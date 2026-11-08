@@ -1,0 +1,114 @@
+{
+  "entities": {
+    "SchoolProfile": {
+      "title": "SchoolProfile",
+      "description": "Profil identitas dan legalitas sekolah SDN Rawa Badak Utara 21",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "npsn": { "type": "string" },
+        "kota": { "type": "string" },
+        "provinsi": { "type": "string" },
+        "alamat": { "type": "string" }
+      },
+      "required": ["name", "npsn"]
+    },
+    "Teacher": {
+      "title": "Teacher",
+      "description": "Data GTK Guru dan Tenaga Kependidikan",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nama": { "type": "string" },
+        "nip": { "type": "string" },
+        "statusPegawai": { "type": "string" },
+        "penugasan": { "type": "string" },
+        "username": { "type": "string" }
+      },
+      "required": ["id", "nama", "penugasan"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Data peserta didik sekolah",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nama": { "type": "string" },
+        "nisn": { "type": "string" },
+        "kelas": { "type": "string" },
+        "agama": { "type": "string" }
+      },
+      "required": ["id", "nama", "nisn", "kelas"]
+    },
+    "TKASubmission": {
+      "title": "TKASubmission",
+      "description": "Lembar jawaban dan hasil nilai ujian TKA siswa",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "nisn": { "type": "string" },
+        "kelas": { "type": "string" },
+        "paket": { "type": "string" },
+        "skorTotal": { "type": "number" },
+        "predikat": { "type": "string" },
+        "status": { "type": "string" },
+        "tanggalUjian": { "type": "string" }
+      },
+      "required": ["id", "studentId", "paket", "skorTotal"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Rekam presensi harian siswa",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string" },
+        "time": { "type": "string" }
+      },
+      "required": ["studentId", "date", "status"]
+    },
+    "Backup": {
+      "title": "Backup",
+      "description": "Snapshot data cadangan sistem di cloud",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "version": { "type": "string" },
+        "dataJson": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "dataJson"]
+    }
+  },
+  "firestore": {
+    "/school_profiles/{profileId}": {
+      "schema": "SchoolProfile",
+      "description": "Dokumen profil sekolah"
+    },
+    "/teachers/{teacherId}": {
+      "schema": "Teacher",
+      "description": "Daftar guru dan tenaga kependidikan"
+    },
+    "/students/{studentId}": {
+      "schema": "Student",
+      "description": "Daftar peserta didik"
+    },
+    "/tka_submissions/{submissionId}": {
+      "schema": "TKASubmission",
+      "description": "Hasil ujian TKA siswa"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "Attendance",
+      "description": "Data absensi harian siswa"
+    },
+    "/backups/{backupId}": {
+      "schema": "Backup",
+      "description": "Data cadangan cloud sistem"
+    }
+  }
+}
