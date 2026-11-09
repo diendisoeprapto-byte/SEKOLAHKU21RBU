@@ -60,14 +60,15 @@ import { ERaporTab } from './components/tabs/ERaporTab';
 import { RaporKokurikulerTab } from './components/tabs/RaporKokurikulerTab';
 import { BackupTab } from './components/tabs/BackupTab';
 import { TKATabs } from './components/tabs/TKATabs';
+import { PenilaianEkskulTab } from './components/tabs/PenilaianEkskulTab';
 import { testConnection } from './utils/firebase';
+import {
+  pullAllDataFromCloud,
+  pushAllDataToCloud,
+  subscribeToCloudChanges,
+} from './utils/cloudSync';
 
 export default function App() {
-  // Test Firebase connection on initial boot
-  useEffect(() => {
-    testConnection();
-  }, []);
-
   // Database States
   const [profile, setProfile] = useState<SchoolProfile>(getStoredProfile());
   const [teachers, setTeachers] = useState<Teacher[]>(getStoredTeachers());
@@ -78,8 +79,70 @@ export default function App() {
     getStoredAttendance()
   );
 
-  // Authentication State
-  const [activeUser, setActiveUser] = useState<ActiveUser | null>(null);
+  // Test Firebase connection & Multi-device Cloud Sync
+  useEffect(() => {
+    testConnection();
+
+    // Pull initial cloud state if available
+    pullAllDataFromCloud().then((cloudData) => {
+      if (cloudData) {
+        if (cloudData.profile) setProfile(cloudData.profile);
+        if (cloudData.teachers) setTeachers(cloudData.teachers);
+        if (cloudData.students) setStudents(cloudData.students);
+        if (cloudData.subjects) setSubjects(cloudData.subjects);
+        if (cloudData.kaldikDays) setKaldikDays(cloudData.kaldikDays);
+        if (cloudData.ekskulList) {
+          localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(cloudData.ekskulList));
+        }
+        if (cloudData.penilaianEkskul) {
+          localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(cloudData.penilaianEkskul));
+        }
+      }
+    });
+
+    // Realtime listener for cross-device updates
+    const unsubscribe = subscribeToCloudChanges((cloudData) => {
+      if (cloudData) {
+        if (cloudData.profile) setProfile(cloudData.profile);
+        if (cloudData.teachers) setTeachers(cloudData.teachers);
+        if (cloudData.students) setStudents(cloudData.students);
+        if (cloudData.subjects) setSubjects(cloudData.subjects);
+        if (cloudData.kaldikDays) setKaldikDays(cloudData.kaldikDays);
+        if (cloudData.ekskulList) {
+          localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(cloudData.ekskulList));
+        }
+        if (cloudData.penilaianEkskul) {
+          localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(cloudData.penilaianEkskul));
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Authentication & Session Persistence with 30-minute auto-logout
+  const getInitialSession = (): { user: ActiveUser | null; tab: TabId } => {
+    try {
+      const storedUser = localStorage.getItem('sekolahku_active_user');
+      const lastActivity = localStorage.getItem('sekolahku_last_activity');
+      const storedTab = (localStorage.getItem('sekolahku_last_tab') as TabId) || 'dashboard';
+
+      if (storedUser && lastActivity) {
+        const timeDiff = Date.now() - Number(lastActivity);
+        const THIRTY_MINUTES = 30 * 60 * 1000;
+        if (timeDiff < THIRTY_MINUTES) {
+          const user = JSON.parse(storedUser);
+          return { user, tab: storedTab };
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return { user: null, tab: 'dashboard' };
+  };
+
+  const initialSession = getInitialSession();
+  const [activeUser, setActiveUser] = useState<ActiveUser | null>(initialSession.user);
 
   // Filters State
   const initialFilters = getActiveFilters();
@@ -88,8 +151,43 @@ export default function App() {
   const [activeClass, setActiveClass] = useState<string>(initialFilters.kelas);
 
   // Navigation State (Menu starts minimized when logged in)
-  const [activeTab, setActiveTab] = useState<TabId>('dashboard');
+  const [activeTab, setActiveTabState] = useState<TabId>(initialSession.tab);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  const setActiveTab = (tab: TabId) => {
+    setActiveTabState(tab);
+    localStorage.setItem('sekolahku_last_tab', tab);
+  };
+
+  // Activity tracking and 30-minute inactivity auto-logout
+  useEffect(() => {
+    if (!activeUser) return;
+
+    const recordActivity = () => {
+      localStorage.setItem('sekolahku_last_activity', String(Date.now()));
+    };
+
+    const checkInactivity = () => {
+      const lastActivity = Number(localStorage.getItem('sekolahku_last_activity') || 0);
+      const THIRTY_MINUTES = 30 * 60 * 1000;
+      if (lastActivity && Date.now() - lastActivity > THIRTY_MINUTES) {
+        setActiveUser(null);
+        localStorage.removeItem('sekolahku_active_user');
+        localStorage.removeItem('sekolahku_last_activity');
+        showToast('Sesi telah berakhir (tidak ada aktivitas selama lebih dari 30 menit). Silakan login kembali.', 'error');
+      }
+    };
+
+    recordActivity();
+    const interval = setInterval(checkInactivity, 15000);
+    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+    events.forEach((evt) => window.addEventListener(evt, recordActivity, { passive: true }));
+
+    return () => {
+      clearInterval(interval);
+      events.forEach((evt) => window.removeEventListener(evt, recordActivity));
+    };
+  }, [activeUser]);
 
   // Modals State
   const [zoomModal, setZoomModal] = useState<{ isOpen: boolean; url: string; title: string }>({
@@ -154,11 +252,14 @@ export default function App() {
   // Login & Logout
   const handleLoginSuccess = (user: ActiveUser) => {
     setActiveUser(user);
+    localStorage.setItem('sekolahku_active_user', JSON.stringify(user));
+    localStorage.setItem('sekolahku_last_activity', String(Date.now()));
     setIsSidebarOpen(false); // Menu tampil dalam posisi minimize saat login
     if (user.role === 'siswa') {
       setActiveTab('ujian');
     } else {
-      setActiveTab('dashboard');
+      const lastTab = (localStorage.getItem('sekolahku_last_tab') as TabId) || 'dashboard';
+      setActiveTab(lastTab === 'ujian' ? 'dashboard' : lastTab);
       if (user.kelasDiampu) {
         setActiveClass(user.kelasDiampu);
       }
@@ -167,6 +268,8 @@ export default function App() {
 
   const handleLogout = () => {
     setActiveUser(null);
+    localStorage.removeItem('sekolahku_active_user');
+    localStorage.removeItem('sekolahku_last_activity');
     showToast('Anda telah keluar dari aplikasi SEKOLAHKU', 'success');
   };
 
@@ -319,6 +422,7 @@ export default function App() {
                   teachers={teachers}
                   attendanceRecords={attendanceRecords}
                   todayDate={todayStr}
+                  kaldikDays={kaldikDays}
                   onNavigateTab={setActiveTab}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
                 />
@@ -444,6 +548,15 @@ export default function App() {
                 />
               )}
 
+              {/* Tab 4.1b: Penilaian Ekstrakurikuler */}
+              {activeTab === 'penilaian-ekskul' && (
+                <PenilaianEkskulTab
+                  students={students}
+                  showToast={showToast}
+                  onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
+                />
+              )}
+
               {/* Tab 4.2: Catatan Wali */}
               {activeTab === 'catatan' && (
                 <CatatanWaliTab
@@ -487,6 +600,7 @@ export default function App() {
                   profile={profile}
                   students={students}
                   teachers={teachers}
+                  subjects={subjects}
                   activeClass={activeClass}
                   activeYear={activeYear}
                   activeSemester={activeSemester}

@@ -18,13 +18,15 @@ import { CBTExam, CBTQuestion } from '../../types';
 import { DEFAULT_CBT_EXAM, MAPEL_LIST } from '../../data/defaultData';
 
 export const PAKET_SOAL_LIST = [
-  'Ulangan Harian 1 (UH 1)',
-  'Ulangan Harian 2 (UH 2)',
-  'Ulangan Harian 3 (UH 3)',
-  'Ulangan Harian 4 (UH 4)',
+  'Sumatif 1 (AS 1)',
+  'Sumatif 2 (AS 2)',
+  'Sumatif 3 (AS 3)',
+  'Sumatif 4 (AS 4)',
+  'Sumatif 5 (AS 5)',
+  'Sumatif 6 (AS 6)',
   'Asesmen Sumatif Tengah Semester (ASTS)',
   'Asesmen Sumatif Akhir Semester (ASAS)',
-  'CBT Ujian Harian',
+  'Sumatif Lingkup Materi CBT',
 ] as const;
 
 export const AnalisisSoalTab: React.FC = () => {
@@ -153,7 +155,7 @@ export const AnalisisSoalTab: React.FC = () => {
         pertanyaan: isIpas
           ? 'Jelaskan mengapa rangkaian listrik di rumah tangga dipasang secara paralel dan bukan seri!'
           : isMat
-          ? 'Hitunglah rata-rata (mean) dan median dari data nilai ulangan: 70, 80, 85, 90, 75, 80, 95!'
+          ? 'Hitunglah rata-rata (mean) dan median dari data nilai sumatif: 70, 80, 85, 90, 75, 80, 95!'
           : isIndo
           ? 'Susunlah sebuah teks pidato persuasif singkat bertema "Gerakan 7 Kebiasaan Anak Indonesia Hebat"!'
           : isInggris

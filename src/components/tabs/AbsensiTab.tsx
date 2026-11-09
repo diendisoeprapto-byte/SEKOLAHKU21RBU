@@ -9,6 +9,8 @@ import {
   Upload,
   Link as LinkIcon,
   Video,
+  CheckCircle2,
+  X,
 } from 'lucide-react';
 import { Student, KaldikDay } from '../../types';
 import { AttendanceRecordItem } from '../../utils/storage';
@@ -39,11 +41,18 @@ export const AbsensiTab: React.FC<Props> = ({
   const [cameraActive, setCameraActive] = useState(false);
   const [lastScannedStudent, setLastScannedStudent] = useState<string>('Siap menerima scan barcode siswa...');
   const [lastScannedTime, setLastScannedTime] = useState<string>('--:--');
+  const [scannedSuccessItem, setScannedSuccessItem] = useState<{
+    student: Student;
+    time: string;
+    status: 'H' | 'S' | 'I' | 'A';
+  } | null>(null);
   const [manualCode, setManualCode] = useState('');
   const [selectedStudentDropdown, setSelectedStudentDropdown] = useState('');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const scanIntervalRef = useRef<any>(null);
+  const isScanningRef = useRef(false);
 
   const filteredStudents = students.filter((s) => s.kelas === activeClass);
 
@@ -51,42 +60,29 @@ export const AbsensiTab: React.FC<Props> = ({
   const isSunday = new Date(activeDate).getDay() === 0;
   const isHoliday = isSunday || (activeDayKaldik ? activeDayKaldik.isHoliday : false);
 
-  const toggleCamera = async () => {
-    if (cameraActive) {
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-        mediaStreamRef.current = null;
-      }
-      setCameraActive(false);
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
-        });
-        mediaStreamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-        setCameraActive(true);
-        showToast('Kamera pemindai barcode aktif!', 'success');
-      } catch (err) {
-        console.error('Camera access failed:', err);
-        showToast('Tidak dapat mengakses kamera. Pastikan izin kamera telah diberikan.', 'error');
-      }
+  // Play pleasant chime on successful scan
+  const playBeep = () => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+      osc.frequency.exponentialRampToValueAtTime(1760, audioCtx.currentTime + 0.15); // A6
+      gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+      gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.25);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.25);
+    } catch (e) {
+      // Audio not permitted or supported
     }
   };
 
-  useEffect(() => {
-    return () => {
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, []);
-
   const recordAttendance = (student: Student, status: 'H' | 'S' | 'I' | 'A' = 'H') => {
     const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
     const key = `${activeDate}_${student.id}`;
 
     const updated = {
@@ -96,15 +92,105 @@ export const AbsensiTab: React.FC<Props> = ({
         studentId: student.id,
         date: activeDate,
         status,
-        time: timeStr,
+        time: timeStr.slice(0, 5),
       },
     };
 
     onSaveAttendance(updated);
     setLastScannedStudent(`${student.nama} (${student.barcodeId}) - ${status === 'H' ? 'HADIR' : status}`);
-    setLastScannedTime(timeStr);
-    showToast(`${student.nama} tercatat: ${status}`, 'success');
+    setLastScannedTime(timeStr.slice(0, 5));
+    setScannedSuccessItem({
+      student,
+      time: timeStr,
+      status,
+    });
+    playBeep();
+    showToast(`✓ Berhasil scan: ${student.nama} (${student.barcodeId}) - Hadir`, 'success');
   };
+
+  const handleBarcodeDetected = (rawCode: string) => {
+    if (!rawCode) return;
+    const clean = rawCode.trim().toLowerCase();
+    const student = filteredStudents.find(
+      (s) =>
+        s.barcodeId.toLowerCase() === clean ||
+        s.nisn.toLowerCase() === clean ||
+        s.id.toLowerCase() === clean
+    );
+
+    if (student) {
+      recordAttendance(student, 'H');
+    }
+  };
+
+  const startBarcodeDetectionLoop = () => {
+    if (typeof (window as any).BarcodeDetector !== 'undefined') {
+      try {
+        const barcodeDetector = new (window as any).BarcodeDetector({
+          formats: ['code_128', 'code_39', 'qr_code', 'ean_13'],
+        });
+
+        scanIntervalRef.current = setInterval(async () => {
+          if (!videoRef.current || videoRef.current.readyState < 2 || isScanningRef.current) return;
+          try {
+            isScanningRef.current = true;
+            const barcodes = await barcodeDetector.detect(videoRef.current);
+            if (barcodes && barcodes.length > 0) {
+              const detectedValue = barcodes[0].rawValue;
+              handleBarcodeDetected(detectedValue);
+            }
+          } catch (err) {
+            // ignore frame parse errors
+          } finally {
+            isScanningRef.current = false;
+          }
+        }, 350);
+      } catch (err) {
+        console.warn('BarcodeDetector format not supported:', err);
+      }
+    }
+  };
+
+  const toggleCamera = async () => {
+    if (cameraActive) {
+      if (scanIntervalRef.current) {
+        clearInterval(scanIntervalRef.current);
+        scanIntervalRef.current = null;
+      }
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+      }
+      setCameraActive(false);
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        mediaStreamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        setCameraActive(true);
+        startBarcodeDetectionLoop();
+        showToast('Kamera pemindai barcode aktif! Arahkan barcode ke layar.', 'success');
+      } catch (err) {
+        console.error('Camera access failed:', err);
+        showToast('Tidak dapat mengakses kamera. Pastikan izin kamera telah diberikan.', 'error');
+      }
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (scanIntervalRef.current) {
+        clearInterval(scanIntervalRef.current);
+      }
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
 
   const handleManualScan = (e: React.FormEvent) => {
     e.preventDefault();
@@ -265,6 +351,48 @@ export const AbsensiTab: React.FC<Props> = ({
               </div>
             )}
           </div>
+
+          {/* Checklist Sukses Scan Barcode */}
+          {scannedSuccessItem && (
+            <div className="p-4 rounded-3xl bg-emerald-500 text-white shadow-xl border-2 border-emerald-400 animate-in fade-in zoom-in-95 duration-200">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-white text-emerald-600 flex items-center justify-center shrink-0 shadow-md">
+                    <CheckCircle2 className="w-8 h-8" />
+                  </div>
+                  <div>
+                    <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-700/60 text-emerald-100 tracking-wider">
+                      ✓ BERHASIL DI-SCAN!
+                    </span>
+                    <h4 className="font-display font-black text-sm text-white mt-0.5">
+                      {scannedSuccessItem.student.nama}
+                    </h4>
+                    <div className="text-[11px] text-emerald-100 font-mono">
+                      {scannedSuccessItem.student.barcodeId} • NISN: {scannedSuccessItem.student.nisn}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setScannedSuccessItem(null)}
+                  className="p-1 rounded-lg bg-emerald-600/50 hover:bg-emerald-600 text-white"
+                  title="Tutup Notifikasi"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-emerald-400/40 flex items-center justify-between text-xs font-bold">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-200 animate-pulse"></span>
+                  Status: Terhubung & Tercatat Hadir
+                </span>
+                <span className="font-mono bg-emerald-700/80 px-2.5 py-0.5 rounded-lg text-emerald-100">
+                  {scannedSuccessItem.time}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Last scanned box */}
           <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-2 text-xs">

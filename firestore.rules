@@ -46,5 +46,43 @@ service cloud.firestore {
       allow read: if true;
       allow write: if true;
     }
+
+    // Central Multi-Device Online Sync Data
+    match /school_data/{docId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Ekstrakurikuler & Penilaian Ekskul
+    match /ekskul/{ekskulId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    match /penilaian_ekskul/{docId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Assessments & Leger
+    match /assessments/{assessmentId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Bank Soal CBT & TKA
+    match /cbt_exams/{examId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    match /tka_questions/{questionId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Settings (Acak Soal, Acak Jawaban, dll)
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if true;
+    }
   }
 }

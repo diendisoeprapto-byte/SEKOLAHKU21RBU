@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Laptop,
   CheckCircle,
@@ -19,10 +19,23 @@ import {
   Layers,
   X,
   Target,
+  FileUp,
+  Edit3,
+  Save,
+  Shuffle,
 } from 'lucide-react';
 import { CBTExam, CBTQuestion, Student, ActiveUser } from '../../types';
-import { getStoredCBTExams, saveStoredCBTExams, getStoredCBTResults, saveStoredCBTResults } from '../../utils/storage';
+import {
+  getStoredCBTExams,
+  saveStoredCBTExams,
+  getStoredCBTResults,
+  saveStoredCBTResults,
+  getStoredAssessments,
+  saveStoredAssessments,
+  getActiveFilters,
+} from '../../utils/storage';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
+import { parseQuestionsFromDocx } from '../../utils/docxImporter';
 
 interface Props {
   activeUser: ActiveUser;
@@ -47,20 +60,24 @@ export const CBTTab: React.FC<Props> = ({
   // Tab mode for teacher: "bank-soal" (default for teacher) or "ujian"
   const [subTab, setSubTab] = useState<'bank-soal' | 'ujian'>('bank-soal');
 
-  // Exam packages (Paket / Jenis Ulangan)
+  // Exam packages (Paket Sumatif Kurikulum Merdeka)
   const [paketList, setPaketList] = useState<string[]>([
-    'Ulangan Harian 1 (UH 1)',
-    'Ulangan Harian 2 (UH 2)',
-    'Ulangan Harian 3 (UH 3)',
-    'Ulangan Harian 4 (UH 4)',
-    'Ulangan Harian 5 (UH 5)',
-    'Ulangan Harian 6 (UH 6)',
+    'Sumatif 1 (AS 1)',
+    'Sumatif 2 (AS 2)',
+    'Sumatif 3 (AS 3)',
+    'Sumatif 4 (AS 4)',
+    'Sumatif 5 (AS 5)',
+    'Sumatif 6 (AS 6)',
     'ASTS (Sumatif Tengah Semester)',
     'ASAS (Sumatif Akhir Semester)',
   ]);
-  const [selectedPaket, setSelectedPaket] = useState<string>('Ulangan Harian 1 (UH 1)');
+  const [selectedPaket, setSelectedPaket] = useState<string>('Sumatif 1 (AS 1)');
   const [isAddUHOpen, setIsAddUHOpen] = useState(false);
   const [newUHName, setNewUHName] = useState('');
+
+  // Editing question state & DOCX file ref
+  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
+  const docxInputRef = useRef<HTMLInputElement>(null);
 
   // Form Fields matching Image 1
   const [selectedMapel, setSelectedMapel] = useState<string>('Pendidikan Agama Islam');
@@ -70,45 +87,162 @@ export const CBTTab: React.FC<Props> = ({
   const [levelKesukaran, setLevelKesukaran] = useState<'Mudah' | 'Sedang' | 'Sukar'>('Sedang');
   const [levelKognitif, setLevelKognitif] = useState<'L1 (C1-C2)' | 'L2 (C3)' | 'L3 (C4-C6)'>('L2 (C3)');
 
-  // CP & TP State
+  // Setting Acak Soal & Acak Jawaban (tersimpan otomatis)
+  const [acakSoal, setAcakSoal] = useState<boolean>(() => {
+    return localStorage.getItem('sekolahku_cbt_acak_soal') === 'true';
+  });
+  const [acakJawaban, setAcakJawaban] = useState<boolean>(() => {
+    return localStorage.getItem('sekolahku_cbt_acak_jawaban') === 'true';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('sekolahku_cbt_acak_soal', String(acakSoal));
+  }, [acakSoal]);
+
+  useEffect(() => {
+    localStorage.setItem('sekolahku_cbt_acak_jawaban', String(acakJawaban));
+  }, [acakJawaban]);
+
+  // Exam runtime questions list (shuffled if acakSoal is active)
+  const [runningExamQuestions, setRunningExamQuestions] = useState<CBTQuestion[]>([]);
+
+  // CP & TP State covering all SD subjects (Kurikulum Merdeka)
   const [cpList, setCpList] = useState([
     {
-      id: 'cp_1',
+      id: 'cp_pabp',
       kode: 'CP 1',
-      judul: 'CP 1: [Kelas 6B - Fase C • Semester 1 TP 2026/2027] Peserta didik memahami pesan pokok Al-Qur\'an dan Hadis',
-      deskripsi: '[Kelas 6B - Fase C • Semester 1 TP 2026/2027] Peserta didik memahami pesan pokok Al-Qur\'an dan Hadis, menerapkan akhlak karimah, melaksanakan ibadah sesuai ketentuan fikih, serta meneladani sejarah peradaban Islam dalam kehidupan sehari-hari.',
+      judul: 'CP 1: [PABP] Peserta didik memahami pesan pokok Al-Qur\'an dan Hadis',
+      deskripsi: '[Kelas 6 - Fase C] Peserta didik memahami pesan pokok Al-Qur\'an dan Hadis, menerapkan akhlak karimah, serta melaksanakan ibadah sesuai ketentuan fikih dalam kehidupan sehari-hari.',
       mapel: 'Pendidikan Agama Islam',
       tpList: [
-        { id: 'TP 1', judul: '[Kelas 6B] Memahami pesan pokok surah pendek Al-Qur\'an serta hadis tentang keutamaan ilmu.' },
-        { id: 'TP 2', judul: '[Kelas 6B] Menjelaskan hukum bacaan tajwid nun mati/tanwin dan mim mati.' },
-        { id: 'TP 3', judul: '[Kelas 6B] Meneladani akhlak terpuji terhadap sesama dan lingkungan.' },
+        { id: 'TP 1', judul: 'Memahami pesan pokok surah pendek Al-Qur\'an serta hadis tentang keutamaan ilmu.' },
+        { id: 'TP 2', judul: 'Menjelaskan hukum bacaan tajwid nun mati/tanwin dan mim mati.' },
+        { id: 'TP 3', judul: 'Meneladani akhlak terpuji terhadap sesama dan lingkungan.' },
       ]
     },
     {
-      id: 'cp_2',
+      id: 'cp_pancasila',
       kode: 'CP 2',
-      judul: 'CP 2: [Kelas 6B - Fase C • IPAS] Sistem Organ Tubuh Manusia & Siklus Hidup',
-      deskripsi: '[Kelas 6B - Fase C • Semester 1 TP 2026/2027] Peserta didik menganalisis hubungan antar sistem organ tubuh manusia, proses peredaran darah, pernapasan, serta pencernaan makanan dan menjaga kesehatannya.',
-      mapel: 'Ilmu Pengetahuan Alam dan Sosial (IPAS)',
+      judul: 'CP 1: [Pendidikan Pancasila] Memahami Makna Sila-Sila Pancasila & Norma Hukum',
+      deskripsi: '[Kelas 6 - Fase C] Peserta didik menganalisis penerapan nilai-nilai Pancasila dalam kehidupan sehari-hari, norma masyarakat, hak dan kewajiban warga negara, serta menjaga persatuan NKRI.',
+      mapel: 'Pendidikan Pancasila',
       tpList: [
-        { id: 'TP 1', judul: '[Kelas 6B] Menganalisis fungsi jantung, pembuluh darah, dan paru-paru pada peredaran darah manusia.' },
-        { id: 'TP 2', judul: '[Kelas 6B] Mengidentifikasi penyakit yang menyerang sistem organ dan cara pencegahannya.' },
+        { id: 'TP 1', judul: 'Menganalisis pengamalan sila-sila Pancasila dalam keluarga, sekolah, dan masyarakat.' },
+        { id: 'TP 2', judul: 'Membedakan hak dan kewajiban anak sebagai anggota keluarga dan warga sekolah.' },
+        { id: 'TP 3', judul: 'Menunjukkan komitmen gotong royong dalam keberagaman suku, agama, dan budaya.' },
       ]
     },
     {
-      id: 'cp_3',
+      id: 'cp_indo',
       kode: 'CP 3',
-      judul: 'CP 3: [Kelas 6B - Fase C • Matematika] Bilangan Cacah, Pecahan & Operasi Hitung',
-      deskripsi: '[Kelas 6B - Fase C • Semester 1 TP 2026/2027] Peserta didik dapat menyelesaikan masalah berkaitan dengan operasi hitung campuran bilangan bulat, pecahan, desimal, dan persentase.',
+      judul: 'CP 1: [Bahasa Indonesia] Menyimak, Membaca Teks Informasi & Menulis Kreatif',
+      deskripsi: '[Kelas 6 - Fase C] Peserta didik mampu menganalisis ide pokok, informasi tersurat dan tersirat dalam teks fiksi dan nonfiksi, serta menyusun teks narasi, deskripsi, dan formulir.',
+      mapel: 'Bahasa Indonesia',
+      tpList: [
+        { id: 'TP 1', judul: 'Menentukan ide pokok, kalimat utama, dan kesimpulan paragraf deduktif-induktif.' },
+        { id: 'TP 2', judul: 'Menemukan informasi penting dari teks eksplanasi ilmiah menggunakan kata tanya ADiKSiMBa.' },
+        { id: 'TP 3', judul: 'Menyusun teks pidato persuasif atau teks formulir pengiriman barang dengan ejaan yang benar.' },
+      ]
+    },
+    {
+      id: 'cp_mtk',
+      kode: 'CP 4',
+      judul: 'CP 1: [Matematika] Bilangan Cacah, Pecahan, Perbandingan & Bangun Ruang',
+      deskripsi: '[Kelas 6 - Fase C] Peserta didik dapat menyelesaikan masalah berkaitan dengan operasi hitung campuran bilangan bulat, pecahan, desimal, rasio, serta volume bangun ruang kubus dan balok.',
       mapel: 'Matematika',
       tpList: [
-        { id: 'TP 1', judul: '[Kelas 6B] Menghitung operasi hitung campuran perkalian dan pembagian pecahan.' },
-        { id: 'TP 2', judul: '[Kelas 6B] Memecahkan soal cerita matematika FPB dan KPK dalam kehidupan sehari-hari.' },
+        { id: 'TP 1', judul: 'Menghitung operasi hitung campuran perkalian dan pembagian pecahan dan desimal.' },
+        { id: 'TP 2', judul: 'Memecahkan soal cerita matematika FPB dan KPK dalam kehidupan sehari-hari.' },
+        { id: 'TP 3', judul: 'Menghitung volume dan luas permukaan kubus, balok, dan prisma segitiga.' },
       ]
-    }
+    },
+    {
+      id: 'cp_ipas',
+      kode: 'CP 5',
+      judul: 'CP 1: [IPAS] Sistem Organ Tubuh Manusia, Ekosistem & Tata Surya',
+      deskripsi: '[Kelas 6 - Fase C] Peserta didik menganalisis hubungan antar sistem organ tubuh manusia (peredaran darah, pernapasan, pencernaan), perpindahan energi, magnet, dan sistem tata surya.',
+      mapel: 'Ilmu Pengetahuan Alam dan Sosial (IPAS)',
+      tpList: [
+        { id: 'TP 1', judul: 'Menganalisis fungsi organ peredaran darah manusia dan cara memelihara kesehatannya.' },
+        { id: 'TP 2', judul: 'Mengidentifikasi rantai makanan, jaring-jaring makanan, dan keseimbangan ekosistem.' },
+        { id: 'TP 3', judul: 'Menjelaskan sistem tata surya, karakteristik planet, serta rotasi dan revolusi bumi.' },
+      ]
+    },
+    {
+      id: 'cp_pjok',
+      kode: 'CP 6',
+      judul: 'CP 1: [PJOK] Keterampilan Gerak Lokomotor, Manipulatif & Kebugaran Jasmani',
+      deskripsi: '[Kelas 6 - Fase C] Peserta didik mempraktikkan variasi dan kombinasi gerak dasar lokomotor, nonlokomotor, dan manipulatif dalam berbagai permainan bola besar, bola kecil, dan senam.',
+      mapel: 'Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)',
+      tpList: [
+        { id: 'TP 1', judul: 'Mempraktikkan variasi gerak dasar passing dan dribbling permainan bola basket dan sepak bola.' },
+        { id: 'TP 2', judul: 'Melakukan kombinasi gerak melempar, menangkap, dan memukul dalam kasti/rounders.' },
+        { id: 'TP 3', judul: 'Menerapkan pola hidup sehat, kebersihan reproduksi, dan pemanasan sebelum olahraga.' },
+      ]
+    },
+    {
+      id: 'cp_seni',
+      kode: 'CP 7',
+      judul: 'CP 1: [Seni Rupa] Eksplorasi Seni Rupa Dua Dimensi & Ragam Hias Tradisional',
+      deskripsi: '[Kelas 6 - Fase C] Peserta didik menciptakan karya seni rupa dua dimensi dan tiga dimensi dengan menerapkan unsur garis, bentuk, warna, serta apresiasi ragam motif budaya nusantara.',
+      mapel: 'Seni Rupa',
+      tpList: [
+        { id: 'TP 1', judul: 'Menggambar ornamen ragam hias motif geometris dan flora khas Betawi/nusantara.' },
+        { id: 'TP 2', judul: 'Membuat karya seni kolase, montase, dan mozaik dari bahan ramah lingkungan.' },
+      ]
+    },
+    {
+      id: 'cp_bing',
+      kode: 'CP 8',
+      judul: 'CP 1: [Bahasa Inggris] Daily Activities, Vocabulary & Short Descriptive Texts',
+      deskripsi: '[Kelas 6 - Fase C] Peserta didik memahami instruksi lisan sederhana, merespons teks percakapan sehari-hari, dan menulis kalimat sederhana tentang kegiatan sekolah dan keluarga.',
+      mapel: 'Bahasa Inggris',
+      tpList: [
+        { id: 'TP 1', judul: 'Understanding daily routines and telling time in English sentences.' },
+        { id: 'TP 2', judul: 'Identifying main ideas from short descriptive reading texts about public places.' },
+      ]
+    },
+    {
+      id: 'cp_plbj',
+      kode: 'CP 9',
+      judul: 'CP 1: [Muatan Lokal PLBJ] Budaya Betawi, Kuliner Khas & Transportasi Kota Jakarta',
+      deskripsi: '[Kelas 6 - Fase C] Peserta didik memahami dan melestarikan kearifan lokal DKI Jakarta seperti seni bela diri silat beksi, ornamen Betawi, kuliner khas, dan moda transportasi modern Jakarta.',
+      mapel: 'Muatan Lokal (PLBJ)',
+      tpList: [
+        { id: 'TP 1', judul: 'Mengenal sejarah kuliner khas Betawi seperti kerak telor, bir pletok, dan asinan.' },
+        { id: 'TP 2', judul: 'Menjelaskan pemanfaatan transportasi publik massal Jakarta (MRT, LRT, TransJakarta).' },
+        { id: 'TP 3', judul: 'Menerapkan perilaku tertib membuang sampah dan pelestarian kali/sungai di Jakarta.' },
+      ]
+    },
   ]);
 
+  // CPs filtered by selectedMapel so only relevant CP/TP appears
+  const filteredCps = useMemo(() => {
+    const list = cpList.filter(
+      (c) =>
+        c.mapel.toLowerCase() === selectedMapel.toLowerCase() ||
+        c.mapel.toLowerCase().includes(selectedMapel.toLowerCase()) ||
+        selectedMapel.toLowerCase().includes(c.mapel.toLowerCase())
+    );
+    return list.length > 0 ? list : cpList;
+  }, [cpList, selectedMapel]);
+
   const [selectedCpId, setSelectedCpId] = useState<string>(cpList[0].id);
+
+  // Auto-connect CP and TP when mapel changes
+  const handleMapelChange = (newMapel: string) => {
+    setSelectedMapel(newMapel);
+    const matching = cpList.filter(
+      (c) =>
+        c.mapel.toLowerCase() === newMapel.toLowerCase() ||
+        c.mapel.toLowerCase().includes(newMapel.toLowerCase()) ||
+        newMapel.toLowerCase().includes(c.mapel.toLowerCase())
+    );
+    if (matching.length > 0) {
+      setSelectedCpId(matching[0].id);
+      setSelectedTpId(matching[0].tpList[0]?.id || 'TP 1');
+    }
+  };
 
   // Quick modals for adding CP & TP
   const [isAddCpOpen, setIsAddCpOpen] = useState(false);
@@ -249,7 +383,7 @@ export const CBTTab: React.FC<Props> = ({
     });
   };
 
-  // Save new question to Bank Soal
+  // Save or update question in Bank Soal
   const handleSaveQuestion = (e: React.FormEvent) => {
     e.preventDefault();
     if (!pertanyaan.trim()) {
@@ -279,8 +413,8 @@ export const CBTTab: React.FC<Props> = ({
       parsedKunci = kunciLain.trim();
     }
 
-    const newQuestion: CBTQuestion = {
-      id: `soal_${Date.now()}`,
+    const questionData: CBTQuestion = {
+      id: editingQuestionId || `soal_${Date.now()}`,
       cpId: currentCp.id,
       tpId: currentTp?.id || 'TP 1',
       tipe: selectedTipeSoal,
@@ -294,18 +428,33 @@ export const CBTTab: React.FC<Props> = ({
       pembahasan: pembahasan.trim() || `Level ${levelKesukaran} • ${levelKognitif} • Paket ${selectedPaket}`,
     };
 
+    let updatedQuestions: CBTQuestion[];
+    if (editingQuestionId) {
+      updatedQuestions = activeExam.soalList.map((q) =>
+        q.id === editingQuestionId ? questionData : q
+      );
+      showToast('Soal berhasil diperbarui di Bank Soal!', 'success');
+      setEditingQuestionId(null);
+    } else {
+      updatedQuestions = [...activeExam.soalList, questionData];
+      showToast('Soal baru berhasil disimpan ke Bank Soal!', 'success');
+    }
+
     const updatedExam: CBTExam = {
       ...activeExam,
-      soalList: [newQuestion, ...activeExam.soalList],
+      soalList: updatedQuestions,
     };
 
     const newExams = [updatedExam, ...exams.slice(1)];
     setExams(newExams);
     saveStoredCBTExams(newExams);
 
-    showToast('Soal berhasil disimpan ke Bank Soal!', 'success');
+    // Reset fields to blank
+    handleResetForm();
+  };
 
-    // Reset fields
+  const handleResetForm = () => {
+    setEditingQuestionId(null);
     setPertanyaan('');
     setOpsiA('');
     setOpsiB('');
@@ -313,23 +462,47 @@ export const CBTTab: React.FC<Props> = ({
     setOpsiD('');
     setOpsiGambar({});
     setKunciLain('');
+    setPgKompleksKeys([]);
     setGambarUrl(null);
     setGambarUrl2(null);
     setPembahasan('');
   };
 
-  const handleResetForm = () => {
-    setPertanyaan('');
-    setOpsiA('');
-    setOpsiB('');
-    setOpsiC('');
-    setOpsiD('');
-    setOpsiGambar({});
-    setKunciLain('');
-    setGambarUrl(null);
-    setGambarUrl2(null);
-    setPembahasan('');
-    showToast('Form berhasil di-reset.', 'success');
+  const handleEditQuestion = (q: CBTQuestion) => {
+    setEditingQuestionId(q.id);
+    setSelectedTipeSoal(q.tipe);
+    setPertanyaan(q.pertanyaan);
+    setBobotPoin(q.bobot || 10);
+    setGambarUrl(q.gambarUrl || null);
+    setGambarUrl2(q.gambarUrl2 || null);
+    setOpsiGambar(q.opsiGambar || {});
+    setPembahasan(q.pembahasan || '');
+
+    if (q.tipe === 'pg') {
+      const oA = q.opsi?.[0] || '';
+      const oB = q.opsi?.[1] || '';
+      const oC = q.opsi?.[2] || '';
+      const oD = q.opsi?.[3] || '';
+      setOpsiA(oA);
+      setOpsiB(oB);
+      setOpsiC(oC);
+      setOpsiD(oD);
+      if (q.kunciJawaban === oA || q.kunciJawaban === 'A') setKunciPG('A');
+      else if (q.kunciJawaban === oB || q.kunciJawaban === 'B') setKunciPG('B');
+      else if (q.kunciJawaban === oC || q.kunciJawaban === 'C') setKunciPG('C');
+      else if (q.kunciJawaban === oD || q.kunciJawaban === 'D') setKunciPG('D');
+    } else if (q.tipe === 'pg_kompleks') {
+      setOpsiA(q.opsi?.[0] || '');
+      setOpsiB(q.opsi?.[1] || '');
+      setOpsiC(q.opsi?.[2] || '');
+      setOpsiD(q.opsi?.[3] || '');
+      setPgKompleksKeys(Array.isArray(q.kunciJawaban) ? q.kunciJawaban : [String(q.kunciJawaban)]);
+    } else {
+      setKunciLain(String(q.kunciJawaban || ''));
+    }
+
+    window.scrollTo({ top: 180, behavior: 'smooth' });
+    showToast(`Soal #${q.id.slice(-4)} siap diedit. Silakan ubah dan klik Simpan.`, 'success');
   };
 
   const handleDeleteQuestion = (qId: string) => {
@@ -341,7 +514,46 @@ export const CBTTab: React.FC<Props> = ({
       const newExams = [updatedExam, ...exams.slice(1)];
       setExams(newExams);
       saveStoredCBTExams(newExams);
+      if (editingQuestionId === qId) {
+        handleResetForm();
+      }
       showToast('Soal berhasil dihapus dari Bank Soal.', 'success');
+    }
+  };
+
+  const handleImportDocx = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const res = await parseQuestionsFromDocx(file);
+      if (!res.success || res.questions.length === 0) {
+        showToast(res.error || 'Tidak ditemukan butir soal di dalam berkas Word (.docx)', 'error');
+        return;
+      }
+
+      const importedWithMeta = res.questions.map((q, idx) => ({
+        ...q,
+        id: `soal_docx_${Date.now()}_${idx + 1}`,
+        cpId: currentCp.id,
+        tpId: currentTp?.id || 'TP 1',
+        pembahasan: q.pembahasan || `Impor Word (.docx) • Paket ${selectedPaket}`,
+      }));
+
+      const updatedExam: CBTExam = {
+        ...activeExam,
+        soalList: [...importedWithMeta, ...activeExam.soalList],
+      };
+
+      const newExams = [updatedExam, ...exams.slice(1)];
+      setExams(newExams);
+      saveStoredCBTExams(newExams);
+
+      showToast(`Berhasil mengimpor ${res.count} soal dari dokumen Word (.docx)!`, 'success');
+    } catch (err: any) {
+      showToast(`Gagal membaca berkas docx: ${err?.message || 'Format tidak sesuai'}`, 'error');
+    } finally {
+      if (e.target) e.target.value = '';
     }
   };
 
@@ -353,7 +565,7 @@ export const CBTTab: React.FC<Props> = ({
 
   const totalPoints = activeExam.soalList.reduce((acc, q) => acc + (q.bobot || 10), 0);
 
-  // CBT Exam Runner
+  // CBT Exam Runner with Acak Soal and Acak Jawaban
   const startExam = () => {
     setIsExamRunning(true);
     setExamResult(null);
@@ -361,10 +573,30 @@ export const CBTTab: React.FC<Props> = ({
     setTimeLeft(activeExam?.durasiMenit ? activeExam.durasiMenit * 60 : 3600);
     setCurrentQuestionIndex(0);
 
+    let qList = [...activeExam.soalList];
+    if (acakSoal) {
+      qList = [...qList].sort(() => Math.random() - 0.5);
+    }
+    if (acakJawaban) {
+      qList = qList.map((q) => {
+        if (q.opsi && q.opsi.length > 0) {
+          return {
+            ...q,
+            opsi: [...q.opsi].sort(() => Math.random() - 0.5),
+          };
+        }
+        return q;
+      });
+    }
+    setRunningExamQuestions(qList);
+
     if (document.documentElement.requestFullscreen) {
       document.documentElement.requestFullscreen().catch(() => {});
     }
-    showToast('Ujian CBT dimulai! Waktu berjalan.', 'success');
+    showToast(
+      `Ujian CBT dimulai! ${acakSoal ? '[Acak Soal Aktif] ' : ''}${acakJawaban ? '[Acak Jawaban Aktif]' : ''}`,
+      'success'
+    );
   };
 
   const handleAnswerChange = (questionId: string, answer: any) => {
@@ -403,13 +635,56 @@ export const CBTTab: React.FC<Props> = ({
     });
     saveStoredCBTResults(results);
 
+    // Synchronize to Penilaian, Remedial, Leger, and Analisis Soal
+    try {
+      const filters = getActiveFilters();
+      const subjectMap: Record<string, string> = {
+        'Pendidikan Agama Islam': 's_pabp_islam',
+        'Pendidikan Pancasila': 's_pancasila',
+        'Bahasa Indonesia': 's_bindonesia',
+        'Matematika': 's_matematika',
+        'Ilmu Pengetahuan Alam dan Sosial (IPAS)': 's_ipas',
+        'Seni Rupa': 's_senirupa',
+        'Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)': 's_pjok',
+        'Bahasa Inggris': 's_binggris',
+        'Muatan Lokal (PLBJ)': 's_plbj',
+      };
+      const subId = subjectMap[selectedMapel] || 's_bindonesia';
+      const assessKey = `${filters.year}_${filters.semester}_${activeClass}_${subId}`;
+      const existingAssessments = getStoredAssessments(assessKey);
+      const studentId = activeUser.studentData?.id || students[0]?.id || 'std_01';
+
+      if (!existingAssessments[studentId]) {
+        existingAssessments[studentId] = {
+          sumatif: {},
+          remedial: {},
+          asts: 0,
+          asas: 0,
+        };
+      }
+
+      const asMatch = selectedPaket.match(/(?:Sumatif|AS|UH)\s*(\d+)/i);
+      if (asMatch) {
+        const asIdx = parseInt(asMatch[1]);
+        existingAssessments[studentId].sumatif[asIdx] = finalGrade;
+      } else if (selectedPaket.includes('ASTS')) {
+        existingAssessments[studentId].asts = finalGrade;
+      } else if (selectedPaket.includes('ASAS')) {
+        existingAssessments[studentId].asas = finalGrade;
+      }
+      saveStoredAssessments(assessKey, existingAssessments);
+    } catch (err) {
+      console.warn('Sync to assessment error:', err);
+    }
+
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }
-    showToast(`Ujian Selesai! Nilai Anda: ${finalGrade}`, 'success');
+    showToast(`Ujian Selesai! Nilai Anda: ${finalGrade} (Tersinkron ke Penilaian & Leger)`, 'success');
   };
 
-  const currentQ = activeExam?.soalList[currentQuestionIndex];
+  const currentExamQuestions = runningExamQuestions.length > 0 ? runningExamQuestions : activeExam?.soalList || [];
+  const currentQ = currentExamQuestions[currentQuestionIndex];
 
   return (
     <section className="space-y-6">
@@ -457,19 +732,52 @@ export const CBTTab: React.FC<Props> = ({
         {/* ============================================================== */}
         {subTab === 'bank-soal' && activeUser.role !== 'siswa' && !isExamRunning && (
           <div className="space-y-6">
+            {/* Top Toolbar for Bank Soal: DOCX Import & Status */}
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-slate-50 rounded-2xl border border-slate-200">
+              <input
+                type="file"
+                ref={docxInputRef}
+                accept=".docx"
+                onChange={handleImportDocx}
+                className="hidden"
+              />
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-700">Bank Soal Paket:</span>
+                <span className="px-2.5 py-0.5 rounded-lg bg-rose-100 text-rose-800 font-black text-xs font-mono">
+                  {selectedPaket}
+                </span>
+                {editingQuestionId && (
+                  <span className="px-2.5 py-0.5 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-[11px] animate-pulse">
+                    ✏ Sedang Mengedit Soal
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => docxInputRef.current?.click()}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-display font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+                  title="Import butir soal dari dokumen Microsoft Word (.docx)"
+                >
+                  <FileUp className="w-4 h-4" /> Import Soal (.DOCX)
+                </button>
+              </div>
+            </div>
+
             <form onSubmit={handleSaveQuestion} className="space-y-4">
               {/* ROW 1: TOP BAR DROPDOWNS (MATCHING IMAGE 1) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                {/* 1. Paket / Jenis Ulangan */}
+                {/* 1. Paket / Jenis Ulangan (Sumatif) */}
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-[11px] font-extrabold text-slate-700">Paket / Jenis Ulangan</label>
+                    <label className="text-[11px] font-extrabold text-slate-700">Paket / Jenis Sumatif</label>
                     <button
                       type="button"
                       onClick={() => setIsAddUHOpen(true)}
                       className="text-[11px] font-extrabold text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
                     >
-                      + Tambah UH
+                      + Tambah Sumatif
                     </button>
                   </div>
                   <select
@@ -490,7 +798,7 @@ export const CBTTab: React.FC<Props> = ({
                   <label className="block text-[11px] font-extrabold text-slate-700 mb-1">Mata Pelajaran</label>
                   <select
                     value={selectedMapel}
-                    onChange={(e) => setSelectedMapel(e.target.value)}
+                    onChange={(e) => handleMapelChange(e.target.value)}
                     className="w-full px-3 py-2 rounded-2xl border border-slate-300 bg-white text-xs font-extrabold text-slate-800 outline-none"
                   >
                     <option value="Pendidikan Agama Islam">Pendidikan Agama Islam</option>
@@ -620,12 +928,12 @@ export const CBTTab: React.FC<Props> = ({
                     value={selectedCpId}
                     onChange={(e) => {
                       setSelectedCpId(e.target.value);
-                      const cp = cpList.find((c) => c.id === e.target.value);
+                      const cp = filteredCps.find((c: any) => c.id === e.target.value) || cpList.find((c: any) => c.id === e.target.value);
                       if (cp && cp.tpList[0]) setSelectedTpId(cp.tpList[0].id);
                     }}
                     className="w-full px-3 py-2 rounded-2xl border-2 border-rose-400 bg-white text-xs font-bold text-slate-800 outline-none truncate"
                   >
-                    {cpList.map((cp) => (
+                    {filteredCps.map((cp: any) => (
                       <option key={cp.id} value={cp.id}>
                         {cp.judul}
                       </option>
@@ -960,20 +1268,20 @@ export const CBTTab: React.FC<Props> = ({
                 )}
               </div>
 
-              {/* ACTION BUTTONS (MATCHING IMAGE 1) */}
+              {/* ACTION BUTTONS (Simpan dan Batal) */}
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
                   type="button"
                   onClick={handleResetForm}
-                  className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-display font-extrabold px-5 py-2.5 rounded-2xl text-xs cursor-pointer shadow-xs transition"
+                  className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-display font-extrabold px-5 py-2.5 rounded-2xl text-xs cursor-pointer shadow-xs transition flex items-center gap-1.5"
                 >
-                  Batal / Reset
+                  <X className="w-4 h-4" /> Batal
                 </button>
                 <button
                   type="submit"
                   className="bg-rose-600 hover:bg-rose-700 text-white font-display font-black px-6 py-2.5 rounded-2xl text-xs flex items-center gap-2 cursor-pointer shadow-md transition"
                 >
-                  💾 Simpan ke Bank Soal
+                  <Save className="w-4 h-4" /> {editingQuestionId ? 'Simpan Perubahan' : 'Simpan Soal'}
                 </button>
               </div>
             </form>
@@ -1039,10 +1347,18 @@ export const CBTTab: React.FC<Props> = ({
                           )}
                         </div>
 
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
                           <span className="text-xs font-display font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-xl">
                             {q.bobot} Poin
                           </span>
+                          <button
+                            type="button"
+                            onClick={() => handleEditQuestion(q)}
+                            className="w-8 h-8 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-600 flex items-center justify-center transition cursor-pointer"
+                            title="Edit Butir Soal"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
                           <button
                             type="button"
                             onClick={() => handleDeleteQuestion(q.id)}
@@ -1138,6 +1454,58 @@ export const CBTTab: React.FC<Props> = ({
                     Belum ada soal pada filter ini. Buat soal menggunakan form di atas!
                   </div>
                 )}
+
+                {/* Setting Acak Soal & Acak Jawaban */}
+                <div className="p-5 rounded-3xl bg-gradient-to-r from-emerald-50 via-white to-teal-50 border-2 border-emerald-300 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-md shadow-emerald-500/20 shrink-0">
+                      <Shuffle className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex items-center gap-2">
+                        Pengaturan Acak Soal & Pilihan Jawaban CBT
+                        <span className="text-[10px] font-extrabold uppercase bg-emerald-200 text-emerald-950 px-2 py-0.5 rounded-full">
+                          Siswa CBT
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        Ketika diaktifkan guru/admin, soal dan opsi pilihan jawaban otomatis teracak secara unik saat dikerjakan oleh siswa.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <label className={`px-4 py-2.5 rounded-2xl border-2 text-xs font-display font-extrabold flex items-center gap-2 cursor-pointer transition select-none shadow-2xs ${
+                      acakSoal ? 'bg-emerald-600 border-emerald-700 text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={acakSoal}
+                        onChange={(e) => {
+                          setAcakSoal(e.target.checked);
+                          showToast(`Setting Acak Soal CBT: ${e.target.checked ? 'AKTIF' : 'NONAKTIF'}`, 'success');
+                        }}
+                        className="w-4 h-4 rounded accent-emerald-500 cursor-pointer"
+                      />
+                      <span>Acak Soal</span>
+                    </label>
+
+                    <label className={`px-4 py-2.5 rounded-2xl border-2 text-xs font-display font-extrabold flex items-center gap-2 cursor-pointer transition select-none shadow-2xs ${
+                      acakJawaban ? 'bg-emerald-600 border-emerald-700 text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={acakJawaban}
+                        onChange={(e) => {
+                          setAcakJawaban(e.target.checked);
+                          showToast(`Setting Acak Jawaban CBT: ${e.target.checked ? 'AKTIF' : 'NONAKTIF'}`, 'success');
+                        }}
+                        className="w-4 h-4 rounded accent-emerald-500 cursor-pointer"
+                      />
+                      <span>Acak Jawaban</span>
+                    </label>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1315,12 +1683,12 @@ export const CBTTab: React.FC<Props> = ({
         )}
       </div>
 
-      {/* MODAL: TAMBAH PAKET UH */}
+      {/* MODAL: TAMBAH PAKET SUMATIF */}
       {isAddUHOpen && (
         <div className="fixed inset-0 z-[950] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white max-w-sm w-full rounded-3xl p-5 shadow-2xl border space-y-4">
             <div className="flex items-center justify-between border-b pb-2">
-              <h4 className="font-display font-black text-sm text-slate-900">Tambah Paket Ulangan</h4>
+              <h4 className="font-display font-black text-sm text-slate-900">Tambah Paket Sumatif</h4>
               <button onClick={() => setIsAddUHOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-4 h-4" />
               </button>
@@ -1329,7 +1697,7 @@ export const CBTTab: React.FC<Props> = ({
               type="text"
               value={newUHName}
               onChange={(e) => setNewUHName(e.target.value)}
-              placeholder="Contoh: Ulangan Harian 7 (UH 7)"
+              placeholder="Contoh: Sumatif 7 (AS 7)"
               className="w-full px-3 py-2 rounded-xl border text-xs font-bold"
             />
             <div className="flex justify-end gap-2">
@@ -1348,7 +1716,7 @@ export const CBTTab: React.FC<Props> = ({
                     setSelectedPaket(newUHName.trim());
                     setIsAddUHOpen(false);
                     setNewUHName('');
-                    showToast('Paket Ulangan berhasil ditambahkan!', 'success');
+                    showToast('Paket Sumatif berhasil ditambahkan!', 'success');
                   }
                 }}
                 className="px-4 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-black"

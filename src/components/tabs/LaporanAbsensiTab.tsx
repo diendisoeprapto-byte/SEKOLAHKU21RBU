@@ -46,7 +46,7 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
   showToast,
   onOpenZoom,
 }) => {
-  const [selectedMonth, setSelectedMonth] = useState('2026-08');
+  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [top5ViewMode, setTop5ViewMode] = useState<'cards' | 'table'>('cards');
   const [top5Scope, setTop5Scope] = useState<'kelas' | 'semua'>('kelas');
   const [selectedPiagam, setSelectedPiagam] = useState<{

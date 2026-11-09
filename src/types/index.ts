@@ -31,11 +31,37 @@ export interface Teacher {
 
 export type ReligionType = 'Islam' | 'Kristen' | 'Katolik' | 'Buddha' | 'Hindu' | 'Konghucu';
 
+export const KEBUTUHAN_KHUSUS_OPTIONS = [
+  'Tidak Ada (Reguler)',
+  'Tunanetra (Hambatan penglihatan)',
+  'Tunarungu (Hambatan pendengaran)',
+  'Tunawicara (Hambatan bicara)',
+  'Tunagrahita (Hambatan intelektual)',
+  'Tunadaksa (Hambatan fisik dan motorik)',
+  'Tunalaras (Hambatan emosi dan perilaku)',
+  'Tunaganda (Hambatan majemuk/lebih dari satu hambatan)',
+  'Lamban Belajar (Slow Learner)',
+  'Kesulitan Belajar Spesifik (Disleksia, Disgrafia, Diskalkulia)',
+  'Autisme (Autism Spectrum Disorder / ASD)',
+  'ADHD (Attention Deficit Hyperactivity Disorder / Gangguan Pemusatan Perhatian dan Hiperaktivitas)',
+  'Cerdas Istimewa dan Bakat Istimewa (Gifted & Talented)',
+] as const;
+
+export type KebutuhanKhususType = typeof KEBUTUHAN_KHUSUS_OPTIONS[number];
+
 export interface Student {
   id: string;
   barcodeId: string;
   nama: string;
-  nisn: string;
+  jenisKelamin: 'L' | 'P';
+  tempatLahir: string;
+  tanggalLahir: string; // YYYY-MM-DD
+  nik: string; // 16 digit NIK
+  nisn: string; // 10 digit NISN
+  kebutuhanKhusus: string;
+  namaAyah: string;
+  namaIbu: string;
+  alamat: string;
   agama: ReligionType;
   kelas: string; // e.g. "Kelas 6A"
   tahunPelajaran: string; // e.g. "2026/2027"

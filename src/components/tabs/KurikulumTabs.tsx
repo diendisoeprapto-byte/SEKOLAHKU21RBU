@@ -3,6 +3,7 @@ import {
   Compass,
   Target,
   CheckSquare,
+  Square,
   Award,
   Sprout,
   Plus,
@@ -11,6 +12,9 @@ import {
   CheckCircle2,
   RotateCcw,
   User,
+  Users,
+  UserPlus,
+  Search,
   Sparkles,
   Edit2,
   Trash2,
@@ -69,8 +73,17 @@ export const KurikulumTabs: React.FC<Props> = ({
   const [editingTpIndex, setEditingTpIndex] = useState<number | null>(null);
   const [editingTpText, setEditingTpText] = useState('');
 
-  // Ekstrakurikuler list with persistence
-  const [ekskulList, setEkskulList] = useState<Array<{ id?: string; nama: string; pembina: string; hari: string; waktu: string }>>(() => {
+  // Ekstrakurikuler list with persistence & member support
+  const [ekskulList, setEkskulList] = useState<
+    Array<{
+      id?: string;
+      nama: string;
+      pembina: string;
+      hari: string;
+      waktu: string;
+      anggotaIds?: string[];
+    }>
+  >(() => {
     const saved = localStorage.getItem('sekolahku_ekskul_list');
     if (saved) {
       try {
@@ -81,17 +94,22 @@ export const KurikulumTabs: React.FC<Props> = ({
       }
     }
     return [
-      { id: 'ek_1', nama: 'Pramuka Siaga / Penggalang', pembina: 'Budi Santoso, M.Pd.', hari: 'Jumat', waktu: '13.00 - 15.00 WIB' },
-      { id: 'ek_2', nama: 'Seni Tari Tradisional Betawi', pembina: 'Hj. Siti Aminah, S.Pd.', hari: 'Sabtu', waktu: '08.00 - 10.00 WIB' },
-      { id: 'ek_3', nama: 'Dokter Kecil / PMR SD', pembina: 'Dewi Lestari, S.Pd.', hari: 'Sabtu', waktu: '10.00 - 11.30 WIB' },
-      { id: 'ek_4', nama: 'Futsal & Olahraga Atletik', pembina: 'Budi Santoso, M.Pd.', hari: 'Selasa', waktu: '15.00 - 17.00 WIB' },
-      { id: 'ek_5', nama: 'Seni Musik & Marawis', pembina: 'Ahmad Fauzi, S.Pd.I', hari: 'Kamis', waktu: '14.00 - 15.30 WIB' },
+      { id: 'ek_1', nama: 'Pramuka Siaga / Penggalang', pembina: 'Budi Santoso, M.Pd.', hari: 'Jumat', waktu: '13.00 - 15.00 WIB', anggotaIds: [] },
+      { id: 'ek_2', nama: 'Seni Tari Tradisional Betawi', pembina: 'Hj. Siti Aminah, S.Pd.', hari: 'Sabtu', waktu: '08.00 - 10.00 WIB', anggotaIds: [] },
+      { id: 'ek_3', nama: 'Dokter Kecil / PMR SD', pembina: 'Dewi Lestari, S.Pd.', hari: 'Sabtu', waktu: '10.00 - 11.30 WIB', anggotaIds: [] },
+      { id: 'ek_4', nama: 'Futsal & Olahraga Atletik', pembina: 'Budi Santoso, M.Pd.', hari: 'Selasa', waktu: '15.00 - 17.00 WIB', anggotaIds: [] },
+      { id: 'ek_5', nama: 'Seni Musik & Marawis', pembina: 'Ahmad Fauzi, S.Pd.I', hari: 'Kamis', waktu: '14.00 - 15.30 WIB', anggotaIds: [] },
     ];
   });
   const [newEkskulNama, setNewEkskulNama] = useState('');
   const [newEkskulPembina, setNewEkskulPembina] = useState('');
   const [newEkskulHari, setNewEkskulHari] = useState('Jumat');
   const [newEkskulWaktu, setNewEkskulWaktu] = useState('13.00 - 15.00 WIB');
+
+  // Modal Member Management State
+  const [managingEkskulId, setManagingEkskulId] = useState<string | null>(null);
+  const [memberClassFilter, setMemberClassFilter] = useState('all');
+  const [memberSearchQuery, setMemberSearchQuery] = useState('');
 
   // -------------------------------------------------------------
   // KOKURIKULER (P5) STATES (FAITHFUL TO USER IMAGE 2)
@@ -266,6 +284,7 @@ export const KurikulumTabs: React.FC<Props> = ({
       pembina: pembinaToSave,
       hari: newEkskulHari,
       waktu: newEkskulWaktu.trim() || '13.00 - 15.00 WIB',
+      anggotaIds: [],
     };
     const updated = [...ekskulList, newItem];
     setEkskulList(updated);
@@ -282,6 +301,62 @@ export const KurikulumTabs: React.FC<Props> = ({
       localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(updated));
       showToast(`Ekstrakurikuler ${nama} berhasil dihapus!`, 'success');
     }
+  };
+
+  const handleToggleMember = (ekskulId: string, studentId: string) => {
+    const updated = ekskulList.map((ek) => {
+      if (ek.id === ekskulId) {
+        const currentMembers = ek.anggotaIds || [];
+        const newMembers = currentMembers.includes(studentId)
+          ? currentMembers.filter((id) => id !== studentId)
+          : [...currentMembers, studentId];
+        return { ...ek, anggotaIds: newMembers };
+      }
+      return ek;
+    });
+    setEkskulList(updated);
+    localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(updated));
+  };
+
+  const handleSelectAllClassMembers = (ekskulId: string, classToSelect: string) => {
+    const targetStudents = students.filter(
+      (s) => classToSelect === 'all' || s.kelas === classToSelect
+    );
+    const targetIds = targetStudents.map((s) => s.id);
+    const updated = ekskulList.map((ek) => {
+      if (ek.id === ekskulId) {
+        const current = new Set(ek.anggotaIds || []);
+        targetIds.forEach((id) => current.add(id));
+        return { ...ek, anggotaIds: Array.from(current) };
+      }
+      return ek;
+    });
+    setEkskulList(updated);
+    localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(updated));
+    showToast(
+      `Seluruh siswa ${classToSelect === 'all' ? 'sekolah' : classToSelect} berhasil ditambahkan ke ekstrakurikuler!`,
+      'success'
+    );
+  };
+
+  const handleClearClassMembers = (ekskulId: string, classToClear: string) => {
+    const targetStudents = students.filter(
+      (s) => classToClear === 'all' || s.kelas === classToClear
+    );
+    const targetIds = new Set(targetStudents.map((s) => s.id));
+    const updated = ekskulList.map((ek) => {
+      if (ek.id === ekskulId) {
+        const newMembers = (ek.anggotaIds || []).filter((id) => !targetIds.has(id));
+        return { ...ek, anggotaIds: newMembers };
+      }
+      return ek;
+    });
+    setEkskulList(updated);
+    localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(updated));
+    showToast(
+      `Daftar siswa ${classToClear === 'all' ? 'sekolah' : classToClear} dihapus dari ekstrakurikuler!`,
+      'success'
+    );
   };
 
   // Handlers for CP & TP editing & adding
@@ -1020,38 +1095,227 @@ export const KurikulumTabs: React.FC<Props> = ({
           </form>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {ekskulList.map((ek, idx) => (
-              <div key={ek.id || idx} className="p-4 rounded-2xl border border-slate-200 bg-white hover:border-amber-300 hover:shadow-md transition space-y-2.5 relative group">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-black uppercase text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
-                    Ekskul {idx + 1}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteEkskul(idx, ek.nama)}
-                    className="px-2.5 py-1 rounded-xl text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition cursor-pointer flex items-center gap-1 text-[11px] font-black"
-                    title={`Hapus Ekskul ${ek.nama}`}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Hapus</span>
-                  </button>
+            {ekskulList.map((ek, idx) => {
+              const memberCount = ek.anggotaIds?.length || 0;
+              return (
+                <div key={ek.id || idx} className="p-5 rounded-2xl border border-slate-200 bg-white hover:border-amber-300 hover:shadow-md transition space-y-3 relative group">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
+                      Ekskul {idx + 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteEkskul(idx, ek.nama)}
+                      className="px-2.5 py-1 rounded-xl text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition cursor-pointer flex items-center gap-1 text-[11px] font-black"
+                      title={`Hapus Ekskul ${ek.nama}`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Hapus</span>
+                    </button>
+                  </div>
+                  <h4 className="font-display font-black text-sm text-slate-800 leading-snug">{ek.nama}</h4>
+                  <div className="text-xs text-slate-600 flex items-center gap-1.5 bg-slate-50 p-2 rounded-xl border border-slate-100">
+                    <span className="font-extrabold text-amber-700">Pembina:</span>
+                    <span className="font-bold text-slate-700 truncate">{ek.pembina}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-slate-500">
+                    <span className="flex items-center gap-1 bg-amber-50 text-amber-800 font-extrabold px-2 py-0.5 rounded-lg border border-amber-200/60">
+                      <Calendar className="w-3 h-3 text-amber-600" /> {ek.hari}
+                    </span>
+                    <span className="flex items-center gap-1 bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-lg border border-slate-200">
+                      <Clock className="w-3 h-3 text-slate-500" /> {ek.waktu || '13.00 - 15.00 WIB'}
+                    </span>
+                  </div>
+
+                  {/* Member Counter & Manage Button */}
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-extrabold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200">
+                      <Users className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>{memberCount} Siswa</span>
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setManagingEkskulId(ek.id || `ek_${idx}`);
+                        setMemberClassFilter('all');
+                        setMemberSearchQuery('');
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-display font-black text-xs flex items-center gap-1.5 cursor-pointer transition shadow-2xs"
+                    >
+                      <UserPlus className="w-3.5 h-3.5 text-amber-700" />
+                      <span>+ Tambah Anggota</span>
+                    </button>
+                  </div>
                 </div>
-                <h4 className="font-display font-black text-sm text-slate-800 leading-snug">{ek.nama}</h4>
-                <div className="text-xs text-slate-600 flex items-center gap-1.5 bg-slate-50 p-2 rounded-xl border border-slate-100">
-                  <span className="font-extrabold text-amber-700">Pembina:</span>
-                  <span className="font-bold text-slate-700 truncate">{ek.pembina}</span>
-                </div>
-                <div className="flex items-center gap-2 text-[11px] text-slate-500">
-                  <span className="flex items-center gap-1 bg-amber-50 text-amber-800 font-extrabold px-2 py-0.5 rounded-lg border border-amber-200/60">
-                    <Calendar className="w-3 h-3 text-amber-600" /> {ek.hari}
-                  </span>
-                  <span className="flex items-center gap-1 bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-lg border border-slate-200">
-                    <Clock className="w-3 h-3 text-slate-500" /> {ek.waktu || '13.00 - 15.00 WIB'}
-                  </span>
+              );
+            })}
+          </div>
+
+          {/* Modal Kelola Anggota Ekstrakurikuler */}
+          {managingEkskulId && (() => {
+            const currentManagingEkskul = ekskulList.find((e) => e.id === managingEkskulId);
+            if (!currentManagingEkskul) return null;
+
+            const enrolledIds = currentManagingEkskul.anggotaIds || [];
+            const filteredStudentList = students.filter((s) => {
+              if (memberClassFilter !== 'all' && s.kelas !== memberClassFilter) return false;
+              if (
+                memberSearchQuery &&
+                !s.nama.toLowerCase().includes(memberSearchQuery.toLowerCase()) &&
+                !s.nisn.includes(memberSearchQuery)
+              ) {
+                return false;
+              }
+              return true;
+            });
+
+            return (
+              <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+                <div className="bg-white rounded-3xl max-w-3xl w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90vh] flex flex-col">
+                  {/* Modal Header */}
+                  <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+                    <div>
+                      <span className="text-[10px] font-black uppercase text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
+                        Kelola Keanggotaan
+                      </span>
+                      <h3 className="font-display font-black text-lg text-slate-800 mt-1 flex items-center gap-2">
+                        <Award className="w-5 h-5 text-amber-600" />
+                        {currentManagingEkskul.nama}
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Centang nama siswa yang mengikuti kegiatan ini. Siswa diperbolehkan memilih lebih dari 1 ekstrakurikuler.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setManagingEkskulId(null)}
+                      className="w-8 h-8 rounded-full bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 flex items-center justify-center font-bold"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Filters & Quick Action bar */}
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                    <div className="sm:col-span-5">
+                      <div className="relative">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          value={memberSearchQuery}
+                          onChange={(e) => setMemberSearchQuery(e.target.value)}
+                          placeholder="Cari nama siswa / NISN..."
+                          className="w-full pl-9 pr-3 py-1.5 rounded-xl border border-slate-300 text-xs bg-white font-medium outline-none focus:border-amber-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="sm:col-span-4">
+                      <select
+                        value={memberClassFilter}
+                        onChange={(e) => setMemberClassFilter(e.target.value)}
+                        className="w-full px-3 py-1.5 rounded-xl border border-slate-300 text-xs bg-white font-bold text-slate-800 outline-none"
+                      >
+                        <option value="all">Semua Kelas</option>
+                        {['Kelas 1A', 'Kelas 1B', 'Kelas 2A', 'Kelas 2B', 'Kelas 3A', 'Kelas 3B', 'Kelas 4A', 'Kelas 4B', 'Kelas 5A', 'Kelas 5B', 'Kelas 6A', 'Kelas 6B'].map((k) => (
+                          <option key={k} value={k}>{k}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-3 flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectAllClassMembers(currentManagingEkskul.id!, memberClassFilter)}
+                        className="px-2.5 py-1.5 rounded-xl bg-emerald-600 text-white font-bold text-[11px] hover:bg-emerald-700 cursor-pointer shadow-xs transition"
+                        title="Pilih seluruh siswa pada kelas terpilih"
+                      >
+                        Pilih Semua
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleClearClassMembers(currentManagingEkskul.id!, memberClassFilter)}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-200 hover:bg-rose-100 text-slate-700 hover:text-rose-700 font-bold text-[11px] cursor-pointer transition"
+                        title="Kosongkan pilihan pada kelas terpilih"
+                      >
+                        Kosongkan
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Student Checkbox List */}
+                  <div className="flex-1 overflow-y-auto space-y-2 pr-1 max-h-96">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {filteredStudentList.map((s) => {
+                        const isEnrolled = enrolledIds.includes(s.id);
+                        // Other ekskuls joined by this student
+                        const otherEkskuls = ekskulList
+                          .filter((ek) => ek.id !== currentManagingEkskul.id && ek.anggotaIds?.includes(s.id))
+                          .map((ek) => ek.nama);
+
+                        return (
+                          <label
+                            key={s.id}
+                            className={`flex items-start gap-2.5 p-3 rounded-2xl border text-xs cursor-pointer transition select-none ${
+                              isEnrolled
+                                ? 'bg-amber-50/80 border-amber-400 text-slate-900 shadow-2xs'
+                                : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isEnrolled}
+                              onChange={() => handleToggleMember(currentManagingEkskul.id!, s.id)}
+                              className="mt-0.5 w-4 h-4 rounded text-amber-600 accent-amber-600 shrink-0"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="font-bold text-slate-900 truncate">{s.nama}</span>
+                                <span className="text-[10px] font-extrabold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded shrink-0">
+                                  {s.kelas}
+                                </span>
+                              </div>
+                              <div className="text-[10px] font-mono text-slate-500 mt-0.5">NISN: {s.nisn}</div>
+                              {otherEkskuls.length > 0 && (
+                                <div className="text-[10px] text-amber-700 font-bold truncate mt-1">
+                                  ✓ Ikut: {otherEkskuls.join(', ')}
+                                </div>
+                              )}
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+
+                    {filteredStudentList.length === 0 && (
+                      <div className="p-8 text-center text-xs text-slate-400 italic">
+                        Tidak ada siswa yang cocok dengan filter pencarian.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Modal Footer */}
+                  <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                    <span className="text-xs font-bold text-slate-600">
+                      Total Anggota Terpilih: <strong className="text-amber-700 text-sm font-black">{enrolledIds.length} Siswa</strong>
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setManagingEkskulId(null);
+                        showToast(`Data keanggotaan ${currentManagingEkskul.nama} berhasil disimpan!`, 'success');
+                      }}
+                      className="px-6 py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 text-white font-display font-black text-xs hover:from-amber-600 hover:to-amber-700 shadow-md cursor-pointer transition"
+                    >
+                      Selesai &amp; Simpan Anggota
+                    </button>
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
+            );
+          })()}
         </div>
       )}
 

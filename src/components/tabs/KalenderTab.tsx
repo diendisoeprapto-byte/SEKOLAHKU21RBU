@@ -44,10 +44,17 @@ export const KalenderTab: React.FC<Props> = ({
   onNavigateTab,
   showToast,
 }) => {
-  const [currentYearMonth, setCurrentYearMonth] = useState('2026-08'); // default active
-  const [selectedDate, setSelectedDate] = useState('2026-08-17');
-  const [dateType, setDateType] = useState<'effective' | 'holiday'>('holiday');
-  const [holidayNote, setHolidayNote] = useState('Hari Kemerdekaan RI Ke-81');
+  const todayStr = new Date().toISOString().split('T')[0];
+  const initialYearMonth = todayStr.slice(0, 7);
+  const [currentYearMonth, setCurrentYearMonth] = useState(initialYearMonth);
+  const [selectedDate, setSelectedDate] = useState(todayStr);
+
+  const initialKaldik = kaldikDays.find((k) => k.date === todayStr);
+  const isInitialSun = new Date().getDay() === 0;
+  const isInitialHol = isInitialSun || (initialKaldik ? initialKaldik.isHoliday : false);
+
+  const [dateType, setDateType] = useState<'effective' | 'holiday'>(isInitialHol ? 'holiday' : 'effective');
+  const [holidayNote, setHolidayNote] = useState(initialKaldik?.keterangan || (isInitialSun ? 'Hari Minggu (Libur)' : ''));
   const [selectedClass, setSelectedClass] = useState<string>(activeClass || 'all');
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [resetScope, setResetScope] = useState<'class' | 'all'>('class');

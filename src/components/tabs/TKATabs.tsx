@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Users,
   Compass,
@@ -33,6 +33,7 @@ import {
   AlertCircle,
   Sparkles,
   ChevronRight,
+  Shuffle,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Student, TKACpTp, TKAQuestion, TKAJenis, ActiveUser } from '../../types';
@@ -50,6 +51,7 @@ import {
   TKASubmissionItem,
 } from '../../utils/storage';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
+import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxImporter';
 
 interface Props {
   subType: 'siswa-tka' | 'cp-tp-tka' | 'bank-soal-tka' | 'analisis-tka' | 'hasil-tka' | 'tes-tka-siswa';
@@ -106,8 +108,16 @@ export const TKATabs: React.FC<Props> = ({
   const [tkaQuestions, setTkaQuestions] = useState<TKAQuestion[]>(getStoredTKAQuestions());
   const [filterJenisTka, setFilterJenisTka] = useState<string>('all');
   const [filterMapelTka, setFilterMapelTka] = useState<string>('all');
+  const [editingTkaQuestionId, setEditingTkaQuestionId] = useState<string | null>(null);
+  const docxTkaInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 4. Analisis TKA State
+  // 4. Analisis TKA State (Multi-Select Mata Pelajaran)
+  const [selectedAnalisisMapels, setSelectedAnalisisMapels] = useState<string[]>([
+    'Bahasa Indonesia',
+    'Matematika',
+    'Ilmu Pengetahuan Alam dan Sosial (IPAS)',
+    'Bahasa Inggris',
+  ]);
   const [analisisMapelTka, setAnalisisMapelTka] = useState<string>('all');
   const [analisisPaketTka, setAnalisisPaketTka] = useState<string>('all');
   const [analisisChartTab, setAnalisisChartTab] = useState<'kesukaran' | 'ketuntasan' | 'pembeda'>('kesukaran');
@@ -146,6 +156,25 @@ export const TKATabs: React.FC<Props> = ({
     return () => clearInterval(interval);
   }, [activeExamPaket, isExamCompleted]);
 
+  // Setting Acak Soal & Acak Jawaban TKA (Tersimpan otomatis)
+  const [acakSoalTka, setAcakSoalTka] = useState<boolean>(() => {
+    return localStorage.getItem('sekolahku_tka_acak_soal') === 'true';
+  });
+  const [acakJawabanTka, setAcakJawabanTka] = useState<boolean>(() => {
+    return localStorage.getItem('sekolahku_tka_acak_jawaban') === 'true';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('sekolahku_tka_acak_soal', String(acakSoalTka));
+  }, [acakSoalTka]);
+
+  useEffect(() => {
+    localStorage.setItem('sekolahku_tka_acak_jawaban', String(acakJawabanTka));
+  }, [acakJawabanTka]);
+
+  // Exam runtime questions list (shuffled if acakSoalTka is active)
+  const [tkaRunningQuestions, setTkaRunningQuestions] = useState<TKAQuestion[]>([]);
+
   // Question Form State matching reference UI Image 1
   const [formPaket, setFormPaket] = useState<TKAJenis>('Simulasi 1');
   const [formMapel, setFormMapel] = useState('Bahasa Indonesia');
@@ -155,9 +184,36 @@ export const TKATabs: React.FC<Props> = ({
   const [formKesukaran, setFormKesukaran] = useState<'Mudah' | 'Sedang' | 'Sukar'>('Sedang');
   const [formKognitif, setFormKognitif] = useState('L2 (C3)');
 
+  // Filter CP TKA according to formMapel
+  const filteredTkaCps = useMemo(() => {
+    const list = cpTpList.filter(
+      (c) =>
+        c.mapel.toLowerCase() === formMapel.toLowerCase() ||
+        c.mapel.toLowerCase().includes(formMapel.toLowerCase()) ||
+        formMapel.toLowerCase().includes(c.mapel.toLowerCase())
+    );
+    return list.length > 0 ? list : cpTpList;
+  }, [cpTpList, formMapel]);
+
   // Selected CP & TP
   const [selectedCpId, setSelectedCpId] = useState<string>(cpTpList[0]?.id || 'cp_tka_01');
-  const activeCp = cpTpList.find((c) => c.id === selectedCpId) || cpTpList[0];
+
+  // Change Mapel and sync matching CP & TP automatically
+  const handleFormMapelChange = (newMapel: string) => {
+    setFormMapel(newMapel);
+    const matching = cpTpList.filter(
+      (c) =>
+        c.mapel.toLowerCase() === newMapel.toLowerCase() ||
+        c.mapel.toLowerCase().includes(newMapel.toLowerCase()) ||
+        newMapel.toLowerCase().includes(c.mapel.toLowerCase())
+    );
+    if (matching.length > 0) {
+      setSelectedCpId(matching[0].id);
+      setFormTpIndex(0);
+    }
+  };
+
+  const activeCp = filteredTkaCps.find((c: any) => c.id === selectedCpId) || filteredTkaCps[0] || cpTpList[0];
   const activeTp = activeCp?.tpList && activeCp.tpList[formTpIndex] ? activeCp.tpList[formTpIndex] : activeCp?.tpList?.[0];
 
   // Question Content & Media (Support up to 2 side-by-side images & option images)
@@ -343,6 +399,7 @@ export const TKATabs: React.FC<Props> = ({
   };
 
   const handleResetForm = () => {
+    setEditingTkaQuestionId(null);
     setFormPertanyaan('');
     setFormGambarUrl(null);
     setFormGambarUrl2(null);
@@ -360,7 +417,52 @@ export const TKATabs: React.FC<Props> = ({
     setMenjodohkanKunci('');
   };
 
-  // Submit new TKA question
+  const handleEditTkaQuestion = (q: TKAQuestion) => {
+    setEditingTkaQuestionId(q.id);
+    setFormPaket(q.jenisTka);
+    setFormMapel(q.mapel);
+    setFormTipe(q.tipe);
+    setFormPertanyaan(q.pertanyaan);
+    setFormBobot(q.bobot || 10);
+    setFormGambarUrl(q.gambarUrl || null);
+    setFormGambarUrl2(q.gambarUrl2 || null);
+    setFormOpsiGambar(q.opsiGambar || {});
+
+    // Options
+    setPgOptionA(q.opsi?.[0] || '');
+    setPgOptionB(q.opsi?.[1] || '');
+    setPgOptionC(q.opsi?.[2] || '');
+    setPgOptionD(q.opsi?.[3] || '');
+
+    // Kunci
+    if (q.tipe === 'pg') {
+      const k = typeof q.kunciJawaban === 'string' && ['A', 'B', 'C', 'D'].includes(q.kunciJawaban)
+        ? (q.kunciJawaban as 'A' | 'B' | 'C' | 'D')
+        : 'A';
+      setPgKunci(k);
+    } else if (q.tipe === 'pg_kompleks') {
+      const keys = Array.isArray(q.kunciJawaban) ? q.kunciJawaban : [String(q.kunciJawaban)];
+      setPgkChecks({
+        A: keys.includes('A') || (Boolean(q.opsi?.[0]) && keys.includes(q.opsi![0])),
+        B: keys.includes('B') || (Boolean(q.opsi?.[1]) && keys.includes(q.opsi![1])),
+        C: keys.includes('C') || (Boolean(q.opsi?.[2]) && keys.includes(q.opsi![2])),
+        D: keys.includes('D') || (Boolean(q.opsi?.[3]) && keys.includes(q.opsi![3])),
+      });
+    } else if (q.tipe === 'benar_salah') {
+      setBenarSalahKunci(q.kunciJawaban === 'Salah' ? 'Salah' : 'Benar');
+    } else if (q.tipe === 'isian') {
+      setIsianKunci(String(q.kunciJawaban || ''));
+    } else if (q.tipe === 'uraian') {
+      setUraianKunci(String(q.kunciJawaban || ''));
+    } else if (q.tipe === 'menjodohkan') {
+      setMenjodohkanKunci(String(q.kunciJawaban || ''));
+    }
+
+    window.scrollTo({ top: 380, behavior: 'smooth' });
+    showToast(`Mode edit aktif untuk butir soal #${q.id}. Perbarui data lalu klik 'Simpan Perubahan'.`, 'success');
+  };
+
+  // Submit or update TKA question
   const handleSaveTkaQuestion = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formPertanyaan.trim()) {
@@ -408,29 +510,58 @@ export const TKATabs: React.FC<Props> = ({
 
     const autoEydPertanyaan = convertFractions(formPertanyaan);
 
-    const newQuestion: TKAQuestion = {
-      id: `tka_q_${Date.now()}`,
-      jenisTka: formPaket,
-      mapel: formMapel,
-      cpId: activeCp?.id || 'cp_tka_01',
-      tpId: activeTp?.id || 'tp_01',
-      tipe: formTipe,
-      pertanyaan: autoEydPertanyaan,
-      opsi: parsedOpsi,
-      opsiGambar: Object.keys(formOpsiGambar).length > 0 ? formOpsiGambar : undefined,
-      kunciJawaban: finalKunci,
-      bobot: Number(formBobot) || 10,
-      gambarUrl: formGambarUrl || undefined,
-      gambarUrl2: formGambarUrl2 || undefined,
-      pembahasan: `Level: ${formKesukaran} (${formKognitif}). Target: ${formTargetKelas}. CP: ${activeCp?.judulCp || '-'}. TP: ${activeTp?.judulTp || '-'}`,
-    };
+    if (editingTkaQuestionId) {
+      const updated = tkaQuestions.map((q) => {
+        if (q.id === editingTkaQuestionId) {
+          return {
+            ...q,
+            jenisTka: formPaket,
+            mapel: formMapel,
+            cpId: activeCp?.id || q.cpId || 'cp_tka_01',
+            tpId: activeTp?.id || q.tpId || 'tp_01',
+            tipe: formTipe,
+            pertanyaan: autoEydPertanyaan,
+            opsi: parsedOpsi,
+            opsiGambar: Object.keys(formOpsiGambar).length > 0 ? formOpsiGambar : undefined,
+            kunciJawaban: finalKunci,
+            bobot: Number(formBobot) || 10,
+            gambarUrl: formGambarUrl || undefined,
+            gambarUrl2: formGambarUrl2 || undefined,
+            pembahasan: `Level: ${formKesukaran} (${formKognitif}). Target: ${formTargetKelas}. CP: ${activeCp?.judulCp || '-'}. TP: ${activeTp?.judulTp || '-'}`,
+          };
+        }
+        return q;
+      });
+      setTkaQuestions(updated);
+      saveStoredTKAQuestions(updated);
+      showToast('Perubahan butir soal TKA berhasil diperbarui!', 'success');
+      handleResetForm();
+    } else {
+      const newQuestion: TKAQuestion = {
+        id: `tka_q_${Date.now()}`,
+        jenisTka: formPaket,
+        mapel: formMapel,
+        cpId: activeCp?.id || 'cp_tka_01',
+        tpId: activeTp?.id || 'tp_01',
+        tipe: formTipe,
+        pertanyaan: autoEydPertanyaan,
+        opsi: parsedOpsi,
+        opsiGambar: Object.keys(formOpsiGambar).length > 0 ? formOpsiGambar : undefined,
+        kunciJawaban: finalKunci,
+        bobot: Number(formBobot) || 10,
+        gambarUrl: formGambarUrl || undefined,
+        gambarUrl2: formGambarUrl2 || undefined,
+        pembahasan: `Level: ${formKesukaran} (${formKognitif}). Target: ${formTargetKelas}. CP: ${activeCp?.judulCp || '-'}. TP: ${activeTp?.judulTp || '-'}`,
+      };
 
-    const updated = [newQuestion, ...tkaQuestions];
-    setTkaQuestions(updated);
-    saveStoredTKAQuestions(updated);
+      // Append at end so first question created is #1
+      const updated = [...tkaQuestions, newQuestion];
+      setTkaQuestions(updated);
+      saveStoredTKAQuestions(updated);
 
-    showToast(`Soal berhasil disimpan ke Bank Soal ${formPaket}!`, 'success');
-    handleResetForm();
+      showToast(`Soal berhasil disimpan ke Bank Soal ${formPaket}!`, 'success');
+      handleResetForm();
+    }
   };
 
   const handleDeleteTkaQuestion = (id: string) => {
@@ -438,7 +569,34 @@ export const TKATabs: React.FC<Props> = ({
       const updated = tkaQuestions.filter((q) => q.id !== id);
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
+      if (editingTkaQuestionId === id) {
+        handleResetForm();
+      }
       showToast('Soal TKA berhasil dihapus', 'success');
+    }
+  };
+
+  const handleImportDocxTka = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      showToast('Membaca berkas DOCX soal TKA...', 'success');
+      const res = await parseQuestionsFromDocx(file);
+      if (!res.success || res.questions.length === 0) {
+        showToast(res.error || 'Gagal membaca butir soal dari berkas Word (.docx)', 'error');
+        return;
+      }
+      const converted = convertToTkaQuestions(res.questions, formMapel, formPaket);
+      const updated = [...converted, ...tkaQuestions];
+      setTkaQuestions(updated);
+      saveStoredTKAQuestions(updated);
+      showToast(`Berhasil mengimpor ${converted.length} soal TKA dari berkas Word (${file.name})!`, 'success');
+    } catch (err: any) {
+      showToast('Gagal memproses berkas DOCX: ' + (err?.message || ''), 'error');
+    } finally {
+      if (docxTkaInputRef.current) {
+        docxTkaInputRef.current.value = '';
+      }
     }
   };
 
@@ -1186,9 +1344,24 @@ export const TKATabs: React.FC<Props> = ({
                 <Download className="w-4 h-4 text-amber-600" /> Template Excel (.XLSX)
               </button>
               <label className="bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition">
-                <Upload className="w-4 h-4" /> Import Soal TKA
+                <Upload className="w-4 h-4" /> Import Excel (.XLSX)
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportTkaQuestions} className="hidden" />
               </label>
+              <button
+                type="button"
+                onClick={() => docxTkaInputRef.current?.click()}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition"
+                title="Import bank soal TKA dari dokumen Microsoft Word (.docx)"
+              >
+                <FileText className="w-4 h-4" /> Import Soal TKA (.DOCX)
+              </button>
+              <input
+                ref={docxTkaInputRef}
+                type="file"
+                accept=".docx"
+                onChange={handleImportDocxTka}
+                className="hidden"
+              />
             </div>
           </div>
 
@@ -1551,7 +1724,7 @@ export const TKATabs: React.FC<Props> = ({
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Mata Pelajaran</label>
                 <select
                   value={formMapel}
-                  onChange={(e) => setFormMapel(e.target.value)}
+                  onChange={(e) => handleFormMapelChange(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-medium text-slate-800 outline-none focus:border-rose-400"
                 >
                   {TKA_MAPEL_LIST.map((m) => (
@@ -1583,7 +1756,7 @@ export const TKATabs: React.FC<Props> = ({
                   className="w-full px-3 py-2 rounded-xl border-2 border-sky-400 bg-white text-xs font-bold text-sky-800 outline-none focus:ring-2 focus:ring-sky-200 transition"
                 >
                   {activeCp?.tpList && activeCp.tpList.length > 0 ? (
-                    activeCp.tpList.map((tp, idx) => (
+                    activeCp.tpList.map((tp: any, idx: number) => (
                       <option key={tp.id} value={idx}>
                         {tp.kodeTp || `TP ${idx + 1}`}
                       </option>
@@ -1664,7 +1837,7 @@ export const TKATabs: React.FC<Props> = ({
                     }}
                     className="w-full px-3 py-2 rounded-xl border-2 border-rose-400 bg-white text-xs font-semibold text-rose-800 outline-none focus:ring-2 focus:ring-rose-200"
                   >
-                    {cpTpList.map((cp, idx) => (
+                    {filteredTkaCps.map((cp: any, idx: number) => (
                       <option key={cp.id} value={cp.id}>
                         CP {idx + 1}: [{formTargetKelas} • TKA] {cp.judulCp}
                       </option>
@@ -2020,21 +2193,31 @@ export const TKATabs: React.FC<Props> = ({
             </div>
 
             {/* Row 5: Action Buttons matching Image 1 */}
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={handleResetForm}
-                className="px-5 py-2.5 rounded-xl border border-slate-300 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer transition"
-              >
-                Batal / Reset
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveTkaQuestion}
-                className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black flex items-center gap-2 cursor-pointer shadow-md transition"
-              >
-                <span>💾</span> Simpan ke Bank Soal
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+              <div>
+                {editingTkaQuestionId && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-100 text-amber-900 font-bold text-xs border border-amber-300">
+                    <Edit3 className="w-3.5 h-3.5 text-amber-700" />
+                    Sedang Mengedit Soal #{editingTkaQuestionId}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleResetForm}
+                  className="px-5 py-2.5 rounded-xl border border-slate-300 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer transition"
+                >
+                  {editingTkaQuestionId ? 'Batal Edit' : 'Batal / Reset'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveTkaQuestion}
+                  className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black flex items-center gap-2 cursor-pointer shadow-md transition"
+                >
+                  <span>💾</span> {editingTkaQuestionId ? 'Simpan Perubahan Soal' : 'Simpan ke Bank Soal'}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -2107,10 +2290,18 @@ export const TKATabs: React.FC<Props> = ({
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                       <span className="text-xs font-mono font-black text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-md border border-emerald-200">
                         Bobot: {q.bobot} Poin
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => handleEditTkaQuestion(q)}
+                        className="text-amber-600 hover:text-amber-800 p-1.5 rounded-lg hover:bg-amber-50 transition cursor-pointer"
+                        title="Edit Butir Soal Ini"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleDeleteTkaQuestion(q.id)}
@@ -2212,6 +2403,58 @@ export const TKATabs: React.FC<Props> = ({
                   Belum ada butir soal pada filter ini. Gunakan form di atas untuk menambahkan butir soal TKA.
                 </div>
               )}
+
+              {/* Setting Acak Soal & Acak Jawaban TKA */}
+              <div className="p-5 rounded-3xl bg-gradient-to-r from-amber-50 via-white to-rose-50 border-2 border-amber-300 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-md shadow-amber-500/20 shrink-0">
+                    <Shuffle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex items-center gap-2">
+                      Pengaturan Acak Soal & Pilihan Jawaban TKA
+                      <span className="text-[10px] font-extrabold uppercase bg-amber-200 text-amber-950 px-2 py-0.5 rounded-full">
+                        Tes Siswa
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Ketika diaktifkan guru/admin, susunan butir soal dan opsi pilihan jawaban otomatis teracak ketika siswa mengerjakan tes TKA & Simulasi.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <label className={`px-4 py-2.5 rounded-2xl border-2 text-xs font-display font-extrabold flex items-center gap-2 cursor-pointer transition select-none shadow-2xs ${
+                    acakSoalTka ? 'bg-amber-600 border-amber-700 text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                  }`}>
+                    <input
+                      type="checkbox"
+                      checked={acakSoalTka}
+                      onChange={(e) => {
+                        setAcakSoalTka(e.target.checked);
+                        showToast(`Setting Acak Soal TKA: ${e.target.checked ? 'AKTIF' : 'NONAKTIF'}`, 'success');
+                      }}
+                      className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
+                    />
+                    <span>Acak Soal TKA</span>
+                  </label>
+
+                  <label className={`px-4 py-2.5 rounded-2xl border-2 text-xs font-display font-extrabold flex items-center gap-2 cursor-pointer transition select-none shadow-2xs ${
+                    acakJawabanTka ? 'bg-amber-600 border-amber-700 text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                  }`}>
+                    <input
+                      type="checkbox"
+                      checked={acakJawabanTka}
+                      onChange={(e) => {
+                        setAcakJawabanTka(e.target.checked);
+                        showToast(`Setting Acak Jawaban TKA: ${e.target.checked ? 'AKTIF' : 'NONAKTIF'}`, 'success');
+                      }}
+                      className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
+                    />
+                    <span>Acak Jawaban TKA</span>
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -2220,7 +2463,8 @@ export const TKATabs: React.FC<Props> = ({
       {/* ================= 4. SUB-MENU ANALISIS SOAL TKA ================= */}
       {subType === 'analisis-tka' && (() => {
         const filteredAnalisisQuestions = tkaQuestions.filter((q) => {
-          if (analisisMapelTka !== 'all' && q.mapel !== analisisMapelTka) return false;
+          if (selectedAnalisisMapels.length === 0) return false;
+          if (!selectedAnalisisMapels.includes(q.mapel)) return false;
           if (analisisPaketTka !== 'all' && q.jenisTka !== analisisPaketTka) return false;
           return true;
         });
@@ -2305,10 +2549,15 @@ export const TKATabs: React.FC<Props> = ({
           : 0;
 
         const handleExportExcelTka = () => {
+          const mapelLabel = selectedAnalisisMapels.length === 0
+            ? 'Tidak Ada Mapel Terpilih'
+            : selectedAnalisisMapels.length === TKA_MAPEL_LIST.length
+            ? 'Semua Mapel TKA (4 Mapel)'
+            : selectedAnalisisMapels.join(', ');
           const wsData = [
             ['ANALISIS BUTIR SOAL TES KEMAMPUAN AKADEMIK (TKA)'],
             ['SDN RAWA BADAK UTARA 21 - JAKARTA UTARA'],
-            [`Mata Pelajaran: ${analisisMapelTka === 'all' ? 'Semua Mapel TKA' : analisisMapelTka}`],
+            [`Mata Pelajaran: ${mapelLabel}`],
             [`Paket TKA: ${analisisPaketTka === 'all' ? 'Semua Paket' : analisisPaketTka}`],
             [`Jumlah Siswa Mengerjakan: ${totalPesertaSub} Siswa`],
             [],
@@ -2329,7 +2578,7 @@ export const TKATabs: React.FC<Props> = ({
           const ws = XLSX.utils.aoa_to_sheet(wsData);
           const wb = XLSX.utils.book_new();
           XLSX.utils.book_append_sheet(wb, ws, 'Analisis TKA');
-          XLSX.writeFile(wb, `Analisis_TKA_${analisisMapelTka.substring(0, 8)}_${analisisPaketTka}.xlsx`);
+          XLSX.writeFile(wb, `Analisis_TKA_${selectedAnalisisMapels.length}_Mapel_${analisisPaketTka}.xlsx`);
         };
 
         return (
@@ -2405,44 +2654,113 @@ export const TKATabs: React.FC<Props> = ({
               </div>
             )}
 
-            {/* Filter Controls: Dropdown Mapel TKA & Dropdown Paket TKA */}
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
-              <div className="md:col-span-6">
-                <label className="block text-xs font-extrabold text-slate-700 mb-1">
-                  Filter Mata Pelajaran TKA:
-                </label>
-                <select
-                  value={analisisMapelTka}
-                  onChange={(e) => setAnalisisMapelTka(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border-2 border-amber-500 bg-white text-xs font-black text-slate-800 outline-none shadow-2xs cursor-pointer focus:ring-2 focus:ring-amber-200"
-                >
-                  <option value="all">Semua Mata Pelajaran TKA (4 Mapel)</option>
-                  {TKA_MAPEL_LIST.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+            {/* Filter Controls: Multi-Select Checkboxes Mapel TKA & Dropdown Paket TKA */}
+            <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+                  <div>
+                    <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                      <CheckSquare className="w-4 h-4 text-amber-600" />
+                      Filter Mata Pelajaran TKA (Centang untuk Memilih 1, 2, atau Semua Mapel):
+                    </label>
+                    <p className="text-[11px] text-slate-500">
+                      Jika mapel tidak dicentang, maka butir soal dan data analisis mapel tersebut tidak akan dimunculkan.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAnalisisMapels([...TKA_MAPEL_LIST])}
+                      className="text-[11px] font-bold text-amber-800 hover:text-amber-950 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition cursor-pointer"
+                    >
+                      Pilih Semua (4 Mapel)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAnalisisMapels([])}
+                      className="text-[11px] font-bold text-slate-600 hover:text-rose-700 bg-slate-200 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition cursor-pointer"
+                    >
+                      Kosongkan Pilihan
+                    </button>
+                  </div>
+                </div>
+
+                {/* Checkbox cards for the 4 TKA subjects */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  {TKA_MAPEL_LIST.map((m) => {
+                    const isChecked = selectedAnalisisMapels.includes(m);
+                    return (
+                      <label
+                        key={m}
+                        className={`flex items-center gap-2.5 p-3 rounded-xl border text-xs font-bold cursor-pointer transition select-none ${
+                          isChecked
+                            ? 'bg-amber-600 text-white border-amber-700 shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-300 hover:border-amber-400'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => {
+                            if (isChecked) {
+                              setSelectedAnalisisMapels(selectedAnalisisMapels.filter((x) => x !== m));
+                            } else {
+                              setSelectedAnalisisMapels([...selectedAnalisisMapels, m]);
+                            }
+                          }}
+                          className="w-4 h-4 rounded text-amber-600 accent-amber-600"
+                        />
+                        <span className="truncate">{m}</span>
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
 
-              <div className="md:col-span-6">
-                <label className="block text-xs font-extrabold text-slate-700 mb-1">
-                  Filter Paket / Jenis Soal TKA:
-                </label>
-                <select
-                  value={analisisPaketTka}
-                  onChange={(e) => setAnalisisPaketTka(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none shadow-2xs cursor-pointer focus:border-amber-500"
-                >
-                  <option value="all">Semua Paket (Simulasi 1 – 6 & Try Out 1 – 6)</option>
-                  {TKA_JENIS_LIST.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </select>
+              <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex-1 max-w-md">
+                  <label className="block text-xs font-extrabold text-slate-700 mb-1">
+                    Filter Paket / Jenis Soal TKA:
+                  </label>
+                  <select
+                    value={analisisPaketTka}
+                    onChange={(e) => setAnalisisPaketTka(e.target.value)}
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none shadow-2xs cursor-pointer focus:border-amber-500"
+                  >
+                    <option value="all">Semua Paket (Simulasi 1 – 6 & Try Out 1 – 6)</option>
+                    {TKA_JENIS_LIST.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="text-right text-xs text-slate-500 font-medium">
+                  Mapel Terpilih: <strong className="text-amber-800 font-black">{selectedAnalisisMapels.length} dari 4 Mapel</strong>
+                </div>
               </div>
             </div>
+
+            {/* Jika tidak ada mapel yang dipilih */}
+            {selectedAnalisisMapels.length === 0 && (
+              <div className="p-8 text-center bg-amber-50 rounded-2xl border-2 border-amber-300 space-y-2">
+                <AlertCircle className="w-8 h-8 text-amber-600 mx-auto" />
+                <h3 className="font-display font-black text-sm text-amber-900">
+                  Tidak Ada Mata Pelajaran yang Dipilih
+                </h3>
+                <p className="text-xs text-amber-800 max-w-md mx-auto">
+                  Silakan centang minimal 1 mata pelajaran pada pilihan di atas untuk menampilkan hasil analisis butir soal, grafik ketuntasan, dan daya pembeda TKA.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setSelectedAnalisisMapels([...TKA_MAPEL_LIST])}
+                  className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white font-bold text-xs hover:bg-amber-700 cursor-pointer shadow-xs"
+                >
+                  <CheckSquare className="w-3.5 h-3.5" /> Pilih Semua Mata Pelajaran
+                </button>
+              </div>
+            )}
 
             {/* Quick Metrics */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -2451,8 +2769,12 @@ export const TKATabs: React.FC<Props> = ({
                 <div className="text-2xl font-display font-black text-slate-900 mt-1">
                   {totalAnalisis} Butir
                 </div>
-                <span className="text-[11px] text-slate-500">
-                  {analisisMapelTka === 'all' ? 'Seluruh Mapel TKA' : analisisMapelTka}
+                <span className="text-[11px] text-slate-500 truncate block">
+                  {selectedAnalisisMapels.length === 0
+                    ? 'Tidak ada mapel'
+                    : selectedAnalisisMapels.length === TKA_MAPEL_LIST.length
+                    ? 'Seluruh Mapel TKA (4 Mapel)'
+                    : selectedAnalisisMapels.join(', ')}
                 </span>
               </div>
               <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200">
@@ -2767,7 +3089,9 @@ export const TKATabs: React.FC<Props> = ({
                     {analisisList.length === 0 && (
                       <tr>
                         <td colSpan={8} className="p-8 text-center text-slate-400 italic">
-                          Tidak ada butir soal TKA yang cocok dengan filter Mata Pelajaran & Paket yang dipilih.
+                          {selectedAnalisisMapels.length === 0
+                            ? 'Tidak ada mata pelajaran yang dipilih. Silakan centang minimal 1 mata pelajaran pada filter di atas.'
+                            : 'Tidak ada butir soal TKA yang cocok dengan filter Mata Pelajaran & Paket yang dipilih.'}
                         </td>
                       </tr>
                     )}
@@ -3508,12 +3832,14 @@ export const TKATabs: React.FC<Props> = ({
           return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
         };
 
-        // Active exam questions
-        const examQuestions = activeExamPaket
-          ? tkaQuestions.filter((q) => q.jenisTka === activeExamPaket)
-          : [];
-        // Fallback questions if none for that exact packet label
-        const displayExamQuestions = examQuestions.length > 0 ? examQuestions : tkaQuestions.slice(0, 20);
+        // Active exam questions (supports shuffled runtime if acakSoalTka or acakJawabanTka is active)
+        const displayExamQuestions = tkaRunningQuestions.length > 0
+          ? tkaRunningQuestions
+          : (activeExamPaket
+              ? (tkaQuestions.filter((q) => q.jenisTka === activeExamPaket).length > 0
+                  ? tkaQuestions.filter((q) => q.jenisTka === activeExamPaket)
+                  : tkaQuestions.slice(0, 20))
+              : tkaQuestions.slice(0, 20));
         const activeQuestion = displayExamQuestions[currentQuestionIdx] || displayExamQuestions[0];
 
         // Start Exam Handler
@@ -3525,7 +3851,30 @@ export const TKATabs: React.FC<Props> = ({
           setExamTimerSeconds(3600); // 60 minutes
           setIsExamCompleted(false);
           setLastExamResult(null);
-          showToast(`Ujian ${paketName} dimulai! Waktu Anda 60 menit.`, 'success');
+
+          const questions = tkaQuestions.filter((q) => q.jenisTka === paketName);
+          let list = questions.length > 0 ? questions : tkaQuestions.slice(0, 20);
+
+          if (acakSoalTka) {
+            list = [...list].sort(() => Math.random() - 0.5);
+          }
+          if (acakJawabanTka) {
+            list = list.map((q) => {
+              if (q.opsi && q.opsi.length > 0) {
+                return {
+                  ...q,
+                  opsi: [...q.opsi].sort(() => Math.random() - 0.5),
+                };
+              }
+              return q;
+            });
+          }
+          setTkaRunningQuestions(list);
+
+          showToast(
+            `Ujian ${paketName} dimulai! ${acakSoalTka ? '[Acak Soal Aktif] ' : ''}${acakJawabanTka ? '[Acak Jawaban Aktif]' : ''}`,
+            'success'
+          );
         };
 
         // Submit & Grade Exam

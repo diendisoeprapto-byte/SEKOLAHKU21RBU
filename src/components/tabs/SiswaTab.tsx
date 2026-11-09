@@ -8,8 +8,12 @@ import {
   Trash2,
   Printer,
   Upload,
+  Edit,
+  X,
+  Save,
+  CheckCircle2,
 } from 'lucide-react';
-import { Student, SchoolProfile, ReligionType } from '../../types';
+import { Student, SchoolProfile, ReligionType, KEBUTUHAN_KHUSUS_OPTIONS } from '../../types';
 import {
   downloadTemplateStudentsXLSX,
   exportStudentsToXLSX,
@@ -39,11 +43,23 @@ export const SiswaTab: React.FC<Props> = ({
   onOpenZoom,
 }) => {
   const [newNama, setNewNama] = useState('');
+  const [newJk, setNewJk] = useState<'L' | 'P'>('L');
+  const [newTempatLahir, setNewTempatLahir] = useState('Jakarta');
+  const [newTanggalLahir, setNewTanggalLahir] = useState('2014-05-12');
+  const [newNik, setNewNik] = useState('');
   const [newNisn, setNewNisn] = useState('');
   const [newAgama, setNewAgama] = useState<ReligionType>('Islam');
+  const [newKebutuhanKhusus, setNewKebutuhanKhusus] = useState<string>('Tidak Ada (Reguler)');
+  const [newNamaAyah, setNewNamaAyah] = useState('');
+  const [newNamaIbu, setNewNamaIbu] = useState('');
+  const [newAlamat, setNewAlamat] = useState('');
   const [newUser, setNewUser] = useState('');
   const [newPass, setNewPass] = useState('123');
   const [newFoto, setNewFoto] = useState('https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150');
+
+  // Edit modal state
+  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredStudents = students.filter((s) => s.kelas === activeClass);
@@ -79,12 +95,16 @@ export const SiswaTab: React.FC<Props> = ({
     }
   };
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>, isEdit = false) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onload = () => {
-        setNewFoto(reader.result as string);
+        if (isEdit && editingStudent) {
+          setEditingStudent({ ...editingStudent, fotoUrl: reader.result as string });
+        } else {
+          setNewFoto(reader.result as string);
+        }
         showToast('Foto siswa berhasil dimuat!', 'success');
       };
       reader.readAsDataURL(file);
@@ -110,7 +130,15 @@ export const SiswaTab: React.FC<Props> = ({
       id: `std_${Date.now()}`,
       barcodeId,
       nama: newNama,
+      jenisKelamin: newJk,
+      tempatLahir: newTempatLahir || 'Jakarta',
+      tanggalLahir: newTanggalLahir || '2014-01-01',
+      nik: newNik || `317201${Date.now().toString().slice(-10)}`,
       nisn: newNisn,
+      kebutuhanKhusus: newKebutuhanKhusus,
+      namaAyah: newNamaAyah || '-',
+      namaIbu: newNamaIbu || '-',
+      alamat: newAlamat || 'Jakarta Utara',
       agama: newAgama,
       kelas: activeClass,
       tahunPelajaran: activeYear,
@@ -122,9 +150,23 @@ export const SiswaTab: React.FC<Props> = ({
     onSaveStudents([...students, newStudent]);
     showToast(`Peserta didik ${newNama} berhasil ditambahkan ke ${activeClass}! Akun: ${finalUsername}`, 'success');
     setNewNama('');
+    setNewNik('');
     setNewNisn('');
+    setNewNamaAyah('');
+    setNewNamaIbu('');
+    setNewAlamat('');
     setNewUser('');
     setNewPass('123');
+  };
+
+  const handleUpdateStudent = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStudent) return;
+
+    const updated = students.map((s) => (s.id === editingStudent.id ? editingStudent : s));
+    onSaveStudents(updated);
+    showToast(`Data peserta didik ${editingStudent.nama} berhasil diperbarui!`, 'success');
+    setEditingStudent(null);
   };
 
   const handleDeleteStudent = (id: string, name: string) => {
@@ -163,15 +205,13 @@ export const SiswaTab: React.FC<Props> = ({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <span className="text-xs font-extrabold uppercase bg-rose-100 text-rose-700 px-3 py-1 rounded-full">
-              Manajemen Peserta Didik & Sinkronisasi Mapel Agama
+              Manajemen Peserta Didik & Kebutuhan Khusus
             </span>
             <h2 className="text-xl font-display font-black text-slate-800 mt-1">
-              Tambah Siswa, Pilih Agama, Buat Akun & Kartu Barcode
+              Data Lengkap Siswa, Orang Tua & Kebutuhan Khusus
             </h2>
             <p className="text-xs text-slate-500 max-w-3xl">
-              Pilihan agama siswa otomatis menentukan mata pelajaran Pendidikan Agama yang dihitung pada{' '}
-              <strong>Menu Penilaian, Leger, dan e-Rapor</strong> (Islam &rarr; PAIBP, Kristen &rarr; PAKBP,
-              Katolik &rarr; PAKat, Buddha &rarr; PABBP, Hindu &rarr; PAHBP, Konghucu &rarr; PAKBBP).
+              Mencakup identitas lengkap: Nama, Jenis Kelamin, TTL, NIK, NISN, Kebutuhan Khusus (12 Kategori), Nama Ayah & Ibu, Alamat, serta Akun Login Siswa.
             </p>
           </div>
 
@@ -209,79 +249,202 @@ export const SiswaTab: React.FC<Props> = ({
           </div>
         </div>
 
-        <form onSubmit={handleAddStudent} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
-          <input
-            type="text"
-            value={newNama}
-            onChange={(e) => setNewNama(e.target.value)}
-            required
-            placeholder="Nama Lengkap Siswa"
-            className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
-          />
-          <input
-            type="text"
-            value={newNisn}
-            onChange={(e) => setNewNisn(e.target.value)}
-            required
-            placeholder="NISN (Contoh: 0134567890)"
-            className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white"
-          />
-          <select
-            value={newAgama}
-            onChange={(e) => setNewAgama(e.target.value as ReligionType)}
-            className="px-3 py-2 rounded-xl border-2 border-rose-600 text-xs font-extrabold bg-rose-50 text-rose-900"
-          >
-            <option value="Islam">Agama: Islam (PAIBP)</option>
-            <option value="Kristen">Agama: Kristen (PAKBP)</option>
-            <option value="Katolik">Agama: Katolik (PAKat)</option>
-            <option value="Buddha">Agama: Buddha (PABBP)</option>
-            <option value="Hindu">Agama: Hindu (PAHBP)</option>
-            <option value="Konghucu">Agama: Konghucu (PAKBBP)</option>
-          </select>
-          <input
-            type="text"
-            value={newUser}
-            onChange={(e) => setNewUser(e.target.value)}
-            placeholder="Username (Otomatis jika kosong)"
-            className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white"
-          />
-          <input
-            type="text"
-            value={newPass}
-            onChange={(e) => setNewPass(e.target.value)}
-            placeholder="Password (Default 123)"
-            className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white"
-          />
-          <input
-            type="file"
-            accept="image/*"
-            onChange={handlePhotoUpload}
-            className="text-xs text-slate-600 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-sky-600 file:text-white cursor-pointer"
-          />
-          <button
-            type="submit"
-            className="bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold py-2 px-4 rounded-xl text-xs shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
-          >
-            <UserPlus className="w-4 h-4" /> Tambah Siswa
-          </button>
+        <form onSubmit={handleAddStudent} className="space-y-4 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Nama Lengkap Siswa *</label>
+              <input
+                type="text"
+                value={newNama}
+                onChange={(e) => setNewNama(e.target.value)}
+                required
+                placeholder="Nama Lengkap Siswa"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Jenis Kelamin *</label>
+              <select
+                value={newJk}
+                onChange={(e) => setNewJk(e.target.value as 'L' | 'P')}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-extrabold bg-white"
+              >
+                <option value="L">Laki-Laki (L)</option>
+                <option value="P">Perempuan (P)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Tempat Lahir</label>
+              <input
+                type="text"
+                value={newTempatLahir}
+                onChange={(e) => setNewTempatLahir(e.target.value)}
+                placeholder="Tempat Lahir (Contoh: Jakarta)"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Tanggal Lahir</label>
+              <input
+                type="date"
+                value={newTanggalLahir}
+                onChange={(e) => setNewTanggalLahir(e.target.value)}
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">NIK (16 Digit)</label>
+              <input
+                type="text"
+                value={newNik}
+                onChange={(e) => setNewNik(e.target.value)}
+                maxLength={16}
+                placeholder="317201..."
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">NISN (10 Digit) *</label>
+              <input
+                type="text"
+                value={newNisn}
+                onChange={(e) => setNewNisn(e.target.value)}
+                required
+                maxLength={10}
+                placeholder="0134567890"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Agama</label>
+              <select
+                value={newAgama}
+                onChange={(e) => setNewAgama(e.target.value as ReligionType)}
+                className="w-full px-3 py-2 rounded-xl border-2 border-rose-500 text-xs font-extrabold bg-rose-50 text-rose-900"
+              >
+                <option value="Islam">Islam (PAIBP)</option>
+                <option value="Kristen">Kristen (PAKBP)</option>
+                <option value="Katolik">Katolik (PAKat)</option>
+                <option value="Buddha">Buddha (PABBP)</option>
+                <option value="Hindu">Hindu (PAHBP)</option>
+                <option value="Konghucu">Konghucu (PAKBBP)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Kebutuhan Khusus</label>
+              <select
+                value={newKebutuhanKhusus}
+                onChange={(e) => setNewKebutuhanKhusus(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-amber-400 text-xs font-bold bg-amber-50 text-amber-900"
+              >
+                {KEBUTUHAN_KHUSUS_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Nama Ayah</label>
+              <input
+                type="text"
+                value={newNamaAyah}
+                onChange={(e) => setNewNamaAyah(e.target.value)}
+                placeholder="Nama Ayah Kandung"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Nama Ibu</label>
+              <input
+                type="text"
+                value={newNamaIbu}
+                onChange={(e) => setNewNamaIbu(e.target.value)}
+                placeholder="Nama Ibu Kandung"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+              />
+            </div>
+
+            <div className="lg:col-span-2">
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Alamat Lengkap</label>
+              <input
+                type="text"
+                value={newAlamat}
+                onChange={(e) => setNewAlamat(e.target.value)}
+                placeholder="Jl. ..., RT/RW, Kelurahan, Kecamatan"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Username Login</label>
+              <input
+                type="text"
+                value={newUser}
+                onChange={(e) => setNewUser(e.target.value)}
+                placeholder="Otomatis jika kosong"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Password Login</label>
+              <input
+                type="text"
+                value={newPass}
+                onChange={(e) => setNewPass(e.target.value)}
+                placeholder="Default 123"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Unggah Foto Siswa</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => handlePhotoUpload(e, false)}
+                className="w-full text-xs text-slate-600 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[11px] file:font-bold file:bg-sky-600 file:text-white cursor-pointer"
+              />
+            </div>
+
+            <div className="flex items-end">
+              <button
+                type="submit"
+                className="w-full bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold py-2 px-4 rounded-xl text-xs shadow-xs flex items-center justify-center gap-1.5 cursor-pointer h-[38px]"
+              >
+                <UserPlus className="w-4 h-4" /> Simpan Siswa Baru
+              </button>
+            </div>
+          </div>
         </form>
       </div>
 
       {/* Tabel Akun & Manajemen Siswa */}
       <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-4">
         <h3 className="font-display font-extrabold text-base text-slate-800 flex items-center gap-2">
-          <Users className="w-5 h-5 text-amber-500" /> Daftar Foto, Agama Siswa, Akun Login & Pindah Rombel ({activeClass})
+          <Users className="w-5 h-5 text-amber-500" /> Daftar Biodata, Kebutuhan Khusus & Akun Siswa ({activeClass})
         </h3>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs sm:text-sm">
             <thead>
               <tr className="bg-slate-100 text-slate-700 text-xs uppercase font-extrabold">
-                <th className="p-3 rounded-l-xl">Foto & Nama Siswa</th>
-                <th className="p-3">Agama & Mapel</th>
+                <th className="p-3 rounded-l-xl">Foto & Siswa</th>
+                <th className="p-3">NIK & NISN</th>
+                <th className="p-3">JK / TTL</th>
+                <th className="p-3">Kebutuhan Khusus</th>
+                <th className="p-3">Orang Tua & Alamat</th>
                 <th className="p-3">Pindah Kelas</th>
-                <th className="p-3">Tahun Pelajaran</th>
-                <th className="p-3">Username</th>
-                <th className="p-3">Password</th>
+                <th className="p-3">Username & Pass</th>
                 <th className="p-3 rounded-r-xl text-right">Aksi</th>
               </tr>
             </thead>
@@ -303,7 +466,35 @@ export const SiswaTab: React.FC<Props> = ({
                     </div>
                   </td>
                   <td className="p-3">
-                    <span className="font-semibold text-slate-700">{s.agama}</span>
+                    <div className="font-mono text-xs font-bold text-slate-700">NIK: {s.nik || '-'}</div>
+                    <div className="font-mono text-[11px] text-slate-500">NISN: {s.nisn}</div>
+                  </td>
+                  <td className="p-3">
+                    <div className="font-bold text-slate-800">
+                      {s.jenisKelamin === 'P' ? 'Perempuan (P)' : 'Laki-Laki (L)'} • {s.agama}
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {s.tempatLahir || '-'}, {s.tanggalLahir || '-'}
+                    </div>
+                  </td>
+                  <td className="p-3 max-w-[200px]">
+                    <span
+                      className={`inline-block px-2 py-0.5 rounded-lg text-[10px] font-bold ${
+                        s.kebutuhanKhusus && !s.kebutuhanKhusus.startsWith('Tidak Ada')
+                          ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                          : 'bg-slate-100 text-slate-600'
+                      }`}
+                    >
+                      {s.kebutuhanKhusus || 'Tidak Ada (Reguler)'}
+                    </span>
+                  </td>
+                  <td className="p-3 max-w-[180px]">
+                    <div className="text-xs text-slate-700 font-semibold truncate">
+                      Ayah: {s.namaAyah || '-'} | Ibu: {s.namaIbu || '-'}
+                    </div>
+                    <div className="text-[11px] text-slate-500 truncate" title={s.alamat}>
+                      {s.alamat || '-'}
+                    </div>
                   </td>
                   <td className="p-3">
                     <select
@@ -318,29 +509,27 @@ export const SiswaTab: React.FC<Props> = ({
                       ))}
                     </select>
                   </td>
-                  <td className="p-3">
-                    <select
-                      value={s.tahunPelajaran}
-                      onChange={(e) => handleYearChange(s.id, e.target.value)}
-                      className="px-2 py-1 rounded-lg border border-slate-300 text-xs font-bold bg-white"
-                    >
-                      {ACADEMIC_YEARS.map((y) => (
-                        <option key={y} value={y}>
-                          {y}
-                        </option>
-                      ))}
-                    </select>
+                  <td className="p-3 font-mono text-xs">
+                    <div className="font-bold text-slate-700">{s.username}</div>
+                    <div className="text-slate-500">{s.password}</div>
                   </td>
-                  <td className="p-3 font-mono font-bold text-slate-700">{s.username}</td>
-                  <td className="p-3 font-mono text-slate-600">{s.password}</td>
                   <td className="p-3 text-right">
-                    <button
-                      onClick={() => handleDeleteStudent(s.id, s.nama)}
-                      className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50"
-                      title="Hapus Siswa"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => setEditingStudent({ ...s })}
+                        className="p-1.5 rounded-lg text-sky-600 hover:bg-sky-50"
+                        title="Edit / Detail Siswa"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteStudent(s.id, s.nama)}
+                        className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50"
+                        title="Hapus Siswa"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -348,6 +537,207 @@ export const SiswaTab: React.FC<Props> = ({
           </table>
         </div>
       </div>
+
+      {/* Modal Edit / Detail Siswa */}
+      {editingStudent && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-4 my-8">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-display font-black text-lg text-slate-800 flex items-center gap-2">
+                <Edit className="w-5 h-5 text-sky-600" /> Edit Detail Siswa: {editingStudent.nama}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditingStudent(null)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateStudent} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Nama Lengkap</label>
+                  <input
+                    type="text"
+                    value={editingStudent.nama}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, nama: e.target.value })}
+                    required
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Jenis Kelamin</label>
+                  <select
+                    value={editingStudent.jenisKelamin || 'L'}
+                    onChange={(e) =>
+                      setEditingStudent({ ...editingStudent, jenisKelamin: e.target.value as 'L' | 'P' })
+                    }
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold"
+                  >
+                    <option value="L">Laki-Laki (L)</option>
+                    <option value="P">Perempuan (P)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Tempat Lahir</label>
+                  <input
+                    type="text"
+                    value={editingStudent.tempatLahir || ''}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, tempatLahir: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Tanggal Lahir</label>
+                  <input
+                    type="date"
+                    value={editingStudent.tanggalLahir || ''}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, tanggalLahir: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">NIK (16 Digit)</label>
+                  <input
+                    type="text"
+                    value={editingStudent.nik || ''}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, nik: e.target.value })}
+                    maxLength={16}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">NISN (10 Digit)</label>
+                  <input
+                    type="text"
+                    value={editingStudent.nisn}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, nisn: e.target.value })}
+                    required
+                    maxLength={10}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Agama</label>
+                  <select
+                    value={editingStudent.agama}
+                    onChange={(e) =>
+                      setEditingStudent({ ...editingStudent, agama: e.target.value as ReligionType })
+                    }
+                    className="w-full px-3 py-2 rounded-xl border-2 border-rose-500 font-bold bg-rose-50 text-rose-900"
+                  >
+                    <option value="Islam">Islam (PAIBP)</option>
+                    <option value="Kristen">Kristen (PAKBP)</option>
+                    <option value="Katolik">Katolik (PAKat)</option>
+                    <option value="Buddha">Buddha (PABBP)</option>
+                    <option value="Hindu">Hindu (PAHBP)</option>
+                    <option value="Konghucu">Konghucu (PAKBBP)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Kebutuhan Khusus</label>
+                  <select
+                    value={editingStudent.kebutuhanKhusus || 'Tidak Ada (Reguler)'}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, kebutuhanKhusus: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-amber-400 font-bold bg-amber-50 text-amber-900"
+                  >
+                    {KEBUTUHAN_KHUSUS_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Nama Ayah</label>
+                  <input
+                    type="text"
+                    value={editingStudent.namaAyah || ''}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, namaAyah: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Nama Ibu</label>
+                  <input
+                    type="text"
+                    value={editingStudent.namaIbu || ''}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, namaIbu: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="font-bold text-slate-700 block mb-1">Alamat Lengkap</label>
+                  <input
+                    type="text"
+                    value={editingStudent.alamat || ''}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, alamat: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Username Login</label>
+                  <input
+                    type="text"
+                    value={editingStudent.username}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, username: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Password Login</label>
+                  <input
+                    type="text"
+                    value={editingStudent.password}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, password: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono font-bold"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="font-bold text-slate-700 block mb-1">Ganti Foto Siswa</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => handlePhotoUpload(e, true)}
+                    className="w-full text-xs text-slate-600 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[11px] file:font-bold file:bg-sky-600 file:text-white cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingStudent(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm"
+                >
+                  <Save className="w-4 h-4" /> Simpan Perubahan
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Grid Kartu Barcode Siswa with 2 Logos (Kemendikbud & Sekolah Monas) */}
       <div className="space-y-4">
@@ -416,7 +806,7 @@ export const SiswaTab: React.FC<Props> = ({
               </div>
 
               {/* Barcode Canvas */}
-              <div className="pt-2 border-t border-slate-100 flex flex-col items-center justify-center bg-slate-50 rounded-2xl p-2">
+              <div className="pt-2 border-t border-slate-100 flex flex-col items-center justify-center bg-white rounded-2xl p-2">
                 <canvas id={`barcode_canvas_${s.id}`} className="max-w-full h-auto"></canvas>
               </div>
             </div>

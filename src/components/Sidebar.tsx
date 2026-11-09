@@ -46,6 +46,7 @@ export type TabId =
   | 'ekskul'
   | 'kokurikuler'
   | 'penilaian'
+  | 'penilaian-ekskul'
   | 'catatan'
   | 'leger'
   | 'ujian'
@@ -453,6 +454,19 @@ export const Sidebar: React.FC<Props> = ({
                     >
                       <Edit3 className="w-4 h-4" />
                       <span>Penilaian & Remedial</span>
+                    </button>
+                  )}
+                  {(!searchQuery || 'penilaian ekstrakurikuler ekskul predikat kualitatif pencapaian'.includes(searchQuery)) && (
+                    <button
+                      onClick={() => onSelectTab('penilaian-ekskul')}
+                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
+                        activeTab === 'penilaian-ekskul'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-700 hover:bg-emerald-50'
+                      }`}
+                    >
+                      <Award className="w-4 h-4" />
+                      <span>Penilaian Ekstrakurikuler</span>
                     </button>
                   )}
                   {(!searchQuery || 'catatan wali kelas kenaikan'.includes(searchQuery)) && (

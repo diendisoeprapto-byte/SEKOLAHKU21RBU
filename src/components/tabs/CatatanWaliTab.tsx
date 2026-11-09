@@ -52,6 +52,12 @@ export const CatatanWaliTab: React.FC<Props> = ({
     'Naik ke Kelas V (Lima)',
     'Naik ke Kelas VI (Enam)',
     'Lulus ke Jenjang SMP',
+    'Tinggal di Kelas 1 (Satu)',
+    'Tinggal di Kelas 2 (Dua)',
+    'Tinggal di Kelas 3 (Tiga)',
+    'Tinggal di Kelas 4 (Empat)',
+    'Tinggal di Kelas 5 (Lima)',
+    'Tinggal di Kelas 6 (Enam)',
     'Tinggal di Kelas',
   ] as const;
 

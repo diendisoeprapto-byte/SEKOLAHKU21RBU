@@ -51,10 +51,29 @@ export const PenilaianTab: React.FC<Props> = ({
   showToast,
   onOpenZoom,
 }) => {
-  // Default selected subject: Bahasa Indonesia or first general subject
-  const [selectedSubjectId, setSelectedSubjectId] = useState<string>(
-    subjects.find((s) => s.code === 'BINDO')?.id || subjects[0]?.id || ''
-  );
+  // Default selected subject: restore last visited subject or fallback to Bahasa Indonesia / first subject
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('sekolahku_last_penilaian_mapel');
+      if (saved && subjects.some((s) => s.id === saved)) {
+        return saved;
+      }
+    } catch {
+      // ignore
+    }
+    return subjects.find((s) => s.code === 'BINDO')?.id || subjects[0]?.id || '';
+  });
+
+  // Save active subject to localStorage whenever it changes
+  useEffect(() => {
+    if (selectedSubjectId) {
+      try {
+        localStorage.setItem('sekolahku_last_penilaian_mapel', selectedSubjectId);
+      } catch {
+        // ignore
+      }
+    }
+  }, [selectedSubjectId]);
 
   const selectedSubject = subjects.find((s) => s.id === selectedSubjectId) || subjects[0];
 

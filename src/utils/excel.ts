@@ -100,6 +100,18 @@ export const parseImportStudentsXLSX = (
           const validAgama = ['Islam', 'Kristen', 'Katolik', 'Buddha', 'Hindu', 'Konghucu'];
           const agama = validAgama.includes(rawAgama) ? (rawAgama as any) : 'Islam';
 
+          const rawJk = String(row['Jenis Kelamin (L/P)'] || row['Jenis Kelamin'] || row['JK'] || row['jenisKelamin'] || 'L').trim().toUpperCase();
+          const jenisKelamin: 'L' | 'P' = rawJk.startsWith('P') || rawJk === 'PEREMPUAN' ? 'P' : 'L';
+
+          const tempatLahir = String(row['Tempat Lahir'] || row['tempatLahir'] || 'Jakarta').trim();
+          const tanggalLahir = String(row['Tanggal Lahir (YYYY-MM-DD)'] || row['Tanggal Lahir'] || row['tanggalLahir'] || '2014-01-01').trim();
+          const nik = String(row['NIK'] || row['nik'] || `317201${Date.now().toString().slice(-10)}`).trim();
+
+          const kebutuhanKhusus = String(row['Kebutuhan Khusus'] || row['kebutuhanKhusus'] || 'Tidak Ada (Reguler)').trim();
+          const namaAyah = String(row['Nama Ayah'] || row['namaAyah'] || '-').trim();
+          const namaIbu = String(row['Nama Ibu'] || row['namaIbu'] || '-').trim();
+          const alamat = String(row['Alamat'] || row['alamat'] || 'Jakarta').trim();
+
           const kelas = String(row['Kelas'] || row['kelas'] || defaultClass).trim();
           const tahunPelajaran = String(row['Tahun Pelajaran'] || row['tahunPelajaran'] || defaultYear).trim();
 
@@ -134,7 +146,15 @@ export const parseImportStudentsXLSX = (
             id: `std_${Date.now()}_${idx}`,
             barcodeId,
             nama,
+            jenisKelamin,
+            tempatLahir,
+            tanggalLahir,
+            nik,
             nisn,
+            kebutuhanKhusus,
+            namaAyah,
+            namaIbu,
+            alamat,
             agama,
             kelas,
             tahunPelajaran,
@@ -250,18 +270,34 @@ export const parseImportTeachersXLSX = (
 export const downloadTemplateStudentsXLSX = () => {
   const templateData = [
     {
-      'Nama Siswa': 'Ahmad Fauzi Pratama',
-      'NISN': '0134567899',
+      'Nama Siswa': 'Muhammad Rizky Pratama',
+      'Jenis Kelamin (L/P)': 'L',
+      'Tempat Lahir': 'Jakarta',
+      'Tanggal Lahir (YYYY-MM-DD)': '2014-05-12',
+      'NIK': '3172011205140001',
+      'NISN': '0134567801',
       'Agama': 'Islam',
+      'Kebutuhan Khusus': 'Tidak Ada (Reguler)',
+      'Nama Ayah': 'Budi Pratama',
+      'Nama Ibu': 'Siti Nurjanah',
+      'Alamat': 'Jl. Rawa Badak Utara No. 12, Koja, Jakarta Utara',
       'Kelas': 'Kelas 6A',
       'Tahun Pelajaran': '2026/2027',
       'Username (Opsional, Otomatis)': '',
       'Password (Opsional, Default 123)': '',
     },
     {
-      'Nama Siswa': 'Maria Kristina Siregar',
-      'NISN': '0134567898',
-      'Agama': 'Kristen',
+      'Nama Siswa': 'Aisyah Putri Azzahra',
+      'Jenis Kelamin (L/P)': 'P',
+      'Tempat Lahir': 'Jakarta',
+      'Tanggal Lahir (YYYY-MM-DD)': '2014-08-20',
+      'NIK': '3172016008140002',
+      'NISN': '0134567802',
+      'Agama': 'Islam',
+      'Kebutuhan Khusus': 'Tidak Ada (Reguler)',
+      'Nama Ayah': 'Ahmad Zaki',
+      'Nama Ibu': 'Fatimah Hanum',
+      'Alamat': 'Jl. Lorong 102 No. 5, Rawa Badak Utara, Koja',
       'Kelas': 'Kelas 6A',
       'Tahun Pelajaran': '2026/2027',
       'Username (Opsional, Otomatis)': '',
@@ -279,9 +315,17 @@ export const exportStudentsToXLSX = (students: Student[]) => {
   const data = students.map((s, idx) => ({
     'No': idx + 1,
     'ID Barcode': s.barcodeId,
+    'NIK': s.nik || '-',
     'NISN': s.nisn,
     'Nama Lengkap': s.nama,
+    'Jenis Kelamin': s.jenisKelamin || 'L',
+    'Tempat Lahir': s.tempatLahir || '-',
+    'Tanggal Lahir': s.tanggalLahir || '-',
     'Agama': s.agama,
+    'Kebutuhan Khusus': s.kebutuhanKhusus || 'Tidak Ada (Reguler)',
+    'Nama Ayah': s.namaAyah || '-',
+    'Nama Ibu': s.namaIbu || '-',
+    'Alamat': s.alamat || '-',
     'Kelas': s.kelas,
     'Tahun Pelajaran': s.tahunPelajaran,
     'Username': s.username,

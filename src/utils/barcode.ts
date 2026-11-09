@@ -4,13 +4,14 @@ export const renderBarcodeToCanvas = (canvas: HTMLCanvasElement, text: string) =
   try {
     JsBarcode(canvas, text, {
       format: 'CODE128',
-      lineColor: '#0f172a',
-      width: 2,
-      height: 48,
+      lineColor: '#000000',
+      width: 2.2,
+      height: 55,
       displayValue: true,
-      fontSize: 13,
+      fontSize: 14,
       font: 'monospace',
-      textMargin: 4,
+      margin: 10,
+      textMargin: 6,
       background: '#ffffff',
     });
   } catch (err) {
@@ -22,13 +23,14 @@ export const renderBarcodeToSvg = (svgElement: SVGSVGElement, text: string) => {
   try {
     JsBarcode(svgElement, text, {
       format: 'CODE128',
-      lineColor: '#0f172a',
-      width: 1.8,
-      height: 44,
+      lineColor: '#000000',
+      width: 2,
+      height: 50,
       displayValue: true,
-      fontSize: 12,
+      fontSize: 13,
       font: 'monospace',
-      textMargin: 3,
+      margin: 8,
+      textMargin: 5,
       background: '#ffffff',
     });
   } catch (err) {

@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { Printer, Download, UserCheck, FileText, CheckCircle2 } from 'lucide-react';
-import { Student, SchoolProfile, Teacher } from '../../types';
-import { getStoredReportNotes } from '../../utils/storage';
+import { Student, SchoolProfile, Teacher, Subject } from '../../types';
+import { getStoredReportNotes, getStoredAssessments, getAssessmentCount } from '../../utils/storage';
+import { getStoredPenilaianEkskul } from './PenilaianEkskulTab';
 
 interface Props {
   profile: SchoolProfile;
   students: Student[];
   teachers: Teacher[];
+  subjects?: Subject[];
   activeClass: string;
   activeYear: string;
   activeSemester: string;
@@ -17,6 +19,7 @@ export const ERaporTab: React.FC<Props> = ({
   profile,
   students,
   teachers,
+  subjects,
   activeClass,
   activeYear,
   activeSemester,
@@ -47,7 +50,7 @@ export const ERaporTab: React.FC<Props> = ({
   const rawDecision = currentNotes?.keputusanKenaikan || getDefaultDecision(activeClass);
   const currentDecision = rawDecision.includes('VII') ? 'Lulus ke Jenjang SMP' : rawDecision;
 
-  // Subjects adapted to student religion
+  // Subjects adapted to student religion with dynamic NA Rapor lookup
   const getSubjectList = () => {
     const agamaLabel =
       student?.agama === 'Kristen'
@@ -62,16 +65,110 @@ export const ERaporTab: React.FC<Props> = ({
         ? 'Pendidikan Agama Konghucu dan Budi Pekerti'
         : 'Pendidikan Agama Islam dan Budi Pekerti';
 
+    const baseList = [
+      { name: agamaLabel, defaultScore: 88, cap: 'Menunjukkan pemahaman yang sangat baik dalam memahami makna ayat/nilai keagamaan, serta berakhlak mulia.' },
+      { name: 'Pendidikan Pancasila', defaultScore: 85, cap: 'Sangat baik dalam memahami hak dan kewajiban sebagai warga negara, serta gotong royong di lingkungan sekolah.' },
+      { name: 'Bahasa Indonesia', defaultScore: 87, cap: 'Sangat mahir dalam menyusun teks deskripsi, membaca pemahaman teks informatif, dan mengekspresikan gagasan.' },
+      { name: 'Matematika', defaultScore: 83, cap: 'Menunjukkan kemampuan baik dalam operasi hitung pecahan dan desimal. Perlu bimbingan dalam pemecahan soal cerita volume bangun ruang.' },
+      { name: 'Ilmu Pengetahuan Alam dan Sosial (IPAS)', defaultScore: 86, cap: 'Menunjukkan penguasaan sangat baik dalam materi peredaran darah manusia dan interaksi sosial masyarakat.' },
+      { name: 'Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)', defaultScore: 84, cap: 'Sangat baik dalam mempraktikkan gerak dasar manipulatif dan kerja sama dalam permainan bola besar.' },
+      { name: 'Seni dan Budaya (Seni Rupa)', defaultScore: 88, cap: 'Sangat kreatif dalam membuat karya rupa dua dimensi dan ornamen ragam hias khas Betawi.' },
+      { name: 'Bahasa Inggris', defaultScore: 85, cap: 'Mampu berkomunikasi menggunakan kalimat sederhana sehari-hari dengan lafal yang baik.' },
+      { name: 'Muatan Lokal: Pendidikan Lingkungan dan Budaya Jakarta (PLBJ)', defaultScore: 89, cap: 'Sangat menguasai materi pelestarian lingkungan kota Jakarta, kuliner Betawi, dan transportasi umum Jakarta.' },
+    ];
+
+    return baseList.map((item) => {
+      let finalScore = item.defaultScore;
+      if (subjects && student) {
+        const matched = subjects.find(
+          (s) =>
+            s.name.toLowerCase().includes(item.name.toLowerCase()) ||
+            item.name.toLowerCase().includes(s.name.toLowerCase()) ||
+            (item.name.includes('Agama') && (s.code.startsWith('PAI') || s.code.startsWith('PAK') || s.name.toLowerCase().includes('agama')))
+        );
+
+        if (matched) {
+          const key = `${activeYear}_${activeSemester}_${activeClass}_${matched.id}`;
+          const assessmentData = getStoredAssessments(key);
+          const count = getAssessmentCount(key);
+          const grade = assessmentData[student.id];
+
+          if (grade) {
+            let totalAs = 0;
+            const kktp = matched.kktp || 75;
+            for (let i = 1; i <= count; i++) {
+              const pure = grade.sumatif?.[i] ?? 0;
+              const rem = grade.remedial?.[i] ?? 0;
+              const effective = rem > 0 ? Math.max(pure, Math.min(rem, kktp)) : pure;
+              totalAs += effective;
+            }
+            const avgAs = count > 0 ? totalAs / count : 0;
+            const asts = grade.asts || 0;
+            const asas = grade.asas || 0;
+            if (avgAs > 0 || asts > 0 || asas > 0) {
+              finalScore = Math.round((2 * avgAs + asts + asas) / 4);
+            }
+          }
+        }
+      }
+
+      return {
+        name: item.name,
+        score: finalScore,
+        cap: item.cap,
+      };
+    });
+  };
+
+  // Dynamic extracurricular ratings for the current student
+  const getStudentEkskuls = () => {
+    if (!student) return [];
+    try {
+      const ekskulListRaw = localStorage.getItem('sekolahku_ekskul_list');
+      const ekskulList: Array<{ id: string; nama: string; anggotaIds?: string[] }> = ekskulListRaw
+        ? JSON.parse(ekskulListRaw)
+        : [];
+      const store = getStoredPenilaianEkskul();
+
+      const results: Array<{ nama: string; predikat: string; keterangan: string }> = [];
+
+      ekskulList.forEach((ek) => {
+        const ratings = store[ek.id] || [];
+        const studentRating = ratings.find((r) => r.studentId === student.id);
+        const isEnrolled = ek.anggotaIds && ek.anggotaIds.includes(student.id);
+
+        if (studentRating) {
+          results.push({
+            nama: ek.nama,
+            predikat: studentRating.predikat,
+            keterangan: studentRating.keterangan || `Menunjukkan keaktifan dan penguasaan teknik yang baik dalam kegiatan ${ek.nama}.`,
+          });
+        } else if (isEnrolled) {
+          results.push({
+            nama: ek.nama,
+            predikat: 'Baik',
+            keterangan: `Aktif mengikuti kegiatan ${ek.nama} dengan tertib dan berdisiplin tinggi.`,
+          });
+        }
+      });
+
+      if (results.length > 0) return results;
+    } catch (e) {
+      console.error(e);
+    }
+
+    // Default fallback so Rapor stays complete
     return [
-      { name: agamaLabel, score: 88, cap: 'Menunjukkan pemahaman yang sangat baik dalam memahami makna ayat/nilai keagamaan, serta berakhlak mulia.' },
-      { name: 'Pendidikan Pancasila', score: 85, cap: 'Sangat baik dalam memahami hak dan kewajiban sebagai warga negara, serta gotong royong di lingkungan sekolah.' },
-      { name: 'Bahasa Indonesia', score: 87, cap: 'Sangat mahir dalam menyusun teks deskripsi, membaca pemahaman teks informatif, dan mengekspresikan gagasan.' },
-      { name: 'Matematika', score: 83, cap: 'Menunjukkan kemampuan baik dalam operasi hitung pecahan dan desimal. Perlu bimbingan dalam pemecahan soal cerita volume bangun ruang.' },
-      { name: 'Ilmu Pengetahuan Alam dan Sosial (IPAS)', score: 86, cap: 'Menunjukkan penguasaan sangat baik dalam materi peredaran darah manusia dan interaksi sosial masyarakat.' },
-      { name: 'Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)', score: 84, cap: 'Sangat baik dalam mempraktikkan gerak dasar manipulatif dan kerja sama dalam permainan bola besar.' },
-      { name: 'Seni dan Budaya (Seni Rupa)', score: 88, cap: 'Sangat kreatif dalam membuat karya rupa dua dimensi dan ornamen ragam hias khas Betawi.' },
-      { name: 'Bahasa Inggris', score: 85, cap: 'Mampu berkomunikasi menggunakan kalimat sederhana sehari-hari dengan lafal yang baik.' },
-      { name: 'Muatan Lokal: Pendidikan Lingkungan dan Budaya Jakarta (PLBJ)', score: 89, cap: 'Sangat menguasai materi pelestarian lingkungan kota Jakarta, kuliner Betawi, dan transportasi umum Jakarta.' },
+      {
+        nama: 'Pramuka Siaga / Penggalang',
+        predikat: 'Sangat Baik',
+        keterangan: 'Menunjukkan sikap kemandirian, kepemimpinan, dan gotong royong dalam kepramukaan.',
+      },
+      {
+        nama: 'Seni Tari Tradisional Betawi',
+        predikat: 'Baik',
+        keterangan: 'Mampu menampilkan gerak tari tradisional Betawi dengan percaya diri.',
+      },
     ];
   };
 
@@ -310,25 +407,26 @@ export const ERaporTab: React.FC<Props> = ({
           <div className="grid grid-cols-2 gap-3 mb-3 text-xs">
             {/* Ekskul */}
             <div className="border border-slate-900 rounded-lg p-2 bg-slate-50/30">
-              <div className="font-black text-slate-900 uppercase text-[11px] mb-1.5 pb-1 border-b border-slate-900">
-                Kegiatan Ekstrakurikuler
+              <div className="font-black text-slate-900 uppercase text-[11px] mb-1.5 pb-1 border-b border-slate-900 flex items-center justify-between">
+                <span>Kegiatan Ekstrakurikuler</span>
+                <span className="text-[9px] font-normal text-slate-500">Terkoneksi Penilaian Ekskul</span>
               </div>
-              <table className="w-full text-left text-[11px]">
+              <table className="w-full text-left text-[10.5px]">
                 <thead>
-                  <tr className="border-b border-slate-300 font-bold">
-                    <th className="pb-1">Kegiatan</th>
-                    <th className="pb-1 text-center">Predikat</th>
+                  <tr className="border-b border-slate-300 font-bold text-slate-800">
+                    <th className="pb-1 w-2/5">Kegiatan</th>
+                    <th className="pb-1 text-center w-1/5">Predikat</th>
+                    <th className="pb-1 w-2/5">Keterangan / Pencapaian</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  <tr>
-                    <td className="py-1">Pramuka Penggalang</td>
-                    <td className="py-1 text-center font-bold text-emerald-800">Sangat Baik</td>
-                  </tr>
-                  <tr>
-                    <td className="py-1">Seni Tari Betawi</td>
-                    <td className="py-1 text-center font-bold text-emerald-800">Baik</td>
-                  </tr>
+                  {getStudentEkskuls().map((ek, i) => (
+                    <tr key={i}>
+                      <td className="py-1 font-semibold text-slate-900">{ek.nama}</td>
+                      <td className="py-1 text-center font-black text-emerald-800">{ek.predikat}</td>
+                      <td className="py-1 text-[9.5px] text-slate-600 leading-tight">{ek.keterangan}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

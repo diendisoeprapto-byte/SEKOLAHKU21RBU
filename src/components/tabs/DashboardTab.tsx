@@ -1,6 +1,6 @@
 import React from 'react';
 import { Users, QrCode, TrendingUp, Database, Camera, CloudDownload, Award } from 'lucide-react';
-import { SchoolProfile, Student, Teacher } from '../../types';
+import { SchoolProfile, Student, Teacher, KaldikDay } from '../../types';
 import { AttendanceRecordItem } from '../../utils/storage';
 import { TabId } from '../Sidebar';
 
@@ -12,6 +12,7 @@ interface Props {
   teachers: Teacher[];
   attendanceRecords: Record<string, AttendanceRecordItem>;
   todayDate: string;
+  kaldikDays?: KaldikDay[];
   onNavigateTab: (tab: TabId) => void;
   onOpenZoom: (url: string, title: string) => void;
 }
@@ -24,17 +25,24 @@ export const DashboardTab: React.FC<Props> = ({
   teachers,
   attendanceRecords,
   todayDate,
+  kaldikDays = [],
   onNavigateTab,
   onOpenZoom,
 }) => {
   const filteredStudents = students.filter((s) => s.kelas === activeClass);
 
+  const todayKaldik = kaldikDays.find((k) => k.date === todayDate);
+  const isTodaySunday = new Date(todayDate).getDay() === 0;
+  const isTodayHoliday = isTodaySunday || (todayKaldik ? todayKaldik.isHoliday : false);
+  const holidayName = isTodaySunday ? 'Hari Minggu (Libur)' : (todayKaldik?.keterangan || 'Hari Libur');
+
   let presentCount = 0;
-  filteredStudents.forEach((s) => {
-    const rec = attendanceRecords[`${todayDate}_${s.id}`];
-    if (rec && rec.status === 'H') presentCount++;
-    else if (!rec) presentCount++; // default assume present
-  });
+  if (!isTodayHoliday) {
+    filteredStudents.forEach((s) => {
+      const rec = attendanceRecords[`${todayDate}_${s.id}`];
+      if (rec && rec.status === 'H') presentCount++;
+    });
+  }
 
   const homeroomTeacher = teachers.find((t) => t.penugasan === activeClass);
 
@@ -85,12 +93,14 @@ export const DashboardTab: React.FC<Props> = ({
         <div className="bg-white p-5 rounded-3xl shadow-md border border-slate-100 flex items-center justify-between">
           <div>
             <span className="text-xs font-bold text-slate-400 uppercase">Kehadiran Hari Ini</span>
-            <div className="text-2xl font-display font-black text-emerald-600 mt-1">
-              {presentCount} Hadir
+            <div className={`text-2xl font-display font-black mt-1 ${isTodayHoliday ? 'text-slate-400' : 'text-emerald-600'}`}>
+              {isTodayHoliday ? '0 Hadir' : `${presentCount} / ${filteredStudents.length} Hadir`}
             </div>
-            <span className="text-[11px] text-slate-500 font-bold">Hasil Scan Barcode</span>
+            <span className={`text-[11px] font-bold ${isTodayHoliday ? 'text-amber-600' : 'text-slate-500'}`}>
+              {isTodayHoliday ? `(Libur: ${holidayName})` : 'Hasil Scan Barcode'}
+            </span>
           </div>
-          <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-xl">
+          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl ${isTodayHoliday ? 'bg-slate-100 text-slate-400' : 'bg-emerald-100 text-emerald-600'}`}>
             <QrCode className="w-6 h-6" />
           </div>
         </div>
@@ -157,7 +167,7 @@ export const DashboardTab: React.FC<Props> = ({
             <tbody className="divide-y divide-slate-100">
               {filteredStudents.map((s, idx) => {
                 const rec = attendanceRecords[`${todayDate}_${s.id}`];
-                const status = rec ? rec.status : 'H';
+                const status = isTodayHoliday ? 'LIBUR' : (rec ? rec.status : 'BELUM');
                 const baseScore = 80 + (idx % 15);
 
                 return (
@@ -183,16 +193,20 @@ export const DashboardTab: React.FC<Props> = ({
                     <td className="p-3 text-center">
                       <span
                         className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-extrabold ${
-                          status === 'H'
+                          status === 'LIBUR'
+                            ? 'bg-amber-100 text-amber-800'
+                            : status === 'H'
                             ? 'bg-emerald-100 text-emerald-800'
                             : status === 'S'
                             ? 'bg-sky-100 text-sky-800'
                             : status === 'I'
                             ? 'bg-amber-100 text-amber-800'
-                            : 'bg-rose-100 text-rose-800'
+                            : status === 'A'
+                            ? 'bg-rose-100 text-rose-800'
+                            : 'bg-slate-100 text-slate-500'
                         }`}
                       >
-                        {status === 'H' ? 'Hadir' : status === 'S' ? 'Sakit' : status === 'I' ? 'Izin' : 'Alfa'}
+                        {status === 'LIBUR' ? 'Libur' : status === 'H' ? 'Hadir' : status === 'S' ? 'Sakit' : status === 'I' ? 'Izin' : status === 'A' ? 'Alfa' : 'Belum Absen'}
                       </span>
                     </td>
                     <td className="p-3 text-center font-display font-extrabold text-sky-700">
