@@ -250,8 +250,8 @@ export const BackupTab: React.FC<Props> = ({
             </div>
             <div className="p-3.5 rounded-2xl bg-white border border-slate-200 space-y-1">
               <span className="text-[10px] font-bold uppercase text-slate-400 block">Database ID Firestore</span>
-              <span className="font-mono font-bold text-purple-700 truncate block" title={firebaseConfig.firestoreDatabaseId}>
-                {firebaseConfig.firestoreDatabaseId}
+              <span className="font-mono font-bold text-purple-700 truncate block" title={(firebaseConfig as any).firestoreDatabaseId || '(default)'}>
+                {(firebaseConfig as any).firestoreDatabaseId || '(default)'}
               </span>
             </div>
           </div>

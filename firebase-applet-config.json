@@ -1,12 +1,9 @@
 {
-  "projectId": "soy-night-zvc14",
-  "appId": "1:138354219205:web:da8deccc6891c6dc4db8ac",
-  "apiKey": "AIzaSyAOmws2y_pLIIfmoGWqouJmXCeqypalE_M",
-  "authDomain": "soy-night-zvc14.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-sekolahkusdnrawa-2c2c24f0-83a4-4b8f-9f8e-269a8e95de29",
-  "storageBucket": "soy-night-zvc14.firebasestorage.app",
-  "messagingSenderId": "138354219205",
-  "measurementId": "",
-  "oAuthClientId": "138354219205-t93shfocpl5kacvk12fj3sl1oidodi7a.apps.googleusercontent.com",
-  "recaptchaSiteKey": ""
+  "projectId": "appadministrasi",
+  "appId": "1:656212188216:web:1d7ca777550627f5de9acd",
+  "apiKey": "AIzaSyCsZr3o19fL_Rl0K9cDuv2sDQaRPaQpMDA",
+  "authDomain": "appadministrasi.firebaseapp.com",
+  "storageBucket": "appadministrasi.firebasestorage.app",
+  "messagingSenderId": "656212188216",
+  "measurementId": "G-R8MTNPS69M"
 }

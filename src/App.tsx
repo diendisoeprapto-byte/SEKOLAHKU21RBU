@@ -66,6 +66,7 @@ import {
   pullAllDataFromCloud,
   pushAllDataToCloud,
   subscribeToCloudChanges,
+  syncAllLocalToCloud,
 } from './utils/cloudSync';
 
 export default function App() {
@@ -83,37 +84,54 @@ export default function App() {
   useEffect(() => {
     testConnection();
 
+    const applyCloudPayload = (cloudData: any) => {
+      if (!cloudData) return;
+      if (cloudData.profile) {
+        setProfile(cloudData.profile);
+        saveStoredProfile(cloudData.profile);
+      }
+      if (cloudData.teachers) {
+        setTeachers(cloudData.teachers);
+        saveStoredTeachers(cloudData.teachers);
+      }
+      if (cloudData.students) {
+        setStudents(cloudData.students);
+        saveStoredStudents(cloudData.students);
+      }
+      if (cloudData.subjects) {
+        setSubjects(cloudData.subjects);
+        saveStoredSubjects(cloudData.subjects);
+      }
+      if (cloudData.kaldikDays) {
+        setKaldikDays(cloudData.kaldikDays);
+        saveStoredKaldik(cloudData.kaldikDays);
+      }
+      if (cloudData.attendance) {
+        setAttendanceRecords(cloudData.attendance);
+        saveStoredAttendance(cloudData.attendance);
+      }
+      if (cloudData.ekskulList) {
+        localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(cloudData.ekskulList));
+      }
+      if (cloudData.penilaianEkskul) {
+        localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(cloudData.penilaianEkskul));
+      }
+    };
+
     // Pull initial cloud state if available
     pullAllDataFromCloud().then((cloudData) => {
-      if (cloudData) {
-        if (cloudData.profile) setProfile(cloudData.profile);
-        if (cloudData.teachers) setTeachers(cloudData.teachers);
-        if (cloudData.students) setStudents(cloudData.students);
-        if (cloudData.subjects) setSubjects(cloudData.subjects);
-        if (cloudData.kaldikDays) setKaldikDays(cloudData.kaldikDays);
-        if (cloudData.ekskulList) {
-          localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(cloudData.ekskulList));
-        }
-        if (cloudData.penilaianEkskul) {
-          localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(cloudData.penilaianEkskul));
-        }
+      if (cloudData && (cloudData.students || cloudData.teachers || cloudData.profile)) {
+        applyCloudPayload(cloudData);
+      } else {
+        // Seed initial local data into cloud if cloud is freshly created
+        syncAllLocalToCloud('initial_seed');
       }
     });
 
-    // Realtime listener for cross-device updates
+    // Realtime listener for cross-device updates (Laptop <-> Tablet)
     const unsubscribe = subscribeToCloudChanges((cloudData) => {
       if (cloudData) {
-        if (cloudData.profile) setProfile(cloudData.profile);
-        if (cloudData.teachers) setTeachers(cloudData.teachers);
-        if (cloudData.students) setStudents(cloudData.students);
-        if (cloudData.subjects) setSubjects(cloudData.subjects);
-        if (cloudData.kaldikDays) setKaldikDays(cloudData.kaldikDays);
-        if (cloudData.ekskulList) {
-          localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(cloudData.ekskulList));
-        }
-        if (cloudData.penilaianEkskul) {
-          localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(cloudData.penilaianEkskul));
-        }
+        applyCloudPayload(cloudData);
       }
     });
 
@@ -211,34 +229,39 @@ export default function App() {
     }, 3500);
   };
 
-  // Sync profile update
+  // Sync profile update with cloud
   const handleSaveProfile = (newProfile: SchoolProfile) => {
     setProfile(newProfile);
     saveStoredProfile(newProfile);
+    pushAllDataToCloud({ profile: newProfile }, activeUser?.name || 'admin');
   };
 
-  // Sync teachers update
+  // Sync teachers update with cloud
   const handleSaveTeachers = (newTeachers: Teacher[]) => {
     setTeachers(newTeachers);
     saveStoredTeachers(newTeachers);
+    pushAllDataToCloud({ teachers: newTeachers }, activeUser?.name || 'admin');
   };
 
-  // Sync students update
+  // Sync students update with cloud (instantly syncs deletions and additions across laptop & tablet)
   const handleSaveStudents = (newStudents: Student[]) => {
     setStudents(newStudents);
     saveStoredStudents(newStudents);
+    pushAllDataToCloud({ students: newStudents }, activeUser?.name || 'admin');
   };
 
-  // Sync kaldik update
+  // Sync kaldik update with cloud
   const handleSaveKaldik = (newDays: KaldikDay[]) => {
     setKaldikDays(newDays);
     saveStoredKaldik(newDays);
+    pushAllDataToCloud({ kaldikDays: newDays }, activeUser?.name || 'admin');
   };
 
-  // Sync attendance update
+  // Sync attendance update with cloud
   const handleSaveAttendance = (newRecords: Record<string, AttendanceRecordItem>) => {
     setAttendanceRecords(newRecords);
     saveStoredAttendance(newRecords);
+    pushAllDataToCloud({ attendance: newRecords }, activeUser?.name || 'admin');
   };
 
   // Global filters
@@ -249,7 +272,7 @@ export default function App() {
     saveActiveFilters(y, s, c);
   };
 
-  // Login & Logout
+  // Login & Logout: default always opens Beranda Sekolah ('dashboard')
   const handleLoginSuccess = (user: ActiveUser) => {
     setActiveUser(user);
     localStorage.setItem('sekolahku_active_user', JSON.stringify(user));
@@ -258,8 +281,8 @@ export default function App() {
     if (user.role === 'siswa') {
       setActiveTab('ujian');
     } else {
-      const lastTab = (localStorage.getItem('sekolahku_last_tab') as TabId) || 'dashboard';
-      setActiveTab(lastTab === 'ujian' ? 'dashboard' : lastTab);
+      // Selalu tampilkan menu beranda sekolah saat baru login
+      setActiveTab('dashboard');
       if (user.kelasDiampu) {
         setActiveClass(user.kelasDiampu);
       }
@@ -425,6 +448,16 @@ export default function App() {
                   kaldikDays={kaldikDays}
                   onNavigateTab={setActiveTab}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
+                  onSelectClass={setActiveClass}
+                  showToast={showToast}
+                  onTriggerSync={async () => {
+                    const success = await syncAllLocalToCloud(activeUser?.name || 'admin');
+                    if (success) {
+                      showToast('Data berhasil disinkronkan ke Cloud Firestore!', 'success');
+                    } else {
+                      showToast('Sinkronisasi cloud gagal. Cek koneksi internet.', 'error');
+                    }
+                  }}
                 />
               )}
 
@@ -528,6 +561,7 @@ export default function App() {
                   onUpdateSubjects={(updated) => {
                     setSubjects(updated);
                     saveStoredSubjects(updated);
+                    pushAllDataToCloud({ subjects: updated }, activeUser?.name || 'admin');
                   }}
                   activeClass={activeClass}
                   students={students}

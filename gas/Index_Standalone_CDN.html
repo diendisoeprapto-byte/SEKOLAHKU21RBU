@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>SEKOLAHKU | SDN Rawa Badak Utara 21 - Standalone Web App</title>
+  
+  <meta name="description" content="Sistem Informasi Penilaian Kurikulum Merdeka, Presensi Barcode Kamera, e-Rapor & CBT SDN Rawa Badak Utara 21">
+  <meta property="og:title" content="SEKOLAHKU - SDN Rawa Badak Utara 21">
+
+  <!-- 1. Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- 2. FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <!-- 3. Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'system-ui', 'sans-serif'],
+            display: ['Nunito', 'system-ui', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- 4. Vue 3 Reactive Framework (No-build Standalone) -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+
+  <!-- 5. Firebase SDK (App & Firestore Compat untuk Web/GAS) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+  <!-- 6. JsBarcode (Render Barcode CODE-128 Kartu Siswa) -->
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+
+  <!-- 7. Html5-QRCode (Scanner Kamera Barcode CODE-128 & QR Universal) -->
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
+  <!-- 8. SheetJS (Import & Export Excel .xlsx) -->
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background-color: #FFFDF9;
+      background-image: radial-gradient(#FDE68A 1px, transparent 1px), radial-gradient(#FECDD3 1px, #FFFDF9 1px);
+      background-size: 36px 36px;
+      background-position: 0 0, 18px 18px;
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+    }
+    h1, h2, h3, h4, .font-display { font-family: 'Nunito', sans-serif; }
+    
+    @keyframes scanLaser {
+      0% { top: 8%; opacity: 0.9; }
+      50% { top: 88%; opacity: 1; }
+      100% { top: 8%; opacity: 0.9; }
+    }
+    .laser-line {
+      position: absolute;
+      left: 6%;
+      width: 88%;
+      height: 3px;
+      background: linear-gradient(90deg, transparent, #22c55e, #4ade80, #22c55e, transparent);
+      box-shadow: 0 0 12px 3px rgba(34, 197, 94, 0.85);
+      animation: scanLaser 2.2s infinite ease-in-out;
+    }
+    #html5qr-code-full-region {
+      border: none !important;
+      position: relative !important;
+      width: 100% !important;
+      background: #0f172a !important;
+    }
+    #html5qr-code-full-region video {
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: cover !important;
+      border-radius: 1.25rem !important;
+    }
+    #html5qr-code-full-region img[alt="Info icon"] { display: none !important; }
+  </style>
+</head>
+<body class="antialiased selection:bg-rose-500 selection:text-white text-slate-800">
+  <div id="app" class="min-h-screen flex flex-col">
+    <!-- Toast Notification Stack -->
+    <div class="fixed top-4 right-4 z-[999] flex flex-col gap-2 max-w-sm w-full pointer-events-none px-4 sm:px-0">
+      <div v-for="t in toasts" :key="t.id"
+           :class="['p-3.5 rounded-2xl shadow-xl border-2 text-xs font-display font-black flex items-center gap-2 pointer-events-auto transition-all',
+                    t.type === 'error' ? 'bg-rose-600 text-white border-rose-700' : 'bg-emerald-600 text-white border-emerald-700']">
+        <i :class="['fa-solid', t.type === 'error' ? 'fa-triangle-exclamation' : 'fa-circle-check']"></i>
+        <span>{{ t.text }}</span>
+      </div>
+    </div>
+
+    <!-- 1. LOGIN SCREEN -->
+    <div v-if="!activeUser" class="min-h-screen flex items-center justify-center p-4">
+      <div class="max-w-md w-full bg-white rounded-3xl p-8 shadow-2xl border-2 border-rose-200 space-y-6">
+        <div class="text-center space-y-2">
+          <div class="w-16 h-16 mx-auto rounded-2xl bg-rose-600 text-white flex items-center justify-center text-3xl font-black shadow-lg shadow-rose-200">
+            <i class="fa-solid fa-graduation-cap"></i>
+          </div>
+          <h1 class="text-2xl font-display font-black text-slate-800">{{ schoolProfile.name }}</h1>
+          <p class="text-xs text-slate-500">Database Realtime Firebase Firestore (Project: appadministrasi)</p>
+        </div>
+
+        <form @submit.prevent="handleLogin" class="space-y-4">
+          <div>
+            <label class="block text-xs font-extrabold text-slate-700 uppercase mb-1">Username / NIP / NISN</label>
+            <input v-model="loginForm.username" type="text" required placeholder="admin / guru / siswa"
+                   class="w-full px-4 py-2.5 rounded-2xl border-2 border-slate-200 focus:border-rose-600 outline-none text-xs font-bold font-mono">
+          </div>
+          <div>
+            <label class="block text-xs font-extrabold text-slate-700 uppercase mb-1">Password</label>
+            <input v-model="loginForm.password" type="password" required placeholder="••••••••"
+                   class="w-full px-4 py-2.5 rounded-2xl border-2 border-slate-200 focus:border-rose-600 outline-none text-xs font-bold font-mono">
+          </div>
+          <button type="submit"
+                  class="w-full py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold text-xs uppercase tracking-wider transition shadow-md shadow-rose-200 cursor-pointer">
+            Masuk Aplikasi
+          </button>
+        </form>
+
+        <div class="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1 text-[11px] text-slate-600">
+          <div class="font-extrabold text-slate-700">Akun Login:</div>
+          <div>Admin: <strong class="text-rose-700 font-mono">admin / admin</strong></div>
+          <div>Guru: <strong class="text-rose-700 font-mono">guru / 123</strong> | Siswa: <strong class="text-rose-700 font-mono">siswa / 123</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. MAIN APPLICATION -->
+    <div v-else class="flex flex-col min-h-screen">
+      <!-- Header -->
+      <header class="bg-white border-b-2 border-rose-100 shadow-xs sticky top-0 z-40">
+        <div class="max-w-[1600px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <button @click="isSidebarOpen = !isSidebarOpen" class="w-10 h-10 rounded-2xl bg-rose-50 text-rose-700 hover:bg-rose-100 flex items-center justify-center font-bold">
+              <i class="fa-solid fa-bars text-sm"></i>
+            </button>
+            <div class="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center text-lg font-bold shadow-md shadow-rose-200">
+              <i class="fa-solid fa-school"></i>
+            </div>
+            <div>
+              <div class="text-[10px] font-extrabold uppercase text-rose-700 tracking-wider">APLIKASI SEKOLAHKU</div>
+              <h2 class="text-sm sm:text-base font-display font-black text-slate-800 leading-tight">{{ schoolProfile.name }}</h2>
+            </div>
+          </div>
+
+          <!-- Rombel Selector & User Info -->
+          <div class="flex items-center gap-2">
+            <div class="hidden sm:flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-2xl text-xs font-bold text-slate-700 border border-slate-200">
+              <i class="fa-solid fa-users-rectangle text-rose-600"></i>
+              <span>Rombel:</span>
+              <select v-model="activeClass" class="bg-transparent font-black text-rose-700 outline-none cursor-pointer">
+                <option v-for="cls in rombelList" :key="cls" :value="cls">{{ cls }}</option>
+              </select>
+            </div>
+
+            <div class="flex items-center gap-2 bg-rose-50 px-3 py-1.5 rounded-2xl border border-rose-200">
+              <div class="w-7 h-7 rounded-xl bg-rose-600 text-white flex items-center justify-center text-xs font-bold">
+                {{ activeUser.name.charAt(0) }}
+              </div>
+              <div class="hidden md:block text-left">
+                <div class="text-xs font-black text-slate-800 leading-none">{{ activeUser.name }}</div>
+                <div class="text-[10px] text-rose-700 font-bold uppercase">{{ activeUser.role }}</div>
+              </div>
+              <button @click="handleLogout" title="Keluar" class="ml-1 text-slate-400 hover:text-rose-600 text-xs cursor-pointer">
+                <i class="fa-solid fa-right-from-bracket"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- Main Layout -->
+      <div class="max-w-[1600px] w-full mx-auto flex-1 flex flex-col lg:flex-row gap-6 p-4 sm:p-6">
+        <!-- Sidebar Navigation -->
+        <aside :class="['w-full lg:w-64 bg-white rounded-3xl p-4 shadow-md border border-slate-100 shrink-0 space-y-2 h-fit', isSidebarOpen ? 'block' : 'hidden lg:block']">
+          <div class="text-[10px] font-black uppercase text-slate-400 px-3 py-1 tracking-wider">Navigasi Utama</div>
+          
+          <button v-for="menu in menuItems" :key="menu.id" @click="activeTab = menu.id"
+                  :class="['w-full text-left px-3.5 py-2.5 rounded-2xl text-xs font-display font-extrabold flex items-center gap-3 transition cursor-pointer',
+                           activeTab === menu.id ? 'bg-rose-600 text-white shadow-md shadow-rose-200' : 'text-slate-600 hover:bg-rose-50 hover:text-rose-700']">
+            <i :class="['fa-solid text-sm w-4', menu.icon]"></i>
+            <span>{{ menu.label }}</span>
+          </button>
+
+          <div class="pt-4 border-t border-slate-100">
+            <button @click="triggerCloudSync" :disabled="isSyncing"
+                    class="w-full py-2.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-display font-black flex items-center justify-center gap-2 cursor-pointer transition">
+              <i :class="['fa-solid fa-cloud-arrow-up', isSyncing ? 'fa-spin' : '']"></i>
+              <span>{{ isSyncing ? 'Menyinkronkan...' : 'Realtime Firestore: ON' }}</span>
+            </button>
+          </div>
+        </aside>
+
+        <!-- Main Content View -->
+        <main class="flex-1 min-w-0 space-y-6">
+          
+          <!-- TAB 1: BERANDA SEKOLAH (DASHBOARD) -->
+          <div v-if="activeTab === 'dashboard'" class="space-y-6">
+            <!-- Banner Utama -->
+            <div class="bg-gradient-to-r from-rose-600 via-rose-500 to-amber-500 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+              <div class="relative z-10 space-y-2 max-w-2xl">
+                <span class="px-3 py-1 rounded-full bg-white/20 text-white text-[11px] font-extrabold uppercase tracking-wider backdrop-blur-xs">
+                  Realtime Firebase Firestore • Project: appadministrasi
+                </span>
+                <h1 class="text-2xl sm:text-3xl font-display font-black leading-tight">{{ schoolProfile.name }}</h1>
+                <p class="text-xs sm:text-sm text-rose-100 leading-relaxed">
+                  Penyimpanan cloud terpusat menggunakan Firestore onSnapshot. Seluruh perubahan siswa, nilai, presensi, dan CBT otomatis realtime tanpa reload.
+                </p>
+              </div>
+            </div>
+
+            <!-- 5 ANGKA KUNCI UTAMA DI BAGIAN ATAS -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+              <!-- 1. Total Siswa (12 Rombel 1A-6B) -->
+              <div class="bg-white p-5 rounded-3xl shadow-md border-2 border-slate-100 hover:border-rose-200 transition">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-[11px] font-black uppercase text-slate-500 tracking-wider">Total Siswa (12 Rombel)</span>
+                  <div class="w-8 h-8 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center text-xs">
+                    <i class="fa-solid fa-users"></i>
+                  </div>
+                </div>
+                <div class="text-3xl font-display font-black text-slate-800">{{ students.length }}</div>
+                <div class="text-[11px] text-slate-400 font-bold mt-1">Kelas 1A s.d. 6B Lengkap</div>
+              </div>
+
+              <!-- 2. Total Guru & Tendik -->
+              <div class="bg-white p-5 rounded-3xl shadow-md border-2 border-slate-100 hover:border-sky-200 transition">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-[11px] font-black uppercase text-slate-500 tracking-wider">Total Guru & GTK</span>
+                  <div class="w-8 h-8 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center text-xs">
+                    <i class="fa-solid fa-chalkboard-user"></i>
+                  </div>
+                </div>
+                <div class="text-3xl font-display font-black text-slate-800">{{ teachers.length }}</div>
+                <div class="text-[11px] text-slate-400 font-bold mt-1">Guru Kelas, Mapel & Tendik</div>
+              </div>
+
+              <!-- 3. Rasio Gender (L & P) -->
+              <div class="bg-white p-5 rounded-3xl shadow-md border-2 border-slate-100 hover:border-amber-200 transition">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-[11px] font-black uppercase text-slate-500 tracking-wider">Gender L & P</span>
+                  <div class="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-xs">
+                    <i class="fa-solid fa-venus-mars"></i>
+                  </div>
+                </div>
+                <div class="flex items-baseline gap-2">
+                  <span class="text-2xl font-display font-black text-sky-700">L: {{ genderStats.l }}</span>
+                  <span class="text-slate-300 font-bold">|</span>
+                  <span class="text-2xl font-display font-black text-rose-600">P: {{ genderStats.p }}</span>
+                </div>
+                <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden flex mt-2">
+                  <div :style="{ width: genderStats.lPct + '%' }" class="bg-sky-500 h-full"></div>
+                  <div :style="{ width: genderStats.pPct + '%' }" class="bg-rose-500 h-full"></div>
+                </div>
+              </div>
+
+              <!-- 4. Siswa Inklusi / ABK -->
+              <div class="bg-white p-5 rounded-3xl shadow-md border-2 border-slate-100 hover:border-purple-200 transition">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-[11px] font-black uppercase text-slate-500 tracking-wider">Siswa Inklusi / ABK</span>
+                  <div class="w-8 h-8 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center text-xs">
+                    <i class="fa-solid fa-heart"></i>
+                  </div>
+                </div>
+                <div class="text-3xl font-display font-black text-purple-700">{{ inclusionCount }}</div>
+                <div class="text-[11px] text-purple-600 font-bold mt-1">12 Kategori Kebutuhan Khusus</div>
+              </div>
+
+              <!-- 5. Kehadiran Hari Ini -->
+              <div class="bg-white p-5 rounded-3xl shadow-md border-2 border-slate-100 hover:border-emerald-200 transition">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-[11px] font-black uppercase text-slate-500 tracking-wider">Presensi Hari Ini</span>
+                  <div class="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xs">
+                    <i class="fa-solid fa-qrcode"></i>
+                  </div>
+                </div>
+                <div class="text-3xl font-display font-black text-emerald-600">{{ todayAttendancePct }}%</div>
+                <div class="text-[11px] font-bold mt-1" :class="isTodayHoliday ? 'text-rose-600' : 'text-emerald-700'">
+                  {{ isTodayHoliday ? 'Hari Libur Sekolah' : todayPresentCount + ' dari ' + students.length + ' Hadir' }}
+                </div>
+              </div>
+            </div>
+
+            <!-- STATUS SISTEM & INDIKATOR FIREBASE FIRESTORE REALTIME -->
+            <div class="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-4">
+              <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                <div class="flex items-center gap-2.5">
+                  <div class="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs">
+                    <i class="fa-solid fa-server"></i>
+                  </div>
+                  <div>
+                    <h3 class="font-display font-black text-base text-slate-800">Database Firestore Real-time (onSnapshot)</h3>
+                    <p class="text-xs text-slate-500">Project: <strong>appadministrasi</strong> • Dokumen: <code>school_data/primary_data</code></p>
+                  </div>
+                </div>
+                <span class="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  onSnapshot Active
+                </span>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-1">
+                  <div class="text-slate-500 font-bold uppercase text-[10px]">Auth Domain</div>
+                  <div class="font-mono font-black text-slate-800">appadministrasi.firebaseapp.com</div>
+                </div>
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-1">
+                  <div class="text-slate-500 font-bold uppercase text-[10px]">Penyimpanan Utama</div>
+                  <div class="font-display font-black text-emerald-700">Firestore Cloud Database</div>
+                </div>
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-1">
+                  <div class="text-slate-500 font-bold uppercase text-[10px]">Sinkronisasi Antar Perangkat</div>
+                  <div class="font-display font-black text-slate-800">Laptop &harr; Tablet &harr; Smartphone</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 2: DATA SISWA & KEBUTUHAN KHUSUS -->
+          <div v-if="activeTab === 'siswa'" class="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-6">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+              <div>
+                <h2 class="text-xl font-display font-black text-slate-800">Data Siswa &amp; Kebutuhan Khusus ({{ activeClass }})</h2>
+                <p class="text-xs text-slate-500">Tersimpan langsung di Firebase Firestore <code>school_data/primary_data</code>.</p>
+              </div>
+            </div>
+
+            <!-- Tabel Siswa -->
+            <div class="overflow-x-auto">
+              <table class="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr class="bg-slate-100 text-slate-700 uppercase font-black">
+                    <th class="p-3 rounded-l-xl">Barcode ID</th>
+                    <th class="p-3">Nama &amp; NISN</th>
+                    <th class="p-3 text-center">L/P</th>
+                    <th class="p-3">Kebutuhan Khusus (12 Kategori)</th>
+                    <th class="p-3">Orang Tua &amp; Alamat</th>
+                    <th class="p-3 text-center">Akun Siswa</th>
+                    <th class="p-3 rounded-r-xl text-center">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  <tr v-for="s in filteredStudents" :key="s.id" class="hover:bg-slate-50">
+                    <td class="p-3 font-mono font-bold text-rose-700">{{ s.barcodeId }}</td>
+                    <td class="p-3 font-bold text-slate-800">
+                      <div>{{ s.nama }}</div>
+                      <div class="text-[10px] text-slate-400 font-mono">NISN: {{ s.nisn }}</div>
+                    </td>
+                    <td class="p-3 text-center font-bold">{{ s.jenisKelamin }}</td>
+                    <td class="p-3">
+                      <span :class="['px-2 py-0.5 rounded-md font-bold text-[10px]', s.kebutuhanKhusus === 'Tidak Ada' ? 'bg-slate-100 text-slate-600' : 'bg-purple-100 text-purple-800']">
+                        {{ s.kebutuhanKhusus }}
+                      </span>
+                    </td>
+                    <td class="p-3 text-[11px] text-slate-600">
+                      <div>Ayah: {{ s.namaAyah }} | Ibu: {{ s.namaIbu }}</div>
+                      <div class="text-[10px] text-slate-400">{{ s.alamat }}</div>
+                    </td>
+                    <td class="p-3 text-center font-mono text-[11px]">
+                      <span class="text-sky-700 font-bold">{{ s.username }}</span> / <span class="text-slate-400">{{ s.password }}</span>
+                    </td>
+                    <td class="p-3 text-center">
+                      <button @click="deleteStudent(s.id)" class="text-rose-600 hover:text-rose-800 p-1" title="Hapus Siswa">
+                        <i class="fa-solid fa-trash"></i>
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- TAB 3: SCAN ABSENSI BARCODE KAMERA -->
+          <div v-if="activeTab === 'absensi'" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <!-- Kolom Kiri: Kamera Scanner & Checklist -->
+            <div class="lg:col-span-5 bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-4">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="font-display font-black text-lg text-slate-800">Scan Presensi Siswa</h3>
+                  <p class="text-xs text-slate-500">Membaca barcode kartu (CODE-128 &amp; QR) dan mencatat Hadir.</p>
+                </div>
+                <button @click="toggleCamera"
+                        :class="['px-3.5 py-2 rounded-xl font-display font-black text-xs flex items-center gap-2 cursor-pointer shadow-xs transition',
+                                 isCameraActive ? 'bg-rose-600 hover:bg-rose-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white']">
+                  <i :class="['fa-solid', isCameraActive ? 'fa-video-slash' : 'fa-camera']"></i>
+                  <span>{{ isCameraActive ? 'Matikan Kamera' : 'Aktifkan Kamera' }}</span>
+                </button>
+              </div>
+
+              <!-- Viewport Kamera Html5Qrcode -->
+              <div class="relative rounded-3xl overflow-hidden bg-slate-900 min-h-[250px] border-4 border-emerald-400 flex flex-col items-center justify-center text-white">
+                <div id="html5qr-code-full-region" :class="['w-full h-full min-h-[250px]', isCameraActive ? 'block' : 'hidden']"></div>
+                <div v-if="isCameraActive" class="laser-line"></div>
+                <div v-if="!isCameraActive" class="text-center p-6 space-y-2">
+                  <i class="fa-solid fa-qrcode text-4xl text-emerald-400 mb-2"></i>
+                  <p class="font-display font-black text-xs">Kamera Pemindai Siap</p>
+                  <p class="text-[11px] text-slate-400">Klik 'Aktifkan Kamera' untuk memindai kartu barcode siswa secara langsung.</p>
+                </div>
+              </div>
+
+              <!-- NOTIFIKASI CEKLIS SUKSES SCAN -->
+              <div v-if="scannedSuccess" class="p-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-xl space-y-2">
+                <div class="flex items-center justify-between">
+                  <span class="text-[10px] font-black uppercase tracking-wider bg-white/20 px-2.5 py-0.5 rounded-full">
+                    <i class="fa-solid fa-circle-check"></i> PRESENSI BERHASIL TERCATAT
+                  </span>
+                  <button @click="scannedSuccess = null" class="text-white hover:text-emerald-200 text-xs">
+                    <i class="fa-solid fa-xmark"></i>
+                  </button>
+                </div>
+                <div class="text-base font-display font-black">{{ scannedSuccess.nama }}</div>
+                <div class="text-xs font-mono">{{ scannedSuccess.barcodeId }} • Kelas: {{ scannedSuccess.kelas }}</div>
+                <div class="text-xs font-bold pt-1 border-t border-white/20 flex justify-between">
+                  <span>Status: HADIR (H)</span>
+                  <span>Jam: {{ scannedSuccess.time }}</span>
+                </div>
+              </div>
+
+              <!-- Input Manual / Scanner USB -->
+              <form @submit.prevent="handleManualBarcode" class="flex gap-2">
+                <input v-model="manualBarcodeCode" type="text" placeholder="Scan Barcode USB / Ketik ID Siswa..."
+                       class="flex-1 px-3.5 py-2 rounded-xl border-2 border-slate-200 text-xs font-mono font-bold outline-none focus:border-emerald-600">
+                <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold cursor-pointer">
+                  Submit
+                </button>
+              </form>
+            </div>
+
+            <!-- Kolom Kanan: Tabel Kehadiran -->
+            <div class="lg:col-span-7 bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-4">
+              <div class="flex items-center justify-between">
+                <h3 class="font-display font-black text-lg text-slate-800">Daftar Kehadiran ({{ activeClass }})</h3>
+                <button @click="markAllPresent" class="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold hover:bg-emerald-100">
+                  <i class="fa-solid fa-check-double mr-1"></i> Hadirkan Semua
+                </button>
+              </div>
+
+              <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr class="bg-slate-100 text-slate-700 uppercase font-black">
+                      <th class="p-3 rounded-l-xl">Barcode ID</th>
+                      <th class="p-3">Nama Siswa</th>
+                      <th class="p-3 text-center">Waktu Presensi</th>
+                      <th class="p-3 text-center">Status</th>
+                      <th class="p-3 rounded-r-xl text-center">Ubah</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100">
+                    <tr v-for="s in filteredStudents" :key="s.id" :class="['hover:bg-slate-50', scannedSuccess && scannedSuccess.id === s.id ? 'bg-emerald-50' : '']">
+                      <td class="p-3 font-mono font-bold text-rose-700">{{ s.barcodeId }}</td>
+                      <td class="p-3 font-bold text-slate-800">{{ s.nama }}</td>
+                      <td class="p-3 text-center font-mono">{{ getAttendanceTime(s.id) }}</td>
+                      <td class="p-3 text-center">
+                        <span :class="['px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase',
+                                       getAttendanceStatus(s.id) === 'H' ? 'bg-emerald-100 text-emerald-800' :
+                                       getAttendanceStatus(s.id) === 'S' ? 'bg-sky-100 text-sky-800' :
+                                       getAttendanceStatus(s.id) === 'I' ? 'bg-amber-100 text-amber-800' :
+                                       getAttendanceStatus(s.id) === 'A' ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-500']">
+                          {{ getAttendanceLabel(s.id) }}
+                        </span>
+                      </td>
+                      <td class="p-3 text-center space-x-1">
+                        <button @click="setStudentAttendance(s.id, 'H')" class="px-2 py-1 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-bold">H</button>
+                        <button @click="setStudentAttendance(s.id, 'S')" class="px-2 py-1 rounded bg-sky-100 hover:bg-sky-200 text-sky-800 font-bold">S</button>
+                        <button @click="setStudentAttendance(s.id, 'I')" class="px-2 py-1 rounded bg-amber-100 hover:bg-amber-200 text-amber-800 font-bold">I</button>
+                        <button @click="setStudentAttendance(s.id, 'A')" class="px-2 py-1 rounded bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold">A</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 4: BANK SOAL & CBT (SUMATIF) -->
+          <div v-if="activeTab === 'cbt'" class="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-6">
+            <div class="border-b border-slate-100 pb-4">
+              <h2 class="text-xl font-display font-black text-slate-800">Bank Soal &amp; Ujian CBT (Paket Sumatif)</h2>
+              <p class="text-xs text-slate-500">Pembuatan soal pilihan ganda, tombol Simpan &amp; Batal, serta pengaturan Acak Soal &amp; Jawaban.</p>
+            </div>
+
+            <!-- Form Soal Baru -->
+            <form @submit.prevent="saveCbtQuestion" class="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
+              <div class="font-display font-black text-sm text-slate-800">
+                {{ isEditingQuestion ? 'Edit Soal Sumatif' : 'Buat Soal Sumatif Baru' }}
+              </div>
+              <div>
+                <label class="block text-xs font-bold text-slate-700 mb-1">Pertanyaan / Butir Soal:</label>
+                <textarea v-model="cbtForm.question" required rows="3" placeholder="Tuliskan pertanyaan soal di sini..."
+                          class="w-full p-3 rounded-xl border border-slate-300 text-xs font-medium outline-none focus:border-rose-600 bg-white"></textarea>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-bold text-slate-700 mb-1">Opsi A:</label>
+                  <input v-model="cbtForm.optionA" type="text" required class="w-full p-2.5 rounded-xl border border-slate-300 text-xs bg-white">
+                </div>
+                <div>
+                  <label class="block text-xs font-bold text-slate-700 mb-1">Opsi B:</label>
+                  <input v-model="cbtForm.optionB" type="text" required class="w-full p-2.5 rounded-xl border border-slate-300 text-xs bg-white">
+                </div>
+                <div>
+                  <label class="block text-xs font-bold text-slate-700 mb-1">Opsi C:</label>
+                  <input v-model="cbtForm.optionC" type="text" required class="w-full p-2.5 rounded-xl border border-slate-300 text-xs bg-white">
+                </div>
+                <div>
+                  <label class="block text-xs font-bold text-slate-700 mb-1">Opsi D:</label>
+                  <input v-model="cbtForm.optionD" type="text" required class="w-full p-2.5 rounded-xl border border-slate-300 text-xs bg-white">
+                </div>
+              </div>
+
+              <div class="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <div class="flex items-center gap-2">
+                  <label class="text-xs font-bold text-slate-700">Kunci Jawaban Benar:</label>
+                  <select v-model="cbtForm.correctKey" class="p-2 rounded-xl border border-slate-300 text-xs font-bold bg-white">
+                    <option value="A">Opsi A</option>
+                    <option value="B">Opsi B</option>
+                    <option value="C">Opsi C</option>
+                    <option value="D">Opsi D</option>
+                  </select>
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <button type="button" @click="resetCbtForm" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold cursor-pointer">
+                    Batal
+                  </button>
+                  <button type="submit" class="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer shadow-xs">
+                    {{ isEditingQuestion ? 'Perbarui Soal' : 'Simpan Soal' }}
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            <!-- Pengaturan Acak Soal & Jawaban -->
+            <div class="p-4 rounded-2xl bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div class="font-extrabold text-amber-900">Pengaturan Ujian Siswa:</div>
+              <div class="flex items-center gap-4">
+                <label class="flex items-center gap-2 cursor-pointer font-bold text-slate-700">
+                  <input type="checkbox" v-model="cbtSettings.randomizeQuestions" class="w-4 h-4 accent-rose-600">
+                  <span>Acak Urutan Soal</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer font-bold text-slate-700">
+                  <input type="checkbox" v-model="cbtSettings.randomizeAnswers" class="w-4 h-4 accent-rose-600">
+                  <span>Acak Pilihan Jawaban</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Daftar Soal -->
+            <div class="space-y-3">
+              <div class="font-display font-black text-sm text-slate-800">Daftar Soal Sumatif (Total: {{ cbtQuestions.length }} Butir)</div>
+              <div v-for="(q, idx) in cbtQuestions" :key="q.id" class="p-4 rounded-2xl border border-slate-200 bg-white space-y-2">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="font-bold text-slate-800 text-xs">
+                    <span class="text-rose-600 mr-1">No. {{ idx + 1 }}:</span> {{ q.question }}
+                  </div>
+                  <div class="flex items-center gap-1 shrink-0">
+                    <button @click="editCbtQuestion(q)" class="p-1.5 text-sky-600 hover:bg-sky-50 rounded" title="Edit Soal">
+                      <i class="fa-solid fa-pen-to-square"></i>
+                    </button>
+                    <button @click="deleteCbtQuestion(q.id)" class="p-1.5 text-rose-600 hover:bg-rose-50 rounded" title="Hapus Soal">
+                      <i class="fa-solid fa-trash"></i>
+                    </button>
+                  </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+                  <div>A. {{ q.options.A }}</div>
+                  <div>B. {{ q.options.B }}</div>
+                  <div>C. {{ q.options.C }}</div>
+                  <div>D. {{ q.options.D }}</div>
+                </div>
+                <div class="text-[10px] font-bold text-emerald-700 pt-1 border-t border-slate-100">
+                  Kunci Jawaban: <span class="font-mono">{{ q.correctKey }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 5: KALENDER & RESET BULANAN -->
+          <div v-if="activeTab === 'kalender'" class="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div>
+                <h2 class="text-xl font-display font-black text-slate-800">Kalender Sekolah &amp; Presensi</h2>
+                <p class="text-xs text-slate-500">Tanggal aktif: {{ todayString }} • Dilengkapi tombol reset kehadiran bulanan.</p>
+              </div>
+              <button @click="resetMonthlyAttendance"
+                      class="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-2 cursor-pointer">
+                <i class="fa-solid fa-arrow-rotate-left"></i> Reset Kehadiran Bulan Ini
+              </button>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+              <div v-for="d in 28" :key="d" :class="['p-3 rounded-2xl border text-center space-y-1', d % 7 === 0 ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200']">
+                <div class="text-[11px] font-black text-slate-500">Nov {{ d }}</div>
+                <div :class="['text-xs font-bold', d % 7 === 0 ? 'text-rose-600' : 'text-emerald-700']">
+                  {{ d % 7 === 0 ? 'Libur Minggu' : 'Hadir: ' + filteredStudents.length + '/' + filteredStudents.length }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <!-- JAVASCRIPT LOGIKA UTUH DENGAN FIRESTORE onSnapshot -->
+  <script>
+    const { createApp, ref, computed, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const activeUser = ref(JSON.parse(localStorage.getItem('sekolahku_active_user') || 'null'));
+        const activeTab = ref(localStorage.getItem('sekolahku_last_tab') || 'dashboard');
+        const activeClass = ref('6A');
+        const isSidebarOpen = ref(false);
+        const toasts = ref([]);
+
+        const showToast = (text, type = 'success') => {
+          const id = Date.now();
+          toasts.value.push({ id, text, type });
+          setTimeout(() => {
+            toasts.value = toasts.value.filter(t => t.id !== id);
+          }, 3500);
+        };
+
+        const schoolProfile = ref({
+          name: "SDN RAWA BADAK UTARA 21",
+          npsn: "20105155",
+          kota: "Kota Administrasi Jakarta Utara",
+          semester: "1 (Ganjil)",
+          tahunPelajaran: "2026/2027"
+        });
+
+        const rombelList = ref(['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B', '5A', '5B', '6A', '6B']);
+
+        const teachers = ref([
+          { id: 't1', nama: 'H. Ahmad Syarifudin, M.Pd.', role: 'Kepala Sekolah', nip: '197505122000031001' },
+          { id: 't2', nama: 'Siti Rahmawati, S.Pd.', role: 'Guru Kelas 6A', nip: '198203152008012003' },
+          { id: 't3', nama: 'Bambang Irawan, S.Pd.', role: 'Guru Kelas 6B', nip: '198507202010011005' },
+          { id: 't4', nama: 'Nurul Hidayah, S.Pd.I.', role: 'Guru PAI', nip: '198911042014022001' },
+          { id: 't5', nama: 'Dedi Kurniawan, S.Pd.', role: 'Guru PJOK', nip: '199208182019031002' }
+        ]);
+
+        const students = ref([
+          { id: 's1', nama: 'Aditya Pratama', kelas: '6A', barcodeId: 'RBU21-6A-001', nisn: '0123456781', jenisKelamin: 'L', kebutuhanKhusus: 'Tidak Ada', namaAyah: 'Budi Pratama', namaIbu: 'Siti Aminah', alamat: 'Jl. Rawa Badak Utara No. 12', username: 'aditya6a', password: '123' },
+          { id: 's2', nama: 'Bella Safitri', kelas: '6A', barcodeId: 'RBU21-6A-002', nisn: '0123456782', jenisKelamin: 'P', kebutuhanKhusus: 'Cerdas Istimewa dan Bakat Istimewa (Gifted & Talented)', namaAyah: 'Iwan Safitri', namaIbu: 'Dewi Sartika', alamat: 'Jl. Alur Laut No. 4', username: 'bella6a', password: '123' },
+          { id: 's3', nama: 'Dimas Setiawan', kelas: '6A', barcodeId: 'RBU21-6A-003', nisn: '0123456783', jenisKelamin: 'L', kebutuhanKhusus: 'Lamban Belajar (Slow Learner)', namaAyah: 'Eko Setiawan', namaIbu: 'Rina Yuliana', alamat: 'Jl. Melati No. 8', username: 'dimas6a', password: '123' },
+          { id: 's4', nama: 'Fajar Nugraha', kelas: '6A', barcodeId: 'RBU21-6A-004', nisn: '0123456784', jenisKelamin: 'L', kebutuhanKhusus: 'Tidak Ada', namaAyah: 'Teguh Nugraha', namaIbu: 'Wati Lestari', alamat: 'Jl. Mawar No. 15', username: 'fajar6a', password: '123' },
+          { id: 's5', nama: 'Gita Permata', kelas: '6B', barcodeId: 'RBU21-6B-001', nisn: '0123456785', jenisKelamin: 'P', kebutuhanKhusus: 'Autisme (Autism Spectrum Disorder / ASD)', namaAyah: 'Asep Permata', namaIbu: 'Yanti Susanti', alamat: 'Jl. Dahlia No. 2', username: 'gita6b', password: '123' }
+        ]);
+
+        const todayString = new Date().toISOString().split('T')[0];
+        const isTodayHoliday = ref(new Date().getDay() === 0);
+        const attendanceRecords = ref({});
+
+        const filteredStudents = computed(() => {
+          return students.value.filter(s => s.kelas === activeClass.value);
+        });
+
+        const genderStats = computed(() => {
+          let l = 0, p = 0;
+          students.value.forEach(s => {
+            if (s.jenisKelamin === 'L') l++; else p++;
+          });
+          const total = students.value.length || 1;
+          return { l, p, lPct: Math.round((l / total) * 100), pPct: Math.round((p / total) * 100) };
+        });
+
+        const inclusionCount = computed(() => {
+          return students.value.filter(s => s.kebutuhanKhusus && s.kebutuhanKhusus !== 'Tidak Ada').length;
+        });
+
+        const todayPresentCount = computed(() => {
+          return students.value.filter(s => {
+            const r = attendanceRecords.value[`${todayString}_${s.id}`];
+            return r && r.status === 'H';
+          }).length;
+        });
+
+        const todayAttendancePct = computed(() => {
+          if (isTodayHoliday.value) return 0;
+          if (students.value.length === 0) return 0;
+          return Math.round((todayPresentCount.value / students.value.length) * 100);
+        });
+
+        const menuItems = [
+          { id: 'dashboard', label: 'Beranda Sekolah', icon: 'fa-house' },
+          { id: 'siswa', label: 'Data Siswa & Inklusi', icon: 'fa-user-graduate' },
+          { id: 'absensi', label: 'Scan Barcode Kamera', icon: 'fa-qrcode' },
+          { id: 'cbt', label: 'Bank Soal & CBT', icon: 'fa-laptop-file' },
+          { id: 'kalender', label: 'Kalender & Reset', icon: 'fa-calendar-days' },
+        ];
+
+        const loginForm = ref({ username: '', password: '' });
+        const handleLogin = () => {
+          const u = loginForm.value.username.trim().toLowerCase();
+          const p = loginForm.value.password.trim();
+          if ((u === 'admin' && p === 'admin') || (u === 'guru' && p === '123') || (u === 'siswa' && p === '123')) {
+            const role = u === 'admin' ? 'admin' : u === 'guru' ? 'guru' : 'siswa';
+            activeUser.value = { name: u.toUpperCase(), role };
+            localStorage.setItem('sekolahku_active_user', JSON.stringify(activeUser.value));
+            localStorage.setItem('sekolahku_last_activity', String(Date.now()));
+            activeTab.value = 'dashboard';
+            localStorage.setItem('sekolahku_last_tab', 'dashboard');
+            showToast(`Selamat datang ${activeUser.value.name}!`, 'success');
+          } else {
+            showToast('Username atau password tidak sesuai!', 'error');
+          }
+        };
+
+        const handleLogout = () => {
+          activeUser.value = null;
+          localStorage.removeItem('sekolahku_active_user');
+          showToast('Anda telah keluar dari aplikasi', 'success');
+        };
+
+        const isCameraActive = ref(false);
+        const scannedSuccess = ref(null);
+        const manualBarcodeCode = ref('');
+        let html5QrScanner = null;
+
+        const playBeep = () => {
+          try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.frequency.setValueAtTime(880, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.12);
+            gain.gain.setValueAtTime(0.25, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.25);
+          } catch(e) {}
+        };
+
+        const markStudentPresent = (student) => {
+          const now = new Date();
+          const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+          const key = `${todayString}_${student.id}`;
+          attendanceRecords.value[key] = { id: key, studentId: student.id, date: todayString, status: 'H', time };
+          
+          scannedSuccess.value = { ...student, time };
+          playBeep();
+          showToast(`✓ Berhasil scan: ${student.nama} (${student.barcodeId}) - Hadir`, 'success');
+          pushToCloud();
+        };
+
+        const toggleCamera = async () => {
+          if (isCameraActive.value) {
+            if (html5QrScanner) {
+              await html5QrScanner.stop();
+              await html5QrScanner.clear();
+            }
+            isCameraActive.value = false;
+          } else {
+            try {
+              html5QrScanner = new Html5Qrcode("html5qr-code-full-region", {
+                formatsToSupport: [
+                  Html5QrcodeSupportedFormats.CODE_128,
+                  Html5QrcodeSupportedFormats.QR_CODE,
+                  Html5QrcodeSupportedFormats.CODE_39
+                ],
+                verbose: false
+              });
+              await html5QrScanner.start(
+                { facingMode: "environment" },
+                { fps: 20, qrbox: { width: 320, height: 160 } },
+                (decodedText) => {
+                  const clean = decodedText.trim().toLowerCase();
+                  const found = students.value.find(s => s.barcodeId.toLowerCase() === clean || s.nisn.toLowerCase() === clean || s.id.toLowerCase() === clean);
+                  if (found) {
+                    markStudentPresent(found);
+                  }
+                },
+                () => {}
+              );
+              isCameraActive.value = true;
+              showToast('Kamera pemindai aktif! Arahkan barcode ke layar.', 'success');
+            } catch(e) {
+              showToast('Tidak dapat mengaktifkan kamera: ' + e.message, 'error');
+            }
+          }
+        };
+
+        const handleManualBarcode = () => {
+          if (!manualBarcodeCode.value.trim()) return;
+          const clean = manualBarcodeCode.value.trim().toLowerCase();
+          const found = students.value.find(s => s.barcodeId.toLowerCase() === clean || s.nisn.toLowerCase() === clean || s.nama.toLowerCase().includes(clean));
+          if (found) {
+            markStudentPresent(found);
+            manualBarcodeCode.value = '';
+          } else {
+            showToast('Barcode siswa tidak ditemukan!', 'error');
+          }
+        };
+
+        const getAttendanceStatus = (stdId) => {
+          const rec = attendanceRecords.value[`${todayString}_${stdId}`];
+          return rec ? rec.status : '-';
+        };
+        const getAttendanceTime = (stdId) => {
+          const rec = attendanceRecords.value[`${todayString}_${stdId}`];
+          return rec ? rec.time : '--:--';
+        };
+        const getAttendanceLabel = (stdId) => {
+          const s = getAttendanceStatus(stdId);
+          if (s === 'H') return 'Hadir';
+          if (s === 'S') return 'Sakit';
+          if (s === 'I') return 'Izin';
+          if (s === 'A') return 'Alfa';
+          return 'Belum Scan';
+        };
+
+        const setStudentAttendance = (stdId, st) => {
+          const now = new Date();
+          const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+          const key = `${todayString}_${stdId}`;
+          attendanceRecords.value[key] = { id: key, studentId: stdId, date: todayString, status: st, time };
+          pushToCloud();
+        };
+
+        const markAllPresent = () => {
+          filteredStudents.value.forEach(s => {
+            const key = `${todayString}_${s.id}`;
+            attendanceRecords.value[key] = { id: key, studentId: s.id, date: todayString, status: 'H', time: '06:45' };
+          });
+          showToast(`Seluruh siswa ${activeClass.value} ditandai Hadir!`, 'success');
+          pushToCloud();
+        };
+
+        const resetMonthlyAttendance = () => {
+          if (confirm('Yakin ingin mereset kehadiran di bulan ini?')) {
+            attendanceRecords.value = {};
+            showToast('Kehadiran bulan ini berhasil direset!', 'success');
+            pushToCloud();
+          }
+        };
+
+        const deleteStudent = (id) => {
+          if (confirm('Yakin ingin menghapus siswa ini?')) {
+            students.value = students.value.filter(s => s.id !== id);
+            showToast('Siswa berhasil dihapus!', 'success');
+            pushToCloud();
+          }
+        };
+
+        const cbtQuestions = ref([
+          { id: 'q1', question: 'Hasil dari 125 + 375 : 25 adalah...', options: { A: '140', B: '150', C: '160', D: '175' }, correctKey: 'A' },
+          { id: 'q2', question: 'Ideologi dasar dan pedoman hidup bagi bangsa Indonesia adalah...', options: { A: 'UUD 1945', B: 'Pancasila', C: 'Bhinneka Tunggal Ika', D: 'Proklamasi' }, correctKey: 'B' }
+        ]);
+        const cbtForm = ref({ id: '', question: '', optionA: '', optionB: '', optionC: '', optionD: '', correctKey: 'A' });
+        const isEditingQuestion = ref(false);
+        const cbtSettings = ref({ randomizeQuestions: false, randomizeAnswers: false });
+
+        const saveCbtQuestion = () => {
+          if (isEditingQuestion.value) {
+            const idx = cbtQuestions.value.findIndex(q => q.id === cbtForm.value.id);
+            if (idx !== -1) {
+              cbtQuestions.value[idx] = {
+                id: cbtForm.value.id,
+                question: cbtForm.value.question,
+                options: { A: cbtForm.value.optionA, B: cbtForm.value.optionB, C: cbtForm.value.optionC, D: cbtForm.value.optionD },
+                correctKey: cbtForm.value.correctKey
+              };
+            }
+            showToast('Soal sumatif berhasil diperbarui!', 'success');
+          } else {
+            cbtQuestions.value.push({
+              id: 'q_' + Date.now(),
+              question: cbtForm.value.question,
+              options: { A: cbtForm.value.optionA, B: cbtForm.value.optionB, C: cbtForm.value.optionC, D: cbtForm.value.optionD },
+              correctKey: cbtForm.value.correctKey
+            });
+            showToast('Soal sumatif berhasil disimpan!', 'success');
+          }
+          resetCbtForm();
+          pushToCloud();
+        };
+
+        const resetCbtForm = () => {
+          cbtForm.value = { id: '', question: '', optionA: '', optionB: '', optionC: '', optionD: '', correctKey: 'A' };
+          isEditingQuestion.value = false;
+        };
+
+        const editCbtQuestion = (q) => {
+          cbtForm.value = { id: q.id, question: q.question, optionA: q.options.A, optionB: q.options.B, optionC: q.options.C, optionD: q.options.D, correctKey: q.correctKey };
+          isEditingQuestion.value = true;
+        };
+
+        const deleteCbtQuestion = (id) => {
+          if (confirm('Hapus soal ini?')) {
+            cbtQuestions.value = cbtQuestions.value.filter(q => q.id !== id);
+            showToast('Soal berhasil dihapus', 'success');
+            pushToCloud();
+          }
+        };
+
+        // Firebase Firestore Realtime Configuration
+        let firestoreDb = null;
+        const isSyncing = ref(false);
+
+        const initFirebase = () => {
+          try {
+            if (typeof firebase !== 'undefined' && !firebase.apps.length) {
+              const userFirebaseConfig = {
+                apiKey: "AIzaSyCsZr3o19fL_Rl0K9cDuv2sDQaRPaQpMDA",
+                authDomain: "appadministrasi.firebaseapp.com",
+                projectId: "appadministrasi",
+                storageBucket: "appadministrasi.firebasestorage.app",
+                messagingSenderId: "656212188216",
+                appId: "1:656212188216:web:1d7ca777550627f5de9acd",
+                measurementId: "G-R8MTNPS69M"
+              };
+              firebase.initializeApp(userFirebaseConfig);
+              firestoreDb = firebase.firestore();
+              
+              // Realtime onSnapshot Listener across all devices (no localStorage needed)
+              firestoreDb.collection('school_data').doc('primary_data').onSnapshot((doc) => {
+                if (doc.exists) {
+                  const data = doc.data();
+                  if (data.students) students.value = data.students;
+                  if (data.teachers) teachers.value = data.teachers;
+                  if (data.profile) schoolProfile.value = data.profile;
+                  if (data.attendance) attendanceRecords.value = data.attendance;
+                  if (data.cbtQuestions) cbtQuestions.value = data.cbtQuestions;
+                } else {
+                  // Seed Firestore with initial data if doc does not exist
+                  pushToCloud();
+                }
+              }, (err) => {
+                console.warn('onSnapshot realtime listener:', err);
+              });
+            }
+          } catch(e) {
+            console.warn('Firestore fallback:', e);
+          }
+        };
+
+        const pushToCloud = async () => {
+          if (!firestoreDb) return;
+          try {
+            await firestoreDb.collection('school_data').doc('primary_data').set({
+              students: students.value,
+              teachers: teachers.value,
+              profile: schoolProfile.value,
+              attendance: attendanceRecords.value,
+              cbtQuestions: cbtQuestions.value,
+              updatedAt: new Date().toISOString()
+            }, { merge: true });
+          } catch(e) {
+            console.warn('Gagal push ke Firestore:', e);
+          }
+        };
+
+        const triggerCloudSync = async () => {
+          isSyncing.value = true;
+          await pushToCloud();
+          setTimeout(() => {
+            isSyncing.value = false;
+            showToast('Data berhasil disinkronkan ke Cloud Firestore!', 'success');
+          }, 800);
+        };
+
+        onMounted(() => {
+          initFirebase();
+        });
+
+        return {
+          activeUser, activeTab, activeClass, isSidebarOpen, toasts, showToast,
+          schoolProfile, rombelList, teachers, students, filteredStudents,
+          genderStats, inclusionCount, todayAttendancePct, todayPresentCount, isTodayHoliday, todayString,
+          menuItems, loginForm, handleLogin, handleLogout,
+          isCameraActive, scannedSuccess, manualBarcodeCode, toggleCamera, handleManualBarcode,
+          getAttendanceStatus, getAttendanceTime, getAttendanceLabel, setStudentAttendance, markAllPresent,
+          resetMonthlyAttendance, deleteStudent,
+          cbtQuestions, cbtForm, isEditingQuestion, cbtSettings, saveCbtQuestion, resetCbtForm, editCbtQuestion, deleteCbtQuestion,
+          isSyncing, triggerCloudSync
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
