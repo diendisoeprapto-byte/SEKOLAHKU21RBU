@@ -49,6 +49,29 @@ export const KEBUTUHAN_KHUSUS_OPTIONS = [
 
 export type KebutuhanKhususType = typeof KEBUTUHAN_KHUSUS_OPTIONS[number];
 
+/**
+ * Memvalidasi apakah seorang siswa tergolong Siswa Inklusi / Berkebutuhan Khusus (ABK).
+ * Siswa reguler ("Tidak Ada", "Reguler", "Tidak Ada (Reguler)", "Siswa Reguler", "-", dll)
+ * secara mutlak TIDAK terhitung sebagai siswa inklusi.
+ */
+export const isSiswaInklusi = (val?: string | null): boolean => {
+  if (!val) return false;
+  const clean = val.trim().toLowerCase();
+  if (
+    clean === '' ||
+    clean === '-' ||
+    clean === 'none' ||
+    clean === 'normal' ||
+    clean === 'bukan abk' ||
+    clean === 'tanpa kebutuhan khusus' ||
+    clean.includes('tidak ada') ||
+    clean.includes('reguler')
+  ) {
+    return false;
+  }
+  return true;
+};
+
 export interface Student {
   id: string;
   barcodeId: string;

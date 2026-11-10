@@ -13,7 +13,7 @@ import {
   Save,
   CheckCircle2,
 } from 'lucide-react';
-import { Student, SchoolProfile, ReligionType, KEBUTUHAN_KHUSUS_OPTIONS } from '../../types';
+import { Student, SchoolProfile, ReligionType, KEBUTUHAN_KHUSUS_OPTIONS, isSiswaInklusi } from '../../types';
 import {
   downloadTemplateStudentsXLSX,
   exportStudentsToXLSX,
@@ -480,7 +480,7 @@ export const SiswaTab: React.FC<Props> = ({
                   <td className="p-3 max-w-[200px]">
                     <span
                       className={`inline-block px-2 py-0.5 rounded-lg text-[10px] font-bold ${
-                        s.kebutuhanKhusus && !s.kebutuhanKhusus.startsWith('Tidak Ada')
+                        isSiswaInklusi(s.kebutuhanKhusus)
                           ? 'bg-amber-100 text-amber-900 border border-amber-300'
                           : 'bg-slate-100 text-slate-600'
                       }`}

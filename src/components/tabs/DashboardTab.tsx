@@ -20,8 +20,9 @@ import {
   Smile,
   AlertCircle,
   Server,
+  X,
 } from 'lucide-react';
-import { SchoolProfile, Student, Teacher, KaldikDay } from '../../types';
+import { SchoolProfile, Student, Teacher, KaldikDay, isSiswaInklusi } from '../../types';
 import { AttendanceRecordItem, CLASSES_LIST } from '../../utils/storage';
 import { TabId } from '../Sidebar';
 import { getStorageStats, syncAllLocalToCloud } from '../../utils/cloudSync';
@@ -59,6 +60,7 @@ export const DashboardTab: React.FC<Props> = ({
 }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [storageStats, setStorageStats] = useState(getStorageStats());
+  const [showInklusiModal, setShowInklusiModal] = useState(false);
 
   useEffect(() => {
     setStorageStats(getStorageStats());
@@ -81,19 +83,16 @@ export const DashboardTab: React.FC<Props> = ({
   const pctPerempuan = totalSiswaAll > 0 ? Math.round((totalPerempuan / totalSiswaAll) * 100) : 0;
 
   // 4. Jumlah Siswa Inklusi / Kebutuhan Khusus dari Kelas 1A - 6B
-  const siswaInklusiList = students.filter(
-    (s) =>
-      s.kebutuhanKhusus &&
-      s.kebutuhanKhusus !== '-' &&
-      s.kebutuhanKhusus.toLowerCase() !== 'tidak ada' &&
-      s.kebutuhanKhusus.trim() !== ''
-  );
+  // Siswa reguler ("Tidak Ada", "Reguler", "Tidak Ada (Reguler)", "Siswa Reguler", "-", dll.)
+  // secara mutlak TIDAK terhitung sebagai siswa inklusi.
+  const siswaInklusiList = students.filter((s) => isSiswaInklusi(s.kebutuhanKhusus));
   const totalInklusi = siswaInklusiList.length;
+  const totalReguler = totalSiswaAll - totalInklusi;
 
   // Breakdown kategori inklusi
   const inklusiCategoriesMap: Record<string, number> = {};
   siswaInklusiList.forEach((s) => {
-    const kat = s.kebutuhanKhusus?.trim() || 'Lainnya';
+    const kat = s.kebutuhanKhusus?.trim() || 'Kebutuhan Khusus Lainnya';
     inklusiCategoriesMap[kat] = (inklusiCategoriesMap[kat] || 0) + 1;
   });
 
@@ -278,7 +277,11 @@ export const DashboardTab: React.FC<Props> = ({
         </div>
 
         {/* Card 4: Jumlah Siswa Inklusi (Kelas 1A - 6B) */}
-        <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200/80 flex flex-col justify-between hover:border-amber-300 transition group">
+        <div
+          onClick={() => setShowInklusiModal(true)}
+          className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200/80 flex flex-col justify-between hover:border-amber-400 hover:shadow-md transition group cursor-pointer"
+          title="Klik untuk melihat rincian verifikasi siswa inklusi vs reguler"
+        >
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
               Siswa Inklusi (ABK)
@@ -292,13 +295,14 @@ export const DashboardTab: React.FC<Props> = ({
               {totalInklusi} <span className="text-sm font-bold text-slate-500">Siswa</span>
             </div>
             <p className="text-[11px] text-amber-800 font-bold mt-1 flex items-center gap-1">
-              <Smile className="w-3.5 h-3.5" /> Sekolah Ramah Inklusi
+              <Smile className="w-3.5 h-3.5" />
+              {totalInklusi > 0 ? `${totalInklusi} Siswa Berkebutuhan Khusus` : '0 Siswa ABK (Semua Reguler)'}
             </p>
           </div>
-          <div className="mt-3 pt-2.5 border-t border-slate-100 text-[10.5px] text-slate-500 flex justify-between">
-            <span>Kebutuhan Khusus</span>
-            <strong className="text-amber-800">
-              {totalInklusi > 0 ? `${Object.keys(inklusiCategoriesMap).length} Jenis` : 'Nihil'}
+          <div className="mt-3 pt-2.5 border-t border-slate-100 text-[10.5px] text-slate-500 flex justify-between items-center">
+            <span>Siswa Reguler</span>
+            <strong className="text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md font-bold">
+              {totalReguler} Siswa (Non-ABK)
             </strong>
           </div>
         </div>
@@ -592,6 +596,132 @@ export const DashboardTab: React.FC<Props> = ({
           </button>
         </div>
       </div>
+
+      {/* ============================================================== */}
+      {/* 6. MODAL RINCIAN VERIFIKASI SISWA INKLUSI VS SISWA REGULER     */}
+      {/* ============================================================== */}
+      {showInklusiModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-50 to-orange-50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-md">
+                  <Heart className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-display font-black text-slate-800 text-base">
+                    Verifikasi Siswa Inklusi (ABK) vs Siswa Reguler
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    SDN Rawa Badak Utara 21 • Tahun Ajaran {activeYear}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowInklusiModal(false)}
+                className="p-2 text-slate-400 hover:text-slate-700 rounded-xl hover:bg-white/80 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4">
+              {/* Stat Badges */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 text-center">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase">Total Seluruh Siswa</span>
+                  <div className="text-xl font-black text-slate-800 mt-0.5">{totalSiswaAll}</div>
+                  <span className="text-[10px] text-slate-500">12 Rombel (1A - 6B)</span>
+                </div>
+                <div className="bg-emerald-50 p-3 rounded-2xl border border-emerald-200 text-center">
+                  <span className="text-[10px] font-bold text-emerald-700 uppercase">Siswa Reguler</span>
+                  <div className="text-xl font-black text-emerald-800 mt-0.5">{totalReguler}</div>
+                  <span className="text-[10px] text-emerald-600 font-semibold">TIDAK Masuk Inklusi</span>
+                </div>
+                <div className="bg-amber-50 p-3 rounded-2xl border border-amber-200 text-center">
+                  <span className="text-[10px] font-bold text-amber-700 uppercase">Siswa Inklusi (ABK)</span>
+                  <div className="text-xl font-black text-amber-800 mt-0.5">{totalInklusi}</div>
+                  <span className="text-[10px] text-amber-600 font-semibold">Angka Kunci Inklusi</span>
+                </div>
+              </div>
+
+              {/* Informative Alert */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/80 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <strong>Aturan Filter Inklusi:</strong> Siswa reguler dengan data kebutuhan khusus bernilai <em>"Tidak Ada (Reguler)"</em>, <em>"Reguler"</em>, <em>"Siswa Reguler"</em>, atau kosong <strong>secara otomatis tidak dimasukkan</strong> ke dalam hitungan angka kunci utama Siswa Inklusi. Hanya siswa dengan diagnosis 12 kebutuhan khusus resmi yang dihitung.
+                </div>
+              </div>
+
+              {/* Inklusi Students Table or Empty State */}
+              <div>
+                <h4 className="text-xs font-black uppercase tracking-wider text-slate-500 mb-2 flex items-center justify-between">
+                  <span>Daftar Siswa Kebutuhan Khusus ({totalInklusi})</span>
+                  {totalInklusi > 0 && (
+                    <span className="text-[10px] text-amber-800 font-bold bg-amber-100 px-2 py-0.5 rounded-md">
+                      {Object.keys(inklusiCategoriesMap).length} Kategori
+                    </span>
+                  )}
+                </h4>
+
+                {totalInklusi === 0 ? (
+                  <div className="text-center py-8 px-4 rounded-2xl bg-slate-50 border border-slate-200">
+                    <Smile className="w-10 h-10 text-emerald-500 mx-auto mb-2" />
+                    <p className="font-bold text-slate-700 text-sm">Tidak Ada Siswa Berkebutuhan Khusus (ABK)</p>
+                    <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                      Seluruh {totalSiswaAll} siswa berstatus sebagai Siswa Reguler dan tidak terhitung ke angka kunci inklusi.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                        <tr>
+                          <th className="p-2.5">No</th>
+                          <th className="p-2.5">Nama Siswa</th>
+                          <th className="p-2.5">Kelas</th>
+                          <th className="p-2.5">L/P</th>
+                          <th className="p-2.5">Kebutuhan Khusus (ABK)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {siswaInklusiList.map((s, idx) => (
+                          <tr key={s.id} className="hover:bg-amber-50/50">
+                            <td className="p-2.5 text-slate-500 font-mono">{idx + 1}</td>
+                            <td className="p-2.5 font-bold text-slate-800">{s.nama}</td>
+                            <td className="p-2.5">
+                              <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-mono font-bold text-[11px]">
+                                {s.kelas}
+                              </span>
+                            </td>
+                            <td className="p-2.5 font-bold">{s.jenisKelamin}</td>
+                            <td className="p-2.5">
+                              <span className="bg-amber-100 text-amber-900 border border-amber-200 px-2 py-0.5 rounded-lg text-[10.5px] font-bold">
+                                {s.kebutuhanKhusus}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowInklusiModal(false)}
+                className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };

@@ -361,8 +361,8 @@
                     </td>
                     <td class="p-3 text-center font-bold">{{ s.jenisKelamin }}</td>
                     <td class="p-3">
-                      <span :class="['px-2 py-0.5 rounded-md font-bold text-[10px]', s.kebutuhanKhusus === 'Tidak Ada' ? 'bg-slate-100 text-slate-600' : 'bg-purple-100 text-purple-800']">
-                        {{ s.kebutuhanKhusus }}
+                      <span :class="['px-2 py-0.5 rounded-md font-bold text-[10px]', isRegular(s.kebutuhanKhusus) ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-900 border border-amber-300']">
+                        {{ s.kebutuhanKhusus || 'Tidak Ada (Reguler)' }}
                       </span>
                     </td>
                     <td class="p-3 text-[11px] text-slate-600">
@@ -681,8 +681,14 @@
           return { l, p, lPct: Math.round((l / total) * 100), pPct: Math.round((p / total) * 100) };
         });
 
+        const isRegular = (val) => {
+          if (!val) return true;
+          const clean = String(val).trim().toLowerCase();
+          return clean === '' || clean === '-' || clean === 'none' || clean === 'normal' || clean === 'bukan abk' || clean.includes('tidak ada') || clean.includes('reguler');
+        };
+
         const inclusionCount = computed(() => {
-          return students.value.filter(s => s.kebutuhanKhusus && s.kebutuhanKhusus !== 'Tidak Ada').length;
+          return students.value.filter(s => !isRegular(s.kebutuhanKhusus)).length;
         });
 
         const todayPresentCount = computed(() => {
@@ -985,7 +991,7 @@
         return {
           activeUser, activeTab, activeClass, isSidebarOpen, toasts, showToast,
           schoolProfile, rombelList, teachers, students, filteredStudents,
-          genderStats, inclusionCount, todayAttendancePct, todayPresentCount, isTodayHoliday, todayString,
+          genderStats, inclusionCount, isRegular, todayAttendancePct, todayPresentCount, isTodayHoliday, todayString,
           menuItems, loginForm, handleLogin, handleLogout,
           isCameraActive, scannedSuccess, manualBarcodeCode, toggleCamera, handleManualBarcode,
           getAttendanceStatus, getAttendanceTime, getAttendanceLabel, setStudentAttendance, markAllPresent,
