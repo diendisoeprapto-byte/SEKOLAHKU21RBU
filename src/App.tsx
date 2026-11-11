@@ -65,6 +65,7 @@ import { RaporKokurikulerTab } from './components/tabs/RaporKokurikulerTab';
 import { BackupTab } from './components/tabs/BackupTab';
 import { TKATabs } from './components/tabs/TKATabs';
 import { PenilaianEkskulTab } from './components/tabs/PenilaianEkskulTab';
+import { StudentDashboard } from './components/StudentDashboard';
 import { testConnection } from './utils/firebase';
 import {
   pullAllDataFromCloud,
@@ -295,7 +296,11 @@ export default function App() {
     localStorage.setItem('sekolahku_last_activity', String(Date.now()));
     setIsSidebarOpen(false); // Menu tampil dalam posisi minimize saat login
     if (user.role === 'siswa') {
-      setActiveTab('ujian');
+      // Selalu tampilkan portal dashboard kartu utama siswa saat baru login
+      setActiveTab('dashboard');
+      if (user.studentData?.kelas) {
+        setActiveClass(user.studentData.kelas);
+      }
     } else {
       // Selalu tampilkan menu beranda sekolah saat baru login
       setActiveTab('dashboard');
@@ -451,8 +456,23 @@ export default function App() {
             />
 
             <main className="flex-1 min-w-0 space-y-6">
-              {/* Tab 1: Beranda */}
-              {activeTab === 'dashboard' && (
+              {/* Portal Siswa Khusus: Dashboard 4 Cards & Alur Ujian (Dropdown Tunggal, Timer, Auto-Submit) */}
+              {activeUser.role === 'siswa' && (activeTab === 'dashboard' || activeTab === 'ujian' || activeTab === 'tes-tka-siswa') && (
+                <StudentDashboard
+                  activeUser={activeUser}
+                  students={students}
+                  subjects={subjects}
+                  activeClass={activeClass}
+                  activeYear={activeYear}
+                  activeSemester={activeSemester}
+                  profile={profile}
+                  showToast={showToast}
+                  onNavigateTab={setActiveTab}
+                />
+              )}
+
+              {/* Tab 1: Beranda Sekolah (Khusus Guru / Admin / Kepsek / TU) */}
+              {activeUser.role !== 'siswa' && activeTab === 'dashboard' && (
                 <DashboardTab
                   profile={profile}
                   activeClass={activeClass}
@@ -638,8 +658,8 @@ export default function App() {
                 />
               )}
 
-              {/* Tab 4.4: CBT Exam */}
-              {activeTab === 'ujian' && (
+              {/* Tab 4.4: CBT Exam (Bank Soal & Pengaturan untuk Guru/Admin) */}
+              {activeUser.role !== 'siswa' && activeTab === 'ujian' && (
                 <CBTTab
                   activeUser={activeUser}
                   activeClass={activeClass}
@@ -659,7 +679,14 @@ export default function App() {
               )}
 
               {/* Tab 4.5: Analisis Soal */}
-              {activeTab === 'analisis-soal' && <AnalisisSoalTab />}
+              {activeTab === 'analisis-soal' && (
+                <AnalisisSoalTab
+                  students={students}
+                  activeClass={activeClass}
+                  activeYear={activeYear}
+                  activeSemester={activeSemester}
+                />
+              )}
 
               {/* Tab 4.6: e-Rapor Merdeka */}
               {activeTab === 'rapor' && (
@@ -687,12 +714,13 @@ export default function App() {
               )}
 
               {/* Tab 5: Modul TKA (Siswa TKA, CP & TP TKA, Bank Soal TKA, Analisis Soal TKA) */}
-              {(activeTab === 'siswa-tka' ||
-                activeTab === 'cp-tp-tka' ||
-                activeTab === 'bank-soal-tka' ||
-                activeTab === 'analisis-tka' ||
-                activeTab === 'hasil-tka' ||
-                activeTab === 'tes-tka-siswa') && (
+              {activeUser.role !== 'siswa' &&
+                (activeTab === 'siswa-tka' ||
+                  activeTab === 'cp-tp-tka' ||
+                  activeTab === 'bank-soal-tka' ||
+                  activeTab === 'analisis-tka' ||
+                  activeTab === 'hasil-tka' ||
+                  activeTab === 'tes-tka-siswa') && (
                 <TKATabs
                   subType={activeTab}
                   students={students}

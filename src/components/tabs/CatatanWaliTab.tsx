@@ -7,6 +7,7 @@ import {
   getStoredAssessments,
   getAssessmentCount,
 } from '../../utils/storage';
+import { calculateClassStudentRankings } from '../../utils/rankingHelper';
 import { pushAllDataToCloud } from '../../utils/cloudSync';
 
 interface Props {
@@ -75,53 +76,24 @@ export const CatatanWaliTab: React.FC<Props> = ({
     return students.filter((s) => s.kelas === activeClass);
   }, [students, activeClass]);
 
-  // Hitung peringkat akademik siswa di kelas berdasarkan skor NA Rapor
+  // Hitung peringkat akademik siswa di kelas menggunakan helper resmi yang identik 100% dengan Rekap Nilai (Leger)
+  const rankingData = useMemo(() => {
+    return calculateClassStudentRankings(
+      students,
+      subjects || [],
+      activeClass,
+      activeYear,
+      activeSemester
+    );
+  }, [students, subjects, activeClass, activeYear, activeSemester]);
+
   const studentRankMap = useMemo(() => {
-    const list = filteredStudents.map((s, sIdx) => {
-      let total = 0;
-      let count = 0;
-      if (subjects && subjects.length > 0) {
-        subjects.forEach((sub) => {
-          const key = `${activeYear}_${activeSemester}_${activeClass}_${sub.id}`;
-          const assessmentData = getStoredAssessments(key);
-          const asCount = getAssessmentCount(key);
-          const grade = assessmentData[s.id];
-          if (grade) {
-            let sumAs = 0;
-            const kktp = sub.kktp || 75;
-            for (let i = 1; i <= asCount; i++) {
-              const pure = grade.sumatif?.[i] ?? 0;
-              const rem = grade.remedial?.[i] ?? 0;
-              const effective = rem > 0 ? Math.max(pure, Math.min(rem, kktp)) : pure;
-              sumAs += effective;
-            }
-            const avgAs = asCount > 0 ? sumAs / asCount : 0;
-            const asts = grade.asts || 0;
-            const asas = grade.asas || 0;
-            if (avgAs > 0 || asts > 0 || asas > 0) {
-              const naRapor = Math.round((2 * avgAs + asts + asas) / 4);
-              total += naRapor;
-              count++;
-            }
-          }
-        });
-      }
-      // Baseline jika belum ada penilaian tersimpan agar urutan ranking tetap konsisten
-      if (count === 0) {
-        const seed = ((s.nama.charCodeAt(0) + sIdx * 7) % 20) + 78;
-        total = seed * 8;
-      }
-      return { student: s, total };
+    const map: Record<string, { rank: number; total: number }> = {};
+    rankingData.studentRows.forEach((row) => {
+      map[row.student.id] = { rank: row.rank, total: row.total };
     });
-
-    list.sort((a, b) => b.total - a.total);
-
-    const rankMap: Record<string, { rank: number; total: number }> = {};
-    list.forEach((item, idx) => {
-      rankMap[item.student.id] = { rank: idx + 1, total: item.total };
-    });
-    return rankMap;
-  }, [filteredStudents, subjects, activeYear, activeSemester, activeClass]);
+    return map;
+  }, [rankingData]);
 
   const handleNoteChange = (studentId: string, field: 'catatanWali' | 'keputusanKenaikan', value: string) => {
     setReportNotes((prev) => {

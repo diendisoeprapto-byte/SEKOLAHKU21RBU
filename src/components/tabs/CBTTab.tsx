@@ -24,7 +24,7 @@ import {
   Save,
   Shuffle,
 } from 'lucide-react';
-import { Subject, CBTExam, CBTQuestion, Student, ActiveUser } from '../../types';
+import { Subject, CBTExam, CBTQuestion, Student, ActiveUser, isSiswaInklusi } from '../../types';
 import {
   getStoredCBTExams,
   saveStoredCBTExams,
@@ -66,7 +66,7 @@ export const CBTTab: React.FC<Props> = ({
   // Tab mode for teacher: "bank-soal" (default for teacher) or "ujian"
   const [subTab, setSubTab] = useState<'bank-soal' | 'ujian'>('bank-soal');
 
-  // Exam packages (Paket Sumatif Kurikulum Merdeka)
+  // Exam packages (Paket Sumatif, Remedial, Inklusi Kurikulum Merdeka)
   const [paketList, setPaketList] = useState<string[]>([
     'Sumatif 1 (AS 1)',
     'Sumatif 2 (AS 2)',
@@ -74,10 +74,31 @@ export const CBTTab: React.FC<Props> = ({
     'Sumatif 4 (AS 4)',
     'Sumatif 5 (AS 5)',
     'Sumatif 6 (AS 6)',
+    'Remedial 1',
+    'Remedial 2',
+    'Remedial 3',
+    'Remedial 4',
+    'Remedial 5',
+    'Remedial 6',
     'ASTS (Sumatif Tengah Semester)',
     'ASAS (Sumatif Akhir Semester)',
+    'Sumatif Inklusi 1',
+    'Sumatif Inklusi 2',
+    'Sumatif Inklusi 3',
+    'Sumatif Inklusi 4',
+    'Sumatif Inklusi 5',
+    'Sumatif Inklusi 6',
+    'Remedial Inklusi 1',
+    'Remedial Inklusi 2',
+    'Remedial Inklusi 3',
+    'Remedial Inklusi 4',
+    'Remedial Inklusi 5',
+    'Remedial Inklusi 6',
+    'ASTS Inklusi',
+    'ASAS Inklusi',
   ]);
   const [selectedPaket, setSelectedPaket] = useState<string>('Sumatif 1 (AS 1)');
+  const [examDurationMinutes, setExamDurationMinutes] = useState<number>(60);
   const [isAddUHOpen, setIsAddUHOpen] = useState(false);
   const [newUHName, setNewUHName] = useState('');
 
@@ -224,7 +245,8 @@ export const CBTTab: React.FC<Props> = ({
       timer = setInterval(() => {
         setTimeLeft((prev) => {
           if (prev <= 1) {
-            handleSubmitExam();
+            clearInterval(timer);
+            handleSubmitExam(true);
             return 0;
           }
           return prev - 1;
@@ -499,7 +521,8 @@ export const CBTTab: React.FC<Props> = ({
     setIsExamRunning(true);
     setExamResult(null);
     setStudentAnswers({});
-    setTimeLeft(activeExam?.durasiMenit ? activeExam.durasiMenit * 60 : 3600);
+    const duration = examDurationMinutes || activeExam?.durasiMenit || 60;
+    setTimeLeft(duration * 60);
     setCurrentQuestionIndex(0);
 
     let qList = [...activeExam.soalList];
@@ -523,7 +546,7 @@ export const CBTTab: React.FC<Props> = ({
       document.documentElement.requestFullscreen().catch(() => {});
     }
     showToast(
-      `Ujian CBT dimulai! ${acakSoal ? '[Acak Soal Aktif] ' : ''}${acakJawaban ? '[Acak Jawaban Aktif]' : ''}`,
+      `Ujian CBT dimulai (${duration} Menit)! ${acakSoal ? '[Acak Soal Aktif] ' : ''}${acakJawaban ? '[Acak Jawaban Aktif]' : ''}`,
       'success'
     );
   };
@@ -535,7 +558,7 @@ export const CBTTab: React.FC<Props> = ({
     }));
   };
 
-  const handleSubmitExam = () => {
+  const handleSubmitExam = (isTimeOut: boolean = false) => {
     if (!activeExam) return;
 
     let totalScore = 0;
@@ -581,26 +604,57 @@ export const CBTTab: React.FC<Props> = ({
       const subId = subjectMap[selectedMapel] || 's_bindonesia';
       const assessKey = `${filters.year}_${filters.semester}_${activeClass}_${subId}`;
       const existingAssessments = getStoredAssessments(assessKey);
-      const studentId = activeUser.studentData?.id || students[0]?.id || 'std_01';
 
-      if (!existingAssessments[studentId]) {
-        existingAssessments[studentId] = {
-          sumatif: {},
-          remedial: {},
-          asts: 0,
-          asas: 0,
-        };
+      // Identifikasi paket inklusif vs reguler
+      const isInclusivePackage = selectedPaket.toLowerCase().includes('inklusi');
+      let targetStudentIds: string[] = [];
+
+      if (activeUser.role === 'siswa' && activeUser.studentData?.id) {
+        targetStudentIds = [activeUser.studentData.id];
+      } else if (isInclusivePackage) {
+        // Otomatis masuk ke nilai siswa inklusif di kelas ini
+        const inclusiveStudents = students.filter(
+          (s) => s.kelas === activeClass && isSiswaInklusi(s.kebutuhanKhusus)
+        );
+        targetStudentIds = inclusiveStudents.length > 0
+          ? inclusiveStudents.map((s) => s.id)
+          : [students.find((s) => s.kelas === activeClass)?.id || 'std_01'];
+      } else {
+        const regularStudents = students.filter(
+          (s) => s.kelas === activeClass && !isSiswaInklusi(s.kebutuhanKhusus)
+        );
+        targetStudentIds = regularStudents.length > 0
+          ? [regularStudents[0].id]
+          : [students.find((s) => s.kelas === activeClass)?.id || 'std_01'];
       }
 
-      const asMatch = selectedPaket.match(/(?:Sumatif|AS|UH)\s*(\d+)/i);
-      if (asMatch) {
-        const asIdx = parseInt(asMatch[1]);
-        existingAssessments[studentId].sumatif[asIdx] = finalGrade;
-      } else if (selectedPaket.includes('ASTS')) {
-        existingAssessments[studentId].asts = finalGrade;
-      } else if (selectedPaket.includes('ASAS')) {
-        existingAssessments[studentId].asas = finalGrade;
-      }
+      targetStudentIds.forEach((targetId) => {
+        if (!existingAssessments[targetId]) {
+          existingAssessments[targetId] = {
+            sumatif: {},
+            remedial: {},
+            asts: 0,
+            asas: 0,
+          };
+        }
+
+        const isRemedial = selectedPaket.toLowerCase().includes('remedial');
+        const asMatch = selectedPaket.match(/(?:Sumatif|Remedial|AS|UH)\s*(?:Inklusi\s*)?(\d+)/i);
+
+        if (asMatch) {
+          const asIdx = parseInt(asMatch[1]);
+          if (isRemedial) {
+            existingAssessments[targetId].remedial[asIdx] = finalGrade;
+          } else {
+            existingAssessments[targetId].sumatif[asIdx] = finalGrade;
+          }
+        } else if (selectedPaket.toUpperCase().includes('ASTS')) {
+          existingAssessments[targetId].asts = finalGrade;
+        } else if (selectedPaket.toUpperCase().includes('ASAS')) {
+          existingAssessments[targetId].asas = finalGrade;
+        }
+      });
+
       saveStoredAssessments(assessKey, existingAssessments);
     } catch (err) {
       console.warn('Sync to assessment error:', err);
@@ -609,7 +663,15 @@ export const CBTTab: React.FC<Props> = ({
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }
-    showToast(`Ujian Selesai! Nilai Anda: ${finalGrade} (Tersinkron ke Penilaian & Leger)`, 'success');
+
+    if (isTimeOut) {
+      showToast(
+        `Waktu Ujian Telah Habis! Nilai Anda: ${finalGrade}. Jawaban telah otomatis tersimpan & terkirim ke sistem.`,
+        'error'
+      );
+    } else {
+      showToast(`Ujian Selesai! Nilai Anda: ${finalGrade} (Tersinkron ke Penilaian & Leger)`, 'success');
+    }
   };
 
   const currentExamQuestions = runningExamQuestions.length > 0 ? runningExamQuestions : activeExam?.soalList || [];
@@ -696,7 +758,7 @@ export const CBTTab: React.FC<Props> = ({
 
             <form onSubmit={handleSaveQuestion} className="space-y-4">
               {/* ROW 1: TOP BAR DROPDOWNS (MATCHING IMAGE 1) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
                 {/* 1. Paket / Jenis Ulangan (Sumatif) */}
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -757,6 +819,26 @@ export const CBTTab: React.FC<Props> = ({
                     <option value="Kelas 3A">Kelas 3A</option>
                     <option value="Kelas 2A">Kelas 2A</option>
                     <option value="Kelas 1A">Kelas 1A</option>
+                  </select>
+                </div>
+
+                {/* 3b. Setting Timer Durasi Ujian */}
+                <div>
+                  <label className="block text-[11px] font-extrabold text-slate-700 mb-1">
+                    ⏱ Timer Ujian (Auto-Submit)
+                  </label>
+                  <select
+                    value={examDurationMinutes}
+                    onChange={(e) => setExamDurationMinutes(Number(e.target.value))}
+                    className="w-full px-3 py-2 rounded-2xl border-2 border-amber-400 bg-amber-50/60 text-xs font-black text-amber-950 outline-none shadow-xs"
+                    title="Setting waktu ujian: Ketika hitungan mundur timer habis, jawaban siswa otomatis tersimpan dan terkirim ke sistem."
+                  >
+                    <option value={15}>15 Menit</option>
+                    <option value={30}>30 Menit</option>
+                    <option value={45}>45 Menit</option>
+                    <option value={60}>60 Menit</option>
+                    <option value={90}>90 Menit</option>
+                    <option value={120}>120 Menit</option>
                   </select>
                 </div>
 
@@ -1599,7 +1681,7 @@ export const CBTTab: React.FC<Props> = ({
                   ) : (
                     <button
                       type="button"
-                      onClick={handleSubmitExam}
+                      onClick={() => handleSubmitExam(false)}
                       className="px-6 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-md cursor-pointer"
                     >
                       Selesai &amp; Kirim Ujian

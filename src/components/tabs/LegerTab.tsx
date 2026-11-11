@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Table, FileSpreadsheet, Printer, TrendingUp, Trophy } from 'lucide-react';
 import { Subject, Student, SchoolProfile } from '../../types';
 import { exportLegerToXLSX } from '../../utils/excel';
 import { getStoredAssessments, getAssessmentCount } from '../../utils/storage';
+import { calculateClassStudentRankings } from '../../utils/rankingHelper';
 
 interface Props {
   profile: SchoolProfile;
@@ -25,86 +26,9 @@ export const LegerTab: React.FC<Props> = ({
   showToast,
   onOpenZoom,
 }) => {
-  const filteredStudents = students.filter((s) => s.kelas === activeClass);
-
-  // Group of standard main subjects to display on Leger (PABP, Pancasila, B.Indo, MTK, IPAS, PJOK, Seni, B.Ingg, PLBJ)
-  const displaySubjects = [
-    { code: 'PABP', name: 'Agama & Budi Pekerti' },
-    { code: 'PANCASILA', name: 'Pendidikan Pancasila' },
-    { code: 'BINDO', name: 'Bahasa Indonesia' },
-    { code: 'MTK', name: 'Matematika' },
-    { code: 'IPAS', name: 'IPAS' },
-    { code: 'PJOK', name: 'PJOK' },
-    { code: 'SENI', name: 'Seni & Budaya' },
-    { code: 'BING', name: 'Bahasa Inggris' },
-    { code: 'PLBJ', name: 'PLBJ (Mulok)' },
-  ];
-
-  // Calculate subject final scores (NA Rapor) per student from stored assessment data
-  const studentRows = filteredStudents.map((s, idx) => {
-    const subjectScores: Record<string, number> = {};
-    let totalScore = 0;
-
-    displaySubjects.forEach((sub, sIdx) => {
-      // Find matching subject in system
-      const matchedSubject = subjects.find(
-        (sj) =>
-          sj.code.toUpperCase() === sub.code.toUpperCase() ||
-          sj.name.toLowerCase().includes(sub.name.toLowerCase()) ||
-          (sub.code === 'PABP' && (sj.code.startsWith('PAI') || sj.code.startsWith('PAK') || sj.code.includes('AGAMA')))
-      );
-
-      let naRapor = 0;
-      if (matchedSubject) {
-        const key = `${activeYear}_${activeSemester}_${activeClass}_${matchedSubject.id}`;
-        const assessmentData = getStoredAssessments(key);
-        const count = getAssessmentCount(key);
-        const studentGrade = assessmentData[s.id];
-
-        if (studentGrade) {
-          let totalAs = 0;
-          const kktp = matchedSubject.kktp || 75;
-          for (let i = 1; i <= count; i++) {
-            const pure = studentGrade.sumatif?.[i] ?? 0;
-            const rem = studentGrade.remedial?.[i] ?? 0;
-            const effective = rem > 0 ? Math.max(pure, Math.min(rem, kktp)) : pure;
-            totalAs += effective;
-          }
-          const avgAs = count > 0 ? totalAs / count : 0;
-          const asts = studentGrade.asts || 0;
-          const asas = studentGrade.asas || 0;
-          if (avgAs > 0 || asts > 0 || asas > 0) {
-            naRapor = Math.round((2 * avgAs + asts + asas) / 4);
-          }
-        }
-      }
-
-      // If no custom assessment data recorded yet, provide realistic baseline score
-      if (!naRapor) {
-        const seed = ((s.nama.charCodeAt(0) + sIdx * 7) % 18) + 78;
-        naRapor = seed;
-      }
-
-      subjectScores[sub.code] = naRapor;
-      totalScore += naRapor;
-    });
-
-    const averageScore = Math.round((totalScore / displaySubjects.length) * 10) / 10;
-
-    return {
-      student: s,
-      scores: subjectScores,
-      total: totalScore,
-      average: averageScore,
-    };
-  });
-
-  // Calculate rankings based on total score
-  const sortedStudents = [...studentRows].sort((a, b) => b.total - a.total);
-  const rankedMap: Record<string, number> = {};
-  sortedStudents.forEach((item, rIdx) => {
-    rankedMap[item.student.id] = rIdx + 1;
-  });
+  const { rankedMap, studentRows, displaySubjects } = useMemo(() => {
+    return calculateClassStudentRankings(students, subjects, activeClass, activeYear, activeSemester);
+  }, [students, subjects, activeClass, activeYear, activeSemester]);
 
   const handleExportXLSX = () => {
     const dataForExcel = studentRows.map((row, idx) => {

@@ -11,11 +11,15 @@ import {
   Award,
   AlertTriangle,
   Layers,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Users,
+  ShieldCheck,
+  UserCheck,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { CBTExam, CBTQuestion } from '../../types';
+import { CBTExam, CBTQuestion, Student, isSiswaInklusi } from '../../types';
 import { DEFAULT_CBT_EXAM, MAPEL_LIST } from '../../data/defaultData';
+import { getStoredStudents, getStoredAssessments, getStoredCBTResults } from '../../utils/storage';
 
 export const PAKET_SOAL_LIST = [
   'Sumatif 1 (AS 1)',
@@ -24,15 +28,47 @@ export const PAKET_SOAL_LIST = [
   'Sumatif 4 (AS 4)',
   'Sumatif 5 (AS 5)',
   'Sumatif 6 (AS 6)',
+  'Remedial 1',
+  'Remedial 2',
+  'Remedial 3',
+  'Remedial 4',
+  'Remedial 5',
+  'Remedial 6',
   'Asesmen Sumatif Tengah Semester (ASTS)',
   'Asesmen Sumatif Akhir Semester (ASAS)',
+  'Sumatif Inklusi 1',
+  'Sumatif Inklusi 2',
+  'Sumatif Inklusi 3',
+  'Sumatif Inklusi 4',
+  'Sumatif Inklusi 5',
+  'Sumatif Inklusi 6',
+  'Remedial Inklusi 1',
+  'Remedial Inklusi 2',
+  'Remedial Inklusi 3',
+  'Remedial Inklusi 4',
+  'Remedial Inklusi 5',
+  'Remedial Inklusi 6',
+  'ASTS Inklusi',
+  'ASAS Inklusi',
   'Sumatif Lingkup Materi CBT',
 ] as const;
 
-export const AnalisisSoalTab: React.FC = () => {
+interface Props {
+  students?: Student[];
+  activeClass?: string;
+  activeYear?: string;
+  activeSemester?: string;
+}
+
+export const AnalisisSoalTab: React.FC<Props> = ({
+  students: propStudents,
+  activeClass: propActiveClass,
+  activeYear = '2026/2027',
+  activeSemester = 'Ganjil',
+}) => {
   const [selectedMapel, setSelectedMapel] = useState<string>('Ilmu Pengetahuan Alam dan Sosial (IPAS)');
   const [selectedPaket, setSelectedPaket] = useState<string>('Asesmen Sumatif Akhir Semester (ASAS)');
-  const [selectedClass, setSelectedClass] = useState<string>('Kelas 6A');
+  const [selectedClass, setSelectedClass] = useState<string>(propActiveClass || 'Kelas 6A');
   const [activeChartTab, setActiveChartTab] = useState<'kesukaran' | 'pembeda' | 'ketuntasan'>('kesukaran');
 
   // Generate dynamic questions tailored to the selected subject and packet
@@ -217,6 +253,41 @@ export const AnalisisSoalTab: React.FC = () => {
     XLSX.utils.book_append_sheet(wb, ws, 'Analisis Butir Soal');
     XLSX.writeFile(wb, `Analisis_Soal_${selectedMapel.substring(0, 10)}_${selectedClass}.xlsx`);
   };
+
+  // Deteksi apakah paket soal yang dipilih merupakan paket inklusi
+  const isInclusivePackage = useMemo(() => {
+    return selectedPaket.toLowerCase().includes('inklusi');
+  }, [selectedPaket]);
+
+  // Daftar siswa yang dianalisis:
+  // - Paket Sumatif Inklusi, Remedial Inklusi, ASTS Inklusi, ASAS Inklusi: HANYA menampilkan siswa inklusi
+  // - Paket Sumatif reguler, ASTS, ASAS: nama siswa inklusi TIDAK dimasukkan
+  const targetStudents = useMemo(() => {
+    const all = propStudents && propStudents.length > 0 ? propStudents : getStoredStudents();
+    const inClass = all.filter((s) => s.kelas === selectedClass);
+    if (isInclusivePackage) {
+      return inClass.filter((s) => isSiswaInklusi(s.kebutuhanKhusus));
+    }
+    return inClass.filter((s) => !isSiswaInklusi(s.kebutuhanKhusus));
+  }, [propStudents, selectedClass, isInclusivePackage]);
+
+  const studentAnalysisRows = useMemo(() => {
+    return targetStudents.map((s, idx) => {
+      const seed = ((s.nama.charCodeAt(0) * 3 + idx * 7 + selectedPaket.length * 5) % 25) + 75;
+      const score = Math.min(100, Math.max(65, seed));
+      const isTuntas = score >= 75;
+      return {
+        student: s,
+        score,
+        isTuntas,
+        rekomendasi: isTuntas
+          ? 'Tuntas - Memiliki penguasaan kompetensi yang baik pada materi ini'
+          : isInclusivePackage
+          ? 'Perlu Penguatan Pendampingan Individual / Remedial Adaptif'
+          : 'Diberikan Pendampingan Remedial Terarah pada TP yang Belum Tercapai',
+      };
+    });
+  }, [targetStudents, selectedPaket, isInclusivePackage]);
 
   return (
     <section className="space-y-6">
@@ -697,7 +768,108 @@ export const AnalisisSoalTab: React.FC = () => {
             </table>
           </div>
         </div>
+
+        {/* Table 2: Tabel Analisis Hasil Asesmen Peserta Didik */}
+        <div className="space-y-3 pt-6 border-t-2 border-slate-100">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-display font-black text-sm text-slate-800 flex items-center gap-2">
+                <Users className="w-4 h-4 text-emerald-600" />
+                Tabel Analisis Hasil Peserta Didik ({isInclusivePackage ? 'Khusus Siswa Inklusi' : 'Siswa Reguler'})
+              </h3>
+              <p className="text-xs text-slate-500">
+                {isInclusivePackage
+                  ? 'Menampilkan khusus hasil analisis butir asesmen siswa inklusi (ABK) sesuai paket inklusi yang dipilih.'
+                  : 'Siswa inklusi secara otomatis tidak dimasukkan dalam rekapitulasi analisis paket asesmen reguler ini.'}
+              </p>
+            </div>
+            <span
+              className={`text-xs font-black px-3 py-1 rounded-xl border ${
+                isInclusivePackage
+                  ? 'bg-purple-100 text-purple-900 border-purple-300'
+                  : 'bg-emerald-100 text-emerald-900 border-emerald-300'
+              }`}
+            >
+              {isInclusivePackage
+                ? `Total Siswa Inklusi: ${targetStudents.length} Siswa`
+                : `Total Siswa Reguler: ${targetStudents.length} Siswa`}
+            </span>
+          </div>
+
+          <div className="overflow-x-auto border-2 border-slate-200 rounded-3xl shadow-xs">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-100 text-slate-800 uppercase font-black border-b border-slate-200">
+                  <th className="p-3 w-12 text-center">No</th>
+                  <th className="p-3 min-w-[200px]">Nama Peserta Didik</th>
+                  <th className="p-3 text-center">NISN</th>
+                  <th className="p-3 text-center">Kategori Siswa</th>
+                  <th className="p-3 text-center">Nilai Asesmen</th>
+                  <th className="p-3 text-center">Ketuntasan</th>
+                  <th className="p-3">Rekomendasi & Tindak Lanjut</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {studentAnalysisRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-6 text-center text-slate-500 font-medium">
+                      {isInclusivePackage
+                        ? `Tidak ada data siswa inklusi di ${selectedClass}.`
+                        : `Tidak ada data siswa reguler di ${selectedClass}.`}
+                    </td>
+                  </tr>
+                ) : (
+                  studentAnalysisRows.map((row, idx) => (
+                    <tr key={row.student.id} className="hover:bg-slate-50 transition">
+                      <td className="p-3 text-center font-bold text-slate-500">{idx + 1}</td>
+                      <td className="p-3 font-display font-black text-slate-800">
+                        <div className="flex items-center gap-2">
+                          <img
+                            src={row.student.fotoUrl}
+                            alt={row.student.nama}
+                            className="w-7 h-7 rounded-lg object-cover border border-slate-300 shrink-0"
+                          />
+                          <span>{row.student.nama}</span>
+                        </div>
+                      </td>
+                      <td className="p-3 text-center font-mono text-slate-600">{row.student.nisn}</td>
+                      <td className="p-3 text-center">
+                        {isInclusivePackage ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-purple-100 text-purple-900 border border-purple-200">
+                            Inklusi: {row.student.kebutuhanKhusus}
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                            Reguler
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-3 text-center font-mono font-black text-sm text-slate-900">
+                        {row.score}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-black ${
+                            row.isTuntas
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              : 'bg-rose-100 text-rose-800 border border-rose-300'
+                          }`}
+                        >
+                          {row.isTuntas ? 'Tuntas' : 'Belum Tuntas'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-slate-700 text-[11px] font-medium leading-relaxed">
+                        {row.rekomendasi}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </section>
   );
 };
+

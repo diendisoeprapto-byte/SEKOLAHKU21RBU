@@ -134,6 +134,18 @@ export const Sidebar: React.FC<Props> = ({
         {isStudent ? (
           <nav className="space-y-1.5">
             <button
+              onClick={() => onSelectTab('dashboard')}
+              className={`w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-3 text-left transition ${
+                activeTab === 'dashboard'
+                  ? 'bg-gradient-to-r from-rose-600 to-rose-700 text-white shadow-md'
+                  : 'text-slate-700 hover:bg-rose-50'
+              }`}
+            >
+              <Home className="w-5 h-5 text-rose-500" />
+              <span>Beranda Siswa (Dashboard)</span>
+            </button>
+
+            <button
               onClick={() => onSelectTab('ujian')}
               className={`w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-3 text-left transition ${
                 activeTab === 'ujian'
@@ -142,7 +154,7 @@ export const Sidebar: React.FC<Props> = ({
               }`}
             >
               <Laptop className="w-5 h-5 text-rose-500" />
-              <span>Ujian CBT Saya</span>
+              <span>Ujian CBT Siswa</span>
             </button>
 
             <button

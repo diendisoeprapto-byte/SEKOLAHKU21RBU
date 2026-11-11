@@ -1,4 +1,5 @@
-import { Menu, Calendar, Clock, GraduationCap, Power, KeyRound } from 'lucide-react';
+import React, { useMemo, useEffect } from 'react';
+import { Menu, Calendar, Clock, GraduationCap, Power, KeyRound, Lock } from 'lucide-react';
 import { SchoolProfile, ActiveUser } from '../types';
 import { ACADEMIC_YEARS, CLASSES_LIST } from '../utils/storage';
 
@@ -25,6 +26,45 @@ export const Header: React.FC<Props> = ({
   onLogout,
   onOpenChangePassword,
 }) => {
+  // Deteksi peran user: Kepsek, Administrator, Guru Mata Pelajaran, Tata Usaha, atau Guru Kelas
+  const isGuruKelas = useMemo(() => {
+    if (activeUser.role !== 'guru') return false;
+    const detailLower = (activeUser.detail || '').toLowerCase();
+    const usernameLower = (activeUser.username || '').toLowerCase();
+
+    // Kepala Sekolah
+    if (detailLower.includes('kepala sekolah') || detailLower.includes('kepsek') || usernameLower.includes('kepsek')) {
+      return false;
+    }
+    // Tata Usaha
+    if (detailLower.includes('tata usaha') || detailLower.includes('tu') || usernameLower.includes('tu')) {
+      return false;
+    }
+    // Guru Mata Pelajaran
+    if (
+      detailLower.includes('mata pelajaran') ||
+      detailLower.includes('mapel') ||
+      detailLower.includes('paibp') ||
+      detailLower.includes('agama') ||
+      detailLower.includes('pjok') ||
+      detailLower.includes('inggris')
+    ) {
+      return false;
+    }
+
+    // Jika memiliki penugasan kelas spesifik (e.g. "Kelas 6A", "Kelas 1B")
+    return Boolean(activeUser.kelasDiampu || detailLower.startsWith('kelas'));
+  }, [activeUser]);
+
+  const assignedClass = activeUser.kelasDiampu || (activeUser.detail?.match(/Kelas\s*[1-6][A-B]/i)?.[0]) || kelas;
+
+  // Pastikan kelas aktif guru kelas otomatis terkunci ke kelas yang diampunya
+  useEffect(() => {
+    if (isGuruKelas && assignedClass && kelas !== assignedClass) {
+      onFilterChange(year, semester, assignedClass);
+    }
+  }, [isGuruKelas, assignedClass, kelas, year, semester, onFilterChange]);
+
   return (
     <header className="bg-gradient-to-r from-rose-600 via-rose-700 to-red-600 text-white shadow-lg sticky top-0 z-40 no-print">
       <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
@@ -96,20 +136,34 @@ export const Header: React.FC<Props> = ({
                 </select>
               </div>
 
-              <div className="flex items-center gap-1.5">
-                <GraduationCap className="w-3.5 h-3.5 text-yellow-300" />
-                <select
-                  value={kelas}
-                  onChange={(e) => onFilterChange(year, semester, e.target.value)}
-                  className="bg-white text-slate-800 font-display font-extrabold text-xs px-2.5 py-1 rounded-xl outline-none cursor-pointer"
+              {/* Dropdown Kelas: Guru Kelas hanya melihat kelasnya dan terkunci, Kepsek / Admin / Guru Mapel / TU bebas memilih kelas */}
+              {isGuruKelas ? (
+                <div
+                  className="flex items-center gap-1.5 bg-yellow-300/25 px-2.5 py-1 rounded-xl border border-yellow-300/60 cursor-not-allowed shadow-2xs select-none"
+                  title={`Menu kelas terkunci: Anda login sebagai Guru Kelas ${assignedClass}. Guru Kelas hanya dapat mengampu dan mengakses kelasnya.`}
                 >
-                  {CLASSES_LIST.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                  <Lock className="w-3.5 h-3.5 text-yellow-300 shrink-0" />
+                  <span className="font-display font-extrabold text-xs text-yellow-100 whitespace-nowrap">
+                    {assignedClass}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <GraduationCap className="w-3.5 h-3.5 text-yellow-300" />
+                  <select
+                    value={kelas}
+                    onChange={(e) => onFilterChange(year, semester, e.target.value)}
+                    className="bg-white text-slate-800 font-display font-extrabold text-xs px-2.5 py-1 rounded-xl outline-none cursor-pointer"
+                    title="Pilih Kelas (Akses Terbuka untuk Kepsek, Administrator, Guru Mapel, dan Tata Usaha)"
+                  >
+                    {CLASSES_LIST.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
           )}
 
