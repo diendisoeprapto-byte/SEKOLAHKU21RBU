@@ -30,6 +30,7 @@ import {
   saveStoredAttendance,
   getActiveFilters,
   saveActiveFilters,
+  saveStoredReportNotes,
   AttendanceRecordItem,
 } from './utils/storage';
 import { DEFAULT_SCHOOL_PROFILE, DEFAULT_TEACHERS, DEFAULT_STUDENTS, DEFAULT_SUBJECTS, DEFAULT_KALDIK_HOLIDAYS } from './data/defaultData';
@@ -123,6 +124,9 @@ export default function App() {
       }
       if (cloudData.penilaianEkskul) {
         localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(cloudData.penilaianEkskul));
+      }
+      if (cloudData.reportNotes) {
+        saveStoredReportNotes(cloudData.reportNotes);
       }
     };
 
@@ -611,7 +615,10 @@ export default function App() {
               {activeTab === 'catatan' && (
                 <CatatanWaliTab
                   students={students}
+                  subjects={subjects}
                   activeClass={activeClass}
+                  activeYear={activeYear}
+                  activeSemester={activeSemester}
                   showToast={showToast}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
                 />

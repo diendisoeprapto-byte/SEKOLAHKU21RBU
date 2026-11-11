@@ -3,6 +3,7 @@ import { Printer, Download, UserCheck, FileText, CheckCircle2 } from 'lucide-rea
 import { Student, SchoolProfile, Teacher, Subject } from '../../types';
 import { getStoredReportNotes, getStoredAssessments, getAssessmentCount } from '../../utils/storage';
 import { getStoredPenilaianEkskul } from './PenilaianEkskulTab';
+import { getCatatanWaliOtomatisByRank } from './CatatanWaliTab';
 
 interface Props {
   profile: SchoolProfile;
@@ -490,8 +491,8 @@ export const ERaporTab: React.FC<Props> = ({
             <span className="font-black text-slate-900 uppercase text-[11px] block mb-1">
               Catatan Wali Kelas:
             </span>
-            <p className="italic text-slate-800 text-[11px]">
-              "{currentNotes?.catatanWali || 'Pertahankan prestasi belajar, sikap disiplin dan budi pekerti yang luhur.'}"
+            <p className="italic text-slate-800 text-[11px] leading-relaxed">
+              "{currentNotes?.catatanWali || getCatatanWaliOtomatisByRank((filteredStudents.findIndex((st) => st.id === student?.id) >= 0 ? filteredStudents.findIndex((st) => st.id === student?.id) + 1 : 1))}"
             </p>
             <div className="mt-2 pt-1 border-t border-slate-300 font-bold text-slate-900 text-xs">
               Keputusan: <span className="font-black text-emerald-900">{currentDecision}</span>

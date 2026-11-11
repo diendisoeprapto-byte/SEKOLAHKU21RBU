@@ -17,6 +17,7 @@ import {
   Search,
   Sparkles,
   Edit2,
+  Edit3,
   Trash2,
   X,
   Calendar,
@@ -34,6 +35,7 @@ import {
   CLASSES_LIST,
 } from '../../utils/storage';
 import { getGradeNumberFromClass } from '../../data/classCurriculumData';
+import { pushAllDataToCloud } from '../../utils/cloudSync';
 
 interface Props {
   subType: 'cp' | 'tp' | 'kktp' | 'ekskul' | 'kokurikuler';
@@ -140,6 +142,10 @@ export const KurikulumTabs: React.FC<Props> = ({
   const [managingEkskulId, setManagingEkskulId] = useState<string | null>(null);
   const [memberClassFilter, setMemberClassFilter] = useState('all');
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
+
+  // State Edit Pembina Ekstrakurikuler
+  const [editingPembinaEkskul, setEditingPembinaEkskul] = useState<{ id: string; nama: string; pembina: string } | null>(null);
+  const [tempPembinaName, setTempPembinaName] = useState('');
 
   // -------------------------------------------------------------
   // KOKURIKULER (P5) STATES (FAITHFUL TO USER IMAGE 2)
@@ -387,6 +393,30 @@ export const KurikulumTabs: React.FC<Props> = ({
       `Daftar siswa ${classToClear === 'all' ? 'sekolah' : classToClear} dihapus dari ekstrakurikuler!`,
       'success'
     );
+  };
+
+  const handleOpenEditPembina = (ek: { id?: string; nama: string; pembina: string }) => {
+    setEditingPembinaEkskul({ id: ek.id || '', nama: ek.nama, pembina: ek.pembina });
+    setTempPembinaName(ek.pembina);
+  };
+
+  const handleSaveEditPembina = () => {
+    if (!editingPembinaEkskul || !tempPembinaName.trim()) {
+      showToast('Nama pembina tidak boleh kosong!', 'error');
+      return;
+    }
+    const updated = ekskulList.map((ek) => {
+      if (ek.id === editingPembinaEkskul.id || ek.nama === editingPembinaEkskul.nama) {
+        return { ...ek, pembina: tempPembinaName.trim() };
+      }
+      return ek;
+    });
+    setEkskulList(updated);
+    localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(updated));
+    pushAllDataToCloud({ ekskulList: updated });
+    showToast(`Pembina ekstrakurikuler ${editingPembinaEkskul.nama} berhasil diperbarui menjadi "${tempPembinaName.trim()}"!`, 'success');
+    setEditingPembinaEkskul(null);
+    setTempPembinaName('');
   };
 
   // Handlers for CP & TP editing & adding
@@ -1219,9 +1249,20 @@ export const KurikulumTabs: React.FC<Props> = ({
                     </button>
                   </div>
                   <h4 className="font-display font-black text-sm text-slate-800 leading-snug">{ek.nama}</h4>
-                  <div className="text-xs text-slate-600 flex items-center gap-1.5 bg-slate-50 p-2 rounded-xl border border-slate-100">
-                    <span className="font-extrabold text-amber-700">Pembina:</span>
-                    <span className="font-bold text-slate-700 truncate">{ek.pembina}</span>
+                  <div className="text-xs text-slate-600 flex items-center justify-between gap-1.5 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="font-extrabold text-amber-700 shrink-0">Pembina:</span>
+                      <span className="font-bold text-slate-700 truncate" title={ek.pembina}>{ek.pembina}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEditPembina(ek)}
+                      className="px-2 py-0.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 font-bold text-[11px] shrink-0 flex items-center gap-1 cursor-pointer transition shadow-2xs"
+                      title="Edit Pembina Ekstrakurikuler"
+                    >
+                      <Edit3 className="w-3 h-3 text-amber-700" />
+                      <span>Edit Pembina</span>
+                    </button>
                   </div>
                   <div className="flex items-center gap-2 text-[11px] text-slate-500">
                     <span className="flex items-center gap-1 bg-amber-50 text-amber-800 font-extrabold px-2 py-0.5 rounded-lg border border-amber-200/60">
@@ -1421,6 +1462,83 @@ export const KurikulumTabs: React.FC<Props> = ({
               </div>
             );
           })()}
+
+          {/* Modal Edit Pembina Ekstrakurikuler */}
+          {editingPembinaEkskul && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+              <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-200 animate-in fade-in zoom-in-95 duration-200">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold shadow-xs">
+                      <Award className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-display font-black text-slate-800 text-sm">Edit Pembina Ekstrakurikuler</h3>
+                      <p className="text-[11px] text-amber-800 font-extrabold">{editingPembinaEkskul.nama}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditingPembinaEkskul(null)}
+                    className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-black text-slate-700 mb-1">
+                      Pilih dari Daftar Guru Sekolah:
+                    </label>
+                    <select
+                      value={tempPembinaName}
+                      onChange={(e) => setTempPembinaName(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-bold bg-white focus:border-amber-500 outline-none cursor-pointer"
+                    >
+                      <option value="">-- Pilih Guru Sekolah --</option>
+                      {teacherList.map((t) => (
+                        <option key={t.id || t.nama} value={t.nama}>
+                          {t.nama} ({t.penugasan})
+                        </option>
+                      ))}
+                      <option value="Pelatih Profesional Luar">Pelatih Profesional Luar / Mitra</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-slate-700 mb-1">
+                      Atau Ketik Manual Nama Pembina &amp; Gelar:
+                    </label>
+                    <input
+                      type="text"
+                      value={tempPembinaName}
+                      onChange={(e) => setTempPembinaName(e.target.value)}
+                      placeholder="Contoh: Budi Santoso, M.Pd."
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-bold bg-white focus:border-amber-500 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingPembinaEkskul(null)}
+                    className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer transition"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveEditPembina}
+                    className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs transition"
+                  >
+                    <Save className="w-3.5 h-3.5" /> Simpan Pembina
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

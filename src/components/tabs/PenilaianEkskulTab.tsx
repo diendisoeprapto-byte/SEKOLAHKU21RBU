@@ -19,11 +19,37 @@ import { pushAllDataToCloud } from '../../utils/cloudSync';
 
 export interface EkskulAssessmentItem {
   studentId: string;
-  predikat: 'Sangat Baik' | 'Baik' | 'Cukup' | 'Kurang';
+  predikat: 'Sangat Baik' | 'Baik' | 'Cukup' | 'Kurang' | 'Perlu Bimbingan';
   keterangan: string;
 }
 
 export type PenilaianEkskulStore = Record<string, EkskulAssessmentItem[]>; // Key: ekskulId
+
+/**
+ * Template deskripsi pencapaian ekstrakurikuler Kurikulum Merdeka
+ * Disesuaikan otomatis dengan nama peserta didik, nama ekstrakurikuler, dan nilai predikat (A, B, C, D)
+ */
+export const getEkskulDeskripsiTemplate = (
+  predikat: string,
+  namaSiswa: string,
+  namaEkskul: string
+): string => {
+  const p = (predikat || '').toLowerCase();
+  const ekskulLabel = namaEkskul ? `ekstrakurikuler ${namaEkskul}` : 'ekstrakurikuler';
+  const siswa = namaSiswa || 'Peserta didik';
+
+  if (p.includes('sangat') || p === 'a') {
+    return `Peserta didik ${siswa} menunjukkan antusiasme, kedisiplinan, dan partisipasi yang sangat tinggi dalam setiap kegiatan. Mampu menjadi teladan bagi teman-temannya, memiliki inisiatif, serta menunjukkan penguasaan keterampilan yang sangat menonjol pada ${ekskulLabel} yang diikuti.`;
+  }
+  if (p === 'baik' || p === 'b') {
+    return `Peserta didik ${siswa} menunjukkan minat, kedisiplinan, dan partisipasi yang baik secara konsisten. Mampu berkolaborasi, aktif mengikuti instruksi pembina, dan menunjukkan perkembangan keterampilan yang memadai pada ${ekskulLabel} yang diikuti.`;
+  }
+  if (p.includes('cukup') || p === 'c') {
+    return `Peserta didik ${siswa} menunjukkan partisipasi yang cukup dalam kegiatan, namun masih membutuhkan motivasi untuk meningkatkan kedisiplinan dan antusiasme. Keterampilan dasar sudah mulai terlihat dan akan berkembang lebih optimal dengan bimbingan serta latihan yang lebih rutin pada ${ekskulLabel}.`;
+  }
+  // Nilai D (Perlu Bimbingan / Kurang)
+  return `Peserta didik ${siswa} membutuhkan pendampingan dan dorongan yang lebih intensif untuk berpartisipasi dalam kegiatan ${ekskulLabel}. Kehadiran, kedisiplinan, serta fokus saat mengikuti arahan pembina masih perlu banyak ditingkatkan agar potensi yang dimiliki dapat tergali dengan baik di masa mendatang.`;
+};
 
 interface Props {
   students: Student[];
@@ -115,22 +141,35 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
   const getStudentGrade = (studentId: string): EkskulAssessmentItem => {
     const found = currentEkskulGrades.find((g) => g.studentId === studentId);
     if (found) return found;
+    const sName = students.find((s) => s.id === studentId)?.nama || 'Peserta didik';
     return {
       studentId,
       predikat: 'Sangat Baik',
-      keterangan: `Aktif, disiplin, dan menunjukkan perkembangan bakat yang sangat baik dalam kegiatan ${activeEkskul?.nama}.`,
+      keterangan: getEkskulDeskripsiTemplate('Sangat Baik', sName, activeEkskul?.nama || 'Ekstrakurikuler'),
     };
   };
 
   const handleUpdateStudentGrade = (
     studentId: string,
     field: 'predikat' | 'keterangan',
-    value: any
+    value: any,
+    studentName?: string
   ) => {
     const existing = getStudentGrade(studentId);
+    let newKeterangan = existing.keterangan;
+
+    // Jika predikat diubah, otomatis generate deskripsi sesuai predikat, nama siswa, dan ekskul
+    if (field === 'predikat') {
+      const sName = studentName || students.find((s) => s.id === studentId)?.nama || 'Peserta didik';
+      newKeterangan = getEkskulDeskripsiTemplate(value, sName, activeEkskul?.nama || 'Ekstrakurikuler');
+    } else {
+      newKeterangan = value;
+    }
+
     const updatedItem: EkskulAssessmentItem = {
       ...existing,
-      [field]: value,
+      predikat: field === 'predikat' ? value : existing.predikat,
+      keterangan: newKeterangan,
     };
 
     const newGradeList = [
@@ -144,6 +183,12 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
     };
 
     setPenilaianStore(newStore);
+  };
+
+  const handleRegenerateDeskripsi = (studentId: string, predikat: string, studentName: string) => {
+    const template = getEkskulDeskripsiTemplate(predikat, studentName, activeEkskul?.nama || 'Ekstrakurikuler');
+    handleUpdateStudentGrade(studentId, 'keterangan', template, studentName);
+    showToast(`Deskripsi otomatis untuk ${studentName} berhasil disesuaikan!`, 'success');
   };
 
   const handleSaveAll = () => {
@@ -163,14 +208,11 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
     );
   };
 
-  const handleAutoFillPredikat = (predikat: 'Sangat Baik' | 'Baik') => {
+  const handleAutoFillPredikat = (predikat: 'Sangat Baik' | 'Baik' | 'Cukup' | 'Perlu Bimbingan') => {
     const autoList: EkskulAssessmentItem[] = displayStudents.map((s) => ({
       studentId: s.id,
       predikat,
-      keterangan:
-        predikat === 'Sangat Baik'
-          ? `Menunjukkan dedikasi tinggi, kemampuan teknik yang sangat baik, serta aktif dalam kegiatan ${activeEkskul?.nama}.`
-          : `Mengikuti kegiatan ${activeEkskul?.nama} dengan tertib, antusias, dan menunjukkan kemampuan yang baik.`,
+      keterangan: getEkskulDeskripsiTemplate(predikat, s.nama, activeEkskul?.nama || 'Ekstrakurikuler'),
     }));
 
     const newStore = {
@@ -179,7 +221,7 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
     };
 
     setPenilaianStore(newStore);
-    showToast(`Seluruh siswa diisi predikat '${predikat}'! Klik 'Simpan Penilaian' untuk menyimpan permanen.`, 'success');
+    showToast(`Seluruh siswa diisi ${predikat} beserta deskripsi otomatis! Klik 'Simpan Penilaian' untuk menyimpan permanen.`, 'success');
   };
 
   const handleExportExcel = () => {
@@ -327,21 +369,35 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-bold text-slate-600">Isi Cepat:</span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-bold text-slate-600 mr-1">Isi Cepat Semua:</span>
             <button
               type="button"
               onClick={() => handleAutoFillPredikat('Sangat Baik')}
-              className="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-100 text-emerald-800 text-[11px] font-bold border border-emerald-300 transition cursor-pointer"
+              className="px-2.5 py-1 rounded-xl bg-white hover:bg-emerald-100 text-emerald-800 text-[11px] font-extrabold border border-emerald-300 transition cursor-pointer shadow-2xs"
             >
-              Semua Sangat Baik (A)
+              Semua Nilai A (Sangat Baik)
             </button>
             <button
               type="button"
               onClick={() => handleAutoFillPredikat('Baik')}
-              className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 text-[11px] font-bold border border-slate-300 transition cursor-pointer"
+              className="px-2.5 py-1 rounded-xl bg-white hover:bg-sky-100 text-sky-800 text-[11px] font-extrabold border border-sky-300 transition cursor-pointer shadow-2xs"
             >
-              Semua Baik (B)
+              Semua Nilai B (Baik)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAutoFillPredikat('Cukup')}
+              className="px-2.5 py-1 rounded-xl bg-white hover:bg-amber-100 text-amber-800 text-[11px] font-extrabold border border-amber-300 transition cursor-pointer shadow-2xs"
+            >
+              Semua Nilai C (Cukup)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAutoFillPredikat('Perlu Bimbingan')}
+              className="px-2.5 py-1 rounded-xl bg-white hover:bg-rose-100 text-rose-800 text-[11px] font-extrabold border border-rose-300 transition cursor-pointer shadow-2xs"
+            >
+              Semua Nilai D (Perlu Bimbingan)
             </button>
           </div>
         </div>
@@ -368,8 +424,8 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
                 <th className="p-3 w-12 border-r border-slate-200">No</th>
                 <th className="p-3 min-w-[220px] text-left border-r border-slate-200">Peserta Didik</th>
                 <th className="p-3 w-28 border-r border-slate-200">Kelas</th>
-                <th className="p-3 w-44 border-r border-slate-200">Nilai Predikat</th>
-                <th className="p-3 min-w-[320px] text-left">Deskripsi Pencapaian / Catatan Pembina</th>
+                <th className="p-3 w-48 border-r border-slate-200">Nilai Predikat</th>
+                <th className="p-3 min-w-[340px] text-left">Deskripsi Pencapaian / Catatan Pembina</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
@@ -406,7 +462,8 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
                           handleUpdateStudentGrade(
                             s.id,
                             'predikat',
-                            e.target.value as any
+                            e.target.value as any,
+                            s.nama
                           )
                         }
                         className={`w-full px-3 py-1.5 rounded-xl border text-xs font-black outline-none cursor-pointer ${
@@ -419,22 +476,33 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
                             : 'bg-rose-50 text-rose-800 border-rose-300'
                         }`}
                       >
-                        <option value="Sangat Baik">Sangat Baik (A)</option>
-                        <option value="Baik">Baik (B)</option>
-                        <option value="Cukup">Cukup (C)</option>
-                        <option value="Kurang">Kurang (D)</option>
+                        <option value="Sangat Baik">Nilai A (Sangat Baik)</option>
+                        <option value="Baik">Nilai B (Baik)</option>
+                        <option value="Cukup">Nilai C (Cukup)</option>
+                        <option value="Perlu Bimbingan">Nilai D (Perlu Bimbingan)</option>
+                        <option value="Kurang">Nilai D (Kurang)</option>
                       </select>
                     </td>
                     <td className="p-3">
-                      <input
-                        type="text"
-                        value={grade.keterangan}
-                        onChange={(e) =>
-                          handleUpdateStudentGrade(s.id, 'keterangan', e.target.value)
-                        }
-                        placeholder="Tuliskan capaian kualitatif siswa..."
-                        className="w-full px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-medium text-slate-800 outline-none focus:border-emerald-500"
-                      />
+                      <div className="flex items-start gap-2">
+                        <textarea
+                          rows={2}
+                          value={grade.keterangan}
+                          onChange={(e) =>
+                            handleUpdateStudentGrade(s.id, 'keterangan', e.target.value, s.nama)
+                          }
+                          placeholder="Deskripsi pencapaian otomatis terisi sesuai predikat..."
+                          className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-medium text-slate-800 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-200 leading-relaxed"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRegenerateDeskripsi(s.id, grade.predikat, s.nama)}
+                          title="Generate Ulang Deskripsi Standar Sesuai Predikat"
+                          className="p-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 shrink-0 cursor-pointer transition shadow-2xs mt-0.5"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

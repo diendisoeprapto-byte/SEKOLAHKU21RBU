@@ -13,6 +13,7 @@ import {
   Subject,
   KaldikDay,
   AttendanceRecord,
+  StudentReportNotes,
 } from '../types';
 import {
   getStoredProfile,
@@ -21,6 +22,7 @@ import {
   getStoredSubjects,
   getStoredKaldik,
   getStoredAttendance,
+  getStoredReportNotes,
 } from './storage';
 
 export interface CloudSyncPayload {
@@ -34,6 +36,7 @@ export interface CloudSyncPayload {
   subjectsByClass?: Record<string, Subject[]>;
   kaldikDays?: KaldikDay[];
   attendance?: Record<string, any>;
+  reportNotes?: Record<string, StudentReportNotes>;
   ekskulList?: Array<{
     id?: string;
     nama: string;
@@ -46,7 +49,7 @@ export interface CloudSyncPayload {
     string,
     Array<{
       studentId: string;
-      predikat: 'Sangat Baik' | 'Baik' | 'Cukup' | 'Kurang';
+      predikat: 'Sangat Baik' | 'Baik' | 'Cukup' | 'Kurang' | 'Perlu Bimbingan';
       keterangan: string;
     }>
   >;
