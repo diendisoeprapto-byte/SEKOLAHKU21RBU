@@ -28,6 +28,7 @@ import {
   FileQuestion,
   Sparkles,
   KeyRound,
+  HeartHandshake,
 } from 'lucide-react';
 import { ActiveUser } from '../types';
 
@@ -40,6 +41,7 @@ export type TabId =
   | 'absensi'
   | 'kalender'
   | 'laporan-absensi'
+  | 'laporan-kebiasaan'
   | 'cp'
   | 'tp'
   | 'kktp'
@@ -192,6 +194,18 @@ export const Sidebar: React.FC<Props> = ({
               <Sparkles className="w-5 h-5 text-purple-500" />
               <span>Tes Kemampuan Akademik (TKA)</span>
             </button>
+
+            <button
+              onClick={() => onSelectTab('laporan-kebiasaan')}
+              className={`w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-3 text-left transition ${
+                activeTab === 'laporan-kebiasaan'
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-md'
+                  : 'text-slate-700 hover:bg-amber-50'
+              }`}
+            >
+              <HeartHandshake className="w-5 h-5 text-amber-500" />
+              <span>Laporan 7 Kebiasaan</span>
+            </button>
           </nav>
         ) : (
           /* Admin / Guru Navigation */
@@ -342,6 +356,24 @@ export const Sidebar: React.FC<Props> = ({
                     >
                       <PieChart className="w-4 h-4" />
                       <span>Laporan Kehadiran</span>
+                    </button>
+                  )}
+                  {(!searchQuery || 'laporan 7 kebiasaan siswa dashboard realtime onsnapshot'.includes(searchQuery)) && (
+                    <button
+                      onClick={() => onSelectTab('laporan-kebiasaan')}
+                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
+                        activeTab === 'laporan-kebiasaan'
+                          ? 'bg-sky-600 text-white shadow-xs'
+                          : 'text-slate-700 hover:bg-sky-50'
+                      }`}
+                    >
+                      <CheckSquare className="w-4 h-4" />
+                      <div className="flex items-center justify-between flex-1">
+                        <span>Laporan 7 Kebiasaan</span>
+                        <span className="text-[9px] bg-emerald-500 text-white font-black px-1.5 py-0.5 rounded-full">
+                          Live
+                        </span>
+                      </div>
                     </button>
                   )}
                 </div>

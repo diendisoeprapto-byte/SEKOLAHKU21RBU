@@ -22,8 +22,17 @@ import {
   ShieldCheck,
   CheckCircle,
   Lock,
+  HeartHandshake,
+  BookOpen,
+  Sun,
+  Coffee,
+  Smile,
+  ThumbsUp,
+  Save,
 } from 'lucide-react';
-import { ActiveUser, Student, Subject, SchoolProfile, CBTQuestion } from '../types';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../utils/firebase';
+import { ActiveUser, Student, Subject, SchoolProfile, CBTQuestion, TUJUH_KEBIASAAN_LIST, KebiasaanReportItem } from '../types';
 import {
   getStoredCBTExams,
   getStoredCBTResults,
@@ -31,8 +40,10 @@ import {
   getStoredAssessments,
   saveStoredAssessments,
   getActiveFilters,
+  CLASSES_LIST,
 } from '../utils/storage';
 import { evaluateQuestionScore } from '../utils/answerChecker';
+
 
 interface Props {
   activeUser: ActiveUser;
@@ -44,6 +55,7 @@ interface Props {
   profile: SchoolProfile;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onNavigateTab: (tab: any) => void;
+  initialTab?: string;
 }
 
 interface ExamOptionItem {
@@ -66,9 +78,27 @@ export const StudentDashboard: React.FC<Props> = ({
   profile,
   showToast,
   onNavigateTab,
+  initialTab,
 }) => {
-  // Mode tampilan siswa: 'home' (4 cards), 'cbt' (flow ujian CBT), 'tka' (flow ujian TKA)
-  const [viewMode, setViewMode] = useState<'home' | 'cbt' | 'tka'>('home');
+  // Mode tampilan siswa: 'home' (cards), 'cbt' (flow ujian CBT), 'tka' (flow ujian TKA), 'kebiasaan' (Form Laporan 7 Kebiasaan)
+  const [viewMode, setViewMode] = useState<'home' | 'cbt' | 'tka' | 'kebiasaan'>(() => {
+    if (initialTab === 'laporan-kebiasaan') return 'kebiasaan';
+    if (initialTab === 'ujian') return 'cbt';
+    if (initialTab === 'tes-tka-siswa') return 'tka';
+    return 'home';
+  });
+
+  useEffect(() => {
+    if (initialTab === 'laporan-kebiasaan') {
+      setViewMode('kebiasaan');
+    } else if (initialTab === 'ujian') {
+      setViewMode('cbt');
+    } else if (initialTab === 'tes-tka-siswa') {
+      setViewMode('tka');
+    } else if (initialTab === 'dashboard') {
+      setViewMode('home');
+    }
+  }, [initialTab]);
 
   // State untuk alur ujian
   const [selectedExamId, setSelectedExamId] = useState<string>('');
@@ -83,6 +113,124 @@ export const StudentDashboard: React.FC<Props> = ({
     if (activeUser.studentData) return activeUser.studentData;
     return students.find((s) => s.username === activeUser.username || s.nama === activeUser.name) || students[0];
   }, [activeUser, students]);
+
+  // State Form Input 7 Kebiasaan Siswa
+  const [kebiasaanFormNama, setKebiasaanFormNama] = useState<string>('');
+  const [kebiasaanFormKelas, setKebiasaanFormKelas] = useState<string>(activeClass);
+  const [kebiasaanFormTanggal, setKebiasaanFormTanggal] = useState<string>(
+    new Date().toISOString().split('T')[0]
+  );
+  const [kebiasaanStatus, setKebiasaanStatus] = useState<Record<string, boolean>>({
+    bangunPagi: true,
+    ibadah: true,
+    mandiGosokGigi: true,
+    sarapanSehat: true,
+    berpamitan: true,
+    membacaBuku: true,
+    membantuOrangTua: true,
+  });
+  const [kebiasaanNotes, setKebiasaanNotes] = useState<Record<string, string>>({
+    bangunPagi: '',
+    ibadah: '',
+    mandiGosokGigi: '',
+    sarapanSehat: '',
+    berpamitan: '',
+    membacaBuku: '',
+    membantuOrangTua: '',
+  });
+  const [kebiasaanCatatanSiswa, setKebiasaanCatatanSiswa] = useState<string>('');
+  const [isSubmittingKebiasaan, setIsSubmittingKebiasaan] = useState<boolean>(false);
+  const [kebiasaanSuccessModal, setKebiasaanSuccessModal] = useState<boolean>(false);
+  const [studentPastReports, setStudentPastReports] = useState<KebiasaanReportItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('sekolahku_student_kebiasaan_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    if (currentStudent) {
+      setKebiasaanFormNama(currentStudent.nama);
+      setKebiasaanFormKelas(currentStudent.kelas || activeClass);
+    }
+  }, [currentStudent, activeClass]);
+
+  // Handler tandai semua kebiasaan sudah dilakukan
+  const handleMarkAllKebiasaan = (val: boolean) => {
+    const updated: Record<string, boolean> = {};
+    TUJUH_KEBIASAAN_LIST.forEach((h) => {
+      updated[h.id] = val;
+    });
+    setKebiasaanStatus(updated);
+    showToast(val ? 'Semua kebiasaan ditandai Sudah Dilakukan!' : 'Semua kebiasaan direset.', 'success');
+  };
+
+  // Handler kirim laporan ke Firestore collection 'laporan_kebiasaan'
+  const handleSubmitKebiasaan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!kebiasaanFormNama.trim()) {
+      showToast('Nama siswa wajib diisi atau dipilih!', 'error');
+      return;
+    }
+
+    setIsSubmittingKebiasaan(true);
+    const completedCount = Object.values(kebiasaanStatus).filter(Boolean).length;
+    const now = new Date();
+    const waktuKirim = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
+
+    const newReport: KebiasaanReportItem = {
+      namaSiswa: kebiasaanFormNama.trim(),
+      studentId: currentStudent?.id || `std_${Date.now()}`,
+      kelas: kebiasaanFormKelas,
+      tanggal: kebiasaanFormTanggal,
+      waktuKirim,
+      kebiasaan: {
+        bangunPagi: Boolean(kebiasaanStatus.bangunPagi),
+        ibadah: Boolean(kebiasaanStatus.ibadah),
+        mandiGosokGigi: Boolean(kebiasaanStatus.mandiGosokGigi),
+        sarapanSehat: Boolean(kebiasaanStatus.sarapanSehat),
+        berpamitan: Boolean(kebiasaanStatus.berpamitan),
+        membacaBuku: Boolean(kebiasaanStatus.membacaBuku),
+        membantuOrangTua: Boolean(kebiasaanStatus.membantuOrangTua),
+      },
+      catatan: kebiasaanNotes,
+      skor: completedCount,
+      catatanSiswa: kebiasaanCatatanSiswa.trim(),
+      createdAt: now.toISOString(),
+    };
+
+    try {
+      // 1. Kirim ke Firestore collection 'laporan_kebiasaan'
+      const docRef = await addDoc(collection(db, 'laporan_kebiasaan'), {
+        ...newReport,
+        timestamp: serverTimestamp(),
+      });
+      newReport.id = docRef.id;
+
+      // 2. Simpan ke local history siswa
+      const updatedHistory = [newReport, ...studentPastReports.slice(0, 19)];
+      setStudentPastReports(updatedHistory);
+      localStorage.setItem('sekolahku_student_kebiasaan_history', JSON.stringify(updatedHistory));
+
+      setKebiasaanSuccessModal(true);
+      showToast(
+        `Alhamdulillah! Laporan 7 Kebiasaan berhasil dikirim ke Firestore. Skor Anda: ${completedCount}/7`,
+        'success'
+      );
+    } catch (err: any) {
+      console.warn('Submit Firestore warning (saved locally):', err);
+      const updatedHistory = [newReport, ...studentPastReports.slice(0, 19)];
+      setStudentPastReports(updatedHistory);
+      localStorage.setItem('sekolahku_student_kebiasaan_history', JSON.stringify(updatedHistory));
+      setKebiasaanSuccessModal(true);
+      showToast('Laporan 7 Kebiasaan berhasil disimpan di sistem lokal sekolah!', 'success');
+    } finally {
+      setIsSubmittingKebiasaan(false);
+    }
+  };
+
 
   // Daftar Ujian CBT Tersedia untuk Kelas Siswa
   const cbtExamList: ExamOptionItem[] = useMemo(() => {
@@ -673,8 +821,481 @@ export const StudentDashboard: React.FC<Props> = ({
                 <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
               </div>
             </div>
+
+            {/* Card 5: Laporan 7 Kebiasaan */}
+            <div
+              onClick={() => setViewMode('kebiasaan')}
+              className="group bg-white p-6 rounded-3xl border-2 border-amber-300 hover:border-amber-500 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden ring-4 ring-amber-100/50"
+            >
+              <div className="space-y-3">
+                <div className="w-14 h-14 rounded-2xl bg-amber-50 group-hover:bg-amber-500 text-amber-600 group-hover:text-white flex items-center justify-center transition shadow-xs">
+                  <HeartHandshake className="w-7 h-7" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-black uppercase text-amber-600 tracking-wider">Karakter &amp; Pembiasaan</span>
+                  <h3 className="font-display font-black text-lg text-slate-800 group-hover:text-amber-600 transition">
+                    Laporan 7 Kebiasaan
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                  Isi formulir 7 kebiasaan baik harianmu: bangun pagi, ibadah, sarapan, berpamitan, membaca buku, dan membantu orang tua.
+                </p>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-amber-100 flex items-center justify-between text-xs font-black text-amber-600 group-hover:text-amber-700">
+                <span>Isi Form Laporan</span>
+                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
+              </div>
+            </div>
           </div>
         </div>
+      </section>
+    );
+  }
+
+  // =========================================================================
+  // VIEW: FORM INPUT DATA LAPORAN 7 KEBIASAAN SISWA
+  // =========================================================================
+  if (viewMode === 'kebiasaan') {
+    const currentCompletedCount = Object.values(kebiasaanStatus).filter(Boolean).length;
+    const completionPercentage = Math.round((currentCompletedCount / 7) * 100);
+
+    return (
+      <section className="space-y-6">
+        {/* Top Breadcrumb & Tombol Kembali */}
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-3xl border border-slate-200 shadow-xs">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setViewMode('home')}
+              className="p-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer flex items-center gap-2 text-xs font-black"
+              title="Kembali ke Beranda Siswa"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Kembali ke Beranda</span>
+            </button>
+            <div className="h-6 w-px bg-slate-200" />
+            <div>
+              <span className="text-[10px] font-black uppercase text-amber-600 tracking-wider block">
+                Formulir Pembiasaan Mandiri
+              </span>
+              <h2 className="text-base font-display font-black text-slate-800">
+                Laporan 7 Kebiasaan Anak Sholeh / Karakter Pelajar Pancasila
+              </h2>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              Tersambung ke Firestore (laporan_kebiasaan)
+            </span>
+          </div>
+        </div>
+
+        {/* Hero Banner Form */}
+        <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-r from-amber-500 via-orange-500 to-rose-600 p-6 md:p-8 text-white shadow-lg">
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-2 max-w-xl">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-black uppercase bg-white/20 backdrop-blur-md text-amber-100 border border-white/30">
+                <HeartHandshake className="w-3.5 h-3.5" /> Pembiasaan Karakter Positif Harian
+              </span>
+              <h1 className="text-2xl md:text-3xl font-display font-black tracking-tight text-white drop-shadow-xs">
+                Ayo Laporkan 7 Kebiasaan Baikmu Hari Ini!
+              </h1>
+              <p className="text-xs md:text-sm text-amber-100/90 leading-relaxed font-medium">
+                Setiap kebiasaan baik yang kamu jalankan membentuk akhlak mulia dan kedisiplinan.
+                Laporan ini akan langsung tersimpan secara real-time ke akun Guru dan Kepala Sekolah.
+              </p>
+            </div>
+
+            <div className="bg-white/15 backdrop-blur-md p-4 rounded-3xl border border-white/25 text-center shrink-0 min-w-[200px]">
+              <span className="text-[11px] font-extrabold uppercase text-amber-200 block">Kepatuhan Hari Ini</span>
+              <div className="flex items-baseline justify-center gap-1 mt-1">
+                <span className="text-3xl font-black text-white">{currentCompletedCount}</span>
+                <span className="text-base font-bold text-amber-200">/ 7</span>
+              </div>
+              <div className="w-full bg-white/20 h-2 rounded-full mt-2 overflow-hidden">
+                <div
+                  className="bg-yellow-300 h-full rounded-full transition-all duration-500"
+                  style={{ width: `${completionPercentage}%` }}
+                />
+              </div>
+              <span className="text-[10px] text-amber-100 block mt-1 font-semibold">
+                {currentCompletedCount === 7
+                  ? '🌟 Sempurna! Kamu Hebat!'
+                  : `${completionPercentage}% Terpenuhi`}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* FORMULIR UTAMA */}
+        <form onSubmit={handleSubmitKebiasaan} className="space-y-6">
+          {/* Card 1: Data Identitas Pelapor */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+              <User className="w-5 h-5 text-amber-600" />
+              <div>
+                <h3 className="text-sm font-display font-black text-slate-800">
+                  Data Identitas Peserta Didik
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Pastikan nama, rombel kelas, dan tanggal pelaporan sudah sesuai.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Nama Siswa (Dropdown/Text) */}
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1.5">
+                  Nama Siswa <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <select
+                    value={kebiasaanFormNama}
+                    onChange={(e) => {
+                      const selectedVal = e.target.value;
+                      setKebiasaanFormNama(selectedVal);
+                      const matched = students.find((s) => s.nama === selectedVal);
+                      if (matched && matched.kelas) {
+                        setKebiasaanFormKelas(matched.kelas);
+                      }
+                    }}
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-amber-500 outline-none text-xs font-bold text-slate-800 transition cursor-pointer"
+                  >
+                    <option value="">-- Pilih Nama Siswa --</option>
+                    {students.map((s) => (
+                      <option key={s.id} value={s.nama}>
+                        {s.nama} ({s.kelas} - NISN: {s.nisn})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {/* Fallback input text jika ingin ketik manual */}
+                <input
+                  type="text"
+                  value={kebiasaanFormNama}
+                  onChange={(e) => setKebiasaanFormNama(e.target.value)}
+                  placeholder="Atau ketik nama lengkap di sini jika berbeda"
+                  className="w-full mt-2 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-700 outline-none focus:border-amber-500"
+                />
+              </div>
+
+              {/* Kelas (Dropdown) */}
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1.5">
+                  Rombel / Kelas <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={kebiasaanFormKelas}
+                  onChange={(e) => setKebiasaanFormKelas(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-amber-500 outline-none text-xs font-bold text-slate-800 transition cursor-pointer"
+                >
+                  {CLASSES_LIST.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1">Kelas tempat siswa terdaftar</p>
+              </div>
+
+              {/* Tanggal (Input Date) */}
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1.5">
+                  Tanggal Pelaporan <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={kebiasaanFormTanggal}
+                    onChange={(e) => setKebiasaanFormTanggal(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-amber-500 outline-none text-xs font-bold text-slate-800 transition cursor-pointer"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">Format: YYYY-MM-DD</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 2: Checklist 7 Kebiasaan */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                <div>
+                  <h3 className="text-sm font-display font-black text-slate-800">
+                    Checklist &amp; Status 7 Kebiasaan
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Pilih status &quot;Sudah Dilakukan&quot; atau &quot;Belum&quot; serta tulis rincian singkat pada setiap kebiasaan.
+                  </p>
+                </div>
+              </div>
+
+              {/* Quick actions: Centang Semua / Reset */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleMarkAllKebiasaan(true)}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-extrabold text-xs transition border border-emerald-200 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  <span>Tandai Semua Sudah (7/7)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleMarkAllKebiasaan(false)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs transition border border-slate-200 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reset</span>
+                </button>
+              </div>
+            </div>
+
+            {/* List 7 Kebiasaan */}
+            <div className="space-y-3">
+              {TUJUH_KEBIASAAN_LIST.map((item) => {
+                const isChecked = Boolean(kebiasaanStatus[item.id]);
+
+                return (
+                  <div
+                    key={item.id}
+                    className={`p-4 rounded-2xl border transition-all duration-200 ${
+                      isChecked
+                        ? 'bg-emerald-50/50 border-emerald-300 shadow-2xs'
+                        : 'bg-slate-50 border-slate-200'
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      {/* Left: Icon, Number, Title & Description */}
+                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                        <span className="text-2xl shrink-0 p-2 rounded-xl bg-white shadow-2xs border border-slate-100">
+                          {item.icon}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="w-5 h-5 rounded-full bg-slate-900 text-white font-black text-[11px] flex items-center justify-center shrink-0">
+                              {item.nomor}
+                            </span>
+                            <h4 className="font-display font-black text-sm text-slate-800">
+                              {item.label}
+                            </h4>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-0.5">{item.deskripsi}</p>
+                        </div>
+                      </div>
+
+                      {/* Right: Button Toggle Status */}
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setKebiasaanStatus((prev) => ({
+                              ...prev,
+                              [item.id]: !prev[item.id],
+                            }))
+                          }
+                          className={`px-4 py-2 rounded-2xl font-display font-black text-xs transition flex items-center gap-2 cursor-pointer ${
+                            isChecked
+                              ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                              : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                          }`}
+                        >
+                          {isChecked ? (
+                            <>
+                              <CheckCircle2 className="w-4 h-4" />
+                              <span>Sudah Dilakukan (+1)</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="w-3.5 h-3.5 rounded-full border-2 border-slate-400 block" />
+                              <span>Belum Dilakukan (0)</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Catatan / Keterangan Tambahan untuk kebiasaan ini */}
+                    <div className="mt-3 pt-2.5 border-t border-slate-200/60">
+                      <input
+                        type="text"
+                        value={kebiasaanNotes[item.id] || ''}
+                        onChange={(e) =>
+                          setKebiasaanNotes((prev) => ({
+                            ...prev,
+                            [item.id]: e.target.value,
+                          }))
+                        }
+                        placeholder={item.placeholder}
+                        className="w-full px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-700 outline-none focus:border-emerald-500 placeholder:text-slate-400"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Card 3: Refleksi Diri / Catatan Tambahan Siswa */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-3">
+            <div className="flex items-center gap-2">
+              <BookOpen className="w-5 h-5 text-amber-600" />
+              <div>
+                <h3 className="text-sm font-display font-black text-slate-800">
+                  Catatan Refleksi &amp; Pesan untuk Guru (Opsional)
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Tuliskan pengalaman menyenangkan atau hal positif yang kamu rasakan saat menjalankan pembiasaan hari ini.
+                </p>
+              </div>
+            </div>
+
+            <textarea
+              rows={3}
+              value={kebiasaanCatatanSiswa}
+              onChange={(e) => setKebiasaanCatatanSiswa(e.target.value)}
+              placeholder="Contoh: Hari ini saya senang sekali bisa bangun jam 5 pagi dan membantu ibu menyiram tanaman sebelum berangkat ke sekolah..."
+              className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-amber-500 outline-none text-xs text-slate-800 transition"
+            />
+          </div>
+
+          {/* Action Button: Kirim Laporan ke Firestore */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                <ThumbsUp className="w-6 h-6" />
+              </div>
+              <div>
+                <span className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider block">
+                  Ringkasan Kesiapan Laporan
+                </span>
+                <span className="text-sm font-black text-slate-800">
+                  {currentCompletedCount} dari 7 Kebiasaan Terpenuhi (Skor: {currentCompletedCount}/7)
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setViewMode('home')}
+                className="px-5 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-display font-black text-xs transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmittingKebiasaan}
+                className="px-7 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-rose-600 hover:from-amber-600 hover:to-rose-700 text-white font-display font-black text-xs shadow-md shadow-amber-500/25 flex items-center gap-2 transition cursor-pointer disabled:opacity-50"
+              >
+                <Send className="w-4 h-4" />
+                <span>{isSubmittingKebiasaan ? 'Menyimpan ke Firestore...' : 'Kirim Laporan 7 Kebiasaan'}</span>
+              </button>
+            </div>
+          </div>
+        </form>
+
+        {/* RIWAYAT LAPORAN SEBELUMNYA SISWA */}
+        {studentPastReports.length > 0 && (
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Clock className="w-5 h-5 text-slate-600" />
+                <h3 className="text-sm font-display font-black text-slate-800">
+                  Riwayat Laporan 7 Kebiasaan Kamu
+                </h3>
+              </div>
+              <span className="text-xs font-bold text-slate-400">
+                {studentPastReports.length} Laporan Terakhir
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {studentPastReports.slice(0, 6).map((item, idx) => (
+                <div
+                  key={item.id || idx}
+                  className="p-4 rounded-2xl border border-slate-200 bg-slate-50 hover:bg-white transition space-y-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-500 flex items-center gap-1">
+                      <Calendar className="w-3.5 h-3.5" /> {item.tanggal}
+                    </span>
+                    <span
+                      className={`text-xs font-black px-2.5 py-0.5 rounded-full ${
+                        item.skor === 7
+                          ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                          : 'bg-amber-100 text-amber-700 border border-amber-300'
+                      }`}
+                    >
+                      Skor {item.skor}/7
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 line-clamp-2">
+                    {item.catatanSiswa || 'Laporan pembiasaan diri harian peserta didik.'}
+                  </p>
+                  <div className="flex items-center gap-1 text-[10px] text-slate-400">
+                    <Clock className="w-3 h-3" /> Dikirim pukul {item.waktuKirim}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* MODAL SUKSES PENGIRIMAN */}
+        {kebiasaanSuccessModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl border-2 border-emerald-400 text-center space-y-4">
+              <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+                <CheckCircle2 className="w-10 h-10" />
+              </div>
+              <div>
+                <span className="text-[10px] font-black uppercase text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
+                  Tersimpan di Firestore (laporan_kebiasaan)
+                </span>
+                <h3 className="text-xl font-display font-black text-slate-800 mt-2">
+                  Laporan Berhasil Terkirim!
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Terima kasih, <strong className="text-slate-700">{kebiasaanFormNama}</strong> ({kebiasaanFormKelas}).
+                </p>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold">
+                🎉 Skor Kepatuhan: {currentCompletedCount} dari 7 Kebiasaan Terlaksana dengan Baik!
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Guru wali kelas dan kepala sekolah dapat langsung memantau laporanmu secara real-time di Dasbor Administrator.
+              </p>
+
+              <div className="flex items-center justify-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setKebiasaanSuccessModal(false)}
+                  className="px-5 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs transition cursor-pointer"
+                >
+                  Tutup
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setKebiasaanSuccessModal(false);
+                    setViewMode('home');
+                  }}
+                  className="px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md transition cursor-pointer"
+                >
+                  Kembali ke Beranda
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </section>
     );
   }

@@ -65,6 +65,7 @@ import { RaporKokurikulerTab } from './components/tabs/RaporKokurikulerTab';
 import { BackupTab } from './components/tabs/BackupTab';
 import { TKATabs } from './components/tabs/TKATabs';
 import { PenilaianEkskulTab } from './components/tabs/PenilaianEkskulTab';
+import { DashboardKebiasaanTab } from './components/tabs/DashboardKebiasaanTab';
 import { StudentDashboard } from './components/StudentDashboard';
 import { testConnection } from './utils/firebase';
 import {
@@ -456,20 +457,25 @@ export default function App() {
             />
 
             <main className="flex-1 min-w-0 space-y-6">
-              {/* Portal Siswa Khusus: Dashboard 4 Cards & Alur Ujian (Dropdown Tunggal, Timer, Auto-Submit) */}
-              {activeUser.role === 'siswa' && (activeTab === 'dashboard' || activeTab === 'ujian' || activeTab === 'tes-tka-siswa') && (
-                <StudentDashboard
-                  activeUser={activeUser}
-                  students={students}
-                  subjects={subjects}
-                  activeClass={activeClass}
-                  activeYear={activeYear}
-                  activeSemester={activeSemester}
-                  profile={profile}
-                  showToast={showToast}
-                  onNavigateTab={setActiveTab}
-                />
-              )}
+              {/* Portal Siswa Khusus: Dashboard Cards, Alur Ujian (CBT & TKA), & Form Laporan 7 Kebiasaan */}
+              {activeUser.role === 'siswa' &&
+                (activeTab === 'dashboard' ||
+                  activeTab === 'ujian' ||
+                  activeTab === 'tes-tka-siswa' ||
+                  activeTab === 'laporan-kebiasaan') && (
+                  <StudentDashboard
+                    activeUser={activeUser}
+                    students={students}
+                    subjects={subjects}
+                    activeClass={activeClass}
+                    activeYear={activeYear}
+                    activeSemester={activeSemester}
+                    profile={profile}
+                    showToast={showToast}
+                    onNavigateTab={setActiveTab}
+                    initialTab={activeTab}
+                  />
+                )}
 
               {/* Tab 1: Beranda Sekolah (Khusus Guru / Admin / Kepsek / TU) */}
               {activeUser.role !== 'siswa' && activeTab === 'dashboard' && (
@@ -513,6 +519,17 @@ export default function App() {
                   onSaveTeachers={handleSaveTeachers}
                   showToast={showToast}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
+                />
+              )}
+
+              {/* Tab 2.5: Dashboard Laporan 7 Kebiasaan Siswa (Real-time onSnapshot) */}
+              {activeUser.role !== 'siswa' && activeTab === 'laporan-kebiasaan' && (
+                <DashboardKebiasaanTab
+                  students={students}
+                  teachers={teachers}
+                  profile={profile}
+                  activeClass={activeClass}
+                  showToast={showToast}
                 />
               )}
 

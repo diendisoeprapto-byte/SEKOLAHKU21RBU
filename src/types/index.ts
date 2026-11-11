@@ -245,3 +245,102 @@ export interface ActiveUser {
   kelasDiampu?: string;
   studentData?: Student;
 }
+
+export const TUJUH_KEBIASAAN_LIST = [
+  {
+    id: 'bangunPagi',
+    nomor: 1,
+    label: '1. Bangun pagi dan merapikan tempat tidur',
+    shortLabel: 'Bangun Pagi & Rapikan Tempat Tidur',
+    icon: '🌅',
+    deskripsi: 'Membiasakan disiplin bangun tepat waktu dan menjaga kerapihan kamar tidur',
+    placeholder: 'Contoh: Bangun pukul 05.00 WIB, merapikan selimut, bantal dan sprei',
+  },
+  {
+    id: 'ibadah',
+    nomor: 2,
+    label: '2. Melaksanakan ibadah',
+    shortLabel: 'Melaksanakan Ibadah',
+    icon: '🕌',
+    deskripsi: 'Melaksanakan kewajiban ibadah sesuai ajaran agama masing-masing',
+    placeholder: 'Contoh: Sholat Subuh berjamaah / Doa Pagi bersama keluarga',
+  },
+  {
+    id: 'mandiGosokGigi',
+    nomor: 3,
+    label: '3. Mandi dan menggosok gigi',
+    shortLabel: 'Mandi & Menggosok Gigi',
+    icon: '🚿',
+    deskripsi: 'Menjaga kebersihan diri, kesegaran badan, dan kesehatan gigi',
+    placeholder: 'Contoh: Mandi pagi bersih dan menggosok gigi sebelum berpakaian',
+  },
+  {
+    id: 'sarapanSehat',
+    nomor: 4,
+    label: '4. Sarapan sehat',
+    shortLabel: 'Sarapan Sehat Bergizi',
+    icon: '🥗',
+    deskripsi: 'Mengonsumsi sarapan bergizi seimbang untuk energi belajar',
+    placeholder: 'Contoh: Nasi, telur mata sapi, sayur bayam, dan minum air putih/susu',
+  },
+  {
+    id: 'berpamitan',
+    nomor: 5,
+    label: '5. Berpamitan sebelum berangkat',
+    shortLabel: 'Berpamitan Sebelum Berangkat',
+    icon: '🤝',
+    deskripsi: 'Mencium tangan orang tua dan mengucapkan salam sopan santun',
+    placeholder: 'Contoh: Mencium tangan ayah dan ibu serta memohon doa restu',
+  },
+  {
+    id: 'membacaBuku',
+    nomor: 6,
+    label: '6. Membaca buku',
+    shortLabel: 'Membaca Buku (Literasi)',
+    icon: '📚',
+    deskripsi: 'Melakukan kegiatan literasi membaca buku pelajaran atau cerita inspiratif',
+    placeholder: 'Contoh: Membaca buku cerita nusantara halaman 10-25',
+  },
+  {
+    id: 'membantuOrangTua',
+    nomor: 7,
+    label: '7. Membantu orang tua',
+    shortLabel: 'Membantu Orang Tua',
+    icon: '🧹',
+    deskripsi: 'Meringankan pekerjaan orang tua di rumah dengan rasa tanggung jawab',
+    placeholder: 'Contoh: Menyapu lantai ruang tamu, mencuci piring bekas makan',
+  },
+] as const;
+
+export type KebiasaanKey = typeof TUJUH_KEBIASAAN_LIST[number]['id'];
+
+export interface KebiasaanReportItem {
+  id?: string;
+  namaSiswa: string;
+  studentId?: string;
+  kelas: string;
+  tanggal: string; // YYYY-MM-DD
+  waktuKirim?: string; // e.g. 06:45:12 WIB
+  kebiasaan: {
+    bangunPagi: boolean;
+    ibadah: boolean;
+    mandiGosokGigi: boolean;
+    sarapanSehat: boolean;
+    berpamitan: boolean;
+    membacaBuku: boolean;
+    membantuOrangTua: boolean;
+  };
+  catatan?: {
+    bangunPagi?: string;
+    ibadah?: string;
+    mandiGosokGigi?: string;
+    sarapanSehat?: string;
+    berpamitan?: string;
+    membacaBuku?: string;
+    membantuOrangTua?: string;
+  };
+  skor: number; // 0 - 7
+  catatanSiswa?: string;
+  createdAt?: string;
+}
+
