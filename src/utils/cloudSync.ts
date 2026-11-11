@@ -31,6 +31,7 @@ export interface CloudSyncPayload {
   teachers?: Teacher[];
   students?: Student[];
   subjects?: Subject[];
+  subjectsByClass?: Record<string, Subject[]>;
   kaldikDays?: KaldikDay[];
   attendance?: Record<string, any>;
   ekskulList?: Array<{
@@ -154,6 +155,12 @@ export async function syncAllLocalToCloud(username: string = 'admin'): Promise<b
       if (pe) penilaianEkskul = JSON.parse(pe);
     } catch {}
 
+    let subjectsByClass: any = {};
+    try {
+      const sbc = localStorage.getItem('sekolahku_subjects_by_class');
+      if (sbc) subjectsByClass = JSON.parse(sbc);
+    } catch {}
+
     const cbtAcakSoal = localStorage.getItem('sekolahku_cbt_acak_soal') === 'true';
     const cbtAcakJawaban = localStorage.getItem('sekolahku_cbt_acak_jawaban') === 'true';
     const tkaAcakSoal = localStorage.getItem('sekolahku_tka_acak_soal') === 'true';
@@ -165,6 +172,7 @@ export async function syncAllLocalToCloud(username: string = 'admin'): Promise<b
         teachers,
         students,
         subjects,
+        subjectsByClass,
         kaldikDays,
         attendance,
         ekskulList,

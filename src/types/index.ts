@@ -118,6 +118,7 @@ export interface Subject {
   kktp: number;
   description?: string;
   tujuanPembelajaran?: string[];
+  kelas?: string;
 }
 
 export interface AssessmentData {

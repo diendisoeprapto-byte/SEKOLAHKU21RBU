@@ -21,6 +21,9 @@ import {
   saveStoredStudents,
   getStoredSubjects,
   saveStoredSubjects,
+  getStoredSubjectsForClass,
+  saveStoredSubjectsForClass,
+  getStoredSubjectsByClass,
   getStoredKaldik,
   saveStoredKaldik,
   getStoredAttendance,
@@ -74,7 +77,8 @@ export default function App() {
   const [profile, setProfile] = useState<SchoolProfile>(getStoredProfile());
   const [teachers, setTeachers] = useState<Teacher[]>(getStoredTeachers());
   const [students, setStudents] = useState<Student[]>(getStoredStudents());
-  const [subjects, setSubjects] = useState<Subject[]>(getStoredSubjects());
+  const initialFilters = getActiveFilters();
+  const [subjects, setSubjects] = useState<Subject[]>(() => getStoredSubjectsForClass(initialFilters.kelas));
   const [kaldikDays, setKaldikDays] = useState<KaldikDay[]>(getStoredKaldik());
   const [attendanceRecords, setAttendanceRecords] = useState<Record<string, AttendanceRecordItem>>(
     getStoredAttendance()
@@ -98,7 +102,11 @@ export default function App() {
         setStudents(cloudData.students);
         saveStoredStudents(cloudData.students);
       }
-      if (cloudData.subjects) {
+      if (cloudData.subjectsByClass) {
+        localStorage.setItem('sekolahku_subjects_by_class', JSON.stringify(cloudData.subjectsByClass));
+        const currentClassSubjects = getStoredSubjectsForClass(initialFilters.kelas);
+        setSubjects(currentClassSubjects);
+      } else if (cloudData.subjects) {
         setSubjects(cloudData.subjects);
         saveStoredSubjects(cloudData.subjects);
       }
@@ -163,10 +171,14 @@ export default function App() {
   const [activeUser, setActiveUser] = useState<ActiveUser | null>(initialSession.user);
 
   // Filters State
-  const initialFilters = getActiveFilters();
   const [activeYear, setActiveYear] = useState<string>(initialFilters.year);
   const [activeSemester, setActiveSemester] = useState<string>(initialFilters.semester);
   const [activeClass, setActiveClass] = useState<string>(initialFilters.kelas);
+
+  // Sync subjects whenever activeClass changes to ensure grade-specific CP & TP
+  useEffect(() => {
+    setSubjects(getStoredSubjectsForClass(activeClass));
+  }, [activeClass]);
 
   // Navigation State (Menu starts minimized when logged in)
   const [activeTab, setActiveTabState] = useState<TabId>(initialSession.tab);
@@ -558,10 +570,14 @@ export default function App() {
                   subType={activeTab}
                   subjects={subjects}
                   teachers={teachers}
-                  onUpdateSubjects={(updated) => {
-                    setSubjects(updated);
-                    saveStoredSubjects(updated);
-                    pushAllDataToCloud({ subjects: updated }, activeUser?.name || 'admin');
+                  onUpdateSubjects={(updated, targetClass) => {
+                    const cls = targetClass || activeClass;
+                    saveStoredSubjectsForClass(cls, updated);
+                    if (cls === activeClass) {
+                      setSubjects(updated);
+                    }
+                    const allByClass = getStoredSubjectsByClass();
+                    pushAllDataToCloud({ subjects: updated, subjectsByClass: allByClass }, activeUser?.name || 'admin');
                   }}
                   activeClass={activeClass}
                   students={students}
@@ -621,6 +637,16 @@ export default function App() {
                   activeUser={activeUser}
                   activeClass={activeClass}
                   students={students}
+                  subjects={subjects}
+                  onUpdateSubjects={(updated, targetClass) => {
+                    const cls = targetClass || activeClass;
+                    saveStoredSubjectsForClass(cls, updated);
+                    if (cls === activeClass) {
+                      setSubjects(updated);
+                    }
+                    const allByClass = getStoredSubjectsByClass();
+                    pushAllDataToCloud({ subjects: updated, subjectsByClass: allByClass }, activeUser?.name || 'admin');
+                  }}
                   showToast={showToast}
                 />
               )}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Compass,
   Target,
@@ -21,15 +21,25 @@ import {
   X,
   Calendar,
   Clock,
+  GraduationCap,
+  Layers,
+  BookOpen,
 } from 'lucide-react';
 import { Subject, Student, Teacher } from '../../types';
-import { saveStoredSubjects, getStoredTeachers } from '../../utils/storage';
+import {
+  saveStoredSubjects,
+  getStoredTeachers,
+  getStoredSubjectsForClass,
+  saveStoredSubjectsForClass,
+  CLASSES_LIST,
+} from '../../utils/storage';
+import { getGradeNumberFromClass } from '../../data/classCurriculumData';
 
 interface Props {
   subType: 'cp' | 'tp' | 'kktp' | 'ekskul' | 'kokurikuler';
   subjects: Subject[];
   teachers?: Teacher[];
-  onUpdateSubjects?: (updated: Subject[]) => void;
+  onUpdateSubjects?: (updated: Subject[], targetClass?: string) => void;
   activeClass: string;
   students?: Student[];
   showToast: (msg: string, type?: 'success' | 'error') => void;
@@ -54,8 +64,28 @@ export const KurikulumTabs: React.FC<Props> = ({
   showToast,
 }) => {
   const teacherList = teachers && teachers.length > 0 ? teachers : getStoredTeachers();
-  const [selectedSubjectId, setSelectedSubjectId] = useState(subjects[0]?.id || '');
-  const selectedSubject = subjects.find((s) => s.id === selectedSubjectId) || subjects[0];
+  const [selectedClass, setSelectedClass] = useState<string>(activeClass || 'Kelas 6A');
+
+  useEffect(() => {
+    setSelectedClass(activeClass || 'Kelas 6A');
+  }, [activeClass]);
+
+  const currentClassSubjects = useMemo(() => {
+    return getStoredSubjectsForClass(selectedClass);
+  }, [selectedClass, subjects]);
+
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>(currentClassSubjects[0]?.id || '');
+
+  useEffect(() => {
+    if (!currentClassSubjects.some((s) => s.id === selectedSubjectId)) {
+      setSelectedSubjectId(currentClassSubjects[0]?.id || '');
+    }
+  }, [currentClassSubjects, selectedSubjectId]);
+
+  const selectedSubject = currentClassSubjects.find((s) => s.id === selectedSubjectId) || currentClassSubjects[0];
+
+  const gradeNum = getGradeNumberFromClass(selectedClass);
+  const faseName = gradeNum <= 2 ? 'Fase A' : gradeNum <= 4 ? 'Fase B' : 'Fase C';
 
   // CP Editing & Adding States
   const [isEditingCp, setIsEditingCp] = useState(false);
@@ -361,7 +391,7 @@ export const KurikulumTabs: React.FC<Props> = ({
 
   // Handlers for CP & TP editing & adding
   const handleSaveCpEdit = () => {
-    const updated = subjects.map((s) => {
+    const updated = currentClassSubjects.map((s) => {
       if (s.id === selectedSubjectId) {
         return {
           ...s,
@@ -370,14 +400,14 @@ export const KurikulumTabs: React.FC<Props> = ({
       }
       return s;
     });
-    saveStoredSubjects(updated);
-    onUpdateSubjects?.(updated);
+    saveStoredSubjectsForClass(selectedClass, updated);
+    onUpdateSubjects?.(updated, selectedClass);
     setIsEditingCp(false);
-    showToast(`Deskripsi Capaian Pembelajaran (CP) untuk ${selectedSubject?.name} berhasil disimpan!`, 'success');
+    showToast(`Deskripsi Capaian Pembelajaran (CP) untuk ${selectedSubject?.name} [${selectedClass}] berhasil disimpan dan terkoneksi!`, 'success');
   };
 
   const handleOpenAddCpModal = () => {
-    const currentSub = selectedSubject || subjects[0];
+    const currentSub = selectedSubject || currentClassSubjects[0];
     if (currentSub) {
       setNewCpName(currentSub.name);
       const tpCount = currentSub.tujuanPembelajaran ? currentSub.tujuanPembelajaran.length : 0;
@@ -403,7 +433,7 @@ export const KurikulumTabs: React.FC<Props> = ({
     }
     setIsCustomMapel(false);
     setNewCpName(subjName);
-    const found = subjects.find((s) => s.name === subjName);
+    const found = currentClassSubjects.find((s) => s.name === subjName);
     if (found) {
       const tpCount = found.tujuanPembelajaran?.length || 0;
       setNewCpCode(`${found.code}-TP${tpCount + 1}`);
@@ -419,13 +449,13 @@ export const KurikulumTabs: React.FC<Props> = ({
       return;
     }
 
-    const existingSubject = subjects.find(
+    const existingSubject = currentClassSubjects.find(
       (s) => s.name.toLowerCase() === targetMapelName.toLowerCase()
     );
 
     if (existingSubject) {
       // Perbarui CP mata pelajaran yang sudah ada
-      const updated = subjects.map((s) => {
+      const updated = currentClassSubjects.map((s) => {
         if (s.id === existingSubject.id) {
           return {
             ...s,
@@ -435,29 +465,30 @@ export const KurikulumTabs: React.FC<Props> = ({
         }
         return s;
       });
-      saveStoredSubjects(updated);
-      onUpdateSubjects?.(updated);
+      saveStoredSubjectsForClass(selectedClass, updated);
+      onUpdateSubjects?.(updated, selectedClass);
       setSelectedSubjectId(existingSubject.id);
-      showToast(`Capaian Pembelajaran (CP) untuk ${existingSubject.name} (${newCpCode.trim() || existingSubject.code}) berhasil diperbarui!`, 'success');
+      showToast(`Capaian Pembelajaran (CP) untuk ${existingSubject.name} [${selectedClass}] berhasil diperbarui dan terkoneksi!`, 'success');
     } else {
       // Tambah Mapel & CP baru
       const code = newCpCode.trim() || targetMapelName.substring(0, 4).toUpperCase();
       const newSubject: Subject = {
-        id: `s_custom_${Date.now()}`,
+        id: `s_${selectedClass.replace(/\s+/g, '_').toLowerCase()}_custom_${Date.now()}`,
         code: code,
         name: targetMapelName,
         kategori: 'umum',
         kktp: 75,
+        kelas: selectedClass,
         description: newCpDescription.trim(),
         tujuanPembelajaran: [
-          `Tujuan Pembelajaran 1 untuk ${targetMapelName}`,
+          `Tujuan Pembelajaran 1 untuk ${targetMapelName} ${selectedClass}`,
         ],
       };
-      const updated = [...subjects, newSubject];
-      saveStoredSubjects(updated);
-      onUpdateSubjects?.(updated);
+      const updated = [...currentClassSubjects, newSubject];
+      saveStoredSubjectsForClass(selectedClass, updated);
+      onUpdateSubjects?.(updated, selectedClass);
       setSelectedSubjectId(newSubject.id);
-      showToast(`Capaian Pembelajaran (CP) baru untuk ${newSubject.name} (${code}) berhasil ditambahkan!`, 'success');
+      showToast(`Capaian Pembelajaran (CP) baru untuk ${newSubject.name} [${selectedClass}] berhasil ditambahkan dan terkoneksi!`, 'success');
     }
 
     setIsAddCpModalOpen(false);
@@ -477,7 +508,7 @@ export const KurikulumTabs: React.FC<Props> = ({
     const target = selectedSubject;
     if (!target) return;
 
-    const updated = subjects.map((s) => {
+    const updated = currentClassSubjects.map((s) => {
       if (s.id === target.id) {
         return {
           ...s,
@@ -486,11 +517,11 @@ export const KurikulumTabs: React.FC<Props> = ({
       }
       return s;
     });
-    saveStoredSubjects(updated);
-    onUpdateSubjects?.(updated);
+    saveStoredSubjectsForClass(selectedClass, updated);
+    onUpdateSubjects?.(updated, selectedClass);
     setIsAddTpModalOpen(false);
     setNewTpText('');
-    showToast(`Tujuan Pembelajaran (TP) baru untuk ${target.name} berhasil ditambahkan!`, 'success');
+    showToast(`Tujuan Pembelajaran (TP) baru untuk ${target.name} [${selectedClass}] berhasil ditambahkan dan terkoneksi ke Bank Soal & Rapor!`, 'success');
   };
 
   const handleSaveEditTp = (idx: number) => {
@@ -498,7 +529,7 @@ export const KurikulumTabs: React.FC<Props> = ({
     const target = selectedSubject;
     if (!target) return;
 
-    const updated = subjects.map((s) => {
+    const updated = currentClassSubjects.map((s) => {
       if (s.id === target.id) {
         const nextTpList = [...(s.tujuanPembelajaran || [])];
         nextTpList[idx] = editingTpText.trim();
@@ -509,19 +540,19 @@ export const KurikulumTabs: React.FC<Props> = ({
       }
       return s;
     });
-    saveStoredSubjects(updated);
-    onUpdateSubjects?.(updated);
+    saveStoredSubjectsForClass(selectedClass, updated);
+    onUpdateSubjects?.(updated, selectedClass);
     setEditingTpIndex(null);
     setEditingTpText('');
-    showToast(`Tujuan Pembelajaran (TP ke-${idx + 1}) berhasil diperbarui!`, 'success');
+    showToast(`Tujuan Pembelajaran (TP ke-${idx + 1}) [${selectedClass}] berhasil diperbarui dan tersinkron!`, 'success');
   };
 
   const handleDeleteTp = (idx: number) => {
-    if (confirm(`Hapus Tujuan Pembelajaran (TP ke-${idx + 1}) ini?`)) {
+    if (confirm(`Hapus Tujuan Pembelajaran (TP ke-${idx + 1}) dari [${selectedClass}]?`)) {
       const target = selectedSubject;
       if (!target) return;
 
-      const updated = subjects.map((s) => {
+      const updated = currentClassSubjects.map((s) => {
         if (s.id === target.id) {
           const nextTpList = (s.tujuanPembelajaran || []).filter((_, i) => i !== idx);
           return {
@@ -531,9 +562,9 @@ export const KurikulumTabs: React.FC<Props> = ({
         }
         return s;
       });
-      saveStoredSubjects(updated);
-      onUpdateSubjects?.(updated);
-      showToast(`Tujuan Pembelajaran (TP) berhasil dihapus!`, 'success');
+      saveStoredSubjectsForClass(selectedClass, updated);
+      onUpdateSubjects?.(updated, selectedClass);
+      showToast(`Tujuan Pembelajaran (TP) berhasil dihapus dari [${selectedClass}]!`, 'success');
     }
   };
 
@@ -551,11 +582,32 @@ export const KurikulumTabs: React.FC<Props> = ({
                 <Compass className="w-5 h-5 text-amber-600" /> Capaian Pembelajaran (CP) Kurikulum Merdeka
               </h2>
               <p className="text-xs text-slate-500">
-                Fase A (Kelas 1-2), Fase B (Kelas 3-4), dan Fase C (Kelas 5-6) SDN Rawa Badak Utara 21. Dapat diedit & disesuaikan.
+                Data CP dibedakan per jenjang kelas ({selectedClass} • {faseName}). Perubahan tersinkron ke Bank Soal CBT, Penilaian & e-Rapor.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {/* Selector Rombel / Kelas */}
+              <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-300 px-3 py-1.5 rounded-xl shadow-2xs">
+                <GraduationCap className="w-4 h-4 text-amber-700" />
+                <span className="text-[11px] font-bold text-amber-950">Rombel:</span>
+                <select
+                  value={selectedClass}
+                  onChange={(e) => {
+                    setSelectedClass(e.target.value);
+                    setIsEditingCp(false);
+                    setEditingTpIndex(null);
+                  }}
+                  className="bg-white border border-amber-300 rounded-lg px-2 py-0.5 text-xs font-black text-amber-950 cursor-pointer outline-none"
+                >
+                  {CLASSES_LIST.map((cls) => (
+                    <option key={cls} value={cls}>
+                      {cls}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <select
                 value={selectedSubjectId}
                 onChange={(e) => {
@@ -564,7 +616,7 @@ export const KurikulumTabs: React.FC<Props> = ({
                 }}
                 className="px-3.5 py-2 rounded-xl border-2 border-amber-500 text-xs font-extrabold bg-white outline-none shadow-2xs"
               >
-                {subjects.map((s) => (
+                {currentClassSubjects.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
                   </option>
@@ -594,9 +646,12 @@ export const KurikulumTabs: React.FC<Props> = ({
                 </h3>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-extrabold px-3 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
-                  Fase C ({activeClass})
+                  {faseName} ({selectedClass})
+                </span>
+                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Terkoneksi ke Bank Soal, Penilaian & Rapor
                 </span>
                 {!isEditingCp ? (
                   <button
@@ -678,11 +733,31 @@ export const KurikulumTabs: React.FC<Props> = ({
                 <Target className="w-5 h-5 text-amber-600" /> Tujuan Pembelajaran (TP) Berbasis CP
               </h2>
               <p className="text-xs text-slate-500">
-                Daftar butir tujuan pembelajaran per lingkup materi ({activeClass}). Guru dapat mengedit, menambah, dan menghapus TP.
+                Daftar TP dibedakan per jenjang kelas ({selectedClass} • {faseName}). Terkoneksi otomatis ke Sumatif (AS1, AS2..), Bank Soal CBT, dan e-Rapor.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {/* Selector Rombel / Kelas */}
+              <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-300 px-3 py-1.5 rounded-xl shadow-2xs">
+                <GraduationCap className="w-4 h-4 text-amber-700" />
+                <span className="text-[11px] font-bold text-amber-950">Rombel:</span>
+                <select
+                  value={selectedClass}
+                  onChange={(e) => {
+                    setSelectedClass(e.target.value);
+                    setEditingTpIndex(null);
+                  }}
+                  className="bg-white border border-amber-300 rounded-lg px-2 py-0.5 text-xs font-black text-amber-950 cursor-pointer outline-none"
+                >
+                  {CLASSES_LIST.map((cls) => (
+                    <option key={cls} value={cls}>
+                      {cls}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <select
                 value={selectedSubjectId}
                 onChange={(e) => {
@@ -691,7 +766,7 @@ export const KurikulumTabs: React.FC<Props> = ({
                 }}
                 className="px-3.5 py-2 rounded-xl border-2 border-amber-500 text-xs font-extrabold bg-white outline-none shadow-2xs"
               >
-                {subjects.map((s) => (
+                {currentClassSubjects.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
                   </option>
@@ -706,6 +781,19 @@ export const KurikulumTabs: React.FC<Props> = ({
                 <Plus className="w-4 h-4" /> + Tambah TP Baru
               </button>
             </div>
+          </div>
+
+          {/* Connection Banner */}
+          <div className="p-3.5 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span className="font-bold text-emerald-950">
+                TP {selectedSubject?.name} [{selectedClass} - {faseName}] aktif & terkoneksi langsung ke Penilaian Sumatif (AS1, AS2..), Bank Soal CBT, dan Deskripsi e-Rapor.
+              </span>
+            </div>
+            <span className="font-mono font-black text-emerald-800 bg-white px-2.5 py-1 rounded-xl border border-emerald-300 shadow-2xs">
+              {selectedSubject?.tujuanPembelajaran?.length || 0} TP Terdaftar
+            </span>
           </div>
 
           {/* List of TP items with Edit & Delete */}
@@ -831,7 +919,7 @@ export const KurikulumTabs: React.FC<Props> = ({
                   className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs font-bold bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-2xs"
                 >
                   <option value="">-- Pilih Mata Pelajaran yang Sudah Ada --</option>
-                  {subjects.map((s) => (
+                  {currentClassSubjects.map((s) => (
                     <option key={s.id} value={s.name}>
                       {s.name} ({s.code}) — {s.tujuanPembelajaran?.length || 0} TP Terdaftar
                     </option>
@@ -974,11 +1062,28 @@ export const KurikulumTabs: React.FC<Props> = ({
                 Menu 3. Kurikulum & Perangkat
               </span>
               <h2 className="text-xl font-display font-black text-slate-800 mt-1 flex items-center gap-2">
-                <CheckSquare className="w-5 h-5 text-amber-600" /> KKTP Kurikulum Merdeka ({activeClass})
+                <CheckSquare className="w-5 h-5 text-amber-600" /> KKTP Kurikulum Merdeka ({selectedClass} • {faseName})
               </h2>
               <p className="text-xs text-slate-500">
                 Kriteria Ketercapaian Tujuan Pembelajaran interval nilai (0-60: Belum Mencapai, 61-74: Cukup, 75-84: Baik, 85-100: Sangat Baik).
               </p>
+            </div>
+
+            {/* Selector Rombel / Kelas */}
+            <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-300 px-3 py-1.5 rounded-xl shadow-2xs">
+              <GraduationCap className="w-4 h-4 text-amber-700" />
+              <span className="text-[11px] font-bold text-amber-950">Rombel:</span>
+              <select
+                value={selectedClass}
+                onChange={(e) => setSelectedClass(e.target.value)}
+                className="bg-white border border-amber-300 rounded-lg px-2 py-0.5 text-xs font-black text-amber-950 cursor-pointer outline-none"
+              >
+                {CLASSES_LIST.map((cls) => (
+                  <option key={cls} value={cls}>
+                    {cls}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -995,7 +1100,7 @@ export const KurikulumTabs: React.FC<Props> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {subjects.map((s) => (
+                {currentClassSubjects.map((s) => (
                   <tr key={s.id} className="hover:bg-slate-50">
                     <td className="p-3 font-bold text-slate-800">{s.name}</td>
                     <td className="p-3 text-center font-mono font-bold text-rose-700">{s.kktp}</td>

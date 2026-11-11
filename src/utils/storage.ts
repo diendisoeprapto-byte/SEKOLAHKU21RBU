@@ -1,11 +1,13 @@
 import { SchoolProfile, Teacher, Student, Subject, KaldikDay, AssessmentData, CBTExam, CBTExamResult, ActiveUser, StudentReportNotes, TKACpTp, TKAQuestion } from '../types';
 import { DEFAULT_SCHOOL_PROFILE, DEFAULT_TEACHERS, DEFAULT_STUDENTS, DEFAULT_SUBJECTS, DEFAULT_KALDIK_HOLIDAYS, DEFAULT_CBT_EXAM, DEFAULT_TKA_CP_TP, DEFAULT_TKA_QUESTIONS } from '../data/defaultData';
+import { getDefaultSubjectsForGrade, getGradeNumberFromClass } from '../data/classCurriculumData';
 
 const STORAGE_KEYS = {
   PROFILE: 'sekolahku_school_profile',
   TEACHERS: 'sekolahku_teachers',
   STUDENTS: 'sekolahku_students',
   SUBJECTS: 'sekolahku_subjects',
+  SUBJECTS_BY_CLASS: 'sekolahku_subjects_by_class',
   KALDIK: 'sekolahku_kaldik_holidays',
   ATTENDANCE: 'sekolahku_attendance_records',
   ASSESSMENTS: 'sekolahku_assessments_data',
@@ -74,18 +76,51 @@ export const saveStoredStudents = (students: Student[]) => {
   localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
 };
 
-export const getStoredSubjects = (): Subject[] => {
-  const data = localStorage.getItem(STORAGE_KEYS.SUBJECTS);
-  if (!data) return DEFAULT_SUBJECTS;
-  try {
-    return JSON.parse(data);
-  } catch {
-    return DEFAULT_SUBJECTS;
+export const getStoredSubjectsByClass = (): Record<string, Subject[]> => {
+  const data = localStorage.getItem(STORAGE_KEYS.SUBJECTS_BY_CLASS);
+  if (data) {
+    try {
+      return JSON.parse(data);
+    } catch (e) {
+      console.error('Failed to parse subjects by class:', e);
+    }
   }
+  return {};
 };
 
-export const saveStoredSubjects = (subjects: Subject[]) => {
+export const getStoredSubjectsForClass = (kelasName: string): Subject[] => {
+  const targetClass = kelasName || 'Kelas 6A';
+  const allByClass = getStoredSubjectsByClass();
+  if (allByClass[targetClass] && Array.isArray(allByClass[targetClass]) && allByClass[targetClass].length > 0) {
+    return allByClass[targetClass];
+  }
+  // Fallback to tailored default for this grade
+  const grade = getGradeNumberFromClass(targetClass);
+  const defaultList = getDefaultSubjectsForGrade(grade, targetClass);
+  allByClass[targetClass] = defaultList;
+  localStorage.setItem(STORAGE_KEYS.SUBJECTS_BY_CLASS, JSON.stringify(allByClass));
+  return defaultList;
+};
+
+export const saveStoredSubjectsForClass = (kelasName: string, subjects: Subject[]) => {
+  const targetClass = kelasName || 'Kelas 6A';
+  const allByClass = getStoredSubjectsByClass();
+  allByClass[targetClass] = subjects;
+  localStorage.setItem(STORAGE_KEYS.SUBJECTS_BY_CLASS, JSON.stringify(allByClass));
   localStorage.setItem(STORAGE_KEYS.SUBJECTS, JSON.stringify(subjects));
+};
+
+export const getStoredSubjects = (kelasName?: string): Subject[] => {
+  if (kelasName) {
+    return getStoredSubjectsForClass(kelasName);
+  }
+  const activeClass = localStorage.getItem(STORAGE_KEYS.ACTIVE_CLASS) || 'Kelas 6A';
+  return getStoredSubjectsForClass(activeClass);
+};
+
+export const saveStoredSubjects = (subjects: Subject[], kelasName?: string) => {
+  const targetClass = kelasName || localStorage.getItem(STORAGE_KEYS.ACTIVE_CLASS) || 'Kelas 6A';
+  saveStoredSubjectsForClass(targetClass, subjects);
 };
 
 export const getStoredKaldik = (): KaldikDay[] => {

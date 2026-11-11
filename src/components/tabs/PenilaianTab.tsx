@@ -22,6 +22,7 @@ import {
   ChevronDown,
   ChevronUp,
   Star,
+  Target,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Subject, Student, AssessmentData } from '../../types';
@@ -82,6 +83,9 @@ export const PenilaianTab: React.FC<Props> = ({
 
   // Dynamic number of Sumatif Asesmen (AS1, AS2, AS3, AS4, ...)
   const [asCount, setAsCountState] = useState<number>(4);
+
+  // State to toggle connected CP & TP summary
+  const [showCpTpInfo, setShowCpTpInfo] = useState<boolean>(false);
 
   // Peringkat 1 - 10 States
   const [showTop10Leaderboard, setShowTop10Leaderboard] = useState<boolean>(true);
@@ -821,6 +825,87 @@ export const PenilaianTab: React.FC<Props> = ({
           </div>
         )}
 
+        {/* CP & TP Connection Card for current class and subject */}
+        <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 shadow-2xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Target className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="font-display font-black text-indigo-950 text-sm">
+                    Koneksi Capaian & Tujuan Pembelajaran (CP & TP)
+                  </h4>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-200 text-indigo-900">
+                    {activeClass} &bull; {selectedSubject?.name}
+                  </span>
+                </div>
+                <p className="text-xs text-indigo-700/90">
+                  Setiap kolom Asesmen Sumatif (AS1, AS2, ...) terhubung langsung ke Tujuan Pembelajaran (TP) kelas {activeClass}.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowCpTpInfo(!showCpTpInfo)}
+              className="px-3 py-1.5 text-xs font-bold text-indigo-700 bg-white border border-indigo-200 rounded-xl hover:bg-indigo-50 transition cursor-pointer flex items-center gap-1.5 shrink-0 self-start sm:self-auto"
+            >
+              {showCpTpInfo ? (
+                <>
+                  <ChevronUp className="w-3.5 h-3.5" /> Sembunyikan Pemetaan
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="w-3.5 h-3.5" /> Lihat Pemetaan TP &rarr; AS
+                </>
+              )}
+            </button>
+          </div>
+
+          {showCpTpInfo && (
+            <div className="mt-3.5 pt-3.5 border-t border-indigo-200/70 space-y-3 text-xs">
+              <div>
+                <span className="font-black text-indigo-950 uppercase tracking-wider text-[10px] block mb-1">
+                  Capaian Pembelajaran (CP) {selectedSubject?.name} [{activeClass}]:
+                </span>
+                <p className="text-slate-700 bg-white p-2.5 rounded-xl border border-indigo-100 text-xs italic">
+                  &ldquo;{selectedSubject?.description || 'Belum ada CP yang ditetapkan'}&rdquo;
+                </p>
+              </div>
+
+              <div>
+                <span className="font-black text-indigo-950 uppercase tracking-wider text-[10px] block mb-1.5">
+                  Pemetaan Asesmen Sumatif (AS) terhadap Butir TP:
+                </span>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {Array.from({ length: asCount }, (_, i) => i + 1).map((idx) => {
+                    const tpText = selectedSubject?.tujuanPembelajaran?.[idx - 1];
+                    return (
+                      <div
+                        key={idx}
+                        className="flex items-start gap-2 bg-white p-2.5 rounded-xl border border-indigo-100 shadow-2xs"
+                      >
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900 font-mono font-bold text-[11px] shrink-0">
+                          AS{idx}
+                        </span>
+                        <div className="min-w-0">
+                          <span className="font-bold text-slate-800 block text-[11px]">
+                            {tpText ? `Tujuan Pembelajaran ${idx}:` : `Tujuan Pembelajaran ${idx} (Belum diset):`}
+                          </span>
+                          <span className="text-slate-600 text-xs">
+                            {tpText || 'Dapat disunting di menu Kurikulum > Tujuan Pembelajaran'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* The Master Grade Table */}
         <div className="overflow-x-auto border-2 border-slate-200 rounded-3xl shadow-xs">
           <table className="w-full text-left border-collapse text-xs">
@@ -841,15 +926,27 @@ export const PenilaianTab: React.FC<Props> = ({
                 </th>
 
                 {/* Dynamic Sumatif & Remedial Column Groups */}
-                {Array.from({ length: asCount }, (_, i) => i + 1).map((idx) => (
-                  <th
-                    key={idx}
-                    colSpan={2}
-                    className="p-2.5 text-center border-r border-slate-200 bg-emerald-50/80 text-emerald-950 font-black"
-                  >
-                    Sumatif (AS{idx})
-                  </th>
-                ))}
+                {Array.from({ length: asCount }, (_, i) => i + 1).map((idx) => {
+                  const tpText = selectedSubject?.tujuanPembelajaran?.[idx - 1];
+                  return (
+                    <th
+                      key={idx}
+                      colSpan={2}
+                      className="p-2.5 text-center border-r border-slate-200 bg-emerald-50/80 text-emerald-950 font-black"
+                      title={tpText ? `TP ${idx}: ${tpText}` : `Asesmen Sumatif ${idx}`}
+                    >
+                      <div>Sumatif (AS{idx})</div>
+                      {tpText && (
+                        <div
+                          className="text-[10px] font-medium text-emerald-800 truncate max-w-[130px] mx-auto opacity-90 normal-case"
+                          title={`Tujuan Pembelajaran ${idx}: ${tpText}`}
+                        >
+                          TP {idx}: {tpText}
+                        </div>
+                      )}
+                    </th>
+                  );
+                })}
 
                 <th rowSpan={2} className="p-3 text-center border-r border-slate-200 bg-sky-50 text-sky-950 w-20">
                   Rata-rata AS

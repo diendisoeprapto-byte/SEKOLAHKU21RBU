@@ -24,7 +24,7 @@ import {
   Save,
   Shuffle,
 } from 'lucide-react';
-import { CBTExam, CBTQuestion, Student, ActiveUser } from '../../types';
+import { Subject, CBTExam, CBTQuestion, Student, ActiveUser } from '../../types';
 import {
   getStoredCBTExams,
   saveStoredCBTExams,
@@ -33,6 +33,8 @@ import {
   getStoredAssessments,
   saveStoredAssessments,
   getActiveFilters,
+  getStoredSubjectsForClass,
+  saveStoredSubjectsForClass,
 } from '../../utils/storage';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx } from '../../utils/docxImporter';
@@ -41,6 +43,8 @@ interface Props {
   activeUser: ActiveUser;
   activeClass: string;
   students: Student[];
+  subjects?: Subject[];
+  onUpdateSubjects?: (updated: Subject[], targetClass?: string) => void;
   showToast: (msg: string, type?: 'success' | 'error') => void;
 }
 
@@ -48,6 +52,8 @@ export const CBTTab: React.FC<Props> = ({
   activeUser,
   activeClass,
   students,
+  subjects,
+  onUpdateSubjects,
   showToast,
 }) => {
   const [exams, setExams] = useState<CBTExam[]>(getStoredCBTExams());
@@ -82,7 +88,6 @@ export const CBTTab: React.FC<Props> = ({
   // Form Fields matching Image 1
   const [selectedMapel, setSelectedMapel] = useState<string>('Pendidikan Agama Islam');
   const [targetKelas, setTargetKelas] = useState<string>(activeClass || 'Kelas 6B');
-  const [selectedTpId, setSelectedTpId] = useState<string>('TP 1');
   const [selectedTipeSoal, setSelectedTipeSoal] = useState<'pg' | 'pg_kompleks' | 'benar_salah' | 'menjodohkan' | 'isian' | 'uraian'>('pg');
   const [levelKesukaran, setLevelKesukaran] = useState<'Mudah' | 'Sedang' | 'Sukar'>('Sedang');
   const [levelKognitif, setLevelKognitif] = useState<'L1 (C1-C2)' | 'L2 (C3)' | 'L3 (C4-C6)'>('L2 (C3)');
@@ -106,115 +111,29 @@ export const CBTTab: React.FC<Props> = ({
   // Exam runtime questions list (shuffled if acakSoal is active)
   const [runningExamQuestions, setRunningExamQuestions] = useState<CBTQuestion[]>([]);
 
-  // CP & TP State covering all SD subjects (Kurikulum Merdeka)
-  const [cpList, setCpList] = useState([
-    {
-      id: 'cp_pabp',
-      kode: 'CP 1',
-      judul: 'CP 1: [PABP] Peserta didik memahami pesan pokok Al-Qur\'an dan Hadis',
-      deskripsi: '[Kelas 6 - Fase C] Peserta didik memahami pesan pokok Al-Qur\'an dan Hadis, menerapkan akhlak karimah, serta melaksanakan ibadah sesuai ketentuan fikih dalam kehidupan sehari-hari.',
-      mapel: 'Pendidikan Agama Islam',
-      tpList: [
-        { id: 'TP 1', judul: 'Memahami pesan pokok surah pendek Al-Qur\'an serta hadis tentang keutamaan ilmu.' },
-        { id: 'TP 2', judul: 'Menjelaskan hukum bacaan tajwid nun mati/tanwin dan mim mati.' },
-        { id: 'TP 3', judul: 'Meneladani akhlak terpuji terhadap sesama dan lingkungan.' },
-      ]
-    },
-    {
-      id: 'cp_pancasila',
-      kode: 'CP 2',
-      judul: 'CP 1: [Pendidikan Pancasila] Memahami Makna Sila-Sila Pancasila & Norma Hukum',
-      deskripsi: '[Kelas 6 - Fase C] Peserta didik menganalisis penerapan nilai-nilai Pancasila dalam kehidupan sehari-hari, norma masyarakat, hak dan kewajiban warga negara, serta menjaga persatuan NKRI.',
-      mapel: 'Pendidikan Pancasila',
-      tpList: [
-        { id: 'TP 1', judul: 'Menganalisis pengamalan sila-sila Pancasila dalam keluarga, sekolah, dan masyarakat.' },
-        { id: 'TP 2', judul: 'Membedakan hak dan kewajiban anak sebagai anggota keluarga dan warga sekolah.' },
-        { id: 'TP 3', judul: 'Menunjukkan komitmen gotong royong dalam keberagaman suku, agama, dan budaya.' },
-      ]
-    },
-    {
-      id: 'cp_indo',
-      kode: 'CP 3',
-      judul: 'CP 1: [Bahasa Indonesia] Menyimak, Membaca Teks Informasi & Menulis Kreatif',
-      deskripsi: '[Kelas 6 - Fase C] Peserta didik mampu menganalisis ide pokok, informasi tersurat dan tersirat dalam teks fiksi dan nonfiksi, serta menyusun teks narasi, deskripsi, dan formulir.',
-      mapel: 'Bahasa Indonesia',
-      tpList: [
-        { id: 'TP 1', judul: 'Menentukan ide pokok, kalimat utama, dan kesimpulan paragraf deduktif-induktif.' },
-        { id: 'TP 2', judul: 'Menemukan informasi penting dari teks eksplanasi ilmiah menggunakan kata tanya ADiKSiMBa.' },
-        { id: 'TP 3', judul: 'Menyusun teks pidato persuasif atau teks formulir pengiriman barang dengan ejaan yang benar.' },
-      ]
-    },
-    {
-      id: 'cp_mtk',
-      kode: 'CP 4',
-      judul: 'CP 1: [Matematika] Bilangan Cacah, Pecahan, Perbandingan & Bangun Ruang',
-      deskripsi: '[Kelas 6 - Fase C] Peserta didik dapat menyelesaikan masalah berkaitan dengan operasi hitung campuran bilangan bulat, pecahan, desimal, rasio, serta volume bangun ruang kubus dan balok.',
-      mapel: 'Matematika',
-      tpList: [
-        { id: 'TP 1', judul: 'Menghitung operasi hitung campuran perkalian dan pembagian pecahan dan desimal.' },
-        { id: 'TP 2', judul: 'Memecahkan soal cerita matematika FPB dan KPK dalam kehidupan sehari-hari.' },
-        { id: 'TP 3', judul: 'Menghitung volume dan luas permukaan kubus, balok, dan prisma segitiga.' },
-      ]
-    },
-    {
-      id: 'cp_ipas',
-      kode: 'CP 5',
-      judul: 'CP 1: [IPAS] Sistem Organ Tubuh Manusia, Ekosistem & Tata Surya',
-      deskripsi: '[Kelas 6 - Fase C] Peserta didik menganalisis hubungan antar sistem organ tubuh manusia (peredaran darah, pernapasan, pencernaan), perpindahan energi, magnet, dan sistem tata surya.',
-      mapel: 'Ilmu Pengetahuan Alam dan Sosial (IPAS)',
-      tpList: [
-        { id: 'TP 1', judul: 'Menganalisis fungsi organ peredaran darah manusia dan cara memelihara kesehatannya.' },
-        { id: 'TP 2', judul: 'Mengidentifikasi rantai makanan, jaring-jaring makanan, dan keseimbangan ekosistem.' },
-        { id: 'TP 3', judul: 'Menjelaskan sistem tata surya, karakteristik planet, serta rotasi dan revolusi bumi.' },
-      ]
-    },
-    {
-      id: 'cp_pjok',
-      kode: 'CP 6',
-      judul: 'CP 1: [PJOK] Keterampilan Gerak Lokomotor, Manipulatif & Kebugaran Jasmani',
-      deskripsi: '[Kelas 6 - Fase C] Peserta didik mempraktikkan variasi dan kombinasi gerak dasar lokomotor, nonlokomotor, dan manipulatif dalam berbagai permainan bola besar, bola kecil, dan senam.',
-      mapel: 'Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)',
-      tpList: [
-        { id: 'TP 1', judul: 'Mempraktikkan variasi gerak dasar passing dan dribbling permainan bola basket dan sepak bola.' },
-        { id: 'TP 2', judul: 'Melakukan kombinasi gerak melempar, menangkap, dan memukul dalam kasti/rounders.' },
-        { id: 'TP 3', judul: 'Menerapkan pola hidup sehat, kebersihan reproduksi, dan pemanasan sebelum olahraga.' },
-      ]
-    },
-    {
-      id: 'cp_seni',
-      kode: 'CP 7',
-      judul: 'CP 1: [Seni Rupa] Eksplorasi Seni Rupa Dua Dimensi & Ragam Hias Tradisional',
-      deskripsi: '[Kelas 6 - Fase C] Peserta didik menciptakan karya seni rupa dua dimensi dan tiga dimensi dengan menerapkan unsur garis, bentuk, warna, serta apresiasi ragam motif budaya nusantara.',
-      mapel: 'Seni Rupa',
-      tpList: [
-        { id: 'TP 1', judul: 'Menggambar ornamen ragam hias motif geometris dan flora khas Betawi/nusantara.' },
-        { id: 'TP 2', judul: 'Membuat karya seni kolase, montase, dan mozaik dari bahan ramah lingkungan.' },
-      ]
-    },
-    {
-      id: 'cp_bing',
-      kode: 'CP 8',
-      judul: 'CP 1: [Bahasa Inggris] Daily Activities, Vocabulary & Short Descriptive Texts',
-      deskripsi: '[Kelas 6 - Fase C] Peserta didik memahami instruksi lisan sederhana, merespons teks percakapan sehari-hari, dan menulis kalimat sederhana tentang kegiatan sekolah dan keluarga.',
-      mapel: 'Bahasa Inggris',
-      tpList: [
-        { id: 'TP 1', judul: 'Understanding daily routines and telling time in English sentences.' },
-        { id: 'TP 2', judul: 'Identifying main ideas from short descriptive reading texts about public places.' },
-      ]
-    },
-    {
-      id: 'cp_plbj',
-      kode: 'CP 9',
-      judul: 'CP 1: [Muatan Lokal PLBJ] Budaya Betawi, Kuliner Khas & Transportasi Kota Jakarta',
-      deskripsi: '[Kelas 6 - Fase C] Peserta didik memahami dan melestarikan kearifan lokal DKI Jakarta seperti seni bela diri silat beksi, ornamen Betawi, kuliner khas, dan moda transportasi modern Jakarta.',
-      mapel: 'Muatan Lokal (PLBJ)',
-      tpList: [
-        { id: 'TP 1', judul: 'Mengenal sejarah kuliner khas Betawi seperti kerak telor, bir pletok, dan asinan.' },
-        { id: 'TP 2', judul: 'Menjelaskan pemanfaatan transportasi publik massal Jakarta (MRT, LRT, TransJakarta).' },
-        { id: 'TP 3', judul: 'Menerapkan perilaku tertib membuang sampah dan pelestarian kali/sungai di Jakarta.' },
-      ]
-    },
-  ]);
+  // Dynamic class-based subjects (synchronized with active class & Kurikulum)
+  const classSubjects = useMemo(() => {
+    return subjects && subjects.length > 0 ? subjects : getStoredSubjectsForClass(activeClass);
+  }, [subjects, activeClass]);
+
+  // Derived CP & TP list connected directly to the active class's subjects
+  const cpList = useMemo(() => {
+    return classSubjects.map((s, idx) => ({
+      id: s.id,
+      kode: s.code || `CP ${idx + 1}`,
+      judul: `CP ${idx + 1}: [${s.name}] ${s.description ? s.description.substring(0, 75) + '...' : ''}`,
+      deskripsi: `[${activeClass}] ${s.description || 'Capaian Pembelajaran mata pelajaran ' + s.name}`,
+      mapel: s.name,
+      tpList: (s.tujuanPembelajaran && s.tujuanPembelajaran.length > 0)
+        ? s.tujuanPembelajaran.map((tp, tpIdx) => ({
+            id: `TP ${tpIdx + 1}`,
+            judul: tp,
+          }))
+        : [
+            { id: 'TP 1', judul: `Tujuan Pembelajaran 1 untuk ${s.name} ${activeClass}` }
+          ],
+    }));
+  }, [classSubjects, activeClass]);
 
   // CPs filtered by selectedMapel so only relevant CP/TP appears
   const filteredCps = useMemo(() => {
@@ -227,7 +146,17 @@ export const CBTTab: React.FC<Props> = ({
     return list.length > 0 ? list : cpList;
   }, [cpList, selectedMapel]);
 
-  const [selectedCpId, setSelectedCpId] = useState<string>(cpList[0].id);
+  const [selectedCpId, setSelectedCpId] = useState<string>('');
+  const [selectedTpId, setSelectedTpId] = useState<string>('TP 1');
+
+  useEffect(() => {
+    if (filteredCps.length > 0) {
+      if (!filteredCps.some((c) => c.id === selectedCpId)) {
+        setSelectedCpId(filteredCps[0].id);
+        setSelectedTpId(filteredCps[0].tpList[0]?.id || 'TP 1');
+      }
+    }
+  }, [filteredCps, selectedCpId]);
 
   // Auto-connect CP and TP when mapel changes
   const handleMapelChange = (newMapel: string) => {
@@ -1768,24 +1697,27 @@ export const CBTTab: React.FC<Props> = ({
                 type="button"
                 onClick={() => {
                   if (newCpTitle.trim() && newCpDesc.trim()) {
-                    const newId = `cp_${Date.now()}`;
-                    const newCpObj = {
-                      id: newId,
-                      kode: `CP ${cpList.length + 1}`,
-                      judul: newCpTitle.trim(),
-                      deskripsi: newCpDesc.trim(),
-                      mapel: selectedMapel,
-                      tpList: [{ id: 'TP 1', judul: 'Memahami kompetensi dasar materi pembelajaran.' }]
+                    const newSubj: Subject = {
+                      id: `s_${activeClass.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}`,
+                      code: `CP-${Date.now().toString().slice(-4)}`,
+                      name: selectedMapel,
+                      kategori: 'umum',
+                      kktp: 75,
+                      kelas: activeClass,
+                      description: newCpDesc.trim(),
+                      tujuanPembelajaran: [newCpTitle.trim()],
                     };
-                    setCpList([...cpList, newCpObj]);
-                    setSelectedCpId(newId);
+                    const updated = [...classSubjects, newSubj];
+                    saveStoredSubjectsForClass(activeClass, updated);
+                    onUpdateSubjects?.(updated, activeClass);
+                    setSelectedCpId(newSubj.id);
                     setIsAddCpOpen(false);
                     setNewCpTitle('');
                     setNewCpDesc('');
-                    showToast('Capaian Pembelajaran (CP) baru berhasil ditambahkan!', 'success');
+                    showToast(`Capaian Pembelajaran (CP) baru untuk [${activeClass}] berhasil disimpan dan terkoneksi!`, 'success');
                   }
                 }}
-                className="px-4 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-black"
+                className="px-4 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-black cursor-pointer shadow-xs"
               >
                 Simpan CP
               </button>
@@ -1799,7 +1731,7 @@ export const CBTTab: React.FC<Props> = ({
         <div className="fixed inset-0 z-[950] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white max-w-md w-full rounded-3xl p-5 shadow-2xl border space-y-4">
             <div className="flex items-center justify-between border-b pb-2">
-              <h4 className="font-display font-black text-sm text-slate-900">Tambah Tujuan Pembelajaran (TP)</h4>
+              <h4 className="font-display font-black text-sm text-slate-900">Tambah Tujuan Pembelajaran (TP) - {activeClass}</h4>
               <button onClick={() => setIsAddTpOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-4 h-4" />
               </button>
@@ -1810,7 +1742,7 @@ export const CBTTab: React.FC<Props> = ({
                 type="text"
                 value={newTpIdInput}
                 onChange={(e) => setNewTpIdInput(e.target.value)}
-                placeholder={`TP ${currentCp.tpList.length + 1}`}
+                placeholder={`TP ${(currentCp.tpList?.length || 0) + 1}`}
                 className="w-full px-3 py-2 rounded-xl border text-xs"
               />
               <label className="text-xs font-bold text-slate-700">Teks Tujuan Pembelajaran:</label>
@@ -1834,25 +1766,27 @@ export const CBTTab: React.FC<Props> = ({
                 type="button"
                 onClick={() => {
                   if (newTpDescInput.trim()) {
-                    const tpKey = newTpIdInput.trim() || `TP ${currentCp.tpList.length + 1}`;
-                    const updatedCpList = cpList.map((c) => {
-                      if (c.id === currentCp.id) {
+                    const tpText = newTpDescInput.trim();
+                    const updated = classSubjects.map((s) => {
+                      if (s.id === currentCp.id) {
                         return {
-                          ...c,
-                          tpList: [...c.tpList, { id: tpKey, judul: newTpDescInput.trim() }]
+                          ...s,
+                          tujuanPembelajaran: [...(s.tujuanPembelajaran || []), tpText],
                         };
                       }
-                      return c;
+                      return s;
                     });
-                    setCpList(updatedCpList);
-                    setSelectedTpId(tpKey);
+                    saveStoredSubjectsForClass(activeClass, updated);
+                    onUpdateSubjects?.(updated, activeClass);
+                    const newIdx = (currentCp.tpList?.length || 0) + 1;
+                    setSelectedTpId(`TP ${newIdx}`);
                     setIsAddTpOpen(false);
                     setNewTpIdInput('');
                     setNewTpDescInput('');
-                    showToast('Tujuan Pembelajaran (TP) baru berhasil ditambahkan!', 'success');
+                    showToast(`Tujuan Pembelajaran (TP) baru untuk [${activeClass}] berhasil ditambahkan dan terkoneksi!`, 'success');
                   }
                 }}
-                className="px-4 py-1.5 rounded-xl bg-sky-600 text-white text-xs font-black"
+                className="px-4 py-1.5 rounded-xl bg-sky-600 text-white text-xs font-black cursor-pointer shadow-xs"
               >
                 Simpan TP
               </button>

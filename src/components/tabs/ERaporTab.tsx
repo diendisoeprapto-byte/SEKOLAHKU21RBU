@@ -79,6 +79,8 @@ export const ERaporTab: React.FC<Props> = ({
 
     return baseList.map((item) => {
       let finalScore = item.defaultScore;
+      let dynamicCap = item.cap;
+
       if (subjects && student) {
         const matched = subjects.find(
           (s) =>
@@ -96,11 +98,26 @@ export const ERaporTab: React.FC<Props> = ({
           if (grade) {
             let totalAs = 0;
             const kktp = matched.kktp || 75;
+            let highestScore = -1;
+            let highestTpText = '';
+            let lowestScore = 999;
+            let lowestTpText = '';
+
             for (let i = 1; i <= count; i++) {
               const pure = grade.sumatif?.[i] ?? 0;
               const rem = grade.remedial?.[i] ?? 0;
               const effective = rem > 0 ? Math.max(pure, Math.min(rem, kktp)) : pure;
               totalAs += effective;
+
+              const tpText = matched.tujuanPembelajaran?.[i - 1] || `tujuan pembelajaran ke-${i}`;
+              if (effective > highestScore) {
+                highestScore = effective;
+                highestTpText = tpText;
+              }
+              if (effective > 0 && effective < lowestScore) {
+                lowestScore = effective;
+                lowestTpText = tpText;
+              }
             }
             const avgAs = count > 0 ? totalAs / count : 0;
             const asts = grade.asts || 0;
@@ -108,6 +125,21 @@ export const ERaporTab: React.FC<Props> = ({
             if (avgAs > 0 || asts > 0 || asas > 0) {
               finalScore = Math.round((2 * avgAs + asts + asas) / 4);
             }
+
+            // Kurikulum Merdeka dynamic report description from active TP:
+            if (highestScore >= 80 && lowestScore > 0 && lowestScore < kktp && highestTpText && lowestTpText) {
+              dynamicCap = `Menunjukkan penguasaan yang sangat baik dalam ${highestTpText}. Perlu bimbingan dan peningkatan dalam ${lowestTpText}.`;
+            } else if (highestScore >= 75 && highestTpText) {
+              dynamicCap = `Menunjukkan penguasaan yang sangat baik dalam ${highestTpText}, serta mampu menyelesaikan tugas dengan disiplin.`;
+            } else if (lowestScore > 0 && lowestScore < kktp && lowestTpText) {
+              dynamicCap = `Cukup menguasai materi pembelajaran, namun perlu bimbingan lebih lanjut dalam ${lowestTpText}.`;
+            } else if (matched.description) {
+              dynamicCap = `Menunjukkan pemahaman yang baik sesuai Capaian Pembelajaran: ${matched.description}`;
+            }
+          } else if (matched.tujuanPembelajaran && matched.tujuanPembelajaran.length > 0) {
+            dynamicCap = `Menunjukkan penguasaan yang baik dalam ${matched.tujuanPembelajaran[0]}.`;
+          } else if (matched.description) {
+            dynamicCap = `Menunjukkan pemahaman yang baik sesuai Capaian Pembelajaran: ${matched.description}`;
           }
         }
       }
@@ -115,7 +147,7 @@ export const ERaporTab: React.FC<Props> = ({
       return {
         name: item.name,
         score: finalScore,
-        cap: item.cap,
+        cap: dynamicCap,
       };
     });
   };
