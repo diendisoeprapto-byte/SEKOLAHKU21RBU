@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Users,
   UserPlus,
@@ -14,6 +14,10 @@ import {
   CheckCircle2,
   Search,
   Filter,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  AlertTriangle,
 } from 'lucide-react';
 import { Student, SchoolProfile, ReligionType, KEBUTUHAN_KHUSUS_OPTIONS, isSiswaInklusi } from '../../types';
 import {
@@ -28,12 +32,23 @@ import {
   saveStudentsToFirestoreBatch,
   saveSingleStudentToFirestore,
   deleteStudentFromFirestore,
-  subscribeToStudentsCollection,
+  deleteMultipleStudentsFromFirestore,
 } from '../../utils/studentFirestore';
+
+export type StudentSortOption =
+  | 'nama-asc'
+  | 'nama-desc'
+  | 'nisn-asc'
+  | 'nisn-desc'
+  | 'kelas-asc'
+  | 'kelas-desc'
+  | 'jk-asc'
+  | 'jk-desc'
+  | 'inklusi-desc';
 
 interface Props {
   students: Student[];
-  onSaveStudents: (students: Student[]) => void;
+  onSaveStudents: (students: Student[], skipCloudWrite?: boolean) => void;
   profile: SchoolProfile;
   activeClass: string;
   activeYear: string;
@@ -71,9 +86,15 @@ export const SiswaTab: React.FC<Props> = ({
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [importStatusMessage, setImportStatusMessage] = useState<string>('');
 
-  // Filter kelas & pencarian siswa
+  // Filter kelas, pencarian & pengurutan siswa (default A -> Z)
   const [selectedFilterClass, setSelectedFilterClass] = useState<string>(activeClass);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [sortBy, setSortBy] = useState<StudentSortOption>('nama-asc');
+
+  // State konfirmasi hapus (menghindari window.confirm yang diblokir iframe)
+  const [deletingStudent, setDeletingStudent] = useState<Student | null>(null);
+  const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
 
   // Sinkronkan filter dengan activeClass jika berubah dari global header
   useEffect(() => {
@@ -82,29 +103,8 @@ export const SiswaTab: React.FC<Props> = ({
     }
   }, [activeClass]);
 
-  // Realtime onSnapshot listener ke Firestore koleksi students
-  useEffect(() => {
-    const unsubscribe = subscribeToStudentsCollection(
-      (firestoreStudents) => {
-        if (firestoreStudents && firestoreStudents.length > 0) {
-          onSaveStudents(firestoreStudents);
-        } else if (students && students.length > 0) {
-          // Jika Firestore students masih kosong (proyek baru), inisialisasi dengan data lokal
-          saveStudentsToFirestoreBatch(students).catch((err) =>
-            console.warn('Initial student seed into Firestore warning:', err)
-          );
-        }
-      },
-      (error) => {
-        console.warn('SiswaTab realtime onSnapshot status:', error?.message);
-      }
-    );
-
-    return () => unsubscribe();
-  }, []);
-
   // Hitung jumlah siswa per kelas untuk label filter
-  const classStudentCounts = React.useMemo(() => {
+  const classStudentCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     CLASSES_LIST.forEach((c) => {
       counts[c] = 0;
@@ -124,19 +124,74 @@ export const SiswaTab: React.FC<Props> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const filteredStudents = students.filter((s) => {
-    const matchesClass = selectedFilterClass === 'SEMUA' ? true : s.kelas === selectedFilterClass;
-    if (!matchesClass) return false;
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase().trim();
-    return (
-      s.nama.toLowerCase().includes(q) ||
-      s.nisn.toLowerCase().includes(q) ||
-      (s.nik && s.nik.toLowerCase().includes(q)) ||
-      s.barcodeId.toLowerCase().includes(q) ||
-      s.kelas.toLowerCase().includes(q)
-    );
-  });
+  const filteredStudents = useMemo(() => {
+    const filtered = students.filter((s) => {
+      const matchesClass = selectedFilterClass === 'SEMUA' ? true : s.kelas === selectedFilterClass;
+      if (!matchesClass) return false;
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase().trim();
+      return (
+        s.nama.toLowerCase().includes(q) ||
+        s.nisn.toLowerCase().includes(q) ||
+        (s.nik && s.nik.toLowerCase().includes(q)) ||
+        s.barcodeId.toLowerCase().includes(q) ||
+        s.kelas.toLowerCase().includes(q)
+      );
+    });
+
+    return [...filtered].sort((a, b) => {
+      const compareName = () =>
+        (a.nama || '').localeCompare(b.nama || '', 'id', { sensitivity: 'base' });
+
+      switch (sortBy) {
+        case 'nama-desc':
+          return (b.nama || '').localeCompare(a.nama || '', 'id', { sensitivity: 'base' });
+        case 'nisn-asc': {
+          const cmp = (a.nisn || '').localeCompare(b.nisn || '', undefined, { numeric: true });
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'nisn-desc': {
+          const cmp = (b.nisn || '').localeCompare(a.nisn || '', undefined, { numeric: true });
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'kelas-asc': {
+          const cmp = (a.kelas || '').localeCompare(b.kelas || '', undefined, { numeric: true });
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'kelas-desc': {
+          const cmp = (b.kelas || '').localeCompare(a.kelas || '', undefined, { numeric: true });
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'jk-asc': {
+          const cmp = (a.jenisKelamin || 'L').localeCompare(b.jenisKelamin || 'L');
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'jk-desc': {
+          const cmp = (b.jenisKelamin || 'L').localeCompare(a.jenisKelamin || 'L');
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'inklusi-desc': {
+          const aInklusi = isSiswaInklusi(a.kebutuhanKhusus) ? 1 : 0;
+          const bInklusi = isSiswaInklusi(b.kebutuhanKhusus) ? 1 : 0;
+          if (bInklusi !== aInklusi) return bInklusi - aInklusi;
+          return compareName();
+        }
+        case 'nama-asc':
+        default:
+          return compareName();
+      }
+    });
+  }, [students, selectedFilterClass, searchQuery, sortBy]);
+
+  const handleToggleColumnSort = (col: 'nama' | 'nisn' | 'jk' | 'kelas') => {
+    setSortBy((prev) => {
+      if (col === 'nama') return prev === 'nama-asc' ? 'nama-desc' : 'nama-asc';
+      if (col === 'nisn') return prev === 'nisn-asc' ? 'nisn-desc' : 'nisn-asc';
+      if (col === 'jk') return prev === 'jk-asc' ? 'jk-desc' : 'jk-asc';
+      if (col === 'kelas') return prev === 'kelas-asc' ? 'kelas-desc' : 'kelas-asc';
+      return 'nama-asc';
+    });
+  };
 
   const handleImportStudents = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -156,8 +211,7 @@ export const SiswaTab: React.FC<Props> = ({
 
       if (count === 0) {
         setIsImporting(false);
-        showToast('Tidak ada data siswa yang valid di dalam file Excel. Pastikan terdapat kolom nama siswa!', 'error');
-        alert('File Excel tidak memuat data siswa yang valid. Mohon pastikan file memiliki kolom Nama Siswa atau Nama Peserta Didik.');
+        showToast('File Excel tidak memuat data siswa yang valid. Pastikan terdapat kolom Nama Siswa!', 'error');
         return;
       }
 
@@ -185,8 +239,8 @@ export const SiswaTab: React.FC<Props> = ({
       // INSTRUKSI #2 & #3: Gunakan writeBatch ke Firestore dan AWAIT batch.commit() selesai sebelum notifikasi
       await saveStudentsToFirestoreBatch(mergedStudents);
 
-      // Perbarui juga data aplikasi
-      onSaveStudents(mergedStudents);
+      // Perbarui state aplikasi tanpa memicu writeBatch ganda
+      onSaveStudents(mergedStudents, true);
 
       // Auto-switch filter agar data siswa yang baru diimpor langsung terlihat
       if (importedClasses.length === 1) {
@@ -204,7 +258,6 @@ export const SiswaTab: React.FC<Props> = ({
     } catch (err: any) {
       console.error('Gagal mengimpor siswa ke Firestore:', err);
       showToast(`Gagal menyimpan data ke database: ${err?.message || 'Kendala koneksi'}`, 'error');
-      alert(`Gagal menyimpan data siswa ke Firebase Firestore: ${err?.message || 'Periksa koneksi internet atau format berkas'}`);
     } finally {
       setIsImporting(false);
       setImportStatusMessage('');
@@ -270,8 +323,9 @@ export const SiswaTab: React.FC<Props> = ({
     };
 
     try {
-      await saveSingleStudentToFirestore(newStudent);
-      onSaveStudents([...students, newStudent]);
+      const updatedList = [...students, newStudent];
+      await saveSingleStudentToFirestore(newStudent, updatedList);
+      onSaveStudents(updatedList, true);
       showToast(`Peserta didik ${newNama} berhasil disimpan ke database Firestore! Akun: ${finalUsername}`, 'success');
       setNewNama('');
       setNewNik('');
@@ -283,7 +337,6 @@ export const SiswaTab: React.FC<Props> = ({
       setNewPass('123');
     } catch (err: any) {
       showToast(`Gagal menyimpan ke database: ${err?.message || 'Kendala jaringan'}`, 'error');
-      alert(`Gagal menyimpan siswa baru ke Firestore: ${err?.message}`);
     }
   };
 
@@ -292,27 +345,55 @@ export const SiswaTab: React.FC<Props> = ({
     if (!editingStudent) return;
 
     try {
-      await saveSingleStudentToFirestore(editingStudent);
       const updated = students.map((s) => (s.id === editingStudent.id ? editingStudent : s));
-      onSaveStudents(updated);
+      await saveSingleStudentToFirestore(editingStudent, updated);
+      onSaveStudents(updated, true);
       showToast(`Data peserta didik ${editingStudent.nama} berhasil diperbarui di database!`, 'success');
       setEditingStudent(null);
     } catch (err: any) {
       showToast(`Gagal memperbarui data siswa: ${err?.message || 'Kendala jaringan'}`, 'error');
-      alert(`Gagal memperbarui siswa di Firestore: ${err?.message}`);
     }
   };
 
-  const handleDeleteStudent = async (id: string, name: string) => {
-    if (confirm(`Yakin ingin menghapus peserta didik ${name}? Data akan dihapus permanen dari Firebase Firestore.`)) {
-      try {
-        await deleteStudentFromFirestore(id);
-        onSaveStudents(students.filter((s) => s.id !== id));
-        showToast(`Peserta didik ${name} berhasil dihapus dari database`, 'success');
-      } catch (err: any) {
-        showToast(`Gagal menghapus siswa: ${err?.message || 'Kendala jaringan'}`, 'error');
-        alert(`Gagal menghapus data siswa dari Firestore: ${err?.message}`);
-      }
+  const confirmDeleteSingleStudent = async () => {
+    if (!deletingStudent) return;
+    setIsDeleting(true);
+    const targetId = deletingStudent.id;
+    const targetName = deletingStudent.nama;
+
+    try {
+      const remaining = students.filter((s) => s.id !== targetId);
+      await deleteStudentFromFirestore(targetId, remaining);
+      onSaveStudents(remaining, true);
+      showToast(`Peserta didik ${targetName} berhasil dihapus permanen dari Firestore`, 'success');
+      setDeletingStudent(null);
+    } catch (err: any) {
+      console.error('Gagal menghapus siswa:', err);
+      showToast(`Gagal menghapus siswa: ${err?.message || 'Kendala jaringan'}`, 'error');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const confirmDeleteBulkStudents = async () => {
+    if (filteredStudents.length === 0) return;
+    setIsDeleting(true);
+
+    try {
+      const idsToDelete = new Set(filteredStudents.map((s) => s.id));
+      const remaining = students.filter((s) => !idsToDelete.has(s.id));
+      await deleteMultipleStudentsFromFirestore(Array.from(idsToDelete), remaining);
+      onSaveStudents(remaining, true);
+      showToast(
+        `${idsToDelete.size} data peserta didik berhasil dihapus permanen dari Firestore`,
+        'success'
+      );
+      setIsBulkDeleteOpen(false);
+    } catch (err: any) {
+      console.error('Gagal menghapus massal siswa:', err);
+      showToast(`Gagal menghapus data siswa: ${err?.message || 'Kendala jaringan'}`, 'error');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -322,9 +403,9 @@ export const SiswaTab: React.FC<Props> = ({
     const updatedStudent = { ...targetStudent, kelas: targetClass };
 
     try {
-      await saveSingleStudentToFirestore(updatedStudent);
       const updated = students.map((s) => (s.id === id ? updatedStudent : s));
-      onSaveStudents(updated);
+      await saveSingleStudentToFirestore(updatedStudent, updated);
+      onSaveStudents(updated, true);
       showToast(`Berhasil memindahkan ${targetStudent.nama} ke ${targetClass}`, 'success');
     } catch (err: any) {
       showToast(`Gagal memindahkan kelas: ${err?.message || 'Kendala jaringan'}`, 'error');
@@ -337,9 +418,9 @@ export const SiswaTab: React.FC<Props> = ({
     const updatedStudent = { ...targetStudent, tahunPelajaran: targetYear };
 
     try {
-      await saveSingleStudentToFirestore(updatedStudent);
       const updated = students.map((s) => (s.id === id ? updatedStudent : s));
-      onSaveStudents(updated);
+      await saveSingleStudentToFirestore(updatedStudent, updated);
+      onSaveStudents(updated, true);
       showToast(`Berhasil memperbarui tahun pelajaran ${targetStudent.nama}`, 'success');
     } catch (err: any) {
       showToast(`Gagal memperbarui tahun pelajaran: ${err?.message || 'Kendala jaringan'}`, 'error');
@@ -663,6 +744,27 @@ export const SiswaTab: React.FC<Props> = ({
               </select>
             </div>
 
+            {/* Sort Data Dropdown */}
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl">
+              <ArrowUpDown className="w-3.5 h-3.5 text-amber-600" />
+              <label className="text-xs font-bold text-slate-600">Urutkan:</label>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as StudentSortOption)}
+                className="bg-transparent text-xs font-black text-slate-800 focus:outline-hidden cursor-pointer"
+              >
+                <option value="nama-asc">Nama (A → Z)</option>
+                <option value="nama-desc">Nama (Z → A)</option>
+                <option value="nisn-asc">NISN (Terkecil → Terbesar)</option>
+                <option value="nisn-desc">NISN (Terbesar → Terkecil)</option>
+                <option value="kelas-asc">Kelas (1A → 6B)</option>
+                <option value="kelas-desc">Kelas (6B → 1A)</option>
+                <option value="jk-asc">Jenis Kelamin (L → P)</option>
+                <option value="jk-desc">Jenis Kelamin (P → L)</option>
+                <option value="inklusi-desc">Kebutuhan Khusus (Inklusi Dahulu)</option>
+              </select>
+            </div>
+
             {/* Pencarian Siswa */}
             <div className="relative min-w-[200px]">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
@@ -683,6 +785,18 @@ export const SiswaTab: React.FC<Props> = ({
                 </button>
               )}
             </div>
+
+            {/* Tombol Hapus Massal (Data Yang Tampil) */}
+            {filteredStudents.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setIsBulkDeleteOpen(true)}
+                className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-display font-bold px-3 py-1.5 rounded-xl text-xs flex items-center gap-1.5 transition cursor-pointer"
+                title="Hapus semua data siswa yang sedang tampil"
+              >
+                <Trash2 className="w-3.5 h-3.5" /> Hapus ({filteredStudents.length})
+              </button>
+            )}
           </div>
         </div>
 
@@ -690,12 +804,76 @@ export const SiswaTab: React.FC<Props> = ({
           <table className="w-full text-left border-collapse text-xs sm:text-sm">
             <thead>
               <tr className="bg-slate-100 text-slate-700 text-xs uppercase font-extrabold">
-                <th className="p-3 rounded-l-xl">Foto & Siswa</th>
-                <th className="p-3">NIK & NISN</th>
-                <th className="p-3">JK / TTL</th>
+                <th className="p-3 rounded-l-xl">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleColumnSort('nama')}
+                    className="flex items-center gap-1 hover:text-rose-700 cursor-pointer uppercase font-extrabold"
+                    title="Klik untuk mengurutkan Nama A-Z / Z-A"
+                  >
+                    <span>Foto & Siswa</span>
+                    {sortBy === 'nama-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-rose-600" />
+                    ) : sortBy === 'nama-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-rose-600" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                  </button>
+                </th>
+                <th className="p-3">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleColumnSort('nisn')}
+                    className="flex items-center gap-1 hover:text-rose-700 cursor-pointer uppercase font-extrabold"
+                    title="Klik untuk mengurutkan berdasarkan NISN"
+                  >
+                    <span>NIK & NISN</span>
+                    {sortBy === 'nisn-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-rose-600" />
+                    ) : sortBy === 'nisn-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-rose-600" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                  </button>
+                </th>
+                <th className="p-3">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleColumnSort('jk')}
+                    className="flex items-center gap-1 hover:text-rose-700 cursor-pointer uppercase font-extrabold"
+                    title="Klik untuk mengurutkan berdasarkan Jenis Kelamin"
+                  >
+                    <span>JK / TTL</span>
+                    {sortBy === 'jk-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-rose-600" />
+                    ) : sortBy === 'jk-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-rose-600" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                  </button>
+                </th>
                 <th className="p-3">Kebutuhan Khusus</th>
                 <th className="p-3">Orang Tua & Alamat</th>
-                <th className="p-3">Pindah Kelas</th>
+                <th className="p-3">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleColumnSort('kelas')}
+                    className="flex items-center gap-1 hover:text-rose-700 cursor-pointer uppercase font-extrabold"
+                    title="Klik untuk mengurutkan berdasarkan Kelas"
+                  >
+                    <span>Pindah Kelas</span>
+                    {sortBy === 'kelas-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-rose-600" />
+                    ) : sortBy === 'kelas-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-rose-600" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                  </button>
+                </th>
                 <th className="p-3">Username & Pass</th>
                 <th className="p-3 rounded-r-xl text-right">Aksi</th>
               </tr>
@@ -807,15 +985,17 @@ export const SiswaTab: React.FC<Props> = ({
                     <td className="p-3 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <button
+                          type="button"
                           onClick={() => setEditingStudent({ ...s })}
-                          className="p-1.5 rounded-lg text-sky-600 hover:bg-sky-50"
+                          className="p-1.5 rounded-lg text-sky-600 hover:bg-sky-50 cursor-pointer"
                           title="Edit / Detail Siswa"
                         >
                           <Edit className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => handleDeleteStudent(s.id, s.nama)}
-                          className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50"
+                          type="button"
+                          onClick={() => setDeletingStudent(s)}
+                          className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 cursor-pointer"
                           title="Hapus Siswa"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -829,6 +1009,120 @@ export const SiswaTab: React.FC<Props> = ({
           </table>
         </div>
       </div>
+
+      {/* Modal Konfirmasi Hapus 1 Siswa */}
+      {deletingStudent && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-11 h-11 rounded-2xl bg-rose-100 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-display font-black text-base text-slate-900">
+                  Hapus Data Siswa?
+                </h3>
+                <p className="text-xs text-slate-500">Tindakan ini menghapus data secara permanen.</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 text-xs space-y-1">
+              <div className="font-bold text-slate-800">{deletingStudent.nama}</div>
+              <div className="text-slate-600 font-mono">
+                NISN: {deletingStudent.nisn} • {deletingStudent.kelas}
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600">
+              Data siswa ini akan dihapus langsung dari database Firebase Firestore dan tidak akan muncul kembali.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setDeletingStudent(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={confirmDeleteSingleStudent}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-60"
+              >
+                {isDeleting ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Menghapus...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Ya, Hapus Permanen</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Massal Siswa */}
+      {isBulkDeleteOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-11 h-11 rounded-2xl bg-rose-100 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-display font-black text-base text-slate-900">
+                  Hapus {filteredStudents.length} Data Siswa?
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Filter aktif: {selectedFilterClass === 'SEMUA' ? 'Semua Kelas' : selectedFilterClass}
+                  {searchQuery ? ` (pencarian "${searchQuery}")` : ''}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600">
+              Seluruh <strong>{filteredStudents.length} data siswa</strong> yang sedang ditampilkan di tabel akan dihapus secara permanen dari Firebase Firestore menggunakan batch delete.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setIsBulkDeleteOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={confirmDeleteBulkStudents}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-60"
+              >
+                {isDeleting ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Menghapus...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Ya, Hapus {filteredStudents.length} Siswa</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Edit / Detail Siswa */}
       {editingStudent && (

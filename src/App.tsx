@@ -77,13 +77,15 @@ import {
 import {
   subscribeToStudentsCollection,
   saveStudentsToFirestoreBatch,
+  sortStudentsAlphabetically,
 } from './utils/studentFirestore';
 
 export default function App() {
   // Database States
   const [profile, setProfile] = useState<SchoolProfile>(getStoredProfile());
   const [teachers, setTeachers] = useState<Teacher[]>(getStoredTeachers());
-  const [students, setStudents] = useState<Student[]>(getStoredStudents());
+  const [students, setStudents] = useState<Student[]>(() => sortStudentsAlphabetically(getStoredStudents()));
+  const studentsCollectionLoadedRef = React.useRef(false);
   const initialFilters = getActiveFilters();
   const [subjects, setSubjects] = useState<Subject[]>(() => getStoredSubjectsForClass(initialFilters.kelas));
   const [kaldikDays, setKaldikDays] = useState<KaldikDay[]>(getStoredKaldik());
@@ -105,9 +107,10 @@ export default function App() {
         setTeachers(cloudData.teachers);
         saveStoredTeachers(cloudData.teachers);
       }
-      if (cloudData.students) {
-        setStudents(cloudData.students);
-        saveStoredStudents(cloudData.students);
+      if (cloudData.students && !studentsCollectionLoadedRef.current) {
+        const sortedCloudStudents = sortStudentsAlphabetically(cloudData.students);
+        setStudents(sortedCloudStudents);
+        saveStoredStudents(sortedCloudStudents);
       }
       if (cloudData.subjectsByClass) {
         localStorage.setItem('sekolahku_subjects_by_class', JSON.stringify(cloudData.subjectsByClass));
@@ -153,11 +156,29 @@ export default function App() {
       }
     });
 
-    // Realtime listener langsung untuk koleksi 'students' di Firestore
+    // Realtime listener langsung untuk koleksi 'students' di Firestore (single source of truth)
     const unsubStudents = subscribeToStudentsCollection((firestoreStudents) => {
-      if (firestoreStudents && firestoreStudents.length > 0) {
+      const alreadySeeded = localStorage.getItem('sekolahku_students_seeded') === 'true';
+
+      if (firestoreStudents.length > 0) {
+        studentsCollectionLoadedRef.current = true;
+        localStorage.setItem('sekolahku_students_seeded', 'true');
         setStudents(firestoreStudents);
         saveStoredStudents(firestoreStudents);
+      } else if (!studentsCollectionLoadedRef.current && !alreadySeeded) {
+        const localStudents = getStoredStudents();
+        if (localStudents.length > 0) {
+          studentsCollectionLoadedRef.current = true;
+          localStorage.setItem('sekolahku_students_seeded', 'true');
+          saveStudentsToFirestoreBatch(localStudents, 'initial_seed').catch((err) =>
+            console.warn('Initial student seed warning:', err)
+          );
+        }
+      } else {
+        // Semua siswa telah dihapus oleh user -> kosongkan state agar tidak muncul kembali
+        studentsCollectionLoadedRef.current = true;
+        setStudents([]);
+        saveStoredStudents([]);
       }
     });
 
@@ -277,12 +298,15 @@ export default function App() {
   };
 
   // Sync students update with cloud (instantly syncs deletions and additions across laptop & tablet)
-  const handleSaveStudents = (newStudents: Student[]) => {
-    setStudents(newStudents);
-    saveStoredStudents(newStudents);
-    saveStudentsToFirestoreBatch(newStudents, activeUser?.name || 'admin').catch((e) =>
-      console.warn('saveStudentsToFirestoreBatch background sync warning:', e)
-    );
+  const handleSaveStudents = (newStudents: Student[], skipCloudWrite: boolean = false) => {
+    const sorted = sortStudentsAlphabetically(newStudents);
+    setStudents(sorted);
+    saveStoredStudents(sorted);
+    if (!skipCloudWrite) {
+      saveStudentsToFirestoreBatch(sorted, activeUser?.name || 'admin').catch((e) =>
+        console.warn('saveStudentsToFirestoreBatch background sync warning:', e)
+      );
+    }
   };
 
   // Sync kaldik update with cloud
