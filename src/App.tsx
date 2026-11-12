@@ -74,6 +74,10 @@ import {
   subscribeToCloudChanges,
   syncAllLocalToCloud,
 } from './utils/cloudSync';
+import {
+  subscribeToStudentsCollection,
+  saveStudentsToFirestoreBatch,
+} from './utils/studentFirestore';
 
 export default function App() {
   // Database States
@@ -149,7 +153,18 @@ export default function App() {
       }
     });
 
-    return () => unsubscribe();
+    // Realtime listener langsung untuk koleksi 'students' di Firestore
+    const unsubStudents = subscribeToStudentsCollection((firestoreStudents) => {
+      if (firestoreStudents && firestoreStudents.length > 0) {
+        setStudents(firestoreStudents);
+        saveStoredStudents(firestoreStudents);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      unsubStudents();
+    };
   }, []);
 
   // Authentication & Session Persistence with 30-minute auto-logout
@@ -265,7 +280,9 @@ export default function App() {
   const handleSaveStudents = (newStudents: Student[]) => {
     setStudents(newStudents);
     saveStoredStudents(newStudents);
-    pushAllDataToCloud({ students: newStudents }, activeUser?.name || 'admin');
+    saveStudentsToFirestoreBatch(newStudents, activeUser?.name || 'admin').catch((e) =>
+      console.warn('saveStudentsToFirestoreBatch background sync warning:', e)
+    );
   };
 
   // Sync kaldik update with cloud

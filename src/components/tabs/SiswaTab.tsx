@@ -24,6 +24,12 @@ import {
 } from '../../utils/excel';
 import { renderBarcodeToCanvas } from '../../utils/barcode';
 import { CLASSES_LIST, ACADEMIC_YEARS } from '../../utils/storage';
+import {
+  saveStudentsToFirestoreBatch,
+  saveSingleStudentToFirestore,
+  deleteStudentFromFirestore,
+  subscribeToStudentsCollection,
+} from '../../utils/studentFirestore';
 
 interface Props {
   students: Student[];
@@ -61,6 +67,10 @@ export const SiswaTab: React.FC<Props> = ({
   const [newPass, setNewPass] = useState('123');
   const [newFoto, setNewFoto] = useState('https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150');
 
+  // Loading state proses import
+  const [isImporting, setIsImporting] = useState<boolean>(false);
+  const [importStatusMessage, setImportStatusMessage] = useState<string>('');
+
   // Filter kelas & pencarian siswa
   const [selectedFilterClass, setSelectedFilterClass] = useState<string>(activeClass);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -71,6 +81,27 @@ export const SiswaTab: React.FC<Props> = ({
       setSelectedFilterClass(activeClass);
     }
   }, [activeClass]);
+
+  // Realtime onSnapshot listener ke Firestore koleksi students
+  useEffect(() => {
+    const unsubscribe = subscribeToStudentsCollection(
+      (firestoreStudents) => {
+        if (firestoreStudents && firestoreStudents.length > 0) {
+          onSaveStudents(firestoreStudents);
+        } else if (students && students.length > 0) {
+          // Jika Firestore students masih kosong (proyek baru), inisialisasi dengan data lokal
+          saveStudentsToFirestoreBatch(students).catch((err) =>
+            console.warn('Initial student seed into Firestore warning:', err)
+          );
+        }
+      },
+      (error) => {
+        console.warn('SiswaTab realtime onSnapshot status:', error?.message);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
 
   // Hitung jumlah siswa per kelas untuk label filter
   const classStudentCounts = React.useMemo(() => {
@@ -111,6 +142,9 @@ export const SiswaTab: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setIsImporting(true);
+    setImportStatusMessage('Membaca dan memverifikasi berkas...');
+
     try {
       const defaultTargetClass = selectedFilterClass !== 'SEMUA' ? selectedFilterClass : activeClass;
       const { newStudents, count, importedClasses } = await parseImportStudentsXLSX(
@@ -121,9 +155,13 @@ export const SiswaTab: React.FC<Props> = ({
       );
 
       if (count === 0) {
+        setIsImporting(false);
         showToast('Tidak ada data siswa yang valid di dalam file Excel. Pastikan terdapat kolom nama siswa!', 'error');
+        alert('File Excel tidak memuat data siswa yang valid. Mohon pastikan file memiliki kolom Nama Siswa atau Nama Peserta Didik.');
         return;
       }
+
+      setImportStatusMessage(`Menyimpan ${count} peserta didik secara permanen ke Firebase Firestore...`);
 
       // Merge: Update jika NISN sudah ada, atau tambahkan jika baru
       const existingMap = new Map<string, Student>();
@@ -143,6 +181,11 @@ export const SiswaTab: React.FC<Props> = ({
       });
 
       const mergedStudents = Array.from(existingMap.values());
+
+      // INSTRUKSI #2 & #3: Gunakan writeBatch ke Firestore dan AWAIT batch.commit() selesai sebelum notifikasi
+      await saveStudentsToFirestoreBatch(mergedStudents);
+
+      // Perbarui juga data aplikasi
       onSaveStudents(mergedStudents);
 
       // Auto-switch filter agar data siswa yang baru diimpor langsung terlihat
@@ -155,12 +198,19 @@ export const SiswaTab: React.FC<Props> = ({
 
       const classLabel = importedClasses.length > 0 ? ` ke ${importedClasses.join(', ')}` : '';
       showToast(
-        `Berhasil mengimpor ${count} peserta didik${classLabel}! Akun login telah dibuat otomatis.`,
+        `Berhasil mengimpor ${count} peserta didik${classLabel} ke database Firestore!`,
         'success'
       );
     } catch (err: any) {
-      showToast(`Gagal membaca file Excel: ${err?.message || 'Format file tidak sesuai'}`, 'error');
+      console.error('Gagal mengimpor siswa ke Firestore:', err);
+      showToast(`Gagal menyimpan data ke database: ${err?.message || 'Kendala koneksi'}`, 'error');
+      alert(`Gagal menyimpan data siswa ke Firebase Firestore: ${err?.message || 'Periksa koneksi internet atau format berkas'}`);
     } finally {
+      setIsImporting(false);
+      setImportStatusMessage('');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
       if (e.target) {
         e.target.value = '';
       }
@@ -183,7 +233,7 @@ export const SiswaTab: React.FC<Props> = ({
     }
   };
 
-  const handleAddStudent = (e: React.FormEvent) => {
+  const handleAddStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newNama || !newNisn) {
       showToast('Harap lengkapi nama dan NISN siswa!', 'error');
@@ -219,45 +269,81 @@ export const SiswaTab: React.FC<Props> = ({
       fotoUrl: newFoto,
     };
 
-    onSaveStudents([...students, newStudent]);
-    showToast(`Peserta didik ${newNama} berhasil ditambahkan ke ${activeClass}! Akun: ${finalUsername}`, 'success');
-    setNewNama('');
-    setNewNik('');
-    setNewNisn('');
-    setNewNamaAyah('');
-    setNewNamaIbu('');
-    setNewAlamat('');
-    setNewUser('');
-    setNewPass('123');
-  };
-
-  const handleUpdateStudent = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingStudent) return;
-
-    const updated = students.map((s) => (s.id === editingStudent.id ? editingStudent : s));
-    onSaveStudents(updated);
-    showToast(`Data peserta didik ${editingStudent.nama} berhasil diperbarui!`, 'success');
-    setEditingStudent(null);
-  };
-
-  const handleDeleteStudent = (id: string, name: string) => {
-    if (confirm(`Yakin ingin menghapus peserta didik ${name}?`)) {
-      onSaveStudents(students.filter((s) => s.id !== id));
-      showToast(`Peserta didik ${name} berhasil dihapus`, 'success');
+    try {
+      await saveSingleStudentToFirestore(newStudent);
+      onSaveStudents([...students, newStudent]);
+      showToast(`Peserta didik ${newNama} berhasil disimpan ke database Firestore! Akun: ${finalUsername}`, 'success');
+      setNewNama('');
+      setNewNik('');
+      setNewNisn('');
+      setNewNamaAyah('');
+      setNewNamaIbu('');
+      setNewAlamat('');
+      setNewUser('');
+      setNewPass('123');
+    } catch (err: any) {
+      showToast(`Gagal menyimpan ke database: ${err?.message || 'Kendala jaringan'}`, 'error');
+      alert(`Gagal menyimpan siswa baru ke Firestore: ${err?.message}`);
     }
   };
 
-  const handleClassChange = (id: string, targetClass: string) => {
-    const updated = students.map((s) => (s.id === id ? { ...s, kelas: targetClass } : s));
-    onSaveStudents(updated);
-    showToast('Berhasil memindahkan kelas siswa', 'success');
+  const handleUpdateStudent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStudent) return;
+
+    try {
+      await saveSingleStudentToFirestore(editingStudent);
+      const updated = students.map((s) => (s.id === editingStudent.id ? editingStudent : s));
+      onSaveStudents(updated);
+      showToast(`Data peserta didik ${editingStudent.nama} berhasil diperbarui di database!`, 'success');
+      setEditingStudent(null);
+    } catch (err: any) {
+      showToast(`Gagal memperbarui data siswa: ${err?.message || 'Kendala jaringan'}`, 'error');
+      alert(`Gagal memperbarui siswa di Firestore: ${err?.message}`);
+    }
   };
 
-  const handleYearChange = (id: string, targetYear: string) => {
-    const updated = students.map((s) => (s.id === id ? { ...s, tahunPelajaran: targetYear } : s));
-    onSaveStudents(updated);
-    showToast('Berhasil memperbarui tahun pelajaran siswa', 'success');
+  const handleDeleteStudent = async (id: string, name: string) => {
+    if (confirm(`Yakin ingin menghapus peserta didik ${name}? Data akan dihapus permanen dari Firebase Firestore.`)) {
+      try {
+        await deleteStudentFromFirestore(id);
+        onSaveStudents(students.filter((s) => s.id !== id));
+        showToast(`Peserta didik ${name} berhasil dihapus dari database`, 'success');
+      } catch (err: any) {
+        showToast(`Gagal menghapus siswa: ${err?.message || 'Kendala jaringan'}`, 'error');
+        alert(`Gagal menghapus data siswa dari Firestore: ${err?.message}`);
+      }
+    }
+  };
+
+  const handleClassChange = async (id: string, targetClass: string) => {
+    const targetStudent = students.find((s) => s.id === id);
+    if (!targetStudent) return;
+    const updatedStudent = { ...targetStudent, kelas: targetClass };
+
+    try {
+      await saveSingleStudentToFirestore(updatedStudent);
+      const updated = students.map((s) => (s.id === id ? updatedStudent : s));
+      onSaveStudents(updated);
+      showToast(`Berhasil memindahkan ${targetStudent.nama} ke ${targetClass}`, 'success');
+    } catch (err: any) {
+      showToast(`Gagal memindahkan kelas: ${err?.message || 'Kendala jaringan'}`, 'error');
+    }
+  };
+
+  const handleYearChange = async (id: string, targetYear: string) => {
+    const targetStudent = students.find((s) => s.id === id);
+    if (!targetStudent) return;
+    const updatedStudent = { ...targetStudent, tahunPelajaran: targetYear };
+
+    try {
+      await saveSingleStudentToFirestore(updatedStudent);
+      const updated = students.map((s) => (s.id === id ? updatedStudent : s));
+      onSaveStudents(updated);
+      showToast(`Berhasil memperbarui tahun pelajaran ${targetStudent.nama}`, 'success');
+    } catch (err: any) {
+      showToast(`Gagal memperbarui tahun pelajaran: ${err?.message || 'Kendala jaringan'}`, 'error');
+    }
   };
 
   // Render barcode into canvas elements after mount
@@ -293,33 +379,69 @@ export const SiswaTab: React.FC<Props> = ({
               ref={fileInputRef}
               accept=".xlsx, .xls, .csv"
               onChange={handleImportStudents}
+              onClick={(e) => {
+                (e.target as HTMLInputElement).value = '';
+              }}
               className="hidden"
             />
             <button
               type="button"
+              disabled={isImporting}
               onClick={downloadTemplateStudentsXLSX}
-              className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-display font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 transition cursor-pointer"
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-display font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
               title="Download format Excel untuk import data siswa"
             >
               <FileDown className="w-4 h-4 text-sky-600" /> Template Siswa (.XLSX)
             </button>
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white font-display font-extrabold px-3.5 py-2 rounded-xl text-xs shadow-xs flex items-center gap-1.5 transition cursor-pointer"
-              title="Import file Excel siswa dengan otomatisasi akun username & password"
+              disabled={isImporting}
+              onClick={() => {
+                if (fileInputRef.current) {
+                  fileInputRef.current.value = '';
+                  fileInputRef.current.click();
+                }
+              }}
+              className={`bg-emerald-600 hover:bg-emerald-700 text-white font-display font-extrabold px-3.5 py-2 rounded-xl text-xs shadow-xs flex items-center gap-1.5 transition ${
+                isImporting ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'
+              }`}
+              title="Import file Excel siswa langsung ke database Firebase Firestore"
             >
-              <Upload className="w-4 h-4" /> Import Siswa (.XLSX)
+              {isImporting ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>Sedang Menyimpan...</span>
+                </>
+              ) : (
+                <>
+                  <Upload className="w-4 h-4" />
+                  <span>Import Siswa (.XLSX)</span>
+                </>
+              )}
             </button>
             <button
               type="button"
+              disabled={isImporting}
               onClick={() => exportStudentsToXLSX(filteredStudents)}
-              className="bg-sky-600 hover:bg-sky-700 text-white font-display font-extrabold px-3.5 py-2 rounded-xl text-xs shadow-xs flex items-center gap-1.5 transition cursor-pointer"
+              className="bg-sky-600 hover:bg-sky-700 text-white font-display font-extrabold px-3.5 py-2 rounded-xl text-xs shadow-xs flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
             >
               <FileSpreadsheet className="w-4 h-4" /> Export Siswa (.XLSX)
             </button>
           </div>
         </div>
+
+        {/* Indikator Loading Proses Simpan ke Database */}
+        {isImporting && (
+          <div className="bg-amber-500/10 border-2 border-amber-500 text-amber-900 p-4 rounded-2xl flex items-center gap-3 animate-pulse">
+            <div className="w-5 h-5 border-2 border-amber-600 border-t-transparent rounded-full animate-spin shrink-0" />
+            <div className="text-xs font-display font-extrabold">
+              <div>{importStatusMessage || 'Sedang menyimpan data ke database...'}</div>
+              <div className="text-[11px] font-medium text-amber-700">
+                Mohon tunggu sejenak, data sedang ditulis secara permanen ke Firebase Firestore melalui writeBatch.
+              </div>
+            </div>
+          </div>
+        )}
 
         <form onSubmit={handleAddStudent} className="space-y-4 bg-slate-50 p-4 rounded-2xl border border-slate-200">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
