@@ -12,6 +12,8 @@ import {
   X,
   Save,
   CheckCircle2,
+  Search,
+  Filter,
 } from 'lucide-react';
 import { Student, SchoolProfile, ReligionType, KEBUTUHAN_KHUSUS_OPTIONS, isSiswaInklusi } from '../../types';
 import {
@@ -31,6 +33,7 @@ interface Props {
   activeYear: string;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onOpenZoom: (url: string, title: string) => void;
+  onSelectClass?: (kelas: string) => void;
 }
 
 export const SiswaTab: React.FC<Props> = ({
@@ -41,6 +44,7 @@ export const SiswaTab: React.FC<Props> = ({
   activeYear,
   showToast,
   onOpenZoom,
+  onSelectClass,
 }) => {
   const [newNama, setNewNama] = useState('');
   const [newJk, setNewJk] = useState<'L' | 'P'>('L');
@@ -57,33 +61,101 @@ export const SiswaTab: React.FC<Props> = ({
   const [newPass, setNewPass] = useState('123');
   const [newFoto, setNewFoto] = useState('https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150');
 
+  // Filter kelas & pencarian siswa
+  const [selectedFilterClass, setSelectedFilterClass] = useState<string>(activeClass);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Sinkronkan filter dengan activeClass jika berubah dari global header
+  useEffect(() => {
+    if (selectedFilterClass !== 'SEMUA') {
+      setSelectedFilterClass(activeClass);
+    }
+  }, [activeClass]);
+
+  // Hitung jumlah siswa per kelas untuk label filter
+  const classStudentCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    CLASSES_LIST.forEach((c) => {
+      counts[c] = 0;
+    });
+    students.forEach((s) => {
+      if (counts[s.kelas] !== undefined) {
+        counts[s.kelas]++;
+      } else {
+        counts[s.kelas] = 1;
+      }
+    });
+    return counts;
+  }, [students]);
+
   // Edit modal state
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const filteredStudents = students.filter((s) => s.kelas === activeClass);
+  const filteredStudents = students.filter((s) => {
+    const matchesClass = selectedFilterClass === 'SEMUA' ? true : s.kelas === selectedFilterClass;
+    if (!matchesClass) return false;
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    return (
+      s.nama.toLowerCase().includes(q) ||
+      s.nisn.toLowerCase().includes(q) ||
+      (s.nik && s.nik.toLowerCase().includes(q)) ||
+      s.barcodeId.toLowerCase().includes(q) ||
+      s.kelas.toLowerCase().includes(q)
+    );
+  });
 
   const handleImportStudents = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      const { newStudents, count } = await parseImportStudentsXLSX(
+      const defaultTargetClass = selectedFilterClass !== 'SEMUA' ? selectedFilterClass : activeClass;
+      const { newStudents, count, importedClasses } = await parseImportStudentsXLSX(
         file,
         students,
-        activeClass,
+        defaultTargetClass,
         activeYear
       );
 
       if (count === 0) {
-        showToast('Tidak ada data siswa yang valid di dalam file Excel!', 'error');
+        showToast('Tidak ada data siswa yang valid di dalam file Excel. Pastikan terdapat kolom nama siswa!', 'error');
         return;
       }
 
-      onSaveStudents([...students, ...newStudents]);
+      // Merge: Update jika NISN sudah ada, atau tambahkan jika baru
+      const existingMap = new Map<string, Student>();
+      students.forEach((s) => {
+        const key = s.nisn ? s.nisn.trim() : s.id;
+        existingMap.set(key, s);
+      });
+
+      newStudents.forEach((ns) => {
+        const key = ns.nisn ? ns.nisn.trim() : ns.id;
+        const existing = existingMap.get(key);
+        if (existing) {
+          existingMap.set(key, { ...ns, id: existing.id, barcodeId: existing.barcodeId || ns.barcodeId });
+        } else {
+          existingMap.set(key, ns);
+        }
+      });
+
+      const mergedStudents = Array.from(existingMap.values());
+      onSaveStudents(mergedStudents);
+
+      // Auto-switch filter agar data siswa yang baru diimpor langsung terlihat
+      if (importedClasses.length === 1) {
+        setSelectedFilterClass(importedClasses[0]);
+        if (onSelectClass) onSelectClass(importedClasses[0]);
+      } else if (importedClasses.length > 1) {
+        setSelectedFilterClass('SEMUA');
+      }
+
+      const classLabel = importedClasses.length > 0 ? ` ke ${importedClasses.join(', ')}` : '';
       showToast(
-        `Berhasil mengimpor ${count} peserta didik! Akun login (username & password) telah dibuat otomatis.`,
+        `Berhasil mengimpor ${count} peserta didik${classLabel}! Akun login telah dibuat otomatis.`,
         'success'
       );
     } catch (err: any) {
@@ -431,9 +503,67 @@ export const SiswaTab: React.FC<Props> = ({
 
       {/* Tabel Akun & Manajemen Siswa */}
       <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-4">
-        <h3 className="font-display font-extrabold text-base text-slate-800 flex items-center gap-2">
-          <Users className="w-5 h-5 text-amber-500" /> Daftar Biodata, Kebutuhan Khusus & Akun Siswa ({activeClass})
-        </h3>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h3 className="font-display font-extrabold text-base text-slate-800 flex items-center gap-2">
+              <Users className="w-5 h-5 text-amber-500" />
+              Daftar Biodata, Kebutuhan Khusus & Akun Siswa
+              <span className="bg-amber-100 text-amber-800 text-xs font-bold px-2.5 py-0.5 rounded-full">
+                {filteredStudents.length} Siswa
+              </span>
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Menampilkan {selectedFilterClass === 'SEMUA' ? 'seluruh kelas' : selectedFilterClass} ({filteredStudents.length} dari total {students.length} siswa terdaftar)
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Filter Dropdown Kelas */}
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl">
+              <Filter className="w-3.5 h-3.5 text-slate-500" />
+              <label className="text-xs font-bold text-slate-600">Pilih Kelas:</label>
+              <select
+                value={selectedFilterClass}
+                onChange={(e) => {
+                  setSelectedFilterClass(e.target.value);
+                  if (e.target.value !== 'SEMUA' && onSelectClass) {
+                    onSelectClass(e.target.value);
+                  }
+                }}
+                className="bg-transparent text-xs font-black text-slate-800 focus:outline-hidden cursor-pointer"
+              >
+                <option value="SEMUA">Semua Kelas ({students.length} Siswa)</option>
+                {CLASSES_LIST.map((c) => (
+                  <option key={c} value={c}>
+                    {c} ({classStudentCounts[c] || 0} Siswa)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Pencarian Siswa */}
+            <div className="relative min-w-[200px]">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Cari nama, NISN, NIK..."
+                className="w-full pl-8 pr-7 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs sm:text-sm">
             <thead>
@@ -449,90 +579,130 @@ export const SiswaTab: React.FC<Props> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredStudents.map((s) => (
-                <tr key={s.id} className="hover:bg-slate-50">
-                  <td className="p-3">
-                    <div className="flex items-center gap-2.5">
-                      <img
-                        src={s.fotoUrl}
-                        alt={s.nama}
-                        onClick={() => onOpenZoom(s.fotoUrl, s.nama)}
-                        className="w-10 h-10 rounded-xl object-cover border border-slate-200 cursor-zoom-in"
-                      />
-                      <div>
-                        <div className="font-bold text-slate-800">{s.nama}</div>
-                        <div className="text-[11px] font-mono text-rose-700 font-bold">{s.barcodeId}</div>
+              {filteredStudents.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="p-8 text-center">
+                    <div className="flex flex-col items-center justify-center max-w-md mx-auto text-center space-y-3">
+                      <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center text-amber-500">
+                        <Users className="w-6 h-6" />
+                      </div>
+                      <div className="font-display font-bold text-slate-800 text-sm">
+                        {searchQuery
+                          ? `Tidak ditemukan peserta didik dengan kata kunci "${searchQuery}"`
+                          : `Belum ada data peserta didik untuk ${selectedFilterClass === 'SEMUA' ? 'semua kelas' : selectedFilterClass}`}
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        {students.length > 0 && selectedFilterClass !== 'SEMUA'
+                          ? `Terdapat ${students.length} peserta didik di kelas lain. Anda dapat melihat semua kelas atau mengimpor file Excel.`
+                          : 'Silakan klik tombol "Import Siswa (.XLSX)" di atas atau isi formulir untuk menambahkan peserta didik.'}
+                      </p>
+                      <div className="flex items-center gap-2 pt-1">
+                        {selectedFilterClass !== 'SEMUA' && students.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFilterClass('SEMUA')}
+                            className="text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 px-3 py-1.5 rounded-xl transition cursor-pointer"
+                          >
+                            Tampilkan Semua Kelas ({students.length})
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Upload className="w-3.5 h-3.5" /> Import Siswa (.XLSX)
+                        </button>
                       </div>
                     </div>
                   </td>
-                  <td className="p-3">
-                    <div className="font-mono text-xs font-bold text-slate-700">NIK: {s.nik || '-'}</div>
-                    <div className="font-mono text-[11px] text-slate-500">NISN: {s.nisn}</div>
-                  </td>
-                  <td className="p-3">
-                    <div className="font-bold text-slate-800">
-                      {s.jenisKelamin === 'P' ? 'Perempuan (P)' : 'Laki-Laki (L)'} • {s.agama}
-                    </div>
-                    <div className="text-[11px] text-slate-500">
-                      {s.tempatLahir || '-'}, {s.tanggalLahir || '-'}
-                    </div>
-                  </td>
-                  <td className="p-3 max-w-[200px]">
-                    <span
-                      className={`inline-block px-2 py-0.5 rounded-lg text-[10px] font-bold ${
-                        isSiswaInklusi(s.kebutuhanKhusus)
-                          ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                          : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      {s.kebutuhanKhusus || 'Tidak Ada (Reguler)'}
-                    </span>
-                  </td>
-                  <td className="p-3 max-w-[180px]">
-                    <div className="text-xs text-slate-700 font-semibold truncate">
-                      Ayah: {s.namaAyah || '-'} | Ibu: {s.namaIbu || '-'}
-                    </div>
-                    <div className="text-[11px] text-slate-500 truncate" title={s.alamat}>
-                      {s.alamat || '-'}
-                    </div>
-                  </td>
-                  <td className="p-3">
-                    <select
-                      value={s.kelas}
-                      onChange={(e) => handleClassChange(s.id, e.target.value)}
-                      className="px-2 py-1 rounded-lg border border-slate-300 text-xs font-bold bg-white"
-                    >
-                      {CLASSES_LIST.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="p-3 font-mono text-xs">
-                    <div className="font-bold text-slate-700">{s.username}</div>
-                    <div className="text-slate-500">{s.password}</div>
-                  </td>
-                  <td className="p-3 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        onClick={() => setEditingStudent({ ...s })}
-                        className="p-1.5 rounded-lg text-sky-600 hover:bg-sky-50"
-                        title="Edit / Detail Siswa"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteStudent(s.id, s.nama)}
-                        className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50"
-                        title="Hapus Siswa"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
                 </tr>
-              ))}
+              ) : (
+                filteredStudents.map((s) => (
+                  <tr key={s.id} className="hover:bg-slate-50">
+                    <td className="p-3">
+                      <div className="flex items-center gap-2.5">
+                        <img
+                          src={s.fotoUrl}
+                          alt={s.nama}
+                          onClick={() => onOpenZoom(s.fotoUrl, s.nama)}
+                          className="w-10 h-10 rounded-xl object-cover border border-slate-200 cursor-zoom-in"
+                        />
+                        <div>
+                          <div className="font-bold text-slate-800">{s.nama}</div>
+                          <div className="text-[11px] font-mono text-rose-700 font-bold">{s.barcodeId}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      <div className="font-mono text-xs font-bold text-slate-700">NIK: {s.nik || '-'}</div>
+                      <div className="font-mono text-[11px] text-slate-500">NISN: {s.nisn}</div>
+                    </td>
+                    <td className="p-3">
+                      <div className="font-bold text-slate-800">
+                        {s.jenisKelamin === 'P' ? 'Perempuan (P)' : 'Laki-Laki (L)'} • {s.agama}
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        {s.tempatLahir || '-'}, {s.tanggalLahir || '-'}
+                      </div>
+                    </td>
+                    <td className="p-3 max-w-[200px]">
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded-lg text-[10px] font-bold ${
+                          isSiswaInklusi(s.kebutuhanKhusus)
+                            ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {s.kebutuhanKhusus || 'Tidak Ada (Reguler)'}
+                      </span>
+                    </td>
+                    <td className="p-3 max-w-[180px]">
+                      <div className="text-xs text-slate-700 font-semibold truncate">
+                        Ayah: {s.namaAyah || '-'} | Ibu: {s.namaIbu || '-'}
+                      </div>
+                      <div className="text-[11px] text-slate-500 truncate" title={s.alamat}>
+                        {s.alamat || '-'}
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      <select
+                        value={s.kelas}
+                        onChange={(e) => handleClassChange(s.id, e.target.value)}
+                        className="px-2 py-1 rounded-lg border border-slate-300 text-xs font-bold bg-white"
+                      >
+                        {CLASSES_LIST.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="p-3 font-mono text-xs">
+                      <div className="font-bold text-slate-700">{s.username}</div>
+                      <div className="text-slate-500">{s.password}</div>
+                    </td>
+                    <td className="p-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => setEditingStudent({ ...s })}
+                          className="p-1.5 rounded-lg text-sky-600 hover:bg-sky-50"
+                          title="Edit / Detail Siswa"
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteStudent(s.id, s.nama)}
+                          className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50"
+                          title="Hapus Siswa"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

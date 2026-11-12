@@ -64,86 +64,366 @@ export const generateAccountPassword = (fallbackId?: string): string => {
 };
 
 /**
- * Mengimpor dan mem-parsing berkas Excel Siswa dengan username & password otomatis
+ * Menormalkan penamaan kelas dari berbagai format (misal '6A', '6 A', 'VI A', 'VI-A', 'Kelas 6A')
+ * agar selalu cocok dengan standar kelas di sistem ('Kelas 1A' - 'Kelas 6B')
+ */
+export const normalizeClassName = (raw: any, defaultClass: string = 'Kelas 6A'): string => {
+  if (!raw) return defaultClass;
+  const str = String(raw).trim();
+  if (!str) return defaultClass;
+
+  const validClasses = [
+    'Kelas 1A', 'Kelas 1B',
+    'Kelas 2A', 'Kelas 2B',
+    'Kelas 3A', 'Kelas 3B',
+    'Kelas 4A', 'Kelas 4B',
+    'Kelas 5A', 'Kelas 5B',
+    'Kelas 6A', 'Kelas 6B'
+  ];
+
+  if (validClasses.includes(str)) return str;
+
+  const upper = str.toUpperCase().replace(/\s+/g, ' ');
+
+  // Roman numerals mapping
+  const romanMap: Record<string, string> = {
+    'VI': '6',
+    'V': '5',
+    'IV': '4',
+    'III': '3',
+    'II': '2',
+    'I': '1'
+  };
+
+  const defaultGrade = defaultClass.replace(/[^1-6]/g, '') || '6';
+  const defaultSection = defaultClass.toUpperCase().includes('B') ? 'B' : 'A';
+
+  // Strip prefixes like "KELAS", "KLS", "ROMBEL", "ROMBONGAN BELAJAR"
+  const cleaned = upper.replace(/^(KELAS|KLS|ROMBEL|ROMBONGAN BELAJAR|TINGKAT)\s*/i, '').trim();
+
+  // Pattern 1: Roman numeral with optional section, e.g. "VI A", "VI-A", "VIA", "VI"
+  const romanMatch = cleaned.match(/^(VI|V|IV|III|II|I)[\s\-_.]*([AB])?$/i);
+  if (romanMatch) {
+    const grade = romanMap[romanMatch[1].toUpperCase()];
+    const section = (romanMatch[2] || defaultSection).toUpperCase();
+    const candidate = `Kelas ${grade}${section}`;
+    if (validClasses.includes(candidate)) return candidate;
+  }
+
+  // Pattern 2: Digits with optional section, e.g. "6A", "6 A", "6-A", "6.A", "6"
+  const digitMatch = cleaned.match(/^([1-6])[\s\-_.]*([AB])?$/i);
+  if (digitMatch) {
+    const grade = digitMatch[1];
+    const section = (digitMatch[2] || defaultSection).toUpperCase();
+    const candidate = `Kelas ${grade}${section}`;
+    if (validClasses.includes(candidate)) return candidate;
+  }
+
+  // Pattern 3: Any digit 1-6 found in string
+  const anyDigit = upper.match(/[1-6]/);
+  const anySection = upper.match(/\b([AB])\b/) || upper.match(/([AB])$/);
+  if (anyDigit) {
+    const grade = anyDigit[0];
+    const section = anySection ? anySection[1] : defaultSection;
+    const candidate = `Kelas ${grade}${section}`;
+    if (validClasses.includes(candidate)) return candidate;
+  }
+
+  return defaultClass;
+};
+
+/**
+ * Format tanggal lahir ke YYYY-MM-DD dari berbagai format (Excel serial number, DD/MM/YYYY, Date)
+ */
+export const formatDateValue = (rawDate: any): string => {
+  if (!rawDate) return '2014-01-01';
+
+  if (rawDate instanceof Date && !isNaN(rawDate.getTime())) {
+    return rawDate.toISOString().split('T')[0];
+  }
+
+  // Excel serial number (e.g. 41771 -> 2014-05-12)
+  if (typeof rawDate === 'number' && rawDate > 10000 && rawDate < 60000) {
+    const jsDate = new Date(Math.round((rawDate - 25569) * 86400 * 1000));
+    if (!isNaN(jsDate.getTime())) {
+      return jsDate.toISOString().split('T')[0];
+    }
+  }
+
+  const str = String(rawDate).trim();
+  if (!str) return '2014-01-01';
+
+  // YYYY-MM-DD
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(str)) {
+    const [y, m, d] = str.split('-');
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+
+  // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+  const dmyMatch = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
+  if (dmyMatch) {
+    const [, d, m, y] = dmyMatch;
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime()) && parsed.getFullYear() > 1990 && parsed.getFullYear() < 2035) {
+    return parsed.toISOString().split('T')[0];
+  }
+
+  return '2014-01-01';
+};
+
+/**
+ * Mengimpor dan mem-parsing berkas Excel Siswa dengan deteksi header dinamis,
+ * normalisasi nama kelas, dan pembuatan username & password otomatis
  */
 export const parseImportStudentsXLSX = (
   file: File,
   currentStudents: Student[],
   defaultClass: string = 'Kelas 6A',
   defaultYear: string = '2026/2027'
-): Promise<{ newStudents: Student[]; count: number }> => {
+): Promise<{ newStudents: Student[]; count: number; importedClasses: string[] }> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const bstr = e.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const data: any[] = XLSX.utils.sheet_to_json(ws);
-
-        if (!data || data.length === 0) {
-          resolve({ newStudents: [], count: 0 });
+        const arrayBuffer = e.target?.result as ArrayBuffer;
+        if (!arrayBuffer) {
+          resolve({ newStudents: [], count: 0, importedClasses: [] });
           return;
         }
 
+        const wb = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
+        if (!wb.SheetNames || wb.SheetNames.length === 0) {
+          resolve({ newStudents: [], count: 0, importedClasses: [] });
+          return;
+        }
+
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        // Ubah sheet menjadi array 2D
+        const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+        if (!rawRows || rawRows.length === 0) {
+          resolve({ newStudents: [], count: 0, importedClasses: [] });
+          return;
+        }
+
+        // Deteksi baris header secara dinamis (mencari baris yang memiliki 'nama', 'peserta didik', 'siswa', 'nisn')
+        let headerRowIdx = 0;
+        let foundHeader = false;
+
+        for (let r = 0; r < Math.min(15, rawRows.length); r++) {
+          const rowCells = rawRows[r].map((c) => String(c || '').toLowerCase().trim());
+          const hasNama = rowCells.some((c) =>
+            c.includes('nama') || c.includes('siswa') || c.includes('peserta') || c.includes('murid')
+          );
+          const hasIdentifier = rowCells.some((c) =>
+            c.includes('nisn') || c.includes('nis') || c.includes('nik') || c.includes('kelamin') || c.includes('jk') || c.includes('kelas') || c.includes('rombel')
+          );
+
+          if (hasNama && hasIdentifier) {
+            headerRowIdx = r;
+            foundHeader = true;
+            break;
+          }
+        }
+
+        // Jika tidak ketemu baris kedua kriteria, cari baris pertama yang memuat kata 'nama'
+        if (!foundHeader) {
+          for (let r = 0; r < Math.min(15, rawRows.length); r++) {
+            const rowCells = rawRows[r].map((c) => String(c || '').toLowerCase().trim());
+            if (rowCells.some((c) => c.includes('nama'))) {
+              headerRowIdx = r;
+              foundHeader = true;
+              break;
+            }
+          }
+        }
+
+        const headerRow = rawRows[headerRowIdx] || [];
+        const normalizedHeaders = headerRow.map((h) =>
+          String(h || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+        );
+
+        // Helper untuk mencari nilai berdasarkan berbagai kemungkinan nama kolom
+        const getRowVal = (rowDict: Record<string, any>, possibleKeys: string[]): string => {
+          for (const k of possibleKeys) {
+            const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (rowDict[cleanKey] !== undefined && rowDict[cleanKey] !== null) {
+              const val = String(rowDict[cleanKey]).trim();
+              if (val) return val;
+            }
+          }
+          return '';
+        };
+
         const existingUsernames = new Set<string>(currentStudents.map((s) => s.username.toLowerCase()));
         const newStudents: Student[] = [];
+        const detectedClasses = new Set<string>();
 
-        data.forEach((row, idx) => {
-          const rawNama = row['Nama Siswa'] || row['Nama Lengkap'] || row['Nama'] || row['nama'];
-          if (!rawNama || !String(rawNama).trim()) return;
+        for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
+          const row = rawRows[r];
+          if (!row || row.length === 0) continue;
 
-          const nama = String(rawNama).trim();
-          const nisn = String(row['NISN'] || row['nisn'] || `013${Date.now().toString().slice(-7)}${idx}`).trim();
+          // Buat dictionary baris
+          const rowDict: Record<string, any> = {};
+          normalizedHeaders.forEach((key, colIdx) => {
+            if (key) {
+              rowDict[key] = row[colIdx];
+            }
+          });
 
-          const rawAgama = String(row['Agama'] || row['agama'] || 'Islam').trim();
+          // Ekstraksi Nama
+          const nama = getRowVal(rowDict, [
+            'namasiswa',
+            'namapesertadidik',
+            'namalengkap',
+            'nama',
+            'pesertadidik',
+            'murid',
+            'namamurid',
+            'namalengkapsiswa'
+          ]);
+
+          // Lewati baris kosong atau baris judul/catatan di bagian bawah
+          if (!nama || nama.toLowerCase().includes('total') || nama.toLowerCase().includes('rekapitulasi')) {
+            continue;
+          }
+
+          // Ekstraksi NISN
+          const rawNisn = getRowVal(rowDict, [
+            'nisn',
+            'nonisn',
+            'nomorinduksiswanasional',
+            'nis',
+            'nonis',
+            'nisnisn',
+            'nomorinduk'
+          ]);
+          const nisn = rawNisn || `013${Date.now().toString().slice(-7)}${newStudents.length}`;
+
+          // Ekstraksi Agama
+          const rawAgama = getRowVal(rowDict, ['agama', 'religion']) || 'Islam';
           const validAgama = ['Islam', 'Kristen', 'Katolik', 'Buddha', 'Hindu', 'Konghucu'];
-          const agama = validAgama.includes(rawAgama) ? (rawAgama as any) : 'Islam';
+          const matchedAgama = validAgama.find(
+            (a) => a.toLowerCase() === rawAgama.toLowerCase()
+          );
+          const agama = (matchedAgama || 'Islam') as any;
 
-          const rawJk = String(row['Jenis Kelamin (L/P)'] || row['Jenis Kelamin'] || row['JK'] || row['jenisKelamin'] || 'L').trim().toUpperCase();
-          const jenisKelamin: 'L' | 'P' = rawJk.startsWith('P') || rawJk === 'PEREMPUAN' ? 'P' : 'L';
+          // Ekstraksi Jenis Kelamin
+          const rawJk = getRowVal(rowDict, [
+            'jeniskelamin',
+            'jeniskelaminlp',
+            'jk',
+            'lp',
+            'sex',
+            'gender',
+            'kelamin'
+          ]).toUpperCase();
+          const jenisKelamin: 'L' | 'P' =
+            rawJk.startsWith('P') || rawJk === 'PEREMPUAN' || rawJk === 'WANITA' || rawJk === 'W' ? 'P' : 'L';
 
-          const tempatLahir = String(row['Tempat Lahir'] || row['tempatLahir'] || 'Jakarta').trim();
-          const tanggalLahir = String(row['Tanggal Lahir (YYYY-MM-DD)'] || row['Tanggal Lahir'] || row['tanggalLahir'] || '2014-01-01').trim();
-          const nik = String(row['NIK'] || row['nik'] || `317201${Date.now().toString().slice(-10)}`).trim();
+          // Ekstraksi Tempat & Tanggal Lahir
+          const tempatLahir = getRowVal(rowDict, [
+            'tempatlahir',
+            'tempat',
+            'tmplahir',
+            'kotallahir'
+          ]) || 'Jakarta';
 
-          const kebutuhanKhusus = String(row['Kebutuhan Khusus'] || row['kebutuhanKhusus'] || 'Tidak Ada (Reguler)').trim();
-          const namaAyah = String(row['Nama Ayah'] || row['namaAyah'] || '-').trim();
-          const namaIbu = String(row['Nama Ibu'] || row['namaIbu'] || '-').trim();
-          const alamat = String(row['Alamat'] || row['alamat'] || 'Jakarta').trim();
+          const rawTglLahir = rowDict['tanggallahir'] ??
+            rowDict['tanggallahiryyyymmdd'] ??
+            rowDict['tgllahir'] ??
+            rowDict['tgl'] ??
+            rowDict['birthdate'] ??
+            rowDict['tgllahirddmmyyyy'];
+          const tanggalLahir = formatDateValue(rawTglLahir);
 
-          const kelas = String(row['Kelas'] || row['kelas'] || defaultClass).trim();
-          const tahunPelajaran = String(row['Tahun Pelajaran'] || row['tahunPelajaran'] || defaultYear).trim();
+          // Ekstraksi NIK
+          const rawNik = getRowVal(rowDict, [
+            'nik',
+            'nonik',
+            'noktp',
+            'nomorindukkependudukan'
+          ]);
+          const nik = rawNik || `317201${Date.now().toString().slice(-10)}`;
 
-          // Otomatis generate username jika kosong
-          const providedUsername =
-            row['Username'] ||
-            row['username'] ||
-            row['Username (Opsional, Otomatis)'] ||
-            row['Username Akun'];
-          const username = providedUsername && String(providedUsername).trim()
-            ? String(providedUsername).trim().toLowerCase()
+          // Ekstraksi Kebutuhan Khusus
+          const kebutuhanKhusus = getRowVal(rowDict, [
+            'kebutuhankhusus',
+            'inklusi',
+            'abk',
+            'disabilitas',
+            'kategoriinklusi',
+            'jeniskebutuhankhusus'
+          ]) || 'Tidak Ada (Reguler)';
+
+          // Ekstraksi Orang Tua & Alamat
+          const namaAyah = getRowVal(rowDict, ['namaayah', 'ayah', 'bapak', 'namabapak']) || '-';
+          const namaIbu = getRowVal(rowDict, ['namaibu', 'ibu']) || '-';
+          const alamat = getRowVal(rowDict, [
+            'alamat',
+            'alamatrumah',
+            'alamattinggal',
+            'domisili',
+            'tempattinggal',
+            'alamatsiswa'
+          ]) || 'Jakarta Utara';
+
+          // Ekstraksi Kelas dengan normalisasi cerdas
+          const rawKelas = getRowVal(rowDict, [
+            'kelas',
+            'rombel',
+            'rombonganbelajar',
+            'tingkat',
+            'kls',
+            'ruang'
+          ]);
+          const kelas = normalizeClassName(rawKelas, defaultClass);
+          detectedClasses.add(kelas);
+
+          // Ekstraksi Tahun Pelajaran
+          const tahunPelajaran = getRowVal(rowDict, [
+            'tahunpelajaran',
+            'tapel',
+            'thnpelajaran',
+            'tahunajaran',
+            'tp'
+          ]) || defaultYear;
+
+          // Akun Login: Username & Password
+          const rawUser = getRowVal(rowDict, [
+            'username',
+            'user',
+            'namaakun',
+            'usernameopsionalotomatis',
+            'usernameakun'
+          ]);
+          const username = rawUser
+            ? rawUser.toLowerCase()
             : generateAccountUsername(nama, nisn, existingUsernames);
 
-          // Otomatis generate password jika kosong (default '123')
-          const providedPassword =
-            row['Password'] ||
-            row['password'] ||
-            row['Password (Opsional, Default 123)'] ||
-            row['Password Akun'];
-          const password = providedPassword && String(providedPassword).trim()
-            ? String(providedPassword).trim()
-            : generateAccountPassword(nisn);
+          const rawPass = getRowVal(rowDict, [
+            'password',
+            'katasandi',
+            'pass',
+            'passwordopsionaldefault123',
+            'passwordakun'
+          ]);
+          const password = rawPass || generateAccountPassword(nisn);
 
-          // Barcode ID: e.g. RBU21-6A-001
+          // Barcode ID
+          const rawBarcode = getRowVal(rowDict, ['idbarcode', 'barcode', 'barcodeid']);
           const classCode = kelas.replace(/\s+/g, '').replace('Kelas', '');
           const seq = String(currentStudents.length + newStudents.length + 1).padStart(3, '0');
-          const barcodeId = row['ID Barcode'] || row['barcodeId'] || `RBU21-${classCode}-${seq}`;
+          const barcodeId = rawBarcode || `RBU21-${classCode}-${seq}`;
 
-          const fotoUrl = row['Foto'] || row['fotoUrl'] || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150';
+          const fotoUrl = getRowVal(rowDict, ['foto', 'fotourl', 'linkfoto']) ||
+            'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150';
 
           newStudents.push({
-            id: `std_${Date.now()}_${idx}`,
+            id: `std_${Date.now()}_${newStudents.length}`,
             barcodeId,
             nama,
             jenisKelamin,
@@ -162,15 +442,19 @@ export const parseImportStudentsXLSX = (
             password,
             fotoUrl,
           });
-        });
+        }
 
-        resolve({ newStudents, count: newStudents.length });
+        resolve({
+          newStudents,
+          count: newStudents.length,
+          importedClasses: Array.from(detectedClasses),
+        });
       } catch (err) {
         reject(err);
       }
     };
     reader.onerror = (err) => reject(err);
-    reader.readAsBinaryString(file);
+    reader.readAsArrayBuffer(file);
   });
 };
 

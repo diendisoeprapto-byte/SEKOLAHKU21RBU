@@ -554,6 +554,7 @@ export default function App() {
                   activeYear={activeYear}
                   showToast={showToast}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
+                  onSelectClass={setActiveClass}
                 />
               )}
 
