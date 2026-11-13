@@ -79,6 +79,15 @@ import {
   saveStudentsToFirestoreBatch,
   sortStudentsAlphabetically,
 } from './utils/studentFirestore';
+import {
+  subscribeToAttendanceCollection,
+  saveSingleAttendanceToFirestore,
+  saveBatchAttendanceToFirestore,
+  deleteAttendanceRecordsFromFirestore,
+  subscribeToKaldikDoc,
+  saveKaldikToFirestore,
+} from './utils/attendanceFirestore';
+import { getLocalTodayStr } from './utils/dateUtils';
 
 export default function App() {
   // Database States
@@ -86,12 +95,35 @@ export default function App() {
   const [teachers, setTeachers] = useState<Teacher[]>(getStoredTeachers());
   const [students, setStudents] = useState<Student[]>(() => sortStudentsAlphabetically(getStoredStudents()));
   const studentsCollectionLoadedRef = React.useRef(false);
+  const attendanceCollectionLoadedRef = React.useRef(false);
+  const kaldikDocLoadedRef = React.useRef(false);
   const initialFilters = getActiveFilters();
   const [subjects, setSubjects] = useState<Subject[]>(() => getStoredSubjectsForClass(initialFilters.kelas));
   const [kaldikDays, setKaldikDays] = useState<KaldikDay[]>(getStoredKaldik());
   const [attendanceRecords, setAttendanceRecords] = useState<Record<string, AttendanceRecordItem>>(
     getStoredAttendance()
   );
+
+  // Real-time local date state (otomatis berubah saat pergantian hari tengah malam)
+  const [liveTodayStr, setLiveTodayStr] = useState<string>(() => getLocalTodayStr());
+  const [selectedAttendanceDate, setSelectedAttendanceDate] = useState<string>(() => getLocalTodayStr());
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(() => getLocalTodayStr());
+
+  useEffect(() => {
+    const checkDateRollover = () => {
+      const currentToday = getLocalTodayStr();
+      setLiveTodayStr((prevToday) => {
+        if (prevToday !== currentToday) {
+          setSelectedAttendanceDate((prevSel) => (prevSel === prevToday ? currentToday : prevSel));
+          setSelectedCalendarDate((prevCal) => (prevCal === prevToday ? currentToday : prevCal));
+          return currentToday;
+        }
+        return prevToday;
+      });
+    };
+    const timer = setInterval(checkDateRollover, 15000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Test Firebase connection & Multi-device Cloud Sync
   useEffect(() => {
@@ -120,11 +152,11 @@ export default function App() {
         setSubjects(cloudData.subjects);
         saveStoredSubjects(cloudData.subjects);
       }
-      if (cloudData.kaldikDays) {
+      if (cloudData.kaldikDays && !kaldikDocLoadedRef.current) {
         setKaldikDays(cloudData.kaldikDays);
         saveStoredKaldik(cloudData.kaldikDays);
       }
-      if (cloudData.attendance) {
+      if (cloudData.attendance && !attendanceCollectionLoadedRef.current) {
         setAttendanceRecords(cloudData.attendance);
         saveStoredAttendance(cloudData.attendance);
       }
@@ -182,9 +214,52 @@ export default function App() {
       }
     });
 
+    // Realtime listener langsung untuk koleksi 'attendance' di Firestore (single source of truth)
+    const unsubAttendance = subscribeToAttendanceCollection(
+      (firestoreAttendance) => {
+        const alreadySeeded = localStorage.getItem('sekolahku_attendance_seeded') === 'true';
+        const recordList = Object.values(firestoreAttendance);
+
+        if (recordList.length > 0) {
+          attendanceCollectionLoadedRef.current = true;
+          localStorage.setItem('sekolahku_attendance_seeded', 'true');
+          setAttendanceRecords(firestoreAttendance);
+          saveStoredAttendance(firestoreAttendance);
+        } else if (!attendanceCollectionLoadedRef.current && !alreadySeeded) {
+          attendanceCollectionLoadedRef.current = true;
+          localStorage.setItem('sekolahku_attendance_seeded', 'true');
+          const localAtt = getStoredAttendance();
+          const localList = Object.values(localAtt);
+          if (localList.length > 0) {
+            saveBatchAttendanceToFirestore(localList).catch((err) =>
+              console.warn('Initial attendance seed warning:', err)
+            );
+          }
+        } else {
+          attendanceCollectionLoadedRef.current = true;
+          setAttendanceRecords({});
+          saveStoredAttendance({});
+        }
+      },
+      (err) => {
+        console.warn('Attendance listener warning:', err);
+      }
+    );
+
+    // Realtime listener langsung untuk Kaldik (settings/kaldik_days)
+    const unsubKaldik = subscribeToKaldikDoc((firestoreKaldik) => {
+      if (firestoreKaldik.length > 0) {
+        kaldikDocLoadedRef.current = true;
+        setKaldikDays(firestoreKaldik);
+        saveStoredKaldik(firestoreKaldik);
+      }
+    });
+
     return () => {
       unsubscribe();
       unsubStudents();
+      unsubAttendance();
+      unsubKaldik();
     };
   }, []);
 
@@ -309,18 +384,72 @@ export default function App() {
     }
   };
 
-  // Sync kaldik update with cloud
+  // Sync kaldik update with cloud (dedicated settings/kaldik_days + primary cloud doc)
   const handleSaveKaldik = (newDays: KaldikDay[]) => {
     setKaldikDays(newDays);
     saveStoredKaldik(newDays);
+    saveKaldikToFirestore(newDays);
     pushAllDataToCloud({ kaldikDays: newDays }, activeUser?.name || 'admin');
   };
 
-  // Sync attendance update with cloud
-  const handleSaveAttendance = (newRecords: Record<string, AttendanceRecordItem>) => {
-    setAttendanceRecords(newRecords);
-    saveStoredAttendance(newRecords);
-    pushAllDataToCloud({ attendance: newRecords }, activeUser?.name || 'admin');
+  // Simpan satu catatan kehadiran secara permanen ke koleksi Firestore 'attendance'
+  const handleRecordSingleAttendance = async (record: AttendanceRecordItem) => {
+    const key = `${record.date}_${record.studentId}`;
+    const cleanRecord: AttendanceRecordItem = { ...record, id: key };
+    setAttendanceRecords((prev) => {
+      const next = { ...prev, [key]: cleanRecord };
+      saveStoredAttendance(next);
+      return next;
+    });
+    await saveSingleAttendanceToFirestore(cleanRecord);
+  };
+
+  // Simpan banyak catatan kehadiran sekaligus (Tandai Semua Hadir) ke koleksi Firestore 'attendance'
+  const handleSaveBatchAttendance = async (records: AttendanceRecordItem[]) => {
+    const cleanRecords = records.map((rec) => {
+      const key = `${rec.date}_${rec.studentId}`;
+      return { ...rec, id: key };
+    });
+    setAttendanceRecords((prev) => {
+      const next = { ...prev };
+      cleanRecords.forEach((rec) => {
+        next[rec.id] = rec;
+      });
+      saveStoredAttendance(next);
+      return next;
+    });
+    await saveBatchAttendanceToFirestore(cleanRecords);
+  };
+
+  // Hapus catatan kehadiran (Reset Harian / Reset Bulanan di Kalender)
+  const handleDeleteAttendanceRecords = async (recordsToDelete: AttendanceRecordItem[]) => {
+    const ids = Array.from(
+      new Set(
+        recordsToDelete
+          .flatMap((r) => [r.id, `${r.date}_${r.studentId}`])
+          .filter(Boolean)
+      )
+    );
+    setAttendanceRecords((prev) => {
+      const next = { ...prev };
+      recordsToDelete.forEach((r) => {
+        delete next[`${r.date}_${r.studentId}`];
+        if (r.id) delete next[r.id];
+      });
+      saveStoredAttendance(next);
+      return next;
+    });
+    await deleteAttendanceRecordsFromFirestore(ids);
+  };
+
+  const handleOpenAttendanceForDate = (dateStr: string) => {
+    setSelectedAttendanceDate(dateStr);
+    setActiveTab('absensi');
+  };
+
+  const handleOpenCalendarForDate = (dateStr: string) => {
+    setSelectedCalendarDate(dateStr);
+    setActiveTab('kalender');
   };
 
   // Global filters
@@ -373,7 +502,7 @@ export default function App() {
     }
   };
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = liveTodayStr;
 
   return (
     <div className="min-h-screen flex flex-col antialiased selection:bg-rose-500 selection:text-white">
@@ -605,8 +734,14 @@ export default function App() {
                   students={students}
                   activeClass={activeClass}
                   attendanceRecords={attendanceRecords}
-                  onSaveAttendance={handleSaveAttendance}
+                  selectedDate={selectedAttendanceDate}
+                  onChangeDate={setSelectedAttendanceDate}
+                  liveTodayStr={liveTodayStr}
+                  onRecordSingleAttendance={handleRecordSingleAttendance}
+                  onSaveBatchAttendance={handleSaveBatchAttendance}
+                  onDeleteAttendanceRecords={handleDeleteAttendanceRecords}
                   kaldikDays={kaldikDays}
+                  onOpenCalendarForDate={handleOpenCalendarForDate}
                   onNavigateTab={setActiveTab}
                   showToast={showToast}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
@@ -619,7 +754,11 @@ export default function App() {
                   students={students}
                   activeClass={activeClass}
                   attendanceRecords={attendanceRecords}
-                  onSaveAttendance={handleSaveAttendance}
+                  selectedDateProp={selectedCalendarDate}
+                  onChangeSelectedDate={setSelectedCalendarDate}
+                  liveTodayStr={liveTodayStr}
+                  onDeleteAttendanceRecords={handleDeleteAttendanceRecords}
+                  onOpenAttendanceForDate={handleOpenAttendanceForDate}
                   kaldikDays={kaldikDays}
                   onSaveKaldik={handleSaveKaldik}
                   onOpenCustomModal={() => setIsCustomHolidayOpen(true)}

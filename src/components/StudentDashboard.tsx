@@ -43,6 +43,7 @@ import {
   CLASSES_LIST,
 } from '../utils/storage';
 import { evaluateQuestionScore } from '../utils/answerChecker';
+import { getLocalTodayStr } from '../utils/dateUtils';
 
 
 interface Props {
@@ -118,7 +119,7 @@ export const StudentDashboard: React.FC<Props> = ({
   const [kebiasaanFormNama, setKebiasaanFormNama] = useState<string>('');
   const [kebiasaanFormKelas, setKebiasaanFormKelas] = useState<string>(activeClass);
   const [kebiasaanFormTanggal, setKebiasaanFormTanggal] = useState<string>(
-    new Date().toISOString().split('T')[0]
+    getLocalTodayStr()
   );
   const [kebiasaanStatus, setKebiasaanStatus] = useState<Record<string, boolean>>({
     bangunPagi: true,

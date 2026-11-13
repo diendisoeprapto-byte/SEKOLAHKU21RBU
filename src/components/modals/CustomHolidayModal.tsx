@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, CalendarPlus, Save, Trash2, Calendar } from 'lucide-react';
 import { KaldikDay } from '../../types';
+import { formatDateKey, parseLocalDate } from '../../utils/dateUtils';
 
 interface Props {
   isOpen: boolean;
@@ -31,8 +32,8 @@ export const CustomHolidayModal: React.FC<Props> = ({
       return;
     }
 
-    const start = new Date(startDate);
-    const end = endDate ? new Date(endDate) : new Date(startDate);
+    const start = parseLocalDate(startDate);
+    const end = endDate ? parseLocalDate(endDate) : parseLocalDate(startDate);
 
     if (end < start) {
       showToast('Tanggal akhir tidak boleh lebih awal dari tanggal mulai!', 'error');
@@ -40,10 +41,10 @@ export const CustomHolidayModal: React.FC<Props> = ({
     }
 
     const newDays: KaldikDay[] = [...kaldikDays];
-    const cur = new Date(start);
+    const cur = new Date(start.getFullYear(), start.getMonth(), start.getDate());
 
     while (cur <= end) {
-      const dateStr = cur.toISOString().split('T')[0];
+      const dateStr = formatDateKey(cur);
       const existingIdx = newDays.findIndex((d) => d.date === dateStr);
 
       const dayObj: KaldikDay = {

@@ -26,6 +26,7 @@ import { SchoolProfile, Student, Teacher, KaldikDay, isSiswaInklusi } from '../.
 import { AttendanceRecordItem, CLASSES_LIST } from '../../utils/storage';
 import { TabId } from '../Sidebar';
 import { getStorageStats, syncAllLocalToCloud } from '../../utils/cloudSync';
+import { parseLocalDate } from '../../utils/dateUtils';
 
 interface Props {
   profile: SchoolProfile;
@@ -98,7 +99,7 @@ export const DashboardTab: React.FC<Props> = ({
 
   // 5. Persentase Kehadiran Hari Ini
   const todayKaldik = kaldikDays.find((k) => k.date === todayDate);
-  const isTodaySunday = new Date(todayDate).getDay() === 0;
+  const isTodaySunday = parseLocalDate(todayDate).getDay() === 0;
   const isTodayHoliday = isTodaySunday || (todayKaldik ? todayKaldik.isHoliday : false);
   const holidayName = isTodaySunday
     ? 'Hari Minggu (Libur)'

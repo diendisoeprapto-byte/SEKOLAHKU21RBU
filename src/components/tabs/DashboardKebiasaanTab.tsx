@@ -29,6 +29,7 @@ import { collection, onSnapshot, query, orderBy, deleteDoc, doc, addDoc } from '
 import { db } from '../../utils/firebase';
 import { KebiasaanReportItem, TUJUH_KEBIASAAN_LIST, Student, SchoolProfile, Teacher } from '../../types';
 import { CLASSES_LIST } from '../../utils/storage';
+import { getLocalTodayStr } from '../../utils/dateUtils';
 
 export const MONTH_NAMES = [
   { value: '01', label: 'Januari' },
@@ -107,7 +108,7 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
               namaSiswa: data.namaSiswa || 'Siswa',
               studentId: data.studentId || '',
               kelas: data.kelas || 'Kelas 6A',
-              tanggal: data.tanggal || new Date().toISOString().split('T')[0],
+              tanggal: data.tanggal || getLocalTodayStr(),
               waktuKirim: data.waktuKirim || '06:30 WIB',
               kebiasaan: data.kebiasaan || {
                 bangunPagi: false,
@@ -174,7 +175,7 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
   }, [reports, selectedClassFilter, selectedDateFilter, searchQuery]);
 
   // Statistik Agregat
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalTodayStr();
   const todayReportsCount = useMemo(() => {
     return reports.filter((r) => r.tanggal === todayStr).length;
   }, [reports, todayStr]);

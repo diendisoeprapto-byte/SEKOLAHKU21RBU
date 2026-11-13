@@ -23,14 +23,21 @@ import {
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { Student, KaldikDay } from '../../types';
 import { AttendanceRecordItem } from '../../utils/storage';
+import { formatTanggalIndo, getLocalTimeStr, parseLocalDate } from '../../utils/dateUtils';
 import { TabId } from '../Sidebar';
 
 interface Props {
   students: Student[];
   activeClass: string;
   attendanceRecords: Record<string, AttendanceRecordItem>;
-  onSaveAttendance: (records: Record<string, AttendanceRecordItem>) => void;
+  selectedDate: string;
+  onChangeDate: (date: string) => void;
+  liveTodayStr: string;
+  onRecordSingleAttendance: (record: AttendanceRecordItem) => Promise<void>;
+  onSaveBatchAttendance: (records: AttendanceRecordItem[]) => Promise<void>;
+  onDeleteAttendanceRecords: (records: AttendanceRecordItem[]) => Promise<void>;
   kaldikDays: KaldikDay[];
+  onOpenCalendarForDate: (dateStr: string) => void;
   onNavigateTab: (tab: TabId) => void;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onOpenZoom: (url: string, title: string) => void;
@@ -45,13 +52,22 @@ export const AbsensiTab: React.FC<Props> = ({
   students,
   activeClass,
   attendanceRecords,
-  onSaveAttendance,
+  selectedDate,
+  onChangeDate,
+  liveTodayStr,
+  onRecordSingleAttendance,
+  onSaveBatchAttendance,
+  onDeleteAttendanceRecords,
   kaldikDays,
+  onOpenCalendarForDate,
   onNavigateTab,
   showToast,
   onOpenZoom,
 }) => {
-  const [activeDate, setActiveDate] = useState(new Date().toISOString().split('T')[0]);
+  const activeDate = selectedDate || liveTodayStr;
+  const setActiveDate = onChangeDate;
+  const [liveClock, setLiveClock] = useState<string>(() => getLocalTimeStr(new Date(), true));
+  const [isBatchSaving, setIsBatchSaving] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [isInitializingCamera, setIsInitializingCamera] = useState(false);
   const [availableCameras, setAvailableCameras] = useState<CameraDevice[]>([]);
@@ -78,8 +94,16 @@ export const AbsensiTab: React.FC<Props> = ({
   const filteredStudents = students.filter((s) => s.kelas === activeClass);
 
   const activeDayKaldik = kaldikDays.find((k) => k.date === activeDate);
-  const isSunday = new Date(activeDate).getDay() === 0;
+  const isSunday = parseLocalDate(activeDate).getDay() === 0;
   const isHoliday = isSunday || (activeDayKaldik ? activeDayKaldik.isHoliday : false);
+
+  // Live clock real-time setiap detik (WIB/WITA/WIT)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setLiveClock(getLocalTimeStr(new Date(), true));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Enumerate cameras on mount
   useEffect(() => {
@@ -142,25 +166,22 @@ export const AbsensiTab: React.FC<Props> = ({
     }
   };
 
-  // Record student attendance to state, storage, and cloud
-  const recordAttendance = (student: Student, status: 'H' | 'S' | 'I' | 'A' = 'H') => {
-    const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+  // Record student attendance permanently to state, localStorage, and Firestore 'attendance' collection
+  const recordAttendance = async (student: Student, status: 'H' | 'S' | 'I' | 'A' = 'H') => {
+    const timeStr = getLocalTimeStr(new Date(), true);
     const key = `${activeDate}_${student.id}`;
-
-    const updated: Record<string, AttendanceRecordItem> = {
-      ...attendanceRecords,
-      [key]: {
-        id: key,
-        studentId: student.id,
-        date: activeDate,
-        status,
-        time: timeStr.slice(0, 5),
-      },
+    const newRecord: AttendanceRecordItem = {
+      id: key,
+      studentId: student.id,
+      date: activeDate,
+      status,
+      time: timeStr.slice(0, 5),
     };
 
-    onSaveAttendance(updated);
-    setLastScannedStudent(`${student.nama} (${student.barcodeId}) - ${status === 'H' ? 'HADIR' : status}`);
+    const statusLabel =
+      status === 'H' ? 'HADIR' : status === 'S' ? 'SAKIT' : status === 'I' ? 'IZIN' : 'ALFA';
+
+    setLastScannedStudent(`${student.nama} (${student.barcodeId}) - ${statusLabel}`);
     setLastScannedTime(timeStr.slice(0, 5));
     setScannedSuccessItem({
       student,
@@ -169,10 +190,34 @@ export const AbsensiTab: React.FC<Props> = ({
     });
     playBeep('success');
 
-    if (student.kelas !== activeClass) {
-      showToast(`✓ Siswa ${student.nama} (Kelas ${student.kelas}) berhasil tercatat Hadir!`, 'success');
-    } else {
-      showToast(`✓ Berhasil scan barcode: ${student.nama} (${student.barcodeId}) - Hadir`, 'success');
+    try {
+      await onRecordSingleAttendance(newRecord);
+      if (student.kelas !== activeClass) {
+        showToast(
+          `✓ ${student.nama} (${student.kelas}) tersimpan ${statusLabel} (${formatTanggalIndo(activeDate, false)})`,
+          'success'
+        );
+      } else {
+        showToast(
+          `✓ ${student.nama} tercatat ${statusLabel} & tersinkron ke Kalender Pendidikan!`,
+          'success'
+        );
+      }
+    } catch (error) {
+      console.error('Gagal menyimpan presensi ke Firestore:', error);
+      showToast('Gagal menyimpan presensi ke Cloud Firestore. Cek koneksi internet.', 'error');
+    }
+  };
+
+  const handleClearSingleAttendance = async (student: Student) => {
+    const rec = attendanceRecords[`${activeDate}_${student.id}`];
+    if (!rec) return;
+    try {
+      await onDeleteAttendanceRecords([rec]);
+      showToast(`Status kehadiran ${student.nama} tanggal ${activeDate} dikosongkan.`, 'success');
+    } catch (error) {
+      console.error('Gagal mengosongkan presensi siswa:', error);
+      showToast('Gagal menghapus catatan presensi di cloud.', 'error');
     }
   };
 
@@ -448,25 +493,48 @@ export const AbsensiTab: React.FC<Props> = ({
     }
   };
 
-  const markAllPresent = () => {
-    const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const updated = { ...attendanceRecords };
-
-    filteredStudents.forEach((s) => {
-      const key = `${activeDate}_${s.id}`;
-      updated[key] = {
-        id: key,
+  const markAllPresent = async () => {
+    if (filteredStudents.length === 0) {
+      showToast(`Tidak ada siswa terdaftar pada kelas ${activeClass}.`, 'error');
+      return;
+    }
+    setIsBatchSaving(true);
+    try {
+      const timeStr = getLocalTimeStr(new Date(), false);
+      const batchRecords: AttendanceRecordItem[] = filteredStudents.map((s) => ({
+        id: `${activeDate}_${s.id}`,
         studentId: s.id,
         date: activeDate,
         status: 'H',
         time: timeStr,
-      };
-    });
+      }));
 
-    onSaveAttendance(updated);
-    showToast(`Seluruh ${filteredStudents.length} siswa berhasil ditandai Hadir hari ini!`, 'success');
+      await onSaveBatchAttendance(batchRecords);
+      showToast(
+        `Seluruh ${filteredStudents.length} siswa (${activeClass}) tersimpan Hadir & tersinkron ke Kalender!`,
+        'success'
+      );
+    } catch (error) {
+      console.error('Gagal menyimpan hadir massal:', error);
+      showToast('Gagal menyimpan presensi massal ke Cloud Firestore.', 'error');
+    } finally {
+      setIsBatchSaving(false);
+    }
   };
+
+  // Ringkasan kehadiran harian kelas aktif untuk tanggal terpilih
+  const dailySummary = filteredStudents.reduce(
+    (acc, s) => {
+      const rec = attendanceRecords[`${activeDate}_${s.id}`];
+      if (!rec) acc.belum++;
+      else if (rec.status === 'H') acc.hadir++;
+      else if (rec.status === 'S') acc.sakit++;
+      else if (rec.status === 'I') acc.izin++;
+      else if (rec.status === 'A') acc.alfa++;
+      return acc;
+    },
+    { hadir: 0, sakit: 0, izin: 0, alfa: 0, belum: 0 }
+  );
 
   return (
     <section className="space-y-6">
@@ -489,9 +557,13 @@ export const AbsensiTab: React.FC<Props> = ({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <div className="px-3 py-1.5 rounded-xl bg-slate-900 text-emerald-300 font-mono text-xs font-black flex items-center gap-1.5 shadow-xs">
+            <Clock className="w-3.5 h-3.5 text-emerald-400" />
+            <span>{liveClock} WIB</span>
+          </div>
           <button
             type="button"
-            onClick={() => onNavigateTab('kalender')}
+            onClick={() => onOpenCalendarForDate(activeDate)}
             className="bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-800 border border-rose-200 font-display font-extrabold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
           >
             <Calendar className="w-4 h-4" /> Buka Kalender Pendidikan
@@ -520,28 +592,69 @@ export const AbsensiTab: React.FC<Props> = ({
               </h2>
             </div>
             <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
-              <LinkIcon className="w-3 h-3 text-emerald-600" /> Realtime Sync
+              <LinkIcon className="w-3 h-3 text-emerald-600" /> Firestore Realtime
             </span>
           </div>
 
-          {/* Date Picker & Holiday Indicator */}
-          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <span className="text-xs font-extrabold text-slate-800 block">
-                <Calendar className="w-3.5 h-3.5 inline mr-1 text-rose-600" /> Tanggal Presensi:
-              </span>
-              <span className={`text-[11px] font-bold ${isHoliday ? 'text-rose-600' : 'text-emerald-700'}`}>
-                {isHoliday
-                  ? `Hari Libur: ${activeDayKaldik?.keterangan || 'Hari Minggu'}`
-                  : 'Hari Efektif Belajar'}
-              </span>
+          {/* Date Picker & Kaldik Holiday Indicator */}
+          <div
+            className={`p-3.5 rounded-2xl border space-y-2 ${
+              isHoliday ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'
+            }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-extrabold text-slate-800">
+                    <Calendar className="w-3.5 h-3.5 inline mr-1 text-rose-600" />
+                    {formatTanggalIndo(activeDate)}
+                  </span>
+                  {activeDate === liveTodayStr && (
+                    <span className="text-[10px] font-black uppercase bg-emerald-600 text-white px-2 py-0.5 rounded-full">
+                      Hari Ini
+                    </span>
+                  )}
+                </div>
+                <span className={`text-[11px] font-bold block mt-0.5 ${isHoliday ? 'text-rose-700' : 'text-emerald-700'}`}>
+                  {isHoliday
+                    ? `Status Kaldik: Libur (${activeDayKaldik?.keterangan || 'Hari Minggu'})`
+                    : `Status Kaldik: ${activeDayKaldik?.keterangan || 'Hari Efektif Belajar'}`}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {activeDate !== liveTodayStr && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveDate(liveTodayStr)}
+                    className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold cursor-pointer shadow-xs"
+                    title={`Kembali ke tanggal hari ini (${liveTodayStr})`}
+                  >
+                    Ke Hari Ini
+                  </button>
+                )}
+                <input
+                  type="date"
+                  value={activeDate}
+                  onChange={(e) => setActiveDate(e.target.value || liveTodayStr)}
+                  className="px-3 py-1.5 rounded-xl border border-rose-300 bg-white font-mono font-bold text-xs shadow-xs"
+                />
+              </div>
             </div>
-            <input
-              type="date"
-              value={activeDate}
-              onChange={(e) => setActiveDate(e.target.value)}
-              className="px-3 py-1.5 rounded-xl border border-rose-300 bg-white font-mono font-bold text-xs shadow-xs"
-            />
+            {isHoliday && (
+              <div className="text-[11px] text-rose-800 bg-white/80 px-2.5 py-1.5 rounded-xl border border-rose-200 flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1 font-semibold">
+                  <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  Tanggal ini ditandai libur di Kalender Pendidikan.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onOpenCalendarForDate(activeDate)}
+                  className="font-extrabold text-rose-700 underline cursor-pointer shrink-0"
+                >
+                  Ubah di Kaldik
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Camera Controls & Selection */}
@@ -791,16 +904,51 @@ export const AbsensiTab: React.FC<Props> = ({
                 Daftar Pendataan Kehadiran Siswa ({activeClass})
               </h3>
               <p className="text-xs text-slate-500">
-                Tanggal: <strong>{activeDate}</strong> • Terhubung langsung dengan Kalender, e-Rapor & Cloud
+                Tanggal: <strong>{formatTanggalIndo(activeDate)}</strong> ({activeDate}) • Terhubung real-time ke Kalender Pendidikan & Cloud
               </p>
             </div>
-            <button
-              type="button"
-              onClick={markAllPresent}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs"
-            >
-              <CheckCheck className="w-4 h-4" /> Tandai Semua Hadir
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onOpenCalendarForDate(activeDate)}
+                className="bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-700 border border-slate-200 text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                title="Lihat rekap tanggal ini di Kalender Pendidikan"
+              >
+                <Calendar className="w-3.5 h-3.5" /> Lihat di Kaldik
+              </button>
+              <button
+                type="button"
+                onClick={markAllPresent}
+                disabled={isBatchSaving}
+                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                <CheckCheck className="w-4 h-4" /> {isBatchSaving ? 'Menyimpan...' : 'Tandai Semua Hadir'}
+              </button>
+            </div>
+          </div>
+
+          {/* Real-time Daily Recap Strip (Synced with Kalender Pendidikan) */}
+          <div className="grid grid-cols-5 gap-2 text-center">
+            <div className="p-2 rounded-2xl bg-emerald-50 border border-emerald-200">
+              <div className="text-[10px] font-extrabold text-emerald-700 uppercase">Hadir (H)</div>
+              <div className="text-base font-display font-black text-emerald-900">{dailySummary.hadir}</div>
+            </div>
+            <div className="p-2 rounded-2xl bg-sky-50 border border-sky-200">
+              <div className="text-[10px] font-extrabold text-sky-700 uppercase">Sakit (S)</div>
+              <div className="text-base font-display font-black text-sky-900">{dailySummary.sakit}</div>
+            </div>
+            <div className="p-2 rounded-2xl bg-amber-50 border border-amber-200">
+              <div className="text-[10px] font-extrabold text-amber-700 uppercase">Izin (I)</div>
+              <div className="text-base font-display font-black text-amber-900">{dailySummary.izin}</div>
+            </div>
+            <div className="p-2 rounded-2xl bg-rose-50 border border-rose-200">
+              <div className="text-[10px] font-extrabold text-rose-700 uppercase">Alfa (A)</div>
+              <div className="text-base font-display font-black text-rose-900">{dailySummary.alfa}</div>
+            </div>
+            <div className="p-2 rounded-2xl bg-slate-50 border border-slate-200">
+              <div className="text-[10px] font-extrabold text-slate-500 uppercase">Belum</div>
+              <div className="text-base font-display font-black text-slate-700">{dailySummary.belum}</div>
+            </div>
           </div>
 
           {/* Quick Dropdown Selector */}
@@ -911,55 +1059,67 @@ export const AbsensiTab: React.FC<Props> = ({
                           </span>
                         </td>
                         <td className="p-3 text-center">
-                          <div className="inline-flex rounded-xl border border-slate-200 overflow-hidden text-xs font-bold shadow-xs">
-                            <button
-                              type="button"
-                              onClick={() => handleStatusChange(s.id, 'H')}
-                              title="Tandai Hadir"
-                              className={`px-2.5 py-1.5 transition ${
-                                status === 'H'
-                                  ? 'bg-emerald-600 text-white'
-                                  : 'bg-white hover:bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              H
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleStatusChange(s.id, 'S')}
-                              title="Tandai Sakit"
-                              className={`px-2.5 py-1.5 border-l border-slate-200 transition ${
-                                status === 'S'
-                                  ? 'bg-sky-600 text-white'
-                                  : 'bg-white hover:bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              S
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleStatusChange(s.id, 'I')}
-                              title="Tandai Izin"
-                              className={`px-2.5 py-1.5 border-l border-slate-200 transition ${
-                                status === 'I'
-                                  ? 'bg-amber-500 text-white'
-                                  : 'bg-white hover:bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              I
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleStatusChange(s.id, 'A')}
-                              title="Tandai Alfa"
-                              className={`px-2.5 py-1.5 border-l border-slate-200 transition ${
-                                status === 'A'
-                                  ? 'bg-rose-600 text-white'
-                                  : 'bg-white hover:bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              A
-                            </button>
+                          <div className="inline-flex items-center gap-1">
+                            <div className="inline-flex rounded-xl border border-slate-200 overflow-hidden text-xs font-bold shadow-xs">
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange(s.id, 'H')}
+                                title="Tandai Hadir"
+                                className={`px-2.5 py-1.5 transition cursor-pointer ${
+                                  status === 'H'
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'bg-white hover:bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                H
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange(s.id, 'S')}
+                                title="Tandai Sakit"
+                                className={`px-2.5 py-1.5 border-l border-slate-200 transition cursor-pointer ${
+                                  status === 'S'
+                                    ? 'bg-sky-600 text-white'
+                                    : 'bg-white hover:bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                S
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange(s.id, 'I')}
+                                title="Tandai Izin"
+                                className={`px-2.5 py-1.5 border-l border-slate-200 transition cursor-pointer ${
+                                  status === 'I'
+                                    ? 'bg-amber-500 text-white'
+                                    : 'bg-white hover:bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                I
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange(s.id, 'A')}
+                                title="Tandai Alfa"
+                                className={`px-2.5 py-1.5 border-l border-slate-200 transition cursor-pointer ${
+                                  status === 'A'
+                                    ? 'bg-rose-600 text-white'
+                                    : 'bg-white hover:bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                A
+                              </button>
+                            </div>
+                            {rec && (
+                              <button
+                                type="button"
+                                onClick={() => handleClearSingleAttendance(s)}
+                                title="Kosongkan status kehadiran siswa ini"
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

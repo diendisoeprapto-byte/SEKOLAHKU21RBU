@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { Student, KaldikDay } from '../../types';
 import { AttendanceRecordItem } from '../../utils/storage';
+import { getLocalTodayStr, getLocalYearMonthStr, parseLocalDate } from '../../utils/dateUtils';
 import { TabId } from '../Sidebar';
 
 interface Props {
@@ -46,7 +47,7 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
   showToast,
   onOpenZoom,
 }) => {
-  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [selectedMonth, setSelectedMonth] = useState(getLocalYearMonthStr());
   const [top5ViewMode, setTop5ViewMode] = useState<'cards' | 'table'>('cards');
   const [top5Scope, setTop5Scope] = useState<'kelas' | 'semua'>('kelas');
   const [selectedPiagam, setSelectedPiagam] = useState<{
@@ -100,9 +101,9 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
   }
 
   // Daily attendance calculation synchronized with active class and students count
-  const todayDate = new Date().toISOString().split('T')[0];
+  const todayDate = getLocalTodayStr();
   const todayKaldik = kaldikDays.find((k) => k.date === todayDate);
-  const isTodaySunday = new Date().getDay() === 0;
+  const isTodaySunday = parseLocalDate(todayDate).getDay() === 0;
   const isTodayHoliday = isTodaySunday || (todayKaldik ? todayKaldik.isHoliday : false);
 
   let todayHadir = 0;

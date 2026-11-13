@@ -1,6 +1,7 @@
 import { SchoolProfile, Teacher, Student, Subject, KaldikDay, AssessmentData, CBTExam, CBTExamResult, ActiveUser, StudentReportNotes, TKACpTp, TKAQuestion } from '../types';
 import { DEFAULT_SCHOOL_PROFILE, DEFAULT_TEACHERS, DEFAULT_STUDENTS, DEFAULT_SUBJECTS, DEFAULT_KALDIK_HOLIDAYS, DEFAULT_CBT_EXAM, DEFAULT_TKA_CP_TP, DEFAULT_TKA_QUESTIONS } from '../data/defaultData';
 import { getDefaultSubjectsForGrade, getGradeNumberFromClass } from '../data/classCurriculumData';
+import { getLocalTodayStr } from './dateUtils';
 
 const STORAGE_KEYS = {
   PROFILE: 'sekolahku_school_profile',
@@ -148,8 +149,11 @@ export interface AttendanceRecordItem {
 export const getStoredAttendance = (): Record<string, AttendanceRecordItem> => {
   const data = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
   if (!data) {
+    if (localStorage.getItem('sekolahku_attendance_seeded') === 'true') {
+      return {};
+    }
     // Generate initial sample attendance records for students today
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalTodayStr();
     const initial: Record<string, AttendanceRecordItem> = {};
     DEFAULT_STUDENTS.forEach((s, idx) => {
       const status = idx === 3 ? 'S' : idx === 5 ? 'I' : 'H';
@@ -454,7 +458,7 @@ export const exportFullSystemJSON = () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `BACKUP_SEKOLAHKU_SDN_RBU_21_${new Date().toISOString().split('T')[0]}.json`;
+  a.download = `BACKUP_SEKOLAHKU_SDN_RBU_21_${getLocalTodayStr()}.json`;
   a.click();
   URL.revokeObjectURL(url);
 };

@@ -19,13 +19,18 @@ import {
 import { Student, KaldikDay } from '../../types';
 import { AttendanceRecordItem, CLASSES_LIST } from '../../utils/storage';
 import { DEFAULT_KALDIK_HOLIDAYS } from '../../data/defaultData';
+import { formatTanggalIndo, getLocalTodayStr, parseLocalDate } from '../../utils/dateUtils';
 import { TabId } from '../Sidebar';
 
 interface Props {
   students: Student[];
   activeClass: string;
   attendanceRecords: Record<string, AttendanceRecordItem>;
-  onSaveAttendance: (records: Record<string, AttendanceRecordItem>) => void;
+  selectedDateProp?: string;
+  onChangeSelectedDate?: (date: string) => void;
+  liveTodayStr: string;
+  onDeleteAttendanceRecords: (records: AttendanceRecordItem[]) => Promise<void>;
+  onOpenAttendanceForDate: (dateStr: string) => void;
   kaldikDays: KaldikDay[];
   onSaveKaldik: (days: KaldikDay[]) => void;
   onOpenCustomModal: () => void;
@@ -37,27 +42,67 @@ export const KalenderTab: React.FC<Props> = ({
   students,
   activeClass,
   attendanceRecords,
-  onSaveAttendance,
+  selectedDateProp,
+  onChangeSelectedDate,
+  liveTodayStr,
+  onDeleteAttendanceRecords,
+  onOpenAttendanceForDate,
   kaldikDays,
   onSaveKaldik,
   onOpenCustomModal,
   onNavigateTab,
   showToast,
 }) => {
-  const todayStr = new Date().toISOString().split('T')[0];
-  const initialYearMonth = todayStr.slice(0, 7);
-  const [currentYearMonth, setCurrentYearMonth] = useState(initialYearMonth);
-  const [selectedDate, setSelectedDate] = useState(todayStr);
+  const todayStr = liveTodayStr || getLocalTodayStr();
+  const [selectedDateInternal, setSelectedDateInternal] = useState(selectedDateProp || todayStr);
+  const selectedDate = selectedDateProp || selectedDateInternal;
+  const setSelectedDate = (dateStr: string) => {
+    setSelectedDateInternal(dateStr);
+    if (onChangeSelectedDate) onChangeSelectedDate(dateStr);
+  };
 
-  const initialKaldik = kaldikDays.find((k) => k.date === todayStr);
-  const isInitialSun = new Date().getDay() === 0;
+  const initialYearMonth = (selectedDate || todayStr).slice(0, 7);
+  const [currentYearMonth, setCurrentYearMonth] = useState(initialYearMonth);
+
+  const initialKaldik = kaldikDays.find((k) => k.date === selectedDate);
+  const isInitialSun = parseLocalDate(selectedDate).getDay() === 0;
   const isInitialHol = isInitialSun || (initialKaldik ? initialKaldik.isHoliday : false);
 
   const [dateType, setDateType] = useState<'effective' | 'holiday'>(isInitialHol ? 'holiday' : 'effective');
   const [holidayNote, setHolidayNote] = useState(initialKaldik?.keterangan || (isInitialSun ? 'Hari Minggu (Libur)' : ''));
   const [selectedClass, setSelectedClass] = useState<string>(activeClass || 'all');
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [isResetSingleDateModalOpen, setIsResetSingleDateModalOpen] = useState(false);
+  const [isResetKaldikModalOpen, setIsResetKaldikModalOpen] = useState(false);
+  const [isDeletingAttendance, setIsDeletingAttendance] = useState(false);
   const [resetScope, setResetScope] = useState<'class' | 'all'>('class');
+
+  // Sinkronkan filter kelas ketika kelas aktif di header berubah
+  React.useEffect(() => {
+    if (activeClass) {
+      setSelectedClass(activeClass);
+    }
+  }, [activeClass]);
+
+  // Sinkronkan bulan dan editor ketika tanggal aktif berubah dari luar (misal dari menu Absensi)
+  React.useEffect(() => {
+    if (selectedDateProp) {
+      setSelectedDateInternal(selectedDateProp);
+      setCurrentYearMonth(selectedDateProp.slice(0, 7));
+      const existing = kaldikDays.find((k) => k.date === selectedDateProp);
+      const isSun = parseLocalDate(selectedDateProp).getDay() === 0;
+      if (existing) {
+        setDateType(existing.isHoliday ? 'holiday' : 'effective');
+        setHolidayNote(existing.keterangan || '');
+      } else if (isSun) {
+        setDateType('holiday');
+        setHolidayNote('Hari Minggu (Libur Mingguan)');
+      } else {
+        setDateType('effective');
+        setHolidayNote('');
+      }
+    }
+  }, [selectedDateProp]);
 
   const [yearStr, monthStr] = currentYearMonth.split('-');
   const year = parseInt(yearStr) || 2026;
@@ -111,7 +156,7 @@ export const KalenderTab: React.FC<Props> = ({
   const handleSelectDate = (dateStr: string) => {
     setSelectedDate(dateStr);
     const existing = kaldikMap[dateStr];
-    const isSun = new Date(dateStr).getDay() === 0;
+    const isSun = parseLocalDate(dateStr).getDay() === 0;
     if (existing) {
       setDateType(existing.isHoliday ? 'holiday' : 'effective');
       setHolidayNote(existing.keterangan || '');
@@ -146,10 +191,13 @@ export const KalenderTab: React.FC<Props> = ({
   };
 
   const handleResetKaldik = () => {
-    if (confirm('Reset seluruh hari libur ke standar Kaldik DKI Jakarta?')) {
-      onSaveKaldik(DEFAULT_KALDIK_HOLIDAYS);
-      showToast('Kaldik DKI Jakarta berhasil di-reset ke standar', 'success');
-    }
+    setIsResetKaldikModalOpen(true);
+  };
+
+  const handleConfirmResetKaldik = () => {
+    onSaveKaldik(DEFAULT_KALDIK_HOLIDAYS);
+    setIsResetKaldikModalOpen(false);
+    showToast('Kaldik DKI Jakarta berhasil di-reset ke standar', 'success');
   };
 
   // Month attendance records count
@@ -203,22 +251,28 @@ export const KalenderTab: React.FC<Props> = ({
       showToast('Belum ada data kehadiran pada tanggal ' + selectedDate, 'error');
       return;
     }
+    setIsResetSingleDateModalOpen(true);
+  };
 
-    if (
-      confirm(
-        `Yakin ingin mengosongkan/mereset catatan absensi tanggal ${selectedDate} (${selectedDateRecords.length} siswa)?`
-      )
-    ) {
-      const updated = { ...attendanceRecords };
-      targetStudents.forEach((s) => {
-        delete updated[`${selectedDate}_${s.id}`];
-      });
-      onSaveAttendance(updated);
+  const handleConfirmResetSingleDateAttendance = async () => {
+    if (!selectedDateHasAbsen) {
+      setIsResetSingleDateModalOpen(false);
+      return;
+    }
+    setIsDeletingAttendance(true);
+    try {
+      await onDeleteAttendanceRecords(selectedDateRecords);
+      setIsResetSingleDateModalOpen(false);
       showToast(`Data absensi tanggal ${selectedDate} berhasil di-reset!`, 'success');
+    } catch (err) {
+      console.error('Gagal mereset absensi tanggal:', err);
+      showToast('Gagal menghapus data absensi dari cloud.', 'error');
+    } finally {
+      setIsDeletingAttendance(false);
     }
   };
 
-  const handleExecuteResetMonthAttendance = () => {
+  const handleExecuteResetMonthAttendance = async () => {
     const recordsToDelete =
       resetScope === 'all' ? allMonthRecords : monthRecordsForScope;
 
@@ -231,18 +285,20 @@ export const KalenderTab: React.FC<Props> = ({
       return;
     }
 
-    const updated = { ...attendanceRecords };
-    recordsToDelete.forEach((r) => {
-      delete updated[`${r.date}_${r.studentId}`];
-      delete updated[r.id];
-    });
-
-    onSaveAttendance(updated);
-    setIsResetModalOpen(false);
-    showToast(
-      `Berhasil mereset ${recordsToDelete.length} data kehadiran bulan ${monthNames[month - 1]} ${year}!`,
-      'success'
-    );
+    setIsDeletingAttendance(true);
+    try {
+      await onDeleteAttendanceRecords(recordsToDelete);
+      setIsResetModalOpen(false);
+      showToast(
+        `Berhasil mereset ${recordsToDelete.length} data kehadiran bulan ${monthNames[month - 1]} ${year}!`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Gagal mereset absensi bulanan:', err);
+      showToast('Gagal menghapus data kehadiran bulanan di cloud.', 'error');
+    } finally {
+      setIsDeletingAttendance(false);
+    }
   };
 
   return (
@@ -265,10 +321,10 @@ export const KalenderTab: React.FC<Props> = ({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => onNavigateTab('absensi')}
+            onClick={() => onOpenAttendanceForDate(selectedDate)}
             className="bg-emerald-600 hover:bg-emerald-700 text-white font-display font-extrabold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs"
           >
-            <CalendarIcon className="w-4 h-4" /> Ke Scan Absensi
+            <CalendarIcon className="w-4 h-4" /> Ke Scan Absensi ({selectedDate})
           </button>
           <button
             type="button"
@@ -403,6 +459,7 @@ export const KalenderTab: React.FC<Props> = ({
                 const item = kaldikMap[dStr];
                 const isHol = item ? item.isHoliday : isSun;
                 const isSelected = selectedDate === dStr;
+                const isToday = todayStr === dStr;
 
                 // Attendance calculation on this day for target students
                 const dayRecords = targetStudents
@@ -423,6 +480,13 @@ export const KalenderTab: React.FC<Props> = ({
                             : isHol
                             ? 'bg-rose-100/70'
                             : 'bg-sky-50')
+                        : isToday
+                        ? 'border-amber-500 ring-2 ring-amber-200 ' +
+                          (isAbsenDone
+                            ? 'bg-emerald-50 hover:bg-emerald-100/80'
+                            : isHol
+                            ? 'bg-rose-50'
+                            : 'bg-amber-50/40')
                         : isAbsenDone
                         ? 'bg-emerald-50 border-emerald-400 hover:bg-emerald-100/80 shadow-2xs'
                         : isHol
@@ -444,6 +508,11 @@ export const KalenderTab: React.FC<Props> = ({
                         >
                           {d}
                         </span>
+                        {isToday && (
+                          <span className="text-[8px] font-black uppercase bg-amber-500 text-white px-1 py-0.2 rounded">
+                            Hari Ini
+                          </span>
+                        )}
                         {isAbsenDone && (
                           <span
                             className="w-2 h-2 rounded-full bg-emerald-500 inline-block"
@@ -556,10 +625,10 @@ export const KalenderTab: React.FC<Props> = ({
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => onNavigateTab('absensi')}
+                        onClick={() => onOpenAttendanceForDate(selectedDate)}
                         className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-display font-extrabold py-2 px-3 rounded-xl text-xs shadow-xs flex items-center justify-center gap-1 cursor-pointer transition"
                       >
-                        <CalendarIcon className="w-3.5 h-3.5" /> Buka Menu Absensi
+                        <CalendarIcon className="w-3.5 h-3.5" /> Buka Menu Absensi ({selectedDate})
                       </button>
                       <button
                         type="button"
@@ -574,14 +643,14 @@ export const KalenderTab: React.FC<Props> = ({
                 ) : (
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-center space-y-2">
                     <p className="text-xs text-slate-500 font-medium">
-                      Belum ada catatan kehadiran yang diinput untuk tanggal ini.
+                      Belum ada catatan kehadiran yang diinput untuk tanggal <strong>{formatTanggalIndo(selectedDate, false)}</strong>.
                     </p>
                     <button
                       type="button"
-                      onClick={() => onNavigateTab('absensi')}
+                      onClick={() => onOpenAttendanceForDate(selectedDate)}
                       className="w-full bg-slate-800 hover:bg-slate-900 text-white font-display font-extrabold py-2 px-3 rounded-xl text-xs shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition"
                     >
-                      <CalendarIcon className="w-3.5 h-3.5 text-emerald-400" /> Input Absensi Sekarang
+                      <CalendarIcon className="w-3.5 h-3.5 text-emerald-400" /> Input Absensi Tanggal Ini
                     </button>
                   </div>
                 )}
@@ -789,9 +858,96 @@ export const KalenderTab: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={handleExecuteResetMonthAttendance}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer"
+                disabled={isDeletingAttendance}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white font-display font-extrabold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer"
               >
-                <Trash2 className="w-4 h-4" /> Ya, Reset Kehadiran
+                <Trash2 className="w-4 h-4" /> {isDeletingAttendance ? 'Menghapus...' : 'Ya, Reset Kehadiran'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Reset Kehadiran Tanggal Tunggal */}
+      {isResetSingleDateModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-rose-700">
+                <AlertTriangle className="w-5 h-5 text-rose-600" />
+                <h3 className="font-display font-black text-base">
+                  Reset Absensi Tanggal {selectedDate}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsResetSingleDateModalOpen(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Yakin ingin mengosongkan/mereset catatan absensi tanggal{' '}
+              <strong className="text-slate-900">{formatTanggalIndo(selectedDate)}</strong> ({selectedDateRecords.length} catatan siswa)?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsResetSingleDateModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmResetSingleDateAttendance}
+                disabled={isDeletingAttendance}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white font-display font-extrabold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" /> {isDeletingAttendance ? 'Menghapus...' : 'Ya, Kosongkan'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Reset Kaldik DKI Jakarta */}
+      {isResetKaldikModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-amber-800">
+                <RotateCcw className="w-5 h-5 text-amber-600" />
+                <h3 className="font-display font-black text-base">
+                  Reset Standar Kaldik DKI Jakarta
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsResetKaldikModalOpen(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Kembalikan seluruh daftar hari libur dan status tanggal efektif ke pengaturan standar Kaldik DKI Jakarta?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsResetKaldikModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmResetKaldik}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-display font-extrabold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" /> Ya, Reset Kaldik
               </button>
             </div>
           </div>

@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { Student, Teacher } from '../types';
+import { getLocalTodayStr } from './dateUtils';
 
 /**
  * Otomatis menghasilkan username login unik berbasis nama lengkap
@@ -619,7 +620,7 @@ export const exportStudentsToXLSX = (students: Student[]) => {
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Data Siswa');
-  XLSX.writeFile(wb, `Data_Siswa_SEKOLAHKU_${new Date().toISOString().split('T')[0]}.xlsx`);
+  XLSX.writeFile(wb, `Data_Siswa_SEKOLAHKU_${getLocalTodayStr()}.xlsx`);
 };
 
 export const downloadTemplateTeachersXLSX = () => {
@@ -674,7 +675,7 @@ export const exportTeachersToXLSX = (teachers: Teacher[]) => {
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Data Guru');
-  XLSX.writeFile(wb, `Data_Guru_SEKOLAHKU_${new Date().toISOString().split('T')[0]}.xlsx`);
+  XLSX.writeFile(wb, `Data_Guru_SEKOLAHKU_${getLocalTodayStr()}.xlsx`);
 };
 
 export const exportMonthlyMatrixToXLSX = (
