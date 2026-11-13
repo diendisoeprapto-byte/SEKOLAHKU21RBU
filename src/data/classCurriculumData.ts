@@ -721,6 +721,21 @@ export const getDefaultSubjectsForGrade = (grade: number, kelasName: string): Su
             'Mengenal jalur transportasi air perahu wisata Kepulauan Seribu Jakarta',
           ],
         },
+        {
+          id: `s_${kPrefix}_kka`,
+          code: 'KKA-5',
+          name: 'Koding dan Kecerdasan Artifisial (KKA)',
+          kategori: 'umum',
+          kktp: 75,
+          kelas: kelasName,
+          description: '[Fase C - Kelas 5] Peserta didik mengenal konsep berpikir komputasional (dekomposisi, pengenalan pola, abstraksi, algoritma), membuat program blok visual sederhana, dan memahami dasar kerja serta etika penggunaan Kecerdasan Artifisial (KA).',
+          tujuanPembelajaran: [
+            'Menerapkan langkah berpikir komputasional (dekomposisi dan urutan algoritma) untuk memecahkan masalah sehari-hari',
+            'Menyusun logika perulangan (loop) dan percabangan (if-else) pada aplikasi pemrograman blok visual',
+            'Menjelaskan perbedaan teknologi digital konvensional dengan sistem berbasis Kecerdasan Artifisial (KA)',
+            'Menerapkan etika aman dan jujur dalam menggunakan perangkat digital dan asisten kecerdasan artifisial',
+          ],
+        },
       ];
 
     case 6:
@@ -860,6 +875,21 @@ export const getDefaultSubjectsForGrade = (grade: number, kelasName: string): Su
             'Mengenal rute stasiun dan tata tertib menggunakan transportasi MRT dan LRT Jakarta',
             'Menjelaskan bumbu rempah dan proses penyajian kuliner khas Soto Betawi',
             'Menganalisis upaya penataan tata ruang ramah anak dan bebas polusi di Jakarta',
+          ],
+        },
+        {
+          id: `s_${kPrefix}_kka`,
+          code: 'KKA-6',
+          name: 'Koding dan Kecerdasan Artifisial (KKA)',
+          kategori: 'umum',
+          kktp: 75,
+          kelas: kelasName,
+          description: '[Fase C - Kelas 6] Peserta didik merancang algoritma pemrograman blok interaktif berbasis variabel dan kondisi, memahami pelatihan data pada Kecerdasan Artifisial (machine learning sederhana), serta menjaga privasi dan verifikasi informasi di era AI.',
+          tujuanPembelajaran: [
+            'Merancang alur logika algoritma menggunakan blok variabel, operator, dan kondisi bercabang',
+            'Membuat proyek gim edukasi atau animasi interaktif sederhana berbasis pemrograman visual',
+            'Menjelaskan cara kerja Kecerdasan Artifisial mengenali pola gambar/teks dari data latih',
+            'Mengevaluasi kebenaran informasi digital dan menjaga keamanan data pribadi saat berinteraksi dengan AI',
           ],
         },
       ];

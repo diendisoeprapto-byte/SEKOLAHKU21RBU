@@ -77,8 +77,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     const isMat = selectedMapel.includes('Matematika');
     const isIndo = selectedMapel.includes('Indonesia');
     const isInggris = selectedMapel.includes('Inggris');
-
-    const seed = (selectedMapel.length + selectedPaket.length) % 7;
+    const isKka = selectedMapel.includes('Koding') || selectedMapel.includes('KKA');
 
     return [
       {
@@ -91,6 +90,8 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           ? 'Ide pokok atau gagasan utama pada paragraf deduktif terletak pada...'
           : isInggris
           ? 'What is the main function of the digestive system in humans?'
+          : isKka
+          ? 'Dalam berpikir komputasional, langkah memecah masalah kompleks menjadi bagian-bagian kecil disebut...'
           : `Soal butir 1 evaluasi capaian materi ${selectedMapel}...`,
         tipe: 'Pilihan Ganda (PG)',
         bobot: 15,
@@ -112,6 +113,8 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           ? 'Watak tokoh kancil yang cerdik mencari jalan keluar saat terjebak dalam sumur mencerminkan nilai...'
           : isInggris
           ? 'Which of the following activities is best done during the morning?'
+          : isKka
+          ? 'Manakah dari contoh perangkat lunak berikut yang menggunakan Kecerdasan Artifisial (AI) dalam mengenali suara atau gambar?'
           : `Soal butir 2 pemahaman konseptual ${selectedMapel}...`,
         tipe: 'PG Kompleks',
         bobot: 20,
@@ -133,6 +136,8 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           ? 'Antonim dari kata "eksklusif" dan "statis" dalam teks artikel ilmiah di atas adalah...'
           : isInggris
           ? 'Fill in the blanks: My sister ... to the school library every Tuesday.'
+          : isKka
+          ? 'Blok perulangan (loop) "repeat 4 times" akan menjalankan perintah di dalamnya sebanyak empat kali berturut-turut.'
           : `Soal butir 3 aplikasi penerapan prinsip ${selectedMapel}...`,
         tipe: 'Benar / Salah',
         bobot: 15,
@@ -154,6 +159,8 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           ? 'Pasangkan kalimat berikut dengan jenis majas yang digunakan secara tepat.'
           : isInggris
           ? 'Match the animals with their habitats correctly: Camel, Penguin, Dolphin.'
+          : isKka
+          ? 'Pasangkan pilar berpikir komputasional berikut dengan definisinya: Dekomposisi, Abstraksi, Algoritma.'
           : `Soal butir 4 analisis komparasi indikator ${selectedMapel}...`,
         tipe: 'Menjodohkan',
         bobot: 15,
@@ -175,6 +182,8 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           ? 'Tuliskan simpulan isi paragraf argumentatif mengenai pelestarian lingkungan kali bersih!'
           : isInggris
           ? 'What is the synonym of the word "tremendous" in paragraph two?'
+          : isKka
+          ? 'Struktur percabangan logika yang mengecek apakah sebuah syarat terpenuhi disebut kondisi...'
           : `Soal butir 5 isian singkat kompetensi ${selectedMapel}...`,
         tipe: 'Isian Singkat',
         bobot: 15,
@@ -196,6 +205,8 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           ? 'Susunlah sebuah teks pidato persuasif singkat bertema "Gerakan 7 Kebiasaan Anak Indonesia Hebat"!'
           : isInggris
           ? 'Write three sentences describing your daily morning routine before going to school.'
+          : isKka
+          ? 'Jelaskan 2 cara menjaga keamanan data pribadi dan memverifikasi kebenaran informasi saat menggunakan asisten Kecerdasan Artifisial!'
           : `Soal butir 6 penalaran tingkat tinggi (HOTS) ${selectedMapel}...`,
         tipe: 'Uraian / Penalaran',
         bobot: 20,

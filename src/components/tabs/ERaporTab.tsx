@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Printer, Download, UserCheck, FileText, CheckCircle2 } from 'lucide-react';
 import { Student, SchoolProfile, Teacher, Subject } from '../../types';
 import { getStoredReportNotes, getStoredAssessments, getAssessmentCount } from '../../utils/storage';
+import { getGradeNumberFromClass } from '../../data/classCurriculumData';
 import { getStoredPenilaianEkskul } from './PenilaianEkskulTab';
 import { getCatatanWaliOtomatisByRank } from './CatatanWaliTab';
 
@@ -78,6 +79,20 @@ export const ERaporTab: React.FC<Props> = ({
       { name: 'Muatan Lokal: Pendidikan Lingkungan dan Budaya Jakarta (PLBJ)', defaultScore: 89, cap: 'Sangat menguasai materi pelestarian lingkungan kota Jakarta, kuliner Betawi, dan transportasi umum Jakarta.' },
     ];
 
+    const gradeNum = getGradeNumberFromClass(activeClass);
+    const hasKka =
+      gradeNum >= 5 ||
+      (subjects || []).some(
+        (s) => s.code.toUpperCase().startsWith('KKA') || s.name.toLowerCase().includes('koding')
+      );
+    if (hasKka) {
+      baseList.push({
+        name: 'Koding dan Kecerdasan Artifisial (KKA)',
+        defaultScore: 86,
+        cap: 'Sangat baik dalam menerapkan berpikir komputasional, menyusun algoritma pemrograman blok visual, serta memahami etika penggunaan Kecerdasan Artifisial (AI).',
+      });
+    }
+
     return baseList.map((item) => {
       let finalScore = item.defaultScore;
       let dynamicCap = item.cap;
@@ -87,6 +102,8 @@ export const ERaporTab: React.FC<Props> = ({
           (s) =>
             s.name.toLowerCase().includes(item.name.toLowerCase()) ||
             item.name.toLowerCase().includes(s.name.toLowerCase()) ||
+            (item.name.includes('PLBJ') && s.name.toLowerCase().includes('plbj')) ||
+            (item.name.includes('KKA') && (s.code.toUpperCase().startsWith('KKA') || s.name.toLowerCase().includes('koding'))) ||
             (item.name.includes('Agama') && (s.code.startsWith('PAI') || s.code.startsWith('PAK') || s.name.toLowerCase().includes('agama')))
         );
 

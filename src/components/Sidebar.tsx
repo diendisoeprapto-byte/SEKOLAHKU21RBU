@@ -61,7 +61,8 @@ export type TabId =
   | 'bank-soal-tka'
   | 'analisis-tka'
   | 'hasil-tka'
-  | 'tes-tka-siswa';
+  | 'tes-tka-siswa'
+  | 'manajemen-asaj';
 
 interface Props {
   activeTab: TabId;
@@ -205,6 +206,18 @@ export const Sidebar: React.FC<Props> = ({
             >
               <HeartHandshake className="w-5 h-5 text-amber-500" />
               <span>Laporan 7 Kebiasaan</span>
+            </button>
+
+            <button
+              onClick={() => onSelectTab('manajemen-asaj')}
+              className={`w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-3 text-left transition ${
+                activeTab === 'manajemen-asaj'
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md'
+                  : 'text-slate-700 hover:bg-emerald-50'
+              }`}
+            >
+              <GraduationCap className="w-5 h-5 text-emerald-600" />
+              <span>Pengumuman Kelulusan (ASAJ)</span>
             </button>
           </nav>
         ) : (
@@ -589,6 +602,19 @@ export const Sidebar: React.FC<Props> = ({
                     >
                       <Award className="w-4 h-4" />
                       <span>Rapor Kokurikuler (P5)</span>
+                    </button>
+                  )}
+                  {(!searchQuery || 'manajemen asaj skl ijazah kelulusan kosp'.includes(searchQuery)) && (
+                    <button
+                      onClick={() => onSelectTab('manajemen-asaj')}
+                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
+                        activeTab === 'manajemen-asaj'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-700 hover:bg-emerald-50'
+                      }`}
+                    >
+                      <GraduationCap className="w-4 h-4" />
+                      <span>Manajemen ASAJ</span>
                     </button>
                   )}
                 </div>

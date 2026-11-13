@@ -90,5 +90,19 @@ service cloud.firestore {
       allow read: if true;
       allow write: if true;
     }
+
+    // Manajemen Nilai ASAJ, Pengaturan KOSP & Kelulusan
+    match /settings_asaj/{settingId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    match /nilai_asaj/{nilaiId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    match /siswa/{siswaId} {
+      allow read: if true;
+      allow write: if true;
+    }
   }
 }

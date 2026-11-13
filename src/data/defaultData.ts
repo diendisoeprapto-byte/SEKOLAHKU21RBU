@@ -166,6 +166,7 @@ export const DEFAULT_SUBJECTS: Subject[] = [
   { id: "s_senirupa", code: "SENI", name: "Seni dan Budaya (Seni Rupa)", kategori: "umum", kktp: 75, description: "Peserta didik mampu mengamati, mengenal, dan menciptakan karya seni rupa dua dimensi dan tiga dimensi.", tujuanPembelajaran: ["Mengenal unsur seni rupa garis dan bidang", "Membuat karya seni rupa daerah", "Mengapresiasi karya seni teman"] },
   { id: "s_binggris", code: "BING", name: "Bahasa Inggris", kategori: "umum", kktp: 75, description: "Students are able to communicate in simple English for daily school activities.", tujuanPembelajaran: ["Greeting and introducing oneself", "Describing objects and daily routine", "Asking and giving directions"] },
   { id: "s_plbj", code: "PLBJ", name: "Muatan Lokal (Pendidikan Lingkungan & Budaya Jakarta)", kategori: "muatan_lokal", kktp: 75, description: "Peserta didik mengenal keanekaragaman budaya Betawi dan pelestarian lingkungan hidup di DKI Jakarta.", tujuanPembelajaran: ["Mengenal kesenian Ondel-ondel dan Gambang Kromong", "Mengenal kuliner tradisional Betawi", "Menjaga kebersihan drainase dan penghijauan Jakarta"] },
+  { id: "s_kka", code: "KKA", name: "Koding dan Kecerdasan Artifisial (KKA)", kategori: "umum", kktp: 75, description: "Peserta didik menerapkan berpikir komputasional, logika algoritma pemrograman visual, serta literasi dan etika Kecerdasan Artifisial.", tujuanPembelajaran: ["Menerapkan dekomposisi dan algoritma berpikir komputasional", "Menyusun logika blok pemrograman sederhana", "Memahami konsep dasar dan etika pemanfaatan Kecerdasan Artifisial"] },
 ];
 
 export const MAPEL_LIST = [
@@ -178,6 +179,7 @@ export const MAPEL_LIST = [
   "Seni dan Budaya",
   "Bahasa Inggris",
   "Muatan Lokal (PLBJ)",
+  "Koding dan Kecerdasan Artifisial (KKA)",
 ];
 
 export const DEFAULT_STUDENTS: Student[] = [
@@ -569,6 +571,18 @@ export const DEFAULT_TKA_CP_TP: import('../types').TKACpTp[] = [
       { id: "tp_eng_02", kodeTp: "TP-ENG-02", judulTp: "Menjawab pertanyaan 5W1H berdasarkan bacaan narasi pendek sederhana bahasa Inggris." },
       { id: "tp_eng_03", kodeTp: "TP-ENG-03", judulTp: "Melengkapi kalimat rumpang dengan pilihan kata kerja dan kata sifat yang tepat." }
     ]
+  },
+  {
+    id: "cp_tka_05",
+    kodeCp: "CP-TKA-KKA",
+    judulCp: "Berpikir Komputasional, Logika Koding & Kecerdasan Artifisial (KKA)",
+    deskripsiCp: "Peserta didik mampu menerapkan dekomposisi masalah, algoritma logika pemrograman visual (urutan, perulangan, percabangan), serta memahami cara kerja dan etika aman Kecerdasan Artifisial (AI).",
+    mapel: "Koding dan Kecerdasan Artifisial (KKA)",
+    tpList: [
+      { id: "tp_kka_01", kodeTp: "TP-KKA-01", judulTp: "Menyelesaikan persoalan logika menggunakan dekomposisi, pengenalan pola, dan algoritma terurut." },
+      { id: "tp_kka_02", kodeTp: "TP-KKA-02", judulTp: "Menentukan keluaran program blok visual yang menggunakan perulangan (loop) dan kondisi (if-else)." },
+      { id: "tp_kka_03", kodeTp: "TP-KKA-03", judulTp: "Membedakan sistem AI dan non-AI serta menerapkan etika verifikasi informasi dan keamanan data." }
+    ]
   }
 ];
 
@@ -577,6 +591,7 @@ export const TKA_MAPEL_LIST = [
   'Matematika',
   'Ilmu Pengetahuan Alam dan Sosial (IPAS)',
   'Bahasa Inggris',
+  'Koding dan Kecerdasan Artifisial (KKA)',
 ] as const;
 
 export const DEFAULT_TKA_QUESTIONS: import('../types').TKAQuestion[] = [
@@ -649,6 +664,19 @@ export const DEFAULT_TKA_QUESTIONS: import('../types').TKAQuestion[] = [
     kunciJawaban: "Fotosintesis / foto sintesis",
     bobot: 20,
     pembahasan: "Fotosintesis atau foto sintesis.",
+  },
+  {
+    id: "tka_q6",
+    jenisTka: "Simulasi 1",
+    mapel: "Koding dan Kecerdasan Artifisial (KKA)",
+    cpId: "cp_tka_05",
+    tpId: "tp_kka_01",
+    tipe: "pg",
+    pertanyaan: "Dalam berpikir komputasional, proses memecah masalah besar menjadi bagian-bagian kecil yang lebih mudah diselesaikan disebut...",
+    opsi: ["Dekomposisi", "Abstraksi", "Simulasi", "Kompilasi"],
+    kunciJawaban: "Dekomposisi",
+    bobot: 20,
+    pembahasan: "Dekomposisi adalah langkah memecah masalah kompleks menjadi sub-masalah yang lebih sederhana.",
   }
 ];
 

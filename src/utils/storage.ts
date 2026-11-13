@@ -92,12 +92,32 @@ export const getStoredSubjectsByClass = (): Record<string, Subject[]> => {
 export const getStoredSubjectsForClass = (kelasName: string): Subject[] => {
   const targetClass = kelasName || 'Kelas 6A';
   const allByClass = getStoredSubjectsByClass();
-  if (allByClass[targetClass] && Array.isArray(allByClass[targetClass]) && allByClass[targetClass].length > 0) {
-    return allByClass[targetClass];
-  }
-  // Fallback to tailored default for this grade
   const grade = getGradeNumberFromClass(targetClass);
   const defaultList = getDefaultSubjectsForGrade(grade, targetClass);
+
+  if (allByClass[targetClass] && Array.isArray(allByClass[targetClass]) && allByClass[targetClass].length > 0) {
+    const existing = allByClass[targetClass];
+    // Pastikan mapel Koding dan Kecerdasan Artifisial (KKA) otomatis tersedia untuk Kelas 5 & 6
+    if (grade === 5 || grade === 6) {
+      const hasKka = existing.some(
+        (s) =>
+          (s.code || '').toUpperCase().startsWith('KKA') ||
+          (s.name || '').toLowerCase().includes('koding') ||
+          (s.name || '').toLowerCase().includes('kka')
+      );
+      if (!hasKka) {
+        const kkaDefault = defaultList.find((s) => (s.code || '').toUpperCase().startsWith('KKA'));
+        if (kkaDefault) {
+          const updated = [...existing, kkaDefault];
+          allByClass[targetClass] = updated;
+          localStorage.setItem(STORAGE_KEYS.SUBJECTS_BY_CLASS, JSON.stringify(allByClass));
+          return updated;
+        }
+      }
+    }
+    return existing;
+  }
+  // Fallback to tailored default for this grade
   allByClass[targetClass] = defaultList;
   localStorage.setItem(STORAGE_KEYS.SUBJECTS_BY_CLASS, JSON.stringify(allByClass));
   return defaultList;
@@ -306,7 +326,22 @@ export const getStoredTKACpTp = (): TKACpTp[] => {
   const data = localStorage.getItem(STORAGE_KEYS.TKA_CP_TP);
   if (!data) return DEFAULT_TKA_CP_TP;
   try {
-    return JSON.parse(data);
+    const parsed: TKACpTp[] = JSON.parse(data);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const hasKka = parsed.some(
+        (c) => (c.mapel || '').toLowerCase().includes('koding') || (c.kodeCp || '').includes('KKA')
+      );
+      if (!hasKka) {
+        const kkaCp = DEFAULT_TKA_CP_TP.find((c) => c.id === 'cp_tka_05');
+        if (kkaCp) {
+          const merged = [...parsed, kkaCp];
+          localStorage.setItem(STORAGE_KEYS.TKA_CP_TP, JSON.stringify(merged));
+          return merged;
+        }
+      }
+      return parsed;
+    }
+    return DEFAULT_TKA_CP_TP;
   } catch {
     return DEFAULT_TKA_CP_TP;
   }
@@ -358,6 +393,7 @@ export interface TKASubmissionItem {
     'Matematika': number;
     'IPAS': number;
     'Bahasa Inggris': number;
+    'Koding dan Kecerdasan Artifisial (KKA)'?: number;
   };
   skorTotal: number;
   predikat: 'A' | 'B' | 'C' | 'D';

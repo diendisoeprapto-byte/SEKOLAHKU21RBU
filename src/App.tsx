@@ -66,6 +66,7 @@ import { BackupTab } from './components/tabs/BackupTab';
 import { TKATabs } from './components/tabs/TKATabs';
 import { PenilaianEkskulTab } from './components/tabs/PenilaianEkskulTab';
 import { DashboardKebiasaanTab } from './components/tabs/DashboardKebiasaanTab';
+import { ManajemenASAJTab } from './components/tabs/ManajemenASAJTab';
 import { StudentDashboard } from './components/StudentDashboard';
 import { testConnection } from './utils/firebase';
 import {
@@ -465,6 +466,17 @@ export default function App() {
     setActiveUser(user);
     localStorage.setItem('sekolahku_active_user', JSON.stringify(user));
     localStorage.setItem('sekolahku_last_activity', String(Date.now()));
+    // Bridge userRole & identitas untuk modul standalone asaj.html
+    const mappedRole =
+      user.role === 'guru'
+        ? user.kelasDiampu?.includes('6')
+          ? 'guru_kelas_6'
+          : 'guru_mapel'
+        : user.role;
+    localStorage.setItem('userRole', mappedRole);
+    localStorage.setItem('userName', user.name || '');
+    localStorage.setItem('userNisn', user.studentData?.nisn || '');
+    localStorage.setItem('userUid', user.studentData?.id || '');
     setIsSidebarOpen(false); // Menu tampil dalam posisi minimize saat login
     if (user.role === 'siswa') {
       // Selalu tampilkan portal dashboard kartu utama siswa saat baru login
@@ -485,6 +497,10 @@ export default function App() {
     setActiveUser(null);
     localStorage.removeItem('sekolahku_active_user');
     localStorage.removeItem('sekolahku_last_activity');
+    localStorage.removeItem('userRole');
+    localStorage.removeItem('userName');
+    localStorage.removeItem('userNisn');
+    localStorage.removeItem('userUid');
     showToast('Anda telah keluar dari aplikasi SEKOLAHKU', 'success');
   };
 
@@ -908,6 +924,17 @@ export default function App() {
                   teachers={teachers}
                   activeClass={activeClass}
                   activeYear={activeYear}
+                />
+              )}
+
+              {/* Tab 4.8: Manajemen ASAJ, Rekapitulasi, SKL & Ijazah / Pengumuman Siswa */}
+              {activeTab === 'manajemen-asaj' && (
+                <ManajemenASAJTab
+                  activeUser={activeUser}
+                  profile={profile}
+                  students={students}
+                  activeYear={activeYear}
+                  showToast={showToast}
                 />
               )}
 

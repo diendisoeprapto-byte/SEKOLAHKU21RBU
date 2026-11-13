@@ -1,5 +1,6 @@
 import { Student, Subject } from '../types';
 import { getStoredAssessments, getAssessmentCount } from './storage';
+import { getGradeNumberFromClass } from '../data/classCurriculumData';
 
 export interface StudentRankResult {
   student: Student;
@@ -27,6 +28,8 @@ export const LEGER_DISPLAY_SUBJECTS = [
   { code: 'PLBJ', name: 'PLBJ (Mulok)' },
 ];
 
+export const KKA_DISPLAY_SUBJECT = { code: 'KKA', name: 'Koding & KA (KKA)' };
+
 /**
  * Menghitung rekapitulasi nilai akhir (NA Rapor) dan ranking siswa satu kelas.
  * Digunakan bersama oleh Menu Leger / Rekap Nilai dan Menu Catatan Wali Kelas
@@ -40,19 +43,40 @@ export function calculateClassStudentRankings(
   activeSemester: string = 'Ganjil'
 ): ClassRankingData {
   const filteredStudents = students.filter((s) => s.kelas === activeClass);
+  const gradeNum = getGradeNumberFromClass(activeClass);
+  const hasKkaSubject =
+    gradeNum >= 5 ||
+    (subjects || []).some(
+      (sj) =>
+        sj.code.toUpperCase().startsWith('KKA') ||
+        sj.name.toLowerCase().includes('koding') ||
+        sj.name.toLowerCase().includes('kka')
+    );
 
-  const studentRows: Omit<StudentRankResult, 'rank'>[] = filteredStudents.map((s, idx) => {
+  const displaySubjects = hasKkaSubject
+    ? [...LEGER_DISPLAY_SUBJECTS, KKA_DISPLAY_SUBJECT]
+    : LEGER_DISPLAY_SUBJECTS;
+
+  const studentRows: Omit<StudentRankResult, 'rank'>[] = filteredStudents.map((s) => {
     const subjectScores: Record<string, number> = {};
     let totalScore = 0;
 
-    LEGER_DISPLAY_SUBJECTS.forEach((sub, sIdx) => {
-      const matchedSubject = (subjects || []).find(
-        (sj) =>
-          sj.code.toUpperCase() === sub.code.toUpperCase() ||
-          sj.name.toLowerCase().includes(sub.name.toLowerCase()) ||
-          (sub.code === 'PABP' &&
-            (sj.code.startsWith('PAI') || sj.code.startsWith('PAK') || sj.code.includes('AGAMA') || sj.name.toLowerCase().includes('agama')))
-      );
+    displaySubjects.forEach((sub, sIdx) => {
+      const matchedSubject = (subjects || []).find((sj) => {
+        const sc = sj.code.toUpperCase();
+        const sn = sj.name.toLowerCase();
+        const dc = sub.code.toUpperCase();
+        return (
+          sc === dc ||
+          sc.startsWith(`${dc}-`) ||
+          sn.includes(sub.name.toLowerCase()) ||
+          (dc === 'SENI' && sn.includes('seni')) ||
+          (dc === 'PLBJ' && (sn.includes('plbj') || sn.includes('jakarta'))) ||
+          (dc === 'KKA' && (sn.includes('koding') || sn.includes('kecerdasan artifisial') || sc.startsWith('KKA'))) ||
+          (dc === 'PABP' &&
+            (sc.startsWith('PAI') || sc.startsWith('PAK') || sc.startsWith('PAB') || sc.startsWith('PAH') || sc.includes('AGAMA') || sn.includes('agama')))
+        );
+      });
 
       let naRapor = 0;
       if (matchedSubject) {
@@ -89,7 +113,7 @@ export function calculateClassStudentRankings(
       totalScore += naRapor;
     });
 
-    const averageScore = Math.round((totalScore / LEGER_DISPLAY_SUBJECTS.length) * 10) / 10;
+    const averageScore = Math.round((totalScore / displaySubjects.length) * 10) / 10;
 
     return {
       student: s,
@@ -114,6 +138,6 @@ export function calculateClassStudentRankings(
   return {
     rankedMap,
     studentRows: fullResults,
-    displaySubjects: LEGER_DISPLAY_SUBJECTS,
+    displaySubjects,
   };
 }

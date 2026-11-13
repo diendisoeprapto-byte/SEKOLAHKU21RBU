@@ -590,6 +590,22 @@ export const CBTTab: React.FC<Props> = ({
     // Synchronize to Penilaian, Remedial, Leger, and Analisis Soal
     try {
       const filters = getActiveFilters();
+      const targetSubjects = getStoredSubjectsForClass(activeClass);
+      const normMapel = selectedMapel.toLowerCase();
+      const matchedSubject = targetSubjects.find((s) => {
+        const sn = (s.name || '').toLowerCase();
+        const sc = (s.code || '').toUpperCase();
+        return (
+          sn.includes(normMapel) ||
+          normMapel.includes(sn) ||
+          (normMapel.includes('agama') && (sc.startsWith('PAI') || sn.includes('agama'))) ||
+          (normMapel.includes('seni') && (sc.startsWith('SENI') || sn.includes('seni'))) ||
+          (normMapel.includes('plbj') && (sc.startsWith('PLBJ') || sn.includes('plbj'))) ||
+          (normMapel.includes('koding') || normMapel.includes('kka')
+            ? sc.startsWith('KKA') || sn.includes('koding') || sn.includes('kka')
+            : false)
+        );
+      });
       const subjectMap: Record<string, string> = {
         'Pendidikan Agama Islam': 's_pabp_islam',
         'Pendidikan Pancasila': 's_pancasila',
@@ -600,8 +616,9 @@ export const CBTTab: React.FC<Props> = ({
         'Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)': 's_pjok',
         'Bahasa Inggris': 's_binggris',
         'Muatan Lokal (PLBJ)': 's_plbj',
+        'Koding dan Kecerdasan Artifisial (KKA)': 's_k6_kka',
       };
-      const subId = subjectMap[selectedMapel] || 's_bindonesia';
+      const subId = matchedSubject?.id || subjectMap[selectedMapel] || 's_bindonesia';
       const assessKey = `${filters.year}_${filters.semester}_${activeClass}_${subId}`;
       const existingAssessments = getStoredAssessments(assessKey);
 
@@ -801,6 +818,7 @@ export const CBTTab: React.FC<Props> = ({
                     <option value="Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)">PJOK</option>
                     <option value="Bahasa Inggris">Bahasa Inggris</option>
                     <option value="Muatan Lokal (PLBJ)">Muatan Lokal (PLBJ)</option>
+                    <option value="Koding dan Kecerdasan Artifisial (KKA)">Koding &amp; Kecerdasan Artifisial (KKA) [Kls 5–6]</option>
                   </select>
                 </div>
 
@@ -814,6 +832,7 @@ export const CBTTab: React.FC<Props> = ({
                   >
                     <option value="Kelas 6B">Kelas 6B</option>
                     <option value="Kelas 6A">Kelas 6A</option>
+                    <option value="Kelas 5B">Kelas 5B</option>
                     <option value="Kelas 5A">Kelas 5A</option>
                     <option value="Kelas 4A">Kelas 4A</option>
                     <option value="Kelas 3A">Kelas 3A</option>

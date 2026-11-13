@@ -1,5 +1,20 @@
-import React, { useState, useRef } from 'react';
-import { Users, FileDown, Upload, FileSpreadsheet, Plus, Edit, Trash2, Filter, Briefcase } from 'lucide-react';
+import React, { useState, useRef, useMemo } from 'react';
+import {
+  Users,
+  FileDown,
+  Upload,
+  FileSpreadsheet,
+  Plus,
+  Edit,
+  Trash2,
+  Filter,
+  Briefcase,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Search,
+  X,
+} from 'lucide-react';
 import { Teacher } from '../../types';
 import {
   downloadTemplateTeachersXLSX,
@@ -7,6 +22,25 @@ import {
   parseImportTeachersXLSX,
   generateAccountUsername,
 } from '../../utils/excel';
+
+type TeacherSortOption =
+  | 'nama-asc'
+  | 'nama-desc'
+  | 'status-asc'
+  | 'status-desc'
+  | 'nip-asc'
+  | 'nip-desc'
+  | 'tmt-asc'
+  | 'tmt-desc'
+  | 'jabatan-asc'
+  | 'jabatan-desc';
+
+const STATUS_PEGAWAI_ORDER: Record<string, number> = {
+  PNS: 1,
+  PPPK: 2,
+  KKI: 3,
+  Honor: 4,
+};
 
 interface Props {
   teachers: Teacher[];
@@ -22,6 +56,8 @@ export const GuruTab: React.FC<Props> = ({
   onOpenZoom,
 }) => {
   const [filterJabatan, setFilterJabatan] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [sortBy, setSortBy] = useState<TeacherSortOption>('nama-asc');
   const [editId, setEditId] = useState<string | null>(null);
   const [nama, setNama] = useState('');
   const [statusPegawai, setStatusPegawai] = useState<'PNS' | 'PPPK' | 'KKI' | 'Honor'>('PNS');
@@ -155,6 +191,89 @@ export const GuruTab: React.FC<Props> = ({
       onSaveTeachers(teachers.filter((t) => t.id !== id));
       showToast(`Guru ${name} berhasil dihapus`, 'success');
     }
+  };
+
+  const filteredAndSortedTeachers = useMemo(() => {
+    const filtered = teachers.filter((t) => {
+      const matchesJabatan =
+        filterJabatan === 'all'
+          ? true
+          : filterJabatan === 'guru'
+          ? !['Tata Usaha', 'Penjaga Sekolah', 'Laboran', 'Petugas Kebersihan', 'Kepala Sekolah'].includes(t.penugasan)
+          : t.penugasan === filterJabatan;
+      if (!matchesJabatan) return false;
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase().trim();
+      return (
+        (t.nama || '').toLowerCase().includes(q) ||
+        (t.nip || '').toLowerCase().includes(q) ||
+        (t.penugasan || '').toLowerCase().includes(q) ||
+        (t.statusPegawai || '').toLowerCase().includes(q) ||
+        (t.username || '').toLowerCase().includes(q)
+      );
+    });
+
+    return [...filtered].sort((a, b) => {
+      const compareName = () =>
+        (a.nama || '').localeCompare(b.nama || '', 'id', { sensitivity: 'base' });
+
+      switch (sortBy) {
+        case 'nama-desc':
+          return (b.nama || '').localeCompare(a.nama || '', 'id', { sensitivity: 'base' });
+        case 'status-asc': {
+          const rankA = STATUS_PEGAWAI_ORDER[a.statusPegawai] ?? 99;
+          const rankB = STATUS_PEGAWAI_ORDER[b.statusPegawai] ?? 99;
+          return rankA !== rankB ? rankA - rankB : compareName();
+        }
+        case 'status-desc': {
+          const rankA = STATUS_PEGAWAI_ORDER[a.statusPegawai] ?? 0;
+          const rankB = STATUS_PEGAWAI_ORDER[b.statusPegawai] ?? 0;
+          return rankA !== rankB ? rankB - rankA : compareName();
+        }
+        case 'nip-asc': {
+          const cmp = (a.nip || '').localeCompare(b.nip || '', undefined, { numeric: true });
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'nip-desc': {
+          const cmp = (b.nip || '').localeCompare(a.nip || '', undefined, { numeric: true });
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'tmt-asc': {
+          const tA = a.tmtPertama || '9999-99-99';
+          const tB = b.tmtPertama || '9999-99-99';
+          const cmp = tA.localeCompare(tB);
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'tmt-desc': {
+          const tA = a.tmtPertama || '';
+          const tB = b.tmtPertama || '';
+          const cmp = tB.localeCompare(tA);
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'jabatan-asc': {
+          const cmp = (a.penugasan || '').localeCompare(b.penugasan || '', 'id', { numeric: true, sensitivity: 'base' });
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'jabatan-desc': {
+          const cmp = (b.penugasan || '').localeCompare(a.penugasan || '', 'id', { numeric: true, sensitivity: 'base' });
+          return cmp !== 0 ? cmp : compareName();
+        }
+        case 'nama-asc':
+        default:
+          return compareName();
+      }
+    });
+  }, [teachers, filterJabatan, searchQuery, sortBy]);
+
+  const handleToggleColumnSort = (col: 'nama' | 'status' | 'nip' | 'tmt' | 'jabatan') => {
+    setSortBy((prev) => {
+      if (col === 'nama') return prev === 'nama-asc' ? 'nama-desc' : 'nama-asc';
+      if (col === 'status') return prev === 'status-asc' ? 'status-desc' : 'status-asc';
+      if (col === 'nip') return prev === 'nip-asc' ? 'nip-desc' : 'nip-asc';
+      if (col === 'tmt') return prev === 'tmt-asc' ? 'tmt-desc' : 'tmt-asc';
+      if (col === 'jabatan') return prev === 'jabatan-asc' ? 'jabatan-desc' : 'jabatan-asc';
+      return 'nama-asc';
+    });
   };
 
   return (
@@ -384,13 +503,65 @@ export const GuruTab: React.FC<Props> = ({
           </div>
         </form>
 
-        {/* Filter Jabatan Bar */}
-        <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
-          <div className="flex items-center gap-2 text-xs font-black text-slate-700">
-            <Filter className="w-4 h-4 text-rose-600" />
-            <span>Filter Jabatan / Bagian:</span>
+        {/* Filter Jabatan & Sort Data Bar */}
+        <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2 text-xs font-black text-slate-700">
+              <Filter className="w-4 h-4 text-rose-600" />
+              <span>Filter Jabatan / Bagian:</span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Sort Data Dropdown */}
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-xl shadow-2xs">
+                <ArrowUpDown className="w-3.5 h-3.5 text-rose-600" />
+                <label htmlFor="guru-sort-select" className="text-xs font-bold text-slate-600">
+                  Urutkan:
+                </label>
+                <select
+                  id="guru-sort-select"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as TeacherSortOption)}
+                  className="bg-transparent text-xs font-black text-slate-800 focus:outline-hidden cursor-pointer"
+                >
+                  <option value="nama-asc">Nama Pegawai (A → Z)</option>
+                  <option value="nama-desc">Nama Pegawai (Z → A)</option>
+                  <option value="jabatan-asc">Jabatan / Penugasan (A → Z)</option>
+                  <option value="jabatan-desc">Jabatan / Penugasan (Z → A)</option>
+                  <option value="status-asc">Status Pegawai (PNS → Honor)</option>
+                  <option value="status-desc">Status Pegawai (Honor → PNS)</option>
+                  <option value="nip-asc">NIP / NIPPPK (Terkecil → Terbesar)</option>
+                  <option value="nip-desc">NIP / NIPPPK (Terbesar → Terkecil)</option>
+                  <option value="tmt-asc">TMT Pertama (Terlama → Terbaru)</option>
+                  <option value="tmt-desc">TMT Pertama (Terbaru → Terlama)</option>
+                </select>
+              </div>
+
+              {/* Pencarian Pegawai */}
+              <div className="relative min-w-[210px]">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Cari nama, NIP, jabatan..."
+                  className="w-full pl-8 pr-7 py-1.5 text-xs rounded-xl border border-slate-200 bg-white focus:outline-hidden focus:ring-2 focus:ring-rose-500"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    title="Hapus pencarian"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5 text-xs font-bold">
+
+          <div className="flex flex-wrap items-center gap-1.5 text-xs font-bold pt-1 border-t border-slate-200/70">
             <button
               type="button"
               onClick={() => setFilterJabatan('all')}
@@ -476,25 +647,106 @@ export const GuruTab: React.FC<Props> = ({
           <table className="w-full text-left border-collapse text-xs sm:text-sm">
             <thead>
               <tr className="bg-slate-100 text-slate-700 text-xs uppercase font-extrabold">
-                <th className="p-3 rounded-l-xl">Foto & Nama Pegawai</th>
-                <th className="p-3 text-center">Status Pegawai</th>
-                <th className="p-3">NIP / NIPPPK / NIKKI</th>
-                <th className="p-3">TTL & TMT</th>
-                <th className="p-3 text-center">Jabatan / Penugasan</th>
+                <th className="p-3 rounded-l-xl">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleColumnSort('nama')}
+                    className="flex items-center gap-1 hover:text-rose-700 cursor-pointer uppercase font-extrabold"
+                    title="Klik untuk mengurutkan Nama Pegawai A-Z / Z-A"
+                  >
+                    <span>Foto & Nama Pegawai</span>
+                    {sortBy === 'nama-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-rose-600" />
+                    ) : sortBy === 'nama-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-rose-600" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                  </button>
+                </th>
+                <th className="p-3 text-center">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleColumnSort('status')}
+                    className="inline-flex items-center justify-center gap-1 hover:text-rose-700 cursor-pointer uppercase font-extrabold"
+                    title="Klik untuk mengurutkan berdasarkan Status Pegawai"
+                  >
+                    <span>Status Pegawai</span>
+                    {sortBy === 'status-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-rose-600" />
+                    ) : sortBy === 'status-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-rose-600" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                  </button>
+                </th>
+                <th className="p-3">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleColumnSort('nip')}
+                    className="flex items-center gap-1 hover:text-rose-700 cursor-pointer uppercase font-extrabold"
+                    title="Klik untuk mengurutkan berdasarkan NIP / NIPPPK / NIKKI"
+                  >
+                    <span>NIP / NIPPPK / NIKKI</span>
+                    {sortBy === 'nip-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-rose-600" />
+                    ) : sortBy === 'nip-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-rose-600" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                  </button>
+                </th>
+                <th className="p-3">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleColumnSort('tmt')}
+                    className="flex items-center gap-1 hover:text-rose-700 cursor-pointer uppercase font-extrabold"
+                    title="Klik untuk mengurutkan berdasarkan TMT Pertama"
+                  >
+                    <span>TTL & TMT</span>
+                    {sortBy === 'tmt-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-rose-600" />
+                    ) : sortBy === 'tmt-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-rose-600" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                  </button>
+                </th>
+                <th className="p-3 text-center">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleColumnSort('jabatan')}
+                    className="inline-flex items-center justify-center gap-1 hover:text-rose-700 cursor-pointer uppercase font-extrabold"
+                    title="Klik untuk mengurutkan berdasarkan Jabatan / Penugasan"
+                  >
+                    <span>Jabatan / Penugasan</span>
+                    {sortBy === 'jabatan-asc' ? (
+                      <ArrowUp className="w-3.5 h-3.5 text-rose-600" />
+                    ) : sortBy === 'jabatan-desc' ? (
+                      <ArrowDown className="w-3.5 h-3.5 text-rose-600" />
+                    ) : (
+                      <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                  </button>
+                </th>
                 <th className="p-3 text-center">Akun Login</th>
                 <th className="p-3 rounded-r-xl text-right">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {teachers
-                .filter((t) => {
-                  if (filterJabatan === 'all') return true;
-                  if (filterJabatan === 'guru') {
-                    return !['Tata Usaha', 'Penjaga Sekolah', 'Laboran', 'Petugas Kebersihan', 'Kepala Sekolah'].includes(t.penugasan);
-                  }
-                  return t.penugasan === filterJabatan;
-                })
-                .map((t) => {
+              {filteredAndSortedTeachers.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="p-8 text-center text-slate-500 text-xs font-bold">
+                    {searchQuery
+                      ? `Tidak ditemukan pegawai dengan kata kunci "${searchQuery}".`
+                      : 'Belum ada data pegawai yang cocok dengan filter ini.'}
+                  </td>
+                </tr>
+              ) : (
+                filteredAndSortedTeachers.map((t) => {
                   const getJabatanBadge = (pos: string) => {
                     switch (pos) {
                       case 'Tata Usaha':
@@ -566,7 +818,8 @@ export const GuruTab: React.FC<Props> = ({
                       </td>
                     </tr>
                   );
-                })}
+                })
+              )}
             </tbody>
           </table>
         </div>

@@ -117,6 +117,7 @@ export const TKATabs: React.FC<Props> = ({
     'Matematika',
     'Ilmu Pengetahuan Alam dan Sosial (IPAS)',
     'Bahasa Inggris',
+    'Koding dan Kecerdasan Artifisial (KKA)',
   ]);
   const [analisisMapelTka, setAnalisisMapelTka] = useState<string>('all');
   const [analisisPaketTka, setAnalisisPaketTka] = useState<string>('all');
@@ -306,7 +307,8 @@ export const TKATabs: React.FC<Props> = ({
       const skorMtk = 66 + ((base >> 2) % 32);
       const skorIpas = 70 + ((base >> 4) % 28);
       const skorInggris = 68 + ((base >> 6) % 30);
-      const skorTotal = Math.round((skorIndo + skorMtk + skorIpas + skorInggris) / 4);
+      const skorKka = 74 + ((base >> 8) % 24);
+      const skorTotal = Math.round((skorIndo + skorMtk + skorIpas + skorInggris + skorKka) / 5);
 
       const predikat: 'A' | 'B' | 'C' | 'D' =
         skorTotal >= 88 ? 'A' : skorTotal >= 78 ? 'B' : skorTotal >= 68 ? 'C' : 'D';
@@ -334,6 +336,7 @@ export const TKATabs: React.FC<Props> = ({
           'Matematika': skorMtk,
           'IPAS': skorIpas,
           'Bahasa Inggris': skorInggris,
+          'Koding dan Kecerdasan Artifisial (KKA)': skorKka,
         },
         skorTotal,
         predikat,
@@ -2552,7 +2555,7 @@ export const TKATabs: React.FC<Props> = ({
           const mapelLabel = selectedAnalisisMapels.length === 0
             ? 'Tidak Ada Mapel Terpilih'
             : selectedAnalisisMapels.length === TKA_MAPEL_LIST.length
-            ? 'Semua Mapel TKA (4 Mapel)'
+            ? `Semua Mapel TKA (${TKA_MAPEL_LIST.length} Mapel)`
             : selectedAnalisisMapels.join(', ');
           const wsData = [
             ['ANALISIS BUTIR SOAL TES KEMAMPUAN AKADEMIK (TKA)'],
@@ -2673,7 +2676,7 @@ export const TKATabs: React.FC<Props> = ({
                       onClick={() => setSelectedAnalisisMapels([...TKA_MAPEL_LIST])}
                       className="text-[11px] font-bold text-amber-800 hover:text-amber-950 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition cursor-pointer"
                     >
-                      Pilih Semua (4 Mapel)
+                      Pilih Semua ({TKA_MAPEL_LIST.length} Mapel)
                     </button>
                     <button
                       type="button"
@@ -2685,8 +2688,8 @@ export const TKATabs: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* Checkbox cards for the 4 TKA subjects */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                {/* Checkbox cards for the 5 TKA subjects */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
                   {TKA_MAPEL_LIST.map((m) => {
                     const isChecked = selectedAnalisisMapels.includes(m);
                     return (
@@ -2737,7 +2740,7 @@ export const TKATabs: React.FC<Props> = ({
                 </div>
 
                 <div className="text-right text-xs text-slate-500 font-medium">
-                  Mapel Terpilih: <strong className="text-amber-800 font-black">{selectedAnalisisMapels.length} dari 4 Mapel</strong>
+                  Mapel Terpilih: <strong className="text-amber-800 font-black">{selectedAnalisisMapels.length} dari {TKA_MAPEL_LIST.length} Mapel</strong>
                 </div>
               </div>
             </div>
@@ -2773,7 +2776,7 @@ export const TKATabs: React.FC<Props> = ({
                   {selectedAnalisisMapels.length === 0
                     ? 'Tidak ada mapel'
                     : selectedAnalisisMapels.length === TKA_MAPEL_LIST.length
-                    ? 'Seluruh Mapel TKA (4 Mapel)'
+                    ? `Seluruh Mapel TKA (${TKA_MAPEL_LIST.length} Mapel)`
                     : selectedAnalisisMapels.join(', ')}
                 </span>
               </div>
@@ -3129,6 +3132,7 @@ export const TKATabs: React.FC<Props> = ({
             skorMtk: sub.scoresPerMapel?.['Matematika'] ?? 0,
             skorIpas: sub.scoresPerMapel?.['IPAS'] ?? 0,
             skorInggris: sub.scoresPerMapel?.['Bahasa Inggris'] ?? 0,
+            skorKka: sub.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ?? 78,
             skorTotal: sub.skorTotal,
             predikat: sub.predikat,
             status: sub.status,
@@ -3185,6 +3189,9 @@ export const TKATabs: React.FC<Props> = ({
         const avgInggris = totalPeserta > 0
           ? Math.round(rankedPool.reduce((acc, r) => acc + r.skorInggris, 0) / totalPeserta)
           : 0;
+        const avgKka = totalPeserta > 0
+          ? Math.round(rankedPool.reduce((acc, r) => acc + r.skorKka, 0) / totalPeserta)
+          : 0;
 
         // Predicate distribution for chart
         const countA = rankedPool.filter((r) => r.predikat === 'A').length;
@@ -3204,6 +3211,7 @@ export const TKATabs: React.FC<Props> = ({
             'Matematika': r.skorMtk,
             'IPAS': r.skorIpas,
             'Bahasa Inggris': r.skorInggris,
+            'Koding & Kecerdasan Artifisial (KKA)': r.skorKka,
             'Rata-rata Skor': r.skorTotal,
             'Predikat': r.predikat,
             'Status (KKTP 75)': r.status,
@@ -3448,12 +3456,12 @@ export const TKATabs: React.FC<Props> = ({
                         Grafik Rata-rata Skor per Mata Pelajaran TKA
                       </h3>
                       <p className="text-[11px] text-slate-400">
-                        Perbandingan 4 mapel dengan garis ambang KKTP (75)
+                        Perbandingan 5 mapel dengan garis ambang KKTP (75)
                       </p>
                     </div>
                   </div>
                   <span className="text-[10px] font-black bg-purple-100 text-purple-800 px-2.5 py-0.5 rounded-full border border-purple-200">
-                    4 Mapel
+                    5 Mapel
                   </span>
                 </div>
 
@@ -3526,6 +3534,24 @@ export const TKATabs: React.FC<Props> = ({
                       <div
                         className="h-full bg-purple-500 rounded-full transition-all duration-500"
                         style={{ width: `${Math.min(100, Math.max(0, avgInggris))}%` }}
+                      ></div>
+                      <div className="absolute top-0 bottom-0 left-[75%] w-0.5 bg-rose-500 z-10" title="KKTP 75"></div>
+                    </div>
+                  </div>
+
+                  {/* Koding & Kecerdasan Artifisial (KKA) */}
+                  <div>
+                    <div className="flex items-center justify-between text-xs font-bold mb-1">
+                      <span className="text-slate-700 flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 inline-block"></span>
+                        Koding &amp; Kecerdasan Artifisial (KKA)
+                      </span>
+                      <span className="font-mono font-black text-indigo-700">{avgKka} / 100</span>
+                    </div>
+                    <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden relative">
+                      <div
+                        className="h-full bg-indigo-500 rounded-full transition-all duration-500"
+                        style={{ width: `${Math.min(100, Math.max(0, avgKka))}%` }}
                       ></div>
                       <div className="absolute top-0 bottom-0 left-[75%] w-0.5 bg-rose-500 z-10" title="KKTP 75"></div>
                     </div>
@@ -3624,7 +3650,7 @@ export const TKATabs: React.FC<Props> = ({
                       Peringkat 1 s/d 10 Siswa Terbaik ({rankingScope === 'semua' ? 'Semua Siswa Angkatan 6' : rankingScope})
                     </h3>
                     <p className="text-xs text-slate-500">
-                      Peraih nilai skor TKA tertinggi gabungan 4 mata pelajaran ({hasilPaketTka})
+                      Peraih nilai skor TKA tertinggi gabungan 5 mata pelajaran ({hasilPaketTka})
                     </p>
                   </div>
                 </div>
@@ -3723,6 +3749,7 @@ export const TKATabs: React.FC<Props> = ({
                       <th className="p-3 text-center">Matematika</th>
                       <th className="p-3 text-center">IPAS</th>
                       <th className="p-3 text-center">B. Inggris</th>
+                      <th className="p-3 text-center">KKA</th>
                       <th className="p-3 text-center bg-purple-100/50">Skor Akhir</th>
                       <th className="p-3 text-center">Predikat</th>
                       <th className="p-3 text-center">Status</th>
@@ -3761,6 +3788,7 @@ export const TKATabs: React.FC<Props> = ({
                         <td className="p-3 text-center font-mono font-bold text-slate-700">{r.skorMtk}</td>
                         <td className="p-3 text-center font-mono font-bold text-slate-700">{r.skorIpas}</td>
                         <td className="p-3 text-center font-mono font-bold text-slate-700">{r.skorInggris}</td>
+                        <td className="p-3 text-center font-mono font-bold text-indigo-700">{r.skorKka}</td>
                         <td className="p-3 text-center font-mono font-black text-sm text-purple-700 bg-purple-50/60">
                           {r.skorTotal}
                         </td>
@@ -3891,6 +3919,7 @@ export const TKATabs: React.FC<Props> = ({
             'Matematika': { earned: 0, max: 0 },
             'IPAS': { earned: 0, max: 0 },
             'Bahasa Inggris': { earned: 0, max: 0 },
+            'Koding dan Kecerdasan Artifisial (KKA)': { earned: 0, max: 0 },
           };
 
           displayExamQuestions.forEach((q) => {
@@ -3900,9 +3929,16 @@ export const TKATabs: React.FC<Props> = ({
             totalScoreEarned += res.earnedScore;
             totalMaxScore += weight;
 
-            const mapelKey = subjectScores[q.mapel] ? q.mapel : 'Bahasa Indonesia';
-            subjectScores[mapelKey].earned += res.earnedScore;
-            subjectScores[mapelKey].max += weight;
+            const normalizedMapelKey =
+              q.mapel.includes('IPAS')
+                ? 'IPAS'
+                : q.mapel.includes('Koding') || q.mapel.includes('KKA')
+                ? 'Koding dan Kecerdasan Artifisial (KKA)'
+                : subjectScores[q.mapel]
+                ? q.mapel
+                : 'Bahasa Indonesia';
+            subjectScores[normalizedMapelKey].earned += res.earnedScore;
+            subjectScores[normalizedMapelKey].max += weight;
           });
 
           const finalIndo = subjectScores['Bahasa Indonesia'].max > 0
@@ -3917,10 +3953,13 @@ export const TKATabs: React.FC<Props> = ({
           const finalInggris = subjectScores['Bahasa Inggris'].max > 0
             ? Math.round((subjectScores['Bahasa Inggris'].earned / subjectScores['Bahasa Inggris'].max) * 100)
             : 84;
+          const finalKka = subjectScores['Koding dan Kecerdasan Artifisial (KKA)'].max > 0
+            ? Math.round((subjectScores['Koding dan Kecerdasan Artifisial (KKA)'].earned / subjectScores['Koding dan Kecerdasan Artifisial (KKA)'].max) * 100)
+            : 83;
 
           const finalTotalScore = totalMaxScore > 0
             ? Math.round((totalScoreEarned / totalMaxScore) * 100)
-            : Math.round((finalIndo + finalMtk + finalIpas + finalInggris) / 4);
+            : Math.round((finalIndo + finalMtk + finalIpas + finalInggris + finalKka) / 5);
 
           const predikat: 'A' | 'B' | 'C' | 'D' =
             finalTotalScore >= 88 ? 'A' : finalTotalScore >= 78 ? 'B' : finalTotalScore >= 68 ? 'C' : 'D';
@@ -3942,6 +3981,7 @@ export const TKATabs: React.FC<Props> = ({
               'Matematika': finalMtk,
               'IPAS': finalIpas,
               'Bahasa Inggris': finalInggris,
+              'Koding dan Kecerdasan Artifisial (KKA)': finalKka,
             },
             skorTotal: finalTotalScore,
             predikat,
@@ -4359,7 +4399,7 @@ export const TKATabs: React.FC<Props> = ({
               </div>
 
               {/* Subject Breakdown */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-left">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-left">
                 <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
                   <span className="text-[10px] text-slate-400 font-bold block">B. INDONESIA</span>
                   <span className="text-lg font-black text-slate-800 font-mono">
@@ -4382,6 +4422,12 @@ export const TKATabs: React.FC<Props> = ({
                   <span className="text-[10px] text-slate-400 font-bold block">B. INGGRIS</span>
                   <span className="text-lg font-black text-slate-800 font-mono">
                     {lastExamResult.scoresPerMapel?.['Bahasa Inggris']}
+                  </span>
+                </div>
+                <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200">
+                  <span className="text-[10px] text-indigo-500 font-bold block">KKA (KODING/AI)</span>
+                  <span className="text-lg font-black text-indigo-800 font-mono">
+                    {lastExamResult.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ?? 83}
                   </span>
                 </div>
               </div>
@@ -4465,7 +4511,7 @@ export const TKATabs: React.FC<Props> = ({
                   <Sparkles className="w-4 h-4 text-amber-300" /> Ketentuan Ujian Tes Kemampuan Akademik (TKA):
                 </div>
                 <p className="text-purple-100 text-[11px] leading-relaxed">
-                  1. Soal terdiri dari 4 Mata Pelajaran: Bahasa Indonesia, Matematika, IPAS, dan Bahasa Inggris.<br />
+                  1. Soal terdiri dari 5 Mata Pelajaran: Bahasa Indonesia, Matematika, IPAS, Bahasa Inggris, dan Koding &amp; Kecerdasan Artifisial (KKA).<br />
                   2. Durasi pengerjaan 60 Menit dengan sistem pengawasan CBT otomatis.<br />
                   3. Nilai KKTP ketuntasan adalah 75.00 poin. Hasil ujian langsung tersimpan dan terhubung ke Rapor TKA.
                 </p>
@@ -4516,7 +4562,7 @@ export const TKATabs: React.FC<Props> = ({
                           {paketName}
                         </h4>
                         <p className="text-xs text-slate-500">
-                          4 Mapel: Bahasa Indonesia, Matematika, IPAS, Bahasa Inggris.
+                          5 Mapel: B. Indonesia, Matematika, IPAS, B. Inggris, Koding &amp; KA (KKA).
                         </p>
 
                         <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
@@ -4655,7 +4701,7 @@ export const TKATabs: React.FC<Props> = ({
                   <tr>
                     <td className="p-3 text-center font-bold">1</td>
                     <td className="p-3 font-bold text-slate-800">Bahasa Indonesia (Literasi Membaca)</td>
-                    <td className="p-3 text-center text-slate-500 font-mono">25%</td>
+                    <td className="p-3 text-center text-slate-500 font-mono">20%</td>
                     <td className="p-3 text-center font-mono font-black text-sm text-purple-700">{selectedHasilStudent.skorIndo}</td>
                     <td className="p-3 text-center font-black">{selectedHasilStudent.skorIndo >= 85 ? 'A' : 'B'}</td>
                     <td className="p-3 text-slate-600 text-[11px]">Sangat terampil menemukan gagasan pokok dan menganalisis simpulan teks informatif.</td>
@@ -4663,7 +4709,7 @@ export const TKATabs: React.FC<Props> = ({
                   <tr>
                     <td className="p-3 text-center font-bold">2</td>
                     <td className="p-3 font-bold text-slate-800">Matematika (Numerasi &amp; Penalaran)</td>
-                    <td className="p-3 text-center text-slate-500 font-mono">25%</td>
+                    <td className="p-3 text-center text-slate-500 font-mono">20%</td>
                     <td className="p-3 text-center font-mono font-black text-sm text-purple-700">{selectedHasilStudent.skorMtk}</td>
                     <td className="p-3 text-center font-black">{selectedHasilStudent.skorMtk >= 85 ? 'A' : 'B'}</td>
                     <td className="p-3 text-slate-600 text-[11px]">Mampu menyelesaikan soal aplikasi operasi pecahan, perbandingan, dan bangun ruang.</td>
@@ -4671,7 +4717,7 @@ export const TKATabs: React.FC<Props> = ({
                   <tr>
                     <td className="p-3 text-center font-bold">3</td>
                     <td className="p-3 font-bold text-slate-800">IPAS (Sains &amp; Lingkungan Sosial)</td>
-                    <td className="p-3 text-center text-slate-500 font-mono">25%</td>
+                    <td className="p-3 text-center text-slate-500 font-mono">20%</td>
                     <td className="p-3 text-center font-mono font-black text-sm text-purple-700">{selectedHasilStudent.skorIpas}</td>
                     <td className="p-3 text-center font-black">{selectedHasilStudent.skorIpas >= 85 ? 'A' : 'B'}</td>
                     <td className="p-3 text-slate-600 text-[11px]">Memahami siklus ekosistem, sifat energi, serta interaksi sosial kemasyarakatan.</td>
@@ -4679,10 +4725,18 @@ export const TKATabs: React.FC<Props> = ({
                   <tr>
                     <td className="p-3 text-center font-bold">4</td>
                     <td className="p-3 font-bold text-slate-800">Bahasa Inggris (Literasi Global)</td>
-                    <td className="p-3 text-center text-slate-500 font-mono">25%</td>
+                    <td className="p-3 text-center text-slate-500 font-mono">20%</td>
                     <td className="p-3 text-center font-mono font-black text-sm text-purple-700">{selectedHasilStudent.skorInggris}</td>
                     <td className="p-3 text-center font-black">{selectedHasilStudent.skorInggris >= 85 ? 'A' : 'B'}</td>
                     <td className="p-3 text-slate-600 text-[11px]">Mampu memahami ungkapan kontekstual, deskripsi harian, dan kosa kata fungsional.</td>
+                  </tr>
+                  <tr>
+                    <td className="p-3 text-center font-bold">5</td>
+                    <td className="p-3 font-bold text-indigo-800">Koding &amp; Kecerdasan Artifisial (KKA)</td>
+                    <td className="p-3 text-center text-slate-500 font-mono">20%</td>
+                    <td className="p-3 text-center font-mono font-black text-sm text-indigo-700">{selectedHasilStudent.skorKka ?? 78}</td>
+                    <td className="p-3 text-center font-black">{(selectedHasilStudent.skorKka ?? 78) >= 85 ? 'A' : 'B'}</td>
+                    <td className="p-3 text-slate-600 text-[11px]">Menerapkan berpikir komputasional, logika blok algoritma, dan etika aman Kecerdasan Artifisial.</td>
                   </tr>
                   <tr className="bg-purple-50 font-black">
                     <td colSpan={3} className="p-3 text-right uppercase text-purple-900">
