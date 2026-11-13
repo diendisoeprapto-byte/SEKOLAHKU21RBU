@@ -67,6 +67,7 @@ import { TKATabs } from './components/tabs/TKATabs';
 import { PenilaianEkskulTab } from './components/tabs/PenilaianEkskulTab';
 import { DashboardKebiasaanTab } from './components/tabs/DashboardKebiasaanTab';
 import { ManajemenASAJTab } from './components/tabs/ManajemenASAJTab';
+import { PortalAlumniTab } from './components/tabs/PortalAlumniTab';
 import { StudentDashboard } from './components/StudentDashboard';
 import { testConnection } from './utils/firebase';
 import {
@@ -930,6 +931,17 @@ export default function App() {
               {/* Tab 4.8: Manajemen ASAJ, Rekapitulasi, SKL & Ijazah / Pengumuman Siswa */}
               {activeTab === 'manajemen-asaj' && (
                 <ManajemenASAJTab
+                  activeUser={activeUser}
+                  profile={profile}
+                  students={students}
+                  activeYear={activeYear}
+                  showToast={showToast}
+                />
+              )}
+
+              {/* Tab 4.9: Portal Alumni & Arsip Lulusan */}
+              {activeUser.role !== 'siswa' && activeTab === 'portal-alumni' && (
+                <PortalAlumniTab
                   activeUser={activeUser}
                   profile={profile}
                   students={students}

@@ -83,6 +83,20 @@
         "dataJson": { "type": "string" }
       },
       "required": ["id", "timestamp", "dataJson"]
+    },
+    "Alumni": {
+      "title": "Alumni",
+      "description": "Data alumni, buku induk digital, riwayat nilai kelas 1-6, kelulusan, dan arsip dokumen rapor/ijazah/SKL",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "biodata": { "type": "object" },
+        "kelulusan": { "type": "object" },
+        "riwayatNilai": { "type": "object" },
+        "dokumen": { "type": "object" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "biodata", "kelulusan"]
     }
   },
   "firestore": {
@@ -109,6 +123,10 @@
     "/backups/{backupId}": {
       "schema": "Backup",
       "description": "Data cadangan cloud sistem"
+    },
+    "/alumni/{alumniId}": {
+      "schema": "Alumni",
+      "description": "Arsip digital lulusan & buku induk alumni SDN Rawa Badak Utara 21"
     }
   }
 }

@@ -104,5 +104,11 @@ service cloud.firestore {
       allow read: if true;
       allow write: if true;
     }
+
+    // Portal Alumni & Arsip Lulusan
+    match /alumni/{alumniId} {
+      allow read: if true;
+      allow write: if true;
+    }
   }
 }

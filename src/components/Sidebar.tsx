@@ -29,6 +29,7 @@ import {
   Sparkles,
   KeyRound,
   HeartHandshake,
+  Archive,
 } from 'lucide-react';
 import { ActiveUser } from '../types';
 
@@ -62,7 +63,8 @@ export type TabId =
   | 'analisis-tka'
   | 'hasil-tka'
   | 'tes-tka-siswa'
-  | 'manajemen-asaj';
+  | 'manajemen-asaj'
+  | 'portal-alumni';
 
 interface Props {
   activeTab: TabId;
@@ -615,6 +617,19 @@ export const Sidebar: React.FC<Props> = ({
                     >
                       <GraduationCap className="w-4 h-4" />
                       <span>Manajemen ASAJ</span>
+                    </button>
+                  )}
+                  {(!searchQuery || 'portal alumni arsip lulusan buku induk ijazah skl rapor migrasi'.includes(searchQuery)) && (
+                    <button
+                      onClick={() => onSelectTab('portal-alumni')}
+                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
+                        activeTab === 'portal-alumni'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-700 hover:bg-emerald-50'
+                      }`}
+                    >
+                      <Archive className="w-4 h-4" />
+                      <span>Portal Alumni &amp; Arsip Lulusan</span>
                     </button>
                   )}
                 </div>
