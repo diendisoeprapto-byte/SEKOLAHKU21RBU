@@ -166,6 +166,10 @@ export interface CBTQuestion {
   gambarUrl?: string;
   gambarUrl2?: string;
   opsiGambar?: { [key: string]: string };
+  paket?: string;
+  subPaket?: string;
+  mapel?: string;
+  kelas?: string;
 }
 
 export type TKAJenis =
@@ -221,6 +225,8 @@ export interface CBTExam {
   judul: string;
   mapel: string;
   kelas: string;
+  paketName?: string;
+  subPaket?: string;
   durasiMenit: number;
   aktif: boolean;
   soalList: CBTQuestion[];

@@ -88,9 +88,13 @@ export const TKATabs: React.FC<Props> = ({
 
   // 2. CP & TP TKA State
   const [cpTpList, setCpTpList] = useState<TKACpTp[]>(getStoredTKACpTp());
+  const [cpTpFilterMapel, setCpTpFilterMapel] = useState<string>(TKA_MAPEL_LIST[0]);
+  const [showAddCpTpForm, setShowAddCpTpForm] = useState(false);
+  const [confirmDeleteCpId, setConfirmDeleteCpId] = useState<string | null>(null);
+  const [confirmDeleteTpId, setConfirmDeleteTpId] = useState<string | null>(null);
   const [newCpKode, setNewCpKode] = useState('');
   const [newCpJudul, setNewCpJudul] = useState('');
-  const [newCpMapel, setNewCpMapel] = useState('Bahasa Indonesia');
+  const [newCpMapel, setNewCpMapel] = useState<string>(TKA_MAPEL_LIST[0]);
   const [newCpDesc, setNewCpDesc] = useState('');
   const [newTpJudul, setNewTpJudul] = useState('');
 
@@ -134,6 +138,10 @@ export const TKATabs: React.FC<Props> = ({
 
   // 6. Student Exam Room State (tes-tka-siswa)
   const [activeExamPaket, setActiveExamPaket] = useState<string | null>(null);
+  const [activeExamMapel, setActiveExamMapel] = useState<string | null>(null);
+  const [studentTkaFilterPaket, setStudentTkaFilterPaket] = useState<string>('all');
+  const [studentTkaFilterMapel, setStudentTkaFilterMapel] = useState<string>('all');
+  const [confirmFinishTkaExam, setConfirmFinishTkaExam] = useState<boolean>(false);
   const [studentAnswers, setStudentAnswers] = useState<Record<string, any>>({});
   const [raguChecks, setRaguChecks] = useState<Record<string, boolean>>({});
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
@@ -941,385 +949,513 @@ export const TKATabs: React.FC<Props> = ({
       )}
 
       {/* ================= 2. SUB-MENU CP & TP TKA ================= */}
-      {subType === 'cp-tp-tka' && (
-        <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
-            <div>
-              <span className="text-xs font-extrabold uppercase bg-amber-100 text-amber-900 px-3 py-1 rounded-full">
-                Menu TKA • Standar Kompetensi
-              </span>
-              <h2 className="text-xl font-display font-black text-slate-800 mt-1 flex items-center gap-2">
-                <Compass className="w-5 h-5 text-amber-600" /> CP & TP TKA (Capaian & Tujuan Pembelajaran Anak TKA)
-              </h2>
-              <p className="text-xs text-slate-500">
-                Data Capaian Pembelajaran (CP) dan Tujuan Pembelajaran (TP) khusus persiapan Tes Kemampuan Akademik (TKA) Kelas 6.
-              </p>
-            </div>
-          </div>
+      {subType === 'cp-tp-tka' && (() => {
+        const mapelOptions = Array.from(
+          new Set<string>([
+            ...TKA_MAPEL_LIST,
+            ...cpTpList.map((c) => c.mapel).filter(Boolean),
+          ])
+        );
+        const filteredCpTpByMapel = cpTpList.filter(
+          (cp) => cp.mapel.trim().toLowerCase() === cpTpFilterMapel.trim().toLowerCase()
+        );
 
-          {/* Form Tambah CP & TP TKA */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!newCpKode || !newCpJudul) return;
-              const newCpObj: TKACpTp = {
-                id: `cp_tka_${Date.now()}`,
-                kodeCp: newCpKode,
-                judulCp: newCpJudul,
-                deskripsiCp: newCpDesc || newCpJudul,
-                mapel: newCpMapel,
-                tpList: newTpJudul
-                  ? [
-                      {
-                        id: `tp_${Date.now()}`,
-                        kodeTp: `${newCpKode}-01`,
-                        judulTp: newTpJudul,
-                      },
-                    ]
-                  : [],
-              };
-              const updated = [...cpTpList, newCpObj];
-              setCpTpList(updated);
-              saveStoredTKACpTp(updated);
-              showToast('Capaian Pembelajaran (CP) TKA berhasil ditambahkan!', 'success');
-              setNewCpKode('');
-              setNewCpJudul('');
-              setNewCpDesc('');
-              setNewTpJudul('');
-            }}
-            className="bg-amber-50/50 p-5 rounded-3xl border border-amber-200 space-y-4"
-          >
-            <h3 className="font-display font-black text-sm text-amber-950 flex items-center gap-2">
-              <Plus className="w-4 h-4 text-amber-600" /> Tambah CP & TP TKA Baru
-            </h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        return (
+          <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-5">
+            {/* Header + Dropdown Pilih Mapel (Sederhana) */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
-                <label className="block text-xs font-extrabold text-slate-700 mb-1">Kode CP:</label>
-                <input
-                  type="text"
-                  value={newCpKode}
-                  onChange={(e) => setNewCpKode(e.target.value)}
-                  required
-                  placeholder="Contoh: CP-TKA-LIT-02"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono font-bold"
-                />
+                <h2 className="text-xl font-display font-black text-slate-800 flex items-center gap-2">
+                  <Compass className="w-5 h-5 text-amber-600" /> CP &amp; TP TKA
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Pilih mata pelajaran pada dropdown untuk menampilkan Capaian Pembelajaran (CP) dan Tujuan Pembelajaran (TP).
+                </p>
               </div>
-              <div>
-                <label className="block text-xs font-extrabold text-slate-700 mb-1">Bidang / Mata Pelajaran:</label>
-                <select
-                  value={newCpMapel}
-                  onChange={(e) => setNewCpMapel(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-extrabold"
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="flex items-center gap-2 bg-amber-50/70 border border-amber-200 px-3 py-1.5 rounded-2xl">
+                  <span className="text-xs font-extrabold text-amber-950">Mata Pelajaran:</span>
+                  <select
+                    value={cpTpFilterMapel}
+                    onChange={(e) => {
+                      setCpTpFilterMapel(e.target.value);
+                      setEditingCpId(null);
+                      setEditingTpId(null);
+                      setAddingTpForCpId(null);
+                      setConfirmDeleteCpId(null);
+                      setConfirmDeleteTpId(null);
+                    }}
+                    className="px-3 py-1.5 rounded-xl border border-amber-300 bg-white text-xs sm:text-sm font-extrabold text-slate-800 outline-none cursor-pointer focus:ring-2 focus:ring-amber-300"
+                  >
+                    {mapelOptions.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewCpMapel(cpTpFilterMapel);
+                    setShowAddCpTpForm((prev) => !prev);
+                  }}
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-display font-black px-4 py-2.5 rounded-2xl text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition"
                 >
-                  {TKA_MAPEL_LIST.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-extrabold text-slate-700 mb-1">Judul Capaian Pembelajaran (CP):</label>
-                <input
-                  type="text"
-                  value={newCpJudul}
-                  onChange={(e) => setNewCpJudul(e.target.value)}
-                  required
-                  placeholder="Contoh: Literasi Membaca Kritis"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-extrabold text-slate-700 mb-1">Deskripsi Lengkap CP TKA:</label>
-                <input
-                  type="text"
-                  value={newCpDesc}
-                  onChange={(e) => setNewCpDesc(e.target.value)}
-                  placeholder="Deskripsi kompetensi yang diharapkan..."
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-medium"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-extrabold text-slate-700 mb-1">Tujuan Pembelajaran (TP) Pertama:</label>
-                <input
-                  type="text"
-                  value={newTpJudul}
-                  onChange={(e) => setNewTpJudul(e.target.value)}
-                  placeholder="Contoh: Menemukan ide pokok paragraf"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold"
-                />
+                  {showAddCpTpForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                  {showAddCpTpForm ? 'Tutup Form' : '+ Tambah CP'}
+                </button>
               </div>
             </div>
 
-            <div className="flex justify-end pt-1">
-              <button
-                type="submit"
-                className="bg-amber-600 hover:bg-amber-700 text-white font-display font-black px-5 py-2.5 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+            {/* Collapsible Form Tambah CP & TP TKA */}
+            {showAddCpTpForm && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!newCpKode.trim() || !newCpJudul.trim()) return;
+                  const newCpObj: TKACpTp = {
+                    id: `cp_tka_${Date.now()}`,
+                    kodeCp: newCpKode.trim(),
+                    judulCp: newCpJudul.trim(),
+                    deskripsiCp: newCpDesc.trim() || newCpJudul.trim(),
+                    mapel: newCpMapel,
+                    tpList: newTpJudul.trim()
+                      ? [
+                          {
+                            id: `tp_${Date.now()}`,
+                            kodeTp: `${newCpKode.trim()}-01`,
+                            judulTp: newTpJudul.trim(),
+                          },
+                        ]
+                      : [],
+                  };
+                  const updated = [...cpTpList, newCpObj];
+                  setCpTpList(updated);
+                  saveStoredTKACpTp(updated);
+                  setCpTpFilterMapel(newCpMapel);
+                  setShowAddCpTpForm(false);
+                  showToast(`CP & TP untuk ${newCpMapel} berhasil ditambahkan!`, 'success');
+                  setNewCpKode('');
+                  setNewCpJudul('');
+                  setNewCpDesc('');
+                  setNewTpJudul('');
+                }}
+                className="bg-amber-50/50 p-4 rounded-2xl border border-amber-200 space-y-3"
               >
-                <Plus className="w-4 h-4" /> Simpan CP & TP TKA
-              </button>
-            </div>
-          </form>
-
-          {/* List of CP & TP TKA */}
-          <div className="space-y-4">
-            {cpTpList.map((cp) => (
-              <div key={cp.id} className="p-5 rounded-3xl bg-slate-50 border border-slate-200 space-y-3">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-mono font-black uppercase bg-amber-200 text-amber-950 px-2.5 py-0.5 rounded-full">
-                      {cp.kodeCp}
-                    </span>
-                    <span className="text-xs font-bold text-slate-500">• {cp.mapel}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    {editingCpId === cp.id ? (
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (!editCpJudul.trim()) return;
-                            const updated = cpTpList.map((c) =>
-                              c.id === cp.id ? { ...c, judulCp: editCpJudul.trim(), deskripsiCp: editCpDesc.trim() || editCpJudul.trim() } : c
-                            );
-                            setCpTpList(updated);
-                            saveStoredTKACpTp(updated);
-                            setEditingCpId(null);
-                            showToast('Perubahan CP TKA berhasil disimpan!', 'success');
-                          }}
-                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
-                        >
-                          <Check className="w-3.5 h-3.5" /> Simpan
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingCpId(null)}
-                          className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
-                        >
-                          Batal
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingCpId(cp.id);
-                          setEditCpJudul(cp.judulCp);
-                          setEditCpDesc(cp.deskripsiCp);
-                        }}
-                        className="text-amber-700 hover:text-amber-800 p-1.5 rounded-lg hover:bg-amber-100/60 transition flex items-center gap-1 text-xs font-bold cursor-pointer"
-                        title="Edit CP TKA"
-                      >
-                        <Pencil className="w-3.5 h-3.5" /> Edit CP
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (confirm(`Hapus CP TKA "${cp.judulCp}" beserta seluruh TP di dalamnya?`)) {
-                          const updated = cpTpList.filter((c) => c.id !== cp.id);
-                          setCpTpList(updated);
-                          saveStoredTKACpTp(updated);
-                          showToast('CP TKA berhasil dihapus', 'success');
-                        }
-                      }}
-                      className="text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 transition cursor-pointer"
-                      title="Hapus CP"
+                  <h3 className="font-display font-black text-sm text-amber-950 flex items-center gap-1.5">
+                    <Plus className="w-4 h-4 text-amber-600" /> Tambah CP &amp; TP Baru
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddCpTpForm(false)}
+                    className="text-xs font-bold text-slate-500 hover:text-slate-700 cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-extrabold text-slate-700 mb-1">Mata Pelajaran:</label>
+                    <select
+                      value={newCpMapel}
+                      onChange={(e) => setNewCpMapel(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-extrabold"
                     >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                      {mapelOptions.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-extrabold text-slate-700 mb-1">Kode CP:</label>
+                    <input
+                      type="text"
+                      value={newCpKode}
+                      onChange={(e) => setNewCpKode(e.target.value)}
+                      required
+                      placeholder="Contoh: CP-TKA-01"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-extrabold text-slate-700 mb-1">Judul CP:</label>
+                    <input
+                      type="text"
+                      value={newCpJudul}
+                      onChange={(e) => setNewCpJudul(e.target.value)}
+                      required
+                      placeholder="Contoh: Pemahaman Teks & Literasi"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-extrabold text-slate-700 mb-1">Deskripsi CP:</label>
+                    <input
+                      type="text"
+                      value={newCpDesc}
+                      onChange={(e) => setNewCpDesc(e.target.value)}
+                      placeholder="Deskripsi ringkas capaian pembelajaran..."
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-extrabold text-slate-700 mb-1">TP Awal (Opsional):</label>
+                    <input
+                      type="text"
+                      value={newTpJudul}
+                      onChange={(e) => setNewTpJudul(e.target.value)}
+                      placeholder="Tujuan pembelajaran pertama..."
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-medium"
+                    />
                   </div>
                 </div>
 
-                {editingCpId === cp.id ? (
-                  <div className="space-y-2 bg-white p-3.5 rounded-2xl border border-amber-300">
-                    <label className="text-xs font-bold text-amber-900 block">Edit Judul CP:</label>
-                    <input
-                      type="text"
-                      value={editCpJudul}
-                      onChange={(e) => setEditCpJudul(e.target.value)}
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold"
-                    />
-                    <label className="text-xs font-bold text-amber-900 block pt-1">Edit Deskripsi CP:</label>
-                    <textarea
-                      rows={2}
-                      value={editCpDesc}
-                      onChange={(e) => setEditCpDesc(e.target.value)}
-                      className="w-full p-2.5 rounded-xl border border-slate-300 text-xs"
-                    />
-                  </div>
-                ) : (
-                  <>
-                    <h3 className="font-display font-black text-base text-slate-900">{cp.judulCp}</h3>
-                    <p className="text-xs text-slate-600 leading-relaxed bg-white p-3 rounded-xl border border-slate-200">
-                      {cp.deskripsiCp}
-                    </p>
-                  </>
-                )}
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    className="bg-amber-600 hover:bg-amber-700 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <Check className="w-4 h-4" /> Simpan CP &amp; TP
+                  </button>
+                </div>
+              </form>
+            )}
 
-                {/* TP Section with Edit, Add & Delete */}
-                <div className="pt-2 border-t border-slate-200 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-extrabold uppercase text-amber-900">
-                      Daftar Tujuan Pembelajaran (TP) TKA Terkait:
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAddingTpForCpId(addingTpForCpId === cp.id ? null : cp.id);
-                        setNewTpJudulForCp('');
-                      }}
-                      className="text-xs font-bold text-amber-700 hover:text-amber-800 flex items-center gap-1 cursor-pointer bg-amber-100/60 hover:bg-amber-100 px-2.5 py-1 rounded-lg transition"
-                    >
-                      <Plus className="w-3.5 h-3.5" /> + Tambah TP
-                    </button>
-                  </div>
+            {/* Daftar CP & TP Hanya untuk Mata Pelajaran Terpilih */}
+            {filteredCpTpByMapel.length === 0 ? (
+              <div className="p-8 text-center rounded-2xl border border-dashed border-slate-300 bg-slate-50/70 space-y-2">
+                <p className="text-sm font-bold text-slate-600">
+                  Belum ada data CP &amp; TP untuk mata pelajaran {cpTpFilterMapel}.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewCpMapel(cpTpFilterMapel);
+                    setShowAddCpTpForm(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Tambah CP {cpTpFilterMapel}
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {filteredCpTpByMapel.map((cp) => (
+                  <div key={cp.id} className="p-5 rounded-2xl bg-slate-50/80 border border-slate-200 space-y-4">
+                    {/* Baris CP */}
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] font-mono font-black uppercase bg-amber-100 text-amber-900 px-2.5 py-0.5 rounded-lg border border-amber-200">
+                            {cp.kodeCp}
+                          </span>
+                          <span className="text-xs font-bold text-slate-500">{cp.mapel}</span>
+                        </div>
 
-                  {/* Form inline add TP */}
-                  {addingTpForCpId === cp.id && (
-                    <div className="p-3 bg-amber-50 rounded-xl border border-amber-300 flex flex-wrap gap-2 items-center">
-                      <input
-                        type="text"
-                        value={newTpJudulForCp}
-                        onChange={(e) => setNewTpJudulForCp(e.target.value)}
-                        placeholder="Tuliskan tujuan pembelajaran (TP) baru..."
-                        className="flex-1 min-w-[200px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-medium"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!newTpJudulForCp.trim()) return;
-                          const newTp = {
-                            id: `tp_${Date.now()}`,
-                            kodeTp: `TP${(cp.tpList?.length || 0) + 1}`,
-                            judulTp: newTpJudulForCp.trim(),
-                          };
-                          const updated = cpTpList.map((c) =>
-                            c.id === cp.id ? { ...c, tpList: [...(c.tpList || []), newTp] } : c
-                          );
-                          setCpTpList(updated);
-                          saveStoredTKACpTp(updated);
-                          setAddingTpForCpId(null);
-                          setNewTpJudulForCp('');
-                          showToast('Tujuan Pembelajaran (TP) berhasil ditambahkan!', 'success');
-                        }}
-                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold cursor-pointer"
-                      >
-                        Simpan TP
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAddingTpForCpId(null)}
-                        className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
-                      >
-                        Batal
-                      </button>
-                    </div>
-                  )}
-
-                  {cp.tpList && cp.tpList.length > 0 ? (
-                    <div className="space-y-1.5">
-                      {cp.tpList.map((tp) => (
-                        <div
-                          key={tp.id}
-                          className="text-xs flex items-center justify-between gap-2 text-slate-700 bg-white p-2.5 rounded-xl border border-slate-200"
-                        >
-                          {editingTpId === tp.id ? (
-                            <div className="flex-1 flex items-center gap-2">
-                              <span className="font-mono font-bold text-amber-700">{tp.kodeTp}:</span>
-                              <input
-                                type="text"
-                                value={editTpJudul}
-                                onChange={(e) => setEditTpJudul(e.target.value)}
-                                className="flex-1 px-2.5 py-1 rounded-lg border border-slate-300 text-xs font-medium"
-                              />
+                        <div className="flex items-center gap-1.5">
+                          {editingCpId === cp.id ? (
+                            <>
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (!editTpJudul.trim()) return;
-                                  const updated = cpTpList.map((c) => {
-                                    if (c.id === cp.id) {
-                                      return {
-                                        ...c,
-                                        tpList: (c.tpList || []).map((t) =>
-                                          t.id === tp.id ? { ...t, judulTp: editTpJudul.trim() } : t
-                                        ),
-                                      };
-                                    }
-                                    return c;
-                                  });
+                                  if (!editCpJudul.trim()) return;
+                                  const updated = cpTpList.map((c) =>
+                                    c.id === cp.id
+                                      ? { ...c, judulCp: editCpJudul.trim(), deskripsiCp: editCpDesc.trim() || editCpJudul.trim() }
+                                      : c
+                                  );
                                   setCpTpList(updated);
                                   saveStoredTKACpTp(updated);
-                                  setEditingTpId(null);
-                                  showToast('Perubahan TP berhasil disimpan!', 'success');
+                                  setEditingCpId(null);
+                                  showToast('Perubahan CP berhasil disimpan!', 'success');
                                 }}
-                                className="px-2 py-1 bg-emerald-600 text-white rounded text-xs font-bold cursor-pointer"
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
                               >
-                                Simpan
+                                <Check className="w-3.5 h-3.5" /> Simpan
                               </button>
                               <button
                                 type="button"
-                                onClick={() => setEditingTpId(null)}
-                                className="px-2 py-1 bg-slate-200 text-slate-700 rounded text-xs font-bold cursor-pointer"
+                                onClick={() => setEditingCpId(null)}
+                                className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
                               >
                                 Batal
                               </button>
-                            </div>
+                            </>
+                          ) : confirmDeleteCpId === cp.id ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = cpTpList.filter((c) => c.id !== cp.id);
+                                  setCpTpList(updated);
+                                  saveStoredTKACpTp(updated);
+                                  setConfirmDeleteCpId(null);
+                                  showToast('CP berhasil dihapus', 'success');
+                                }}
+                                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                              >
+                                Hapus
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteCpId(null)}
+                                className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                              >
+                                Batal
+                              </button>
+                            </>
                           ) : (
                             <>
-                              <div className="flex items-center gap-2 flex-1">
-                                <span className="font-mono font-bold text-amber-700">{tp.kodeTp}:</span>
-                                <span>{tp.judulTp}</span>
-                              </div>
-                              <div className="flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingTpId(tp.id);
-                                    setEditTpJudul(tp.judulTp);
-                                  }}
-                                  className="text-amber-700 hover:text-amber-900 p-1 hover:bg-amber-50 rounded"
-                                  title="Edit TP"
-                                >
-                                  <Pencil className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (confirm(`Hapus TP "${tp.judulTp}"?`)) {
-                                      const updated = cpTpList.map((c) => {
-                                        if (c.id === cp.id) {
-                                          return {
-                                            ...c,
-                                            tpList: (c.tpList || []).filter((t) => t.id !== tp.id),
-                                          };
-                                        }
-                                        return c;
-                                      });
-                                      setCpTpList(updated);
-                                      saveStoredTKACpTp(updated);
-                                      showToast('TP berhasil dihapus', 'success');
-                                    }
-                                  }}
-                                  className="text-rose-500 hover:text-rose-700 p-1 hover:bg-rose-50 rounded"
-                                  title="Hapus TP"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingCpId(cp.id);
+                                  setEditCpJudul(cp.judulCp);
+                                  setEditCpDesc(cp.deskripsiCp);
+                                }}
+                                className="text-slate-600 hover:text-amber-700 px-2 py-1 rounded-lg hover:bg-amber-100/60 transition flex items-center gap-1 text-xs font-bold cursor-pointer"
+                              >
+                                <Pencil className="w-3.5 h-3.5" /> Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteCpId(cp.id)}
+                                className="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition cursor-pointer"
+                                title="Hapus CP"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </>
                           )}
                         </div>
-                      ))}
+                      </div>
+
+                      {editingCpId === cp.id ? (
+                        <div className="space-y-2 bg-white p-3.5 rounded-xl border border-amber-300">
+                          <input
+                            type="text"
+                            value={editCpJudul}
+                            onChange={(e) => setEditCpJudul(e.target.value)}
+                            className="w-full px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-bold"
+                            placeholder="Judul CP"
+                          />
+                          <textarea
+                            rows={2}
+                            value={editCpDesc}
+                            onChange={(e) => setEditCpDesc(e.target.value)}
+                            className="w-full p-2.5 rounded-lg border border-slate-300 text-xs"
+                            placeholder="Deskripsi CP"
+                          />
+                        </div>
+                      ) : (
+                        <div className="bg-white p-4 rounded-xl border border-slate-200/90 space-y-1">
+                          <div className="text-[10px] font-black uppercase tracking-wide text-amber-700">
+                            Capaian Pembelajaran (CP)
+                          </div>
+                          <h3 className="font-display font-black text-sm sm:text-base text-slate-900">
+                            {cp.judulCp}
+                          </h3>
+                          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                            {cp.deskripsiCp}
+                          </p>
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <p className="text-xs text-slate-400 italic">Belum ada Tujuan Pembelajaran (TP) untuk CP ini.</p>
-                  )}
-                </div>
+
+                    {/* Baris TP */}
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-extrabold text-slate-700">
+                          Tujuan Pembelajaran ({cp.tpList?.length || 0})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAddingTpForCpId(addingTpForCpId === cp.id ? null : cp.id);
+                            setNewTpJudulForCp('');
+                          }}
+                          className="text-xs font-bold text-amber-700 hover:text-amber-800 flex items-center gap-1 cursor-pointer bg-amber-100/70 hover:bg-amber-100 px-2.5 py-1 rounded-lg transition"
+                        >
+                          <Plus className="w-3.5 h-3.5" /> Tambah TP
+                        </button>
+                      </div>
+
+                      {addingTpForCpId === cp.id && (
+                        <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-300 flex flex-wrap gap-2 items-center">
+                          <input
+                            type="text"
+                            value={newTpJudulForCp}
+                            onChange={(e) => setNewTpJudulForCp(e.target.value)}
+                            placeholder="Tuliskan tujuan pembelajaran (TP) baru..."
+                            className="flex-1 min-w-[200px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-medium"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!newTpJudulForCp.trim()) return;
+                              const newTp = {
+                                id: `tp_${Date.now()}`,
+                                kodeTp: `TP-${(cp.tpList?.length || 0) + 1}`,
+                                judulTp: newTpJudulForCp.trim(),
+                              };
+                              const updated = cpTpList.map((c) =>
+                                c.id === cp.id ? { ...c, tpList: [...(c.tpList || []), newTp] } : c
+                              );
+                              setCpTpList(updated);
+                              saveStoredTKACpTp(updated);
+                              setAddingTpForCpId(null);
+                              setNewTpJudulForCp('');
+                              showToast('Tujuan Pembelajaran (TP) berhasil ditambahkan!', 'success');
+                            }}
+                            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                          >
+                            Simpan
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAddingTpForCpId(null)}
+                            className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                          >
+                            Batal
+                          </button>
+                        </div>
+                      )}
+
+                      {cp.tpList && cp.tpList.length > 0 ? (
+                        <div className="space-y-1.5">
+                          {cp.tpList.map((tp, tpIdx) => (
+                            <div
+                              key={tp.id}
+                              className="text-xs sm:text-sm flex items-center justify-between gap-3 text-slate-700 bg-white px-3.5 py-2.5 rounded-xl border border-slate-200"
+                            >
+                              {editingTpId === tp.id ? (
+                                <div className="flex-1 flex flex-wrap items-center gap-2">
+                                  <span className="font-mono font-bold text-xs text-amber-700">{tp.kodeTp}</span>
+                                  <input
+                                    type="text"
+                                    value={editTpJudul}
+                                    onChange={(e) => setEditTpJudul(e.target.value)}
+                                    className="flex-1 min-w-[180px] px-2.5 py-1 rounded-lg border border-slate-300 text-xs font-medium"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (!editTpJudul.trim()) return;
+                                      const updated = cpTpList.map((c) =>
+                                        c.id === cp.id
+                                          ? {
+                                              ...c,
+                                              tpList: (c.tpList || []).map((t) =>
+                                                t.id === tp.id ? { ...t, judulTp: editTpJudul.trim() } : t
+                                              ),
+                                            }
+                                          : c
+                                      );
+                                      setCpTpList(updated);
+                                      saveStoredTKACpTp(updated);
+                                      setEditingTpId(null);
+                                      showToast('Perubahan TP berhasil disimpan!', 'success');
+                                    }}
+                                    className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg text-xs font-bold cursor-pointer"
+                                  >
+                                    Simpan
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingTpId(null)}
+                                    className="px-2.5 py-1 bg-slate-200 text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                                  >
+                                    Batal
+                                  </button>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="flex items-start gap-2.5 flex-1">
+                                    <span className="w-5 h-5 rounded-md bg-amber-100 text-amber-800 font-mono font-black text-[11px] flex items-center justify-center shrink-0 mt-0.5">
+                                      {tpIdx + 1}
+                                    </span>
+                                    <div className="leading-relaxed">
+                                      <span className="font-mono font-bold text-[11px] text-amber-700 mr-2">
+                                        {tp.kodeTp}
+                                      </span>
+                                      <span className="text-slate-800 font-medium">{tp.judulTp}</span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {confirmDeleteTpId === tp.id ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const updated = cpTpList.map((c) =>
+                                              c.id === cp.id
+                                                ? { ...c, tpList: (c.tpList || []).filter((t) => t.id !== tp.id) }
+                                                : c
+                                            );
+                                            setCpTpList(updated);
+                                            saveStoredTKACpTp(updated);
+                                            setConfirmDeleteTpId(null);
+                                            showToast('TP berhasil dihapus', 'success');
+                                          }}
+                                          className="px-2 py-0.5 bg-rose-600 text-white rounded text-[11px] font-bold cursor-pointer"
+                                        >
+                                          Hapus
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setConfirmDeleteTpId(null)}
+                                          className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded text-[11px] font-bold cursor-pointer"
+                                        >
+                                          Batal
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setEditingTpId(tp.id);
+                                            setEditTpJudul(tp.judulTp);
+                                          }}
+                                          className="text-slate-400 hover:text-amber-700 p-1 hover:bg-amber-50 rounded cursor-pointer"
+                                          title="Edit TP"
+                                        >
+                                          <Pencil className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setConfirmDeleteTpId(tp.id)}
+                                          className="text-slate-400 hover:text-rose-600 p-1 hover:bg-rose-50 rounded cursor-pointer"
+                                          title="Hapus TP"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-400 italic">
+                          Belum ada Tujuan Pembelajaran (TP) untuk CP ini.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ================= 3. SUB-MENU BANK SOAL TKA (IMAGE 1 EXACT DESIGN) ================= */}
       {subType === 'bank-soal-tka' && (
@@ -3860,19 +3996,35 @@ export const TKATabs: React.FC<Props> = ({
           return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
         };
 
-        // Active exam questions (supports shuffled runtime if acakSoalTka or acakJawabanTka is active)
+        // Active exam questions filtered by selected paket and optional mapel
+        const getMatchingTkaQuestions = (paket: string, mapel?: string | null) => {
+          return tkaQuestions.filter((q) => {
+            if (q.jenisTka !== paket) return false;
+            if (mapel && mapel !== 'all' && q.mapel !== mapel) return false;
+            return true;
+          });
+        };
+
         const displayExamQuestions = tkaRunningQuestions.length > 0
           ? tkaRunningQuestions
-          : (activeExamPaket
-              ? (tkaQuestions.filter((q) => q.jenisTka === activeExamPaket).length > 0
-                  ? tkaQuestions.filter((q) => q.jenisTka === activeExamPaket)
-                  : tkaQuestions.slice(0, 20))
-              : tkaQuestions.slice(0, 20));
+          : (activeExamPaket ? getMatchingTkaQuestions(activeExamPaket, activeExamMapel) : []);
         const activeQuestion = displayExamQuestions[currentQuestionIdx] || displayExamQuestions[0];
 
         // Start Exam Handler
-        const handleStartExam = (paketName: string) => {
+        const handleStartExam = (paketName: string, mapelName?: string | null) => {
+          const targetMapel = mapelName && mapelName !== 'all' ? mapelName : null;
+          const questions = getMatchingTkaQuestions(paketName, targetMapel);
+          if (questions.length === 0) {
+            showToast(
+              `Belum ada soal yang dibuat guru untuk ${paketName}${targetMapel ? ` • ${targetMapel}` : ''}. Silakan tambah soal di Bank Soal TKA.`,
+              'error'
+            );
+            return;
+          }
+
           setActiveExamPaket(paketName);
+          setActiveExamMapel(targetMapel);
+          setConfirmFinishTkaExam(false);
           setStudentAnswers({});
           setRaguChecks({});
           setCurrentQuestionIdx(0);
@@ -3880,8 +4032,7 @@ export const TKATabs: React.FC<Props> = ({
           setIsExamCompleted(false);
           setLastExamResult(null);
 
-          const questions = tkaQuestions.filter((q) => q.jenisTka === paketName);
-          let list = questions.length > 0 ? questions : tkaQuestions.slice(0, 20);
+          let list = [...questions];
 
           if (acakSoalTka) {
             list = [...list].sort(() => Math.random() - 0.5);
@@ -3900,17 +4051,13 @@ export const TKATabs: React.FC<Props> = ({
           setTkaRunningQuestions(list);
 
           showToast(
-            `Ujian ${paketName} dimulai! ${acakSoalTka ? '[Acak Soal Aktif] ' : ''}${acakJawabanTka ? '[Acak Jawaban Aktif]' : ''}`,
+            `Ujian ${paketName}${targetMapel ? ` (${targetMapel})` : ''} dimulai! [${list.length} Soal]`,
             'success'
           );
         };
 
         // Submit & Grade Exam
         const handleFinishExam = () => {
-          if (!confirm('Apakah kamu yakin ingin menyelesaikan dan mengumpulkan lembar jawaban ujian TKA ini?')) {
-            return;
-          }
-
           let totalScoreEarned = 0;
           let totalMaxScore = 0;
 
@@ -3925,7 +4072,17 @@ export const TKATabs: React.FC<Props> = ({
           displayExamQuestions.forEach((q) => {
             const studentAns = studentAnswers[q.id];
             const weight = q.bobot || 10;
-            const res = evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, weight);
+            let res = evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, weight);
+            // Support PG option key ('A'/'B'/'C'/'D') vs full option text match
+            if (q.tipe === 'pg' && !res.isCorrect && typeof studentAns === 'string' && q.opsi && q.opsi.length > 0) {
+              const letterIdx = studentAns.trim().toUpperCase().charCodeAt(0) - 65;
+              if (letterIdx >= 0 && letterIdx < q.opsi.length) {
+                const chosenOptionText = q.opsi[letterIdx];
+                if (chosenOptionText.trim().toLowerCase() === String(q.kunciJawaban || '').trim().toLowerCase()) {
+                  res = { isCorrect: true, earnedScore: weight };
+                }
+              }
+            }
             totalScoreEarned += res.earnedScore;
             totalMaxScore += weight;
 
@@ -3967,6 +4124,10 @@ export const TKATabs: React.FC<Props> = ({
 
           const durationUsedMinutes = Math.max(1, Math.ceil((3600 - examTimerSeconds) / 60));
 
+          const paketLabel = activeExamMapel
+            ? `${activeExamPaket || 'Simulasi 1'} (${activeExamMapel})`
+            : activeExamPaket || 'Tryout TKA 1';
+
           const newSubmission: TKASubmissionItem = {
             id: `sub_${currentStudent.id}_${(activeExamPaket || 'TKA').replace(/\s+/g, '_')}_${Date.now()}`,
             studentId: currentStudent.id,
@@ -3974,7 +4135,7 @@ export const TKATabs: React.FC<Props> = ({
             nisn: currentStudent.nisn,
             kelas: currentStudent.kelas,
             fotoUrl: currentStudent.fotoUrl,
-            paket: activeExamPaket || 'Tryout TKA 1',
+            paket: paketLabel,
             answers: studentAnswers,
             scoresPerMapel: {
               'Bahasa Indonesia': finalIndo,
@@ -3992,12 +4153,13 @@ export const TKATabs: React.FC<Props> = ({
 
           // Save submission
           const otherSubs = tkaSubmissions.filter(
-            (s) => !(s.studentId === currentStudent.id && s.paket === activeExamPaket)
+            (s) => !(s.studentId === currentStudent.id && s.paket === paketLabel)
           );
           const updated = [newSubmission, ...otherSubs];
           setTkaSubmissions(updated);
           saveStoredTKASubmissions(updated);
 
+          setConfirmFinishTkaExam(false);
           setLastExamResult(newSubmission);
           setIsExamCompleted(true);
           showToast(`Selamat! Ujian TKA selesai dengan skor: ${finalTotalScore} (Predikat ${predikat})`, 'success');
@@ -4019,7 +4181,7 @@ export const TKATabs: React.FC<Props> = ({
                   </div>
                   <div>
                     <h2 className="font-display font-black text-sm text-slate-800">
-                      {activeExamPaket} • CBT Tes Kemampuan Akademik
+                      {activeExamPaket}{activeExamMapel ? ` • ${activeExamMapel}` : ''} • CBT Tes Kemampuan Akademik
                     </h2>
                     <p className="text-[11px] text-slate-500">
                       Siswa: <strong className="text-purple-700">{currentStudent.nama}</strong> ({currentStudent.kelas}) • NISN: {currentStudent.nisn}
@@ -4040,14 +4202,34 @@ export const TKATabs: React.FC<Props> = ({
                     <span>Sisa Waktu: {formatTimer(examTimerSeconds)}</span>
                   </div>
 
-                  {/* Kumpulkan Ujian Button */}
-                  <button
-                    type="button"
-                    onClick={handleFinishExam}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black px-4 py-2 rounded-2xl text-xs flex items-center gap-1.5 shadow-sm cursor-pointer transition"
-                  >
-                    <CheckCircle className="w-4 h-4" /> Kumpulkan Ujian
-                  </button>
+                  {/* Kumpulkan Ujian Button (Inline Confirm) */}
+                  {confirmFinishTkaExam ? (
+                    <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-300 px-2.5 py-1.5 rounded-2xl">
+                      <span className="text-[11px] font-bold text-emerald-900">Yakin kumpulkan?</span>
+                      <button
+                        type="button"
+                        onClick={handleFinishExam}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-1 rounded-xl text-[11px] cursor-pointer"
+                      >
+                        Ya, Kumpulkan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmFinishTkaExam(false)}
+                        className="bg-white text-slate-600 border border-slate-200 font-bold px-2.5 py-1 rounded-xl text-[11px] cursor-pointer"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmFinishTkaExam(true)}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black px-4 py-2 rounded-2xl text-xs flex items-center gap-1.5 shadow-sm cursor-pointer transition"
+                    >
+                      <CheckCircle className="w-4 h-4" /> Kumpulkan Ujian
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -4518,118 +4700,179 @@ export const TKATabs: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* List of 12 TKA Exam Packages (Simulasi 1-6 & Try Out 1-6) */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="font-display font-black text-base text-slate-800 flex items-center gap-2">
-                  <BookOpen className="w-5 h-5 text-purple-600" /> Paket Soal Ujian TKA Tersedia (12 Paket)
-                </h3>
-                <span className="text-xs text-slate-400 font-bold">
-                  Simulasi 1 - 6 &amp; Try Out 1 - 6
-                </span>
+            {/* Filter Dropdown Jenis TKA & Mata Pelajaran + Daftar Paket TKA */}
+            <div className="space-y-4">
+              <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-display font-black text-base text-slate-800 flex items-center gap-2">
+                      <BookOpen className="w-5 h-5 text-purple-600" /> Pilih Paket Soal &amp; Mata Pelajaran TKA
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Pilih jenis simulasi / try out TKA dan mata pelajaran yang ingin dikerjakan. Soal disesuaikan persis dengan Bank Soal TKA yang dibuat guru.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-extrabold text-slate-700 mb-1">
+                      Jenis / Paket TKA
+                    </label>
+                    <select
+                      value={studentTkaFilterPaket}
+                      onChange={(e) => setStudentTkaFilterPaket(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-2xl border-2 border-purple-400 bg-white text-xs font-extrabold text-purple-950 outline-none cursor-pointer"
+                    >
+                      <option value="all">-- Semua Paket TKA ({TKA_JENIS_LIST.length} Paket) --</option>
+                      {Array.from(new Set([...TKA_JENIS_LIST, ...tkaQuestions.map((q) => q.jenisTka)])).map((jenis) => {
+                        const count = tkaQuestions.filter((q) => q.jenisTka === jenis).length;
+                        return (
+                          <option key={jenis} value={jenis}>
+                            {jenis} ({count} Soal)
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-extrabold text-slate-700 mb-1">
+                      Mata Pelajaran TKA
+                    </label>
+                    <select
+                      value={studentTkaFilterMapel}
+                      onChange={(e) => setStudentTkaFilterMapel(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-2xl border-2 border-indigo-400 bg-white text-xs font-extrabold text-indigo-950 outline-none cursor-pointer"
+                    >
+                      <option value="all">-- Semua Mata Pelajaran (Gabungan Paket) --</option>
+                      {Array.from(new Set([...TKA_MAPEL_LIST, ...tkaQuestions.map((q) => q.mapel)])).map((m) => {
+                        const count = tkaQuestions.filter(
+                          (q) =>
+                            (studentTkaFilterPaket === 'all' || q.jenisTka === studentTkaFilterPaket) &&
+                            q.mapel === m
+                        ).length;
+                        return (
+                          <option key={m} value={m}>
+                            {m} ({count} Soal)
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {TKA_JENIS_LIST.map((paketName) => {
-                  // Check if student already submitted this exam
-                  const existingSub = tkaSubmissions.find(
-                    (s) => s.studentId === currentStudent.id && s.paket === paketName
-                  );
-                  const qCount = tkaQuestions.filter((q) => q.jenisTka === paketName).length || 20;
+                {Array.from(new Set([...TKA_JENIS_LIST, ...tkaQuestions.map((q) => q.jenisTka)]))
+                  .filter((paketName) => studentTkaFilterPaket === 'all' || paketName === studentTkaFilterPaket)
+                  .map((paketName) => {
+                    const selectedMapel = studentTkaFilterMapel === 'all' ? null : studentTkaFilterMapel;
+                    const paketLookupKey = selectedMapel ? `${paketName} (${selectedMapel})` : paketName;
+                    const existingSub = tkaSubmissions.find(
+                      (s) => s.studentId === currentStudent.id && s.paket === paketLookupKey
+                    );
+                    const qCount = tkaQuestions.filter(
+                      (q) => q.jenisTka === paketName && (!selectedMapel || q.mapel === selectedMapel)
+                    ).length;
 
-                  return (
-                    <div
-                      key={paketName}
-                      className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs hover:border-purple-300 hover:shadow-md transition space-y-3 flex flex-col justify-between"
-                    >
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-black uppercase tracking-wider bg-purple-50 text-purple-700 px-2.5 py-1 rounded-full border border-purple-200">
-                            Standar Kemendikbud
-                          </span>
-                          {existingSub ? (
-                            <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full border border-emerald-200">
-                              ✓ Selesai
+                    return (
+                      <div
+                        key={paketLookupKey}
+                        className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs hover:border-purple-300 hover:shadow-md transition space-y-3 flex flex-col justify-between"
+                      >
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-black uppercase tracking-wider bg-purple-50 text-purple-700 px-2.5 py-1 rounded-full border border-purple-200">
+                              {selectedMapel || 'Gabungan Mapel TKA'}
                             </span>
-                          ) : (
-                            <span className="text-[10px] font-black bg-amber-50 text-amber-700 px-2.5 py-0.5 rounded-full border border-amber-200">
-                              Belum Dikerjakan
-                            </span>
+                            {existingSub ? (
+                              <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                                ✓ Selesai
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-black bg-amber-50 text-amber-700 px-2.5 py-0.5 rounded-full border border-amber-200">
+                                {qCount > 0 ? 'Siap Dikerjakan' : 'Belum Ada Soal'}
+                              </span>
+                            )}
+                          </div>
+
+                          <h4 className="font-display font-black text-base text-slate-800">
+                            {paketName}{selectedMapel ? ` — ${selectedMapel}` : ''}
+                          </h4>
+                          <p className="text-xs text-slate-500">
+                            {selectedMapel
+                              ? `Soal TKA ${paketName} khusus mata pelajaran ${selectedMapel}.`
+                              : '5 Mapel: B. Indonesia, Matematika, IPAS, B. Inggris, Koding & KA (KKA).'}
+                          </p>
+
+                          <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
+                            <div className="p-2 rounded-xl bg-slate-50 border border-slate-100">
+                              <span className="text-slate-400 block text-[10px]">Jumlah Soal</span>
+                              <span className="font-bold text-slate-700 font-mono">{qCount} Butir</span>
+                            </div>
+                            <div className="p-2 rounded-xl bg-slate-50 border border-slate-100">
+                              <span className="text-slate-400 block text-[10px]">Waktu Ujian</span>
+                              <span className="font-bold text-slate-700 font-mono">60 Menit</span>
+                            </div>
+                          </div>
+
+                          {existingSub && (
+                            <div className="p-2.5 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-between text-xs">
+                              <div>
+                                <span className="text-[10px] text-purple-600 font-bold block">Skor Capaian:</span>
+                                <span className="font-black text-purple-900 text-base font-mono">
+                                  {existingSub.skorTotal} / 100
+                                </span>
+                              </div>
+                              <div className="text-right">
+                                <span
+                                  className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                                    existingSub.status === 'Tuntas'
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : 'bg-rose-100 text-rose-800'
+                                  }`}
+                                >
+                                  {existingSub.status}
+                                </span>
+                              </div>
+                            </div>
                           )}
                         </div>
 
-                        <h4 className="font-display font-black text-base text-slate-800">
-                          {paketName}
-                        </h4>
-                        <p className="text-xs text-slate-500">
-                          5 Mapel: B. Indonesia, Matematika, IPAS, B. Inggris, Koding &amp; KA (KKA).
-                        </p>
-
-                        <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
-                          <div className="p-2 rounded-xl bg-slate-50 border border-slate-100">
-                            <span className="text-slate-400 block text-[10px]">Jumlah Soal</span>
-                            <span className="font-bold text-slate-700 font-mono">{qCount} Butir</span>
-                          </div>
-                          <div className="p-2 rounded-xl bg-slate-50 border border-slate-100">
-                            <span className="text-slate-400 block text-[10px]">Waktu Ujian</span>
-                            <span className="font-bold text-slate-700 font-mono">60 Menit</span>
-                          </div>
-                        </div>
-
-                        {existingSub && (
-                          <div className="p-2.5 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-between text-xs">
-                            <div>
-                              <span className="text-[10px] text-purple-600 font-bold block">Skor Capaian:</span>
-                              <span className="font-black text-purple-900 text-base font-mono">
-                                {existingSub.skorTotal} / 100
-                              </span>
-                            </div>
-                            <div className="text-right">
-                              <span
-                                className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                                  existingSub.status === 'Tuntas'
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : 'bg-rose-100 text-rose-800'
-                                }`}
+                        <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
+                          {existingSub ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedHasilStudent(existingSub)}
+                                className="flex-1 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1"
                               >
-                                {existingSub.status}
-                              </span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
-                        {existingSub ? (
-                          <>
+                                <Eye className="w-3.5 h-3.5" /> Lihat Rapor
+                              </button>
+                              <button
+                                type="button"
+                                disabled={qCount === 0}
+                                onClick={() => handleStartExam(paketName, selectedMapel)}
+                                className="flex-1 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:bg-slate-300 text-white font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1 shadow-xs"
+                              >
+                                <Play className="w-3.5 h-3.5" /> Kerjakan Ulang
+                              </button>
+                            </>
+                          ) : (
                             <button
                               type="button"
-                              onClick={() => setSelectedHasilStudent(existingSub)}
-                              className="flex-1 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1"
+                              disabled={qCount === 0}
+                              onClick={() => handleStartExam(paketName, selectedMapel)}
+                              className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:bg-slate-300 text-white font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
                             >
-                              <Eye className="w-3.5 h-3.5" /> Lihat Rapor
+                              <Play className="w-4 h-4" /> Mulai Tes TKA Sekarang
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleStartExam(paketName)}
-                              className="flex-1 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1 shadow-xs"
-                            >
-                              <Play className="w-3.5 h-3.5" /> Kerjakan Ulang
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleStartExam(paketName)}
-                            className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
-                          >
-                            <Play className="w-4 h-4" /> Mulai Tes TKA Sekarang
-                          </button>
-                        )}
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
               </div>
             </div>
           </div>

@@ -98,17 +98,20 @@ export const CBTTab: React.FC<Props> = ({
     'ASAS Inklusi',
   ]);
   const [selectedPaket, setSelectedPaket] = useState<string>('Sumatif 1 (AS 1)');
+  const [subPaketList, setSubPaketList] = useState<string[]>(['Paket 1', 'Paket 2', 'Paket 3']);
+  const [selectedSubPaket, setSelectedSubPaket] = useState<string>('Paket 1');
   const [examDurationMinutes, setExamDurationMinutes] = useState<number>(60);
   const [isAddUHOpen, setIsAddUHOpen] = useState(false);
   const [newUHName, setNewUHName] = useState('');
 
   // Editing question state & DOCX file ref
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
+  const [confirmDeleteQId, setConfirmDeleteQId] = useState<string | null>(null);
   const docxInputRef = useRef<HTMLInputElement>(null);
 
   // Form Fields matching Image 1
   const [selectedMapel, setSelectedMapel] = useState<string>('Pendidikan Agama Islam');
-  const [targetKelas, setTargetKelas] = useState<string>(activeClass || 'Kelas 6B');
+  const [targetKelas, setTargetKelas] = useState<string>(activeClass || 'Kelas 6A');
   const [selectedTipeSoal, setSelectedTipeSoal] = useState<'pg' | 'pg_kompleks' | 'benar_salah' | 'menjodohkan' | 'isian' | 'uraian'>('pg');
   const [levelKesukaran, setLevelKesukaran] = useState<'Mudah' | 'Sedang' | 'Sukar'>('Sedang');
   const [levelKognitif, setLevelKognitif] = useState<'L1 (C1-C2)' | 'L2 (C3)' | 'L3 (C4-C6)'>('L2 (C3)');
@@ -225,15 +228,72 @@ export const CBTTab: React.FC<Props> = ({
   // Filter for created questions list underneath
   const [filterTipe, setFilterTipe] = useState<string>('all');
 
-  const activeExam = exams[0] || {
-    id: 'exam_default',
-    judul: 'Bank Soal CBT Sekolah',
-    mapel: 'Pendidikan Agama Islam',
-    kelas: activeClass || 'Kelas 6B',
-    durasiMenit: 60,
-    aktif: true,
-    soalList: [],
+  // Helper infer paket from legacy CBTExam title if paketName missing
+  const inferPaketFromExam = (exam: CBTExam): string => {
+    if (exam.paketName) return exam.paketName;
+    const j = (exam.judul || '').toLowerCase();
+    if (j.includes('asts')) return 'ASTS (Sumatif Tengah Semester)';
+    if (j.includes('asas')) return 'ASAS (Sumatif Akhir Semester)';
+    const sumatifMatch = exam.judul?.match(/Sumatif\s*\d+\s*\(AS\s*\d+\)/i);
+    if (sumatifMatch) return sumatifMatch[0];
+    const remMatch = exam.judul?.match(/Remedial\s*\d+/i);
+    if (remMatch) return remMatch[0];
+    return 'ASAS (Sumatif Akhir Semester)';
   };
+
+  const makeExamBucketId = (paket: string, subPaket: string, mapel: string, kelas: string) => {
+    const slug = (v: string) =>
+      v
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    return `cbt_${slug(paket)}_${slug(subPaket)}_${slug(mapel)}_${slug(kelas)}`;
+  };
+
+  const upsertExamInList = (list: CBTExam[], updated: CBTExam): CBTExam[] => {
+    const exists = list.some((e) => e.id === updated.id);
+    if (exists) {
+      return list.map((e) => (e.id === updated.id ? updated : e));
+    }
+    return [updated, ...list];
+  };
+
+  const activeExam: CBTExam = useMemo(() => {
+    const found = exams.find((e) => {
+      const ePaket = inferPaketFromExam(e);
+      const eSub = e.subPaket || 'Paket 1';
+      return (
+        ePaket === selectedPaket &&
+        eSub === selectedSubPaket &&
+        e.mapel === selectedMapel &&
+        e.kelas === targetKelas
+      );
+    });
+    if (found) return found;
+    return {
+      id: makeExamBucketId(selectedPaket, selectedSubPaket, selectedMapel, targetKelas),
+      judul: `${selectedPaket} - ${selectedMapel} (${selectedSubPaket})`,
+      mapel: selectedMapel,
+      kelas: targetKelas,
+      paketName: selectedPaket,
+      subPaket: selectedSubPaket,
+      durasiMenit: examDurationMinutes || 60,
+      aktif: true,
+      soalList: [],
+    };
+  }, [exams, selectedPaket, selectedSubPaket, selectedMapel, targetKelas, examDurationMinutes]);
+
+  useEffect(() => {
+    const found = exams.find((e) => e.id === activeExam.id);
+    if (found && found.durasiMenit && found.durasiMenit !== examDurationMinutes) {
+      setExamDurationMinutes(found.durasiMenit);
+    }
+  }, [activeExam.id]);
+
+  // Daftar semua bucket ujian yang sudah terisi minimal 1 soal
+  const savedExamBuckets = useMemo(() => {
+    return exams.filter((e) => Array.isArray(e.soalList) && e.soalList.length > 0);
+  }, [exams]);
 
   // Find currently selected CP & TP
   const currentCp = cpList.find((c) => c.id === selectedCpId) || cpList[0];
@@ -376,7 +436,11 @@ export const CBTTab: React.FC<Props> = ({
       gambarUrl: gambarUrl || undefined,
       gambarUrl2: gambarUrl2 || undefined,
       opsiGambar: Object.keys(opsiGambar).length > 0 ? opsiGambar : undefined,
-      pembahasan: pembahasan.trim() || `Level ${levelKesukaran} • ${levelKognitif} • Paket ${selectedPaket}`,
+      pembahasan: pembahasan.trim() || `Level ${levelKesukaran} • ${levelKognitif} • ${selectedPaket} (${selectedSubPaket})`,
+      paket: selectedPaket,
+      subPaket: selectedSubPaket,
+      mapel: selectedMapel,
+      kelas: targetKelas,
     };
 
     let updatedQuestions: CBTQuestion[];
@@ -388,15 +452,22 @@ export const CBTTab: React.FC<Props> = ({
       setEditingQuestionId(null);
     } else {
       updatedQuestions = [...activeExam.soalList, questionData];
-      showToast('Soal baru berhasil disimpan ke Bank Soal!', 'success');
+      showToast(`Soal disimpan ke ${selectedPaket} • ${selectedMapel} (${selectedSubPaket})!`, 'success');
     }
 
     const updatedExam: CBTExam = {
       ...activeExam,
+      judul: `${selectedPaket} - ${selectedMapel} (${selectedSubPaket})`,
+      mapel: selectedMapel,
+      kelas: targetKelas,
+      paketName: selectedPaket,
+      subPaket: selectedSubPaket,
+      durasiMenit: examDurationMinutes || activeExam.durasiMenit || 60,
+      aktif: true,
       soalList: updatedQuestions,
     };
 
-    const newExams = [updatedExam, ...exams.slice(1)];
+    const newExams = upsertExamInList(exams, updatedExam);
     setExams(newExams);
     saveStoredCBTExams(newExams);
 
@@ -457,19 +528,18 @@ export const CBTTab: React.FC<Props> = ({
   };
 
   const handleDeleteQuestion = (qId: string) => {
-    if (confirm('Apakah Anda yakin ingin menghapus butir soal ini dari Bank Soal?')) {
-      const updatedExam: CBTExam = {
-        ...activeExam,
-        soalList: activeExam.soalList.filter((q) => q.id !== qId),
-      };
-      const newExams = [updatedExam, ...exams.slice(1)];
-      setExams(newExams);
-      saveStoredCBTExams(newExams);
-      if (editingQuestionId === qId) {
-        handleResetForm();
-      }
-      showToast('Soal berhasil dihapus dari Bank Soal.', 'success');
+    const updatedExam: CBTExam = {
+      ...activeExam,
+      soalList: activeExam.soalList.filter((q) => q.id !== qId),
+    };
+    const newExams = upsertExamInList(exams, updatedExam);
+    setExams(newExams);
+    saveStoredCBTExams(newExams);
+    if (editingQuestionId === qId) {
+      handleResetForm();
     }
+    setConfirmDeleteQId(null);
+    showToast('Soal berhasil dihapus dari Bank Soal.', 'success');
   };
 
   const handleImportDocx = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -488,19 +558,30 @@ export const CBTTab: React.FC<Props> = ({
         id: `soal_docx_${Date.now()}_${idx + 1}`,
         cpId: currentCp.id,
         tpId: currentTp?.id || 'TP 1',
-        pembahasan: q.pembahasan || `Impor Word (.docx) • Paket ${selectedPaket}`,
+        pembahasan: q.pembahasan || `Impor Word (.docx) • ${selectedPaket} (${selectedSubPaket})`,
+        paket: selectedPaket,
+        subPaket: selectedSubPaket,
+        mapel: selectedMapel,
+        kelas: targetKelas,
       }));
 
       const updatedExam: CBTExam = {
         ...activeExam,
+        judul: `${selectedPaket} - ${selectedMapel} (${selectedSubPaket})`,
+        mapel: selectedMapel,
+        kelas: targetKelas,
+        paketName: selectedPaket,
+        subPaket: selectedSubPaket,
+        durasiMenit: examDurationMinutes || activeExam.durasiMenit || 60,
+        aktif: true,
         soalList: [...importedWithMeta, ...activeExam.soalList],
       };
 
-      const newExams = [updatedExam, ...exams.slice(1)];
+      const newExams = upsertExamInList(exams, updatedExam);
       setExams(newExams);
       saveStoredCBTExams(newExams);
 
-      showToast(`Berhasil mengimpor ${res.count} soal dari dokumen Word (.docx)!`, 'success');
+      showToast(`Berhasil mengimpor ${res.count} soal ke ${selectedPaket} • ${selectedMapel} (${selectedSubPaket})!`, 'success');
     } catch (err: any) {
       showToast(`Gagal membaca berkas docx: ${err?.message || 'Format tidak sesuai'}`, 'error');
     } finally {
@@ -749,10 +830,16 @@ export const CBTTab: React.FC<Props> = ({
                 onChange={handleImportDocx}
                 className="hidden"
               />
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-700">Bank Soal Paket:</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold text-slate-700">Bank Soal Aktif:</span>
                 <span className="px-2.5 py-0.5 rounded-lg bg-rose-100 text-rose-800 font-black text-xs font-mono">
                   {selectedPaket}
+                </span>
+                <span className="px-2.5 py-0.5 rounded-lg bg-indigo-100 text-indigo-800 font-black text-xs">
+                  {selectedMapel}
+                </span>
+                <span className="px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs">
+                  {selectedSubPaket}
                 </span>
                 {editingQuestionId && (
                   <span className="px-2.5 py-0.5 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-[11px] animate-pulse">
@@ -774,12 +861,12 @@ export const CBTTab: React.FC<Props> = ({
             </div>
 
             <form onSubmit={handleSaveQuestion} className="space-y-4">
-              {/* ROW 1: TOP BAR DROPDOWNS (MATCHING IMAGE 1) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
+              {/* ROW 1: TOP BAR DROPDOWNS (2 CLEAN ROWS OF 4) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 {/* 1. Paket / Jenis Ulangan (Sumatif) */}
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-[11px] font-extrabold text-slate-700">Paket / Jenis Sumatif</label>
+                    <label className="text-[11px] font-extrabold text-slate-700">Jenis / Asesmen CBT</label>
                     <button
                       type="button"
                       onClick={() => setIsAddUHOpen(true)}
@@ -796,6 +883,22 @@ export const CBTTab: React.FC<Props> = ({
                     {paketList.map((p) => (
                       <option key={p} value={p}>
                         {p}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 1b. Paket Soal (Paket 1, Paket 2, Paket 3) */}
+                <div>
+                  <label className="block text-[11px] font-extrabold text-slate-700 mb-1">Paket Soal</label>
+                  <select
+                    value={selectedSubPaket}
+                    onChange={(e) => setSelectedSubPaket(e.target.value)}
+                    className="w-full px-3 py-2 rounded-2xl border-2 border-indigo-400 bg-white text-xs font-extrabold text-indigo-900 outline-none shadow-xs"
+                  >
+                    {subPaketList.map((sp) => (
+                      <option key={sp} value={sp}>
+                        {sp}
                       </option>
                     ))}
                   </select>
@@ -834,9 +937,13 @@ export const CBTTab: React.FC<Props> = ({
                     <option value="Kelas 6A">Kelas 6A</option>
                     <option value="Kelas 5B">Kelas 5B</option>
                     <option value="Kelas 5A">Kelas 5A</option>
+                    <option value="Kelas 4B">Kelas 4B</option>
                     <option value="Kelas 4A">Kelas 4A</option>
+                    <option value="Kelas 3B">Kelas 3B</option>
                     <option value="Kelas 3A">Kelas 3A</option>
+                    <option value="Kelas 2B">Kelas 2B</option>
                     <option value="Kelas 2A">Kelas 2A</option>
+                    <option value="Kelas 1B">Kelas 1B</option>
                     <option value="Kelas 1A">Kelas 1A</option>
                   </select>
                 </div>
@@ -848,7 +955,15 @@ export const CBTTab: React.FC<Props> = ({
                   </label>
                   <select
                     value={examDurationMinutes}
-                    onChange={(e) => setExamDurationMinutes(Number(e.target.value))}
+                    onChange={(e) => {
+                      const mins = Number(e.target.value);
+                      setExamDurationMinutes(mins);
+                      if (exams.some((ex) => ex.id === activeExam.id)) {
+                        const updated = upsertExamInList(exams, { ...activeExam, durasiMenit: mins });
+                        setExams(updated);
+                        saveStoredCBTExams(updated);
+                      }
+                    }}
                     className="w-full px-3 py-2 rounded-2xl border-2 border-amber-400 bg-amber-50/60 text-xs font-black text-amber-950 outline-none shadow-xs"
                     title="Setting waktu ujian: Ketika hitungan mundur timer habis, jawaban siswa otomatis tersimpan dan terkirim ke sistem."
                   >
@@ -1320,13 +1435,49 @@ export const CBTTab: React.FC<Props> = ({
             {/* DAFTAR SOAL YANG SUDAH DIBUAT (UNDERNEATH THE FORM)             */}
             {/* ============================================================== */}
             <div className="mt-8 pt-6 border-t-2 border-slate-200 space-y-4">
+              {savedExamBuckets.length > 0 && (
+                <div className="p-3.5 rounded-2xl bg-indigo-50/60 border border-indigo-200 space-y-2">
+                  <span className="text-[11px] font-extrabold text-indigo-900 uppercase tracking-wider block">
+                    Paket &amp; Mapel Tersedia untuk Ujian Siswa ({savedExamBuckets.length} Paket Aktif):
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {savedExamBuckets.map((ex) => {
+                      const exPaket = inferPaketFromExam(ex);
+                      const exSub = ex.subPaket || 'Paket 1';
+                      const isCurrent = ex.id === activeExam.id;
+                      return (
+                        <button
+                          key={ex.id}
+                          type="button"
+                          onClick={() => {
+                            if (!paketList.includes(exPaket)) setPaketList((prev) => [...prev, exPaket]);
+                            if (!subPaketList.includes(exSub)) setSubPaketList((prev) => [...prev, exSub]);
+                            setSelectedPaket(exPaket);
+                            setSelectedSubPaket(exSub);
+                            handleMapelChange(ex.mapel);
+                            setTargetKelas(ex.kelas);
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer border ${
+                            isCurrent
+                              ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                              : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300'
+                          }`}
+                        >
+                          {exPaket} • {ex.mapel} ({exSub}) [{ex.kelas}] — {ex.soalList.length} Soal
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-4 rounded-3xl border border-slate-200">
                 <div>
                   <h3 className="font-display font-black text-base text-slate-900 flex items-center gap-2">
-                    <Layers className="w-5 h-5 text-emerald-600" /> Daftar Soal yang Sudah Dibuat
+                    <Layers className="w-5 h-5 text-emerald-600" /> Daftar Soal: {selectedPaket} • {selectedMapel} ({selectedSubPaket})
                   </h3>
                   <p className="text-xs text-slate-600">
-                    Total: <strong>{activeExam.soalList.length} Butir Soal</strong> • Total Bobot: <strong>{totalPoints} Poin</strong>
+                    Kelas: <strong>{targetKelas}</strong> • Total: <strong>{activeExam.soalList.length} Butir Soal</strong> • Total Bobot: <strong>{totalPoints} Poin</strong>
                   </p>
                 </div>
 
@@ -1389,14 +1540,33 @@ export const CBTTab: React.FC<Props> = ({
                           >
                             <Edit3 className="w-4 h-4" />
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteQuestion(q.id)}
-                            className="w-8 h-8 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 flex items-center justify-center transition cursor-pointer"
-                            title="Hapus Soal"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {confirmDeleteQId === q.id ? (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteQuestion(q.id)}
+                                className="px-2.5 py-1 rounded-xl bg-rose-600 text-white text-[11px] font-black cursor-pointer"
+                              >
+                                Hapus
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteQId(null)}
+                                className="px-2 py-1 rounded-xl bg-slate-100 text-slate-600 text-[11px] font-bold cursor-pointer"
+                              >
+                                Batal
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteQId(q.id)}
+                              className="w-8 h-8 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 flex items-center justify-center transition cursor-pointer"
+                              title="Hapus Soal"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </div>
 

@@ -37,12 +37,16 @@ import {
   getStoredCBTExams,
   getStoredCBTResults,
   saveStoredCBTResults,
+  getStoredTKAQuestions,
+  getStoredTKASubmissions,
+  saveStoredTKASubmissions,
   getStoredAssessments,
   saveStoredAssessments,
   getActiveFilters,
   CLASSES_LIST,
 } from '../utils/storage';
-import { evaluateQuestionScore } from '../utils/answerChecker';
+import { TKA_JENIS_LIST, TKA_MAPEL_LIST } from '../data/defaultData';
+import { evaluateQuestionScore, normalizeString } from '../utils/answerChecker';
 import { getLocalTodayStr } from '../utils/dateUtils';
 
 
@@ -66,6 +70,9 @@ interface ExamOptionItem {
   judul: string;
   durasiMenit: number;
   paketName: string;
+  subPaket?: string;
+  kelas?: string;
+  isTeacherCreated?: boolean;
   soalList: CBTQuestion[];
 }
 
@@ -101,9 +108,12 @@ export const StudentDashboard: React.FC<Props> = ({
     }
   }, [initialTab]);
 
-  // State untuk alur ujian
+  // State untuk alur ujian & filter dropdown Paket Soal + Mata Pelajaran
+  const [selectedPaketFilter, setSelectedPaketFilter] = useState<string>('');
+  const [selectedMapelFilter, setSelectedMapelFilter] = useState<string>('');
   const [selectedExamId, setSelectedExamId] = useState<string>('');
   const [isExamRunning, setIsExamRunning] = useState<boolean>(false);
+  const [runningSoalList, setRunningSoalList] = useState<CBTQuestion[]>([]);
   const [currentQIndex, setCurrentQIndex] = useState<number>(0);
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const [timeLeft, setTimeLeft] = useState<number>(0);
@@ -233,16 +243,63 @@ export const StudentDashboard: React.FC<Props> = ({
   };
 
 
-  // Daftar Ujian CBT Tersedia untuk Kelas Siswa
+  // Reset dropdown filters saat berpindah mode ujian (CBT <-> TKA)
+  useEffect(() => {
+    if (!isExamRunning) {
+      setSelectedPaketFilter('');
+      setSelectedMapelFilter('');
+      setSelectedExamId('');
+      setExamResult(null);
+      setRunningSoalList([]);
+    }
+  }, [viewMode]);
+
+  // Helper infer paketName dari CBTExam bila exam belum memiliki properti paketName
+  const inferCbtPaketName = (judul: string, explicitPaket?: string): string => {
+    if (explicitPaket) return explicitPaket;
+    const j = (judul || '').toLowerCase();
+    if (j.includes('asts')) return 'ASTS (Sumatif Tengah Semester)';
+    if (j.includes('asas')) return 'ASAS (Sumatif Akhir Semester)';
+    const sumatifMatch = judul?.match(/Sumatif\s*\d+\s*\(AS\s*\d+\)/i);
+    if (sumatifMatch) return sumatifMatch[0];
+    const remMatch = judul?.match(/Remedial\s*\d+/i);
+    if (remMatch) return remMatch[0];
+    return 'ASAS (Sumatif Akhir Semester)';
+  };
+
+  // Daftar Ujian CBT Tersedia (Dinamis dari Bank Soal Guru + Paket Contoh Bawaan)
   const cbtExamList: ExamOptionItem[] = useMemo(() => {
-    return [
+    const storedExams = getStoredCBTExams();
+    const dynamicTeacherExams: ExamOptionItem[] = [];
+
+    storedExams.forEach((ex) => {
+      if (!Array.isArray(ex.soalList) || ex.soalList.length === 0) return;
+      const paketName = inferCbtPaketName(ex.judul, ex.paketName);
+      const subPaket = ex.subPaket || 'Paket 1';
+      dynamicTeacherExams.push({
+        id: ex.id,
+        category: 'cbt',
+        mapel: ex.mapel,
+        judul: `${paketName} - ${ex.mapel} (${subPaket})`,
+        durasiMenit: ex.durasiMenit || 60,
+        paketName,
+        subPaket,
+        kelas: ex.kelas,
+        isTeacherCreated: true,
+        soalList: ex.soalList,
+      });
+    });
+
+    const sampleCbtDefaults: ExamOptionItem[] = [
       {
         id: 'cbt_ipas_as1',
         category: 'cbt',
         mapel: 'Ilmu Pengetahuan Alam dan Sosial (IPAS)',
-        judul: 'Sumatif 1 (AS 1) - Organ Tubuh & Sistem Pernapasan Manusia',
+        judul: 'Sumatif 1 (AS 1) - Organ Tubuh & Sistem Pernapasan Manusia (Paket 1)',
         durasiMenit: 60,
         paketName: 'Sumatif 1 (AS 1)',
+        subPaket: 'Paket 1',
+        kelas: currentStudent?.kelas || activeClass,
         soalList: [
           {
             id: 'cbt_q1',
@@ -295,9 +352,11 @@ export const StudentDashboard: React.FC<Props> = ({
         id: 'cbt_mtk_as2',
         category: 'cbt',
         mapel: 'Matematika',
-        judul: 'Sumatif 2 (AS 2) - Operasi Hitung Campuran Bilangan Bulat',
+        judul: 'Sumatif 2 (AS 2) - Operasi Hitung Campuran Bilangan Bulat (Paket 1)',
         durasiMenit: 60,
         paketName: 'Sumatif 2 (AS 2)',
+        subPaket: 'Paket 1',
+        kelas: currentStudent?.kelas || activeClass,
         soalList: [
           {
             id: 'cbt_m1',
@@ -341,9 +400,11 @@ export const StudentDashboard: React.FC<Props> = ({
         id: 'cbt_asts_indo',
         category: 'cbt',
         mapel: 'Bahasa Indonesia',
-        judul: 'ASTS (Sumatif Tengah Semester) - Membaca Kritis & Teks Eksplanasi',
+        judul: 'ASTS (Sumatif Tengah Semester) - Bahasa Indonesia (Paket 1)',
         durasiMenit: 90,
         paketName: 'ASTS (Sumatif Tengah Semester)',
+        subPaket: 'Paket 1',
+        kelas: currentStudent?.kelas || activeClass,
         soalList: [
           {
             id: 'cbt_bi1',
@@ -378,9 +439,11 @@ export const StudentDashboard: React.FC<Props> = ({
         id: 'cbt_asas_pancasila',
         category: 'cbt',
         mapel: 'Pendidikan Pancasila',
-        judul: 'ASAS (Sumatif Akhir Semester) - Hak, Kewajiban & Musyawarah Mufakat',
+        judul: 'ASAS (Sumatif Akhir Semester) - Pendidikan Pancasila (Paket 1)',
         durasiMenit: 90,
         paketName: 'ASAS (Sumatif Akhir Semester)',
+        subPaket: 'Paket 1',
+        kelas: currentStudent?.kelas || activeClass,
         soalList: [
           {
             id: 'cbt_p1',
@@ -412,18 +475,65 @@ export const StudentDashboard: React.FC<Props> = ({
         ],
       },
     ];
-  }, []);
 
-  // Daftar Ujian TKA (Tes Kemampuan Akademik berbasis C3/C4)
+    const merged = [...dynamicTeacherExams];
+    sampleCbtDefaults.forEach((sample) => {
+      const alreadyHasSameBucket = dynamicTeacherExams.some(
+        (d) =>
+          d.paketName === sample.paketName &&
+          d.mapel === sample.mapel &&
+          (d.subPaket || 'Paket 1') === (sample.subPaket || 'Paket 1')
+      );
+      if (!alreadyHasSameBucket) {
+        merged.push(sample);
+      }
+    });
+
+    return merged;
+  }, [viewMode, currentStudent?.kelas, activeClass]);
+
+  // Daftar Ujian TKA (Dinamis dikelompokkan per Jenis TKA + Mata Pelajaran dari Bank Soal TKA Guru)
   const tkaExamList: ExamOptionItem[] = useMemo(() => {
-    return [
+    const storedTkaQuestions = getStoredTKAQuestions();
+    const groupedMap = new Map<string, { jenisTka: string; mapel: string; list: CBTQuestion[] }>();
+
+    storedTkaQuestions.forEach((q) => {
+      const jenis = q.jenisTka || 'Simulasi 1';
+      const mapel = q.mapel || 'Bahasa Indonesia';
+      const key = `${jenis}__${mapel}`;
+      if (!groupedMap.has(key)) {
+        groupedMap.set(key, { jenisTka: jenis, mapel, list: [] });
+      }
+      groupedMap.get(key)!.list.push(q);
+    });
+
+    const slug = (v: string) =>
+      v
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+
+    const dynamicTkaExams: ExamOptionItem[] = Array.from(groupedMap.values()).map((grp) => ({
+      id: `tka_live_${slug(grp.jenisTka)}_${slug(grp.mapel)}`,
+      category: 'tka',
+      mapel: grp.mapel,
+      judul: `${grp.jenisTka} - ${grp.mapel}`,
+      durasiMenit: 60,
+      paketName: grp.jenisTka,
+      subPaket: 'Paket 1',
+      isTeacherCreated: true,
+      soalList: grp.list,
+    }));
+
+    const sampleTkaDefaults: ExamOptionItem[] = [
       {
         id: 'tka_indo_tp612',
         category: 'tka',
         mapel: 'Bahasa Indonesia',
-        judul: 'TKA Bahasa Indonesia - TP 6.1.2: Analisis Argumen & Ide Pokok (C3/C4)',
+        judul: 'Tryout TKA 1 - Bahasa Indonesia',
         durasiMenit: 90,
         paketName: 'Tryout TKA 1',
+        subPaket: 'Paket 1',
         soalList: [
           {
             id: 'tka_bi1',
@@ -459,9 +569,10 @@ export const StudentDashboard: React.FC<Props> = ({
         id: 'tka_mtk_tp621',
         category: 'tka',
         mapel: 'Matematika',
-        judul: 'TKA Matematika - TP 6.2.1: Pemecahan Masalah Rasio & Geometri Ruang (C4)',
+        judul: 'Tryout TKA 2 - Matematika',
         durasiMenit: 90,
         paketName: 'Tryout TKA 2',
+        subPaket: 'Paket 1',
         soalList: [
           {
             id: 'tka_mtk1',
@@ -487,9 +598,10 @@ export const StudentDashboard: React.FC<Props> = ({
         id: 'tka_ipas_tp631',
         category: 'tka',
         mapel: 'Ilmu Pengetahuan Alam dan Sosial (IPAS)',
-        judul: 'TKA IPAS - TP 6.3.1: Analisis Ekosistem & Perpindahan Energi (C4)',
+        judul: 'Tryout TKA 3 - Ilmu Pengetahuan Alam dan Sosial (IPAS)',
         durasiMenit: 90,
         paketName: 'Tryout TKA 3',
+        subPaket: 'Paket 1',
         soalList: [
           {
             id: 'tka_ip1',
@@ -522,15 +634,128 @@ export const StudentDashboard: React.FC<Props> = ({
         ],
       },
     ];
-  }, []);
+
+    const merged = [...dynamicTkaExams];
+    sampleTkaDefaults.forEach((sample) => {
+      const exists = dynamicTkaExams.some(
+        (d) => d.paketName === sample.paketName && d.mapel === sample.mapel
+      );
+      if (!exists) {
+        merged.push(sample);
+      }
+    });
+
+    return merged;
+  }, [viewMode]);
 
   // Daftar ujian yang aktif tergantung mode (CBT atau TKA)
   const currentAvailableExams = viewMode === 'tka' ? tkaExamList : cbtExamList;
 
-  // Ujian yang sedang dipilih di panel dropdown
+  // Daftar opsi unik Paket Soal & Mata Pelajaran untuk dropdown
+  const availablePaketOptions = useMemo(() => {
+    const set = new Set<string>();
+    if (viewMode === 'tka') {
+      TKA_JENIS_LIST.forEach((j) => set.add(j));
+    }
+    currentAvailableExams.forEach((e) => set.add(e.paketName));
+    return Array.from(set);
+  }, [currentAvailableExams, viewMode]);
+
+  const availableMapelOptions = useMemo(() => {
+    const set = new Set<string>();
+    if (viewMode === 'tka') {
+      TKA_MAPEL_LIST.forEach((m) => set.add(m));
+    }
+    currentAvailableExams
+      .filter((e) => !selectedPaketFilter || e.paketName === selectedPaketFilter)
+      .forEach((e) => set.add(e.mapel));
+    if (set.size === 0) {
+      currentAvailableExams.forEach((e) => set.add(e.mapel));
+    }
+    return Array.from(set);
+  }, [currentAvailableExams, selectedPaketFilter, viewMode]);
+
+  // Daftar ujian tersaring sesuai Paket Soal & Mapel yang dipilih siswa
+  const filteredExamsForDropdown = useMemo(() => {
+    return currentAvailableExams.filter((e) => {
+      if (selectedPaketFilter && e.paketName !== selectedPaketFilter) return false;
+      if (selectedMapelFilter && e.mapel !== selectedMapelFilter) return false;
+      return true;
+    });
+  }, [currentAvailableExams, selectedPaketFilter, selectedMapelFilter]);
+
+  // Otomatis pilih ujian jika paket & mapel sudah dipilih dan tersedia
+  useEffect(() => {
+    if (isExamRunning) return;
+    if (selectedPaketFilter && selectedMapelFilter) {
+      if (filteredExamsForDropdown.length > 0) {
+        const stillValid = filteredExamsForDropdown.some((e) => e.id === selectedExamId);
+        if (!stillValid) {
+          setSelectedExamId(filteredExamsForDropdown[0].id);
+        }
+      } else {
+        setSelectedExamId('');
+      }
+    } else if (selectedExamId && !filteredExamsForDropdown.some((e) => e.id === selectedExamId)) {
+      setSelectedExamId('');
+    }
+  }, [selectedPaketFilter, selectedMapelFilter, filteredExamsForDropdown, isExamRunning]);
+
+  // Ujian yang sedang dipilih
   const currentExam = useMemo(() => {
     return currentAvailableExams.find((e) => e.id === selectedExamId) || null;
   }, [currentAvailableExams, selectedExamId]);
+
+  const activeExamSoalList = useMemo(() => {
+    if (isExamRunning && runningSoalList.length > 0) return runningSoalList;
+    return currentExam?.soalList || [];
+  }, [isExamRunning, runningSoalList, currentExam]);
+
+  // Evaluasi skor mendukung baik format kunci huruf ("A"/"B") maupun teks penuh opsi ("Jantung")
+  const gradeQuestionAnswer = (q: CBTQuestion, studentAns: any): { isCorrect: boolean; earnedScore: number } => {
+    if (studentAns === undefined || studentAns === null || studentAns === '') {
+      return { isCorrect: false, earnedScore: 0 };
+    }
+    if (q.tipe === 'pg' && q.opsi && q.opsi.length > 0) {
+      const ansStr = typeof studentAns === 'object' ? studentAns.text || studentAns.key || '' : String(studentAns);
+      const ansKey = typeof studentAns === 'object' ? studentAns.key || '' : '';
+      const keyNorm = normalizeString(String(q.kunciJawaban || ''));
+
+      // Cocokkan teks langsung ATAU huruf opsi ('A','B','C','D') ATAU awalan 'A. ...'
+      const optIdx = q.opsi.findIndex((o) => normalizeString(o) === normalizeString(ansStr));
+      const derivedKey = optIdx >= 0 ? String.fromCharCode(65 + optIdx).toLowerCase() : normalizeString(ansKey);
+
+      const isDirectText = normalizeString(ansStr) === keyNorm;
+      const isLetterKey = derivedKey !== '' && derivedKey === keyNorm;
+      const isOptionAtKeyLetter =
+        keyNorm.length === 1 &&
+        keyNorm >= 'a' &&
+        keyNorm <= 'z' &&
+        optIdx >= 0 &&
+        optIdx === keyNorm.charCodeAt(0) - 97;
+      const isPrefixMatch =
+        ansStr.trim().charAt(1) === '.' &&
+        normalizeString(ansStr.trim().charAt(0)) === keyNorm;
+
+      const correct = isDirectText || isLetterKey || isOptionAtKeyLetter || isPrefixMatch;
+      return { isCorrect: correct, earnedScore: correct ? q.bobot : 0 };
+    }
+    if (q.tipe === 'pg_kompleks') {
+      const selectedArr: string[] = Array.isArray(studentAns) ? studentAns : [String(studentAns)];
+      const directRes = evaluateQuestionScore('pg_kompleks', selectedArr, q.kunciJawaban, q.bobot);
+      if (directRes.earnedScore > 0) return directRes;
+      // Fallback jika kunci disimpan dalam huruf A/B/C/D dan jawaban disimpan sebagai teks opsi
+      if (q.opsi && q.opsi.length > 0) {
+        const mappedLetters = selectedArr.map((txt) => {
+          const idx = q.opsi!.findIndex((o) => normalizeString(o) === normalizeString(txt));
+          return idx >= 0 ? String.fromCharCode(65 + idx) : txt;
+        });
+        return evaluateQuestionScore('pg_kompleks', mappedLetters, q.kunciJawaban, q.bobot);
+      }
+      return directRes;
+    }
+    return evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, q.bobot);
+  };
 
   // Timer interval saat ujian berlangsung
   useEffect(() => {
@@ -553,9 +778,40 @@ export const StudentDashboard: React.FC<Props> = ({
   // Handler mulai ujian (mengunci dropdown dan memunculkan soal)
   const handleStartExam = () => {
     if (!currentExam) {
-      showToast('Pilih ujian terlebih dahulu dari menu dropdown di atas!', 'error');
+      showToast('Pilih paket soal dan mata pelajaran terlebih dahulu!', 'error');
       return;
     }
+    if (currentExam.soalList.length === 0) {
+      showToast('Belum ada butir soal pada paket yang dipilih.', 'error');
+      return;
+    }
+
+    const acakSoal =
+      viewMode === 'tka'
+        ? localStorage.getItem('sekolahku_tka_acak_soal') === 'true'
+        : localStorage.getItem('sekolahku_cbt_acak_soal') === 'true';
+    const acakJawaban =
+      viewMode === 'tka'
+        ? localStorage.getItem('sekolahku_tka_acak_jawaban') === 'true'
+        : localStorage.getItem('sekolahku_cbt_acak_jawaban') === 'true';
+
+    let preparedList = [...currentExam.soalList];
+    if (acakSoal) {
+      preparedList = [...preparedList].sort(() => Math.random() - 0.5);
+    }
+    if (acakJawaban) {
+      preparedList = preparedList.map((q) => {
+        if (q.opsi && q.opsi.length > 0) {
+          return {
+            ...q,
+            opsi: [...q.opsi].sort(() => Math.random() - 0.5),
+          };
+        }
+        return q;
+      });
+    }
+
+    setRunningSoalList(preparedList);
     setTimeLeft(currentExam.durasiMenit * 60);
     setCurrentQIndex(0);
     setAnswers({});
@@ -568,13 +824,14 @@ export const StudentDashboard: React.FC<Props> = ({
   const handleFinishExam = (isAutoSubmit: boolean = false) => {
     if (!currentExam) return;
 
+    const evaluatedQuestions = activeExamSoalList.length > 0 ? activeExamSoalList : currentExam.soalList;
     let earned = 0;
     let max = 0;
 
-    currentExam.soalList.forEach((q) => {
-      max += q.bobot;
+    evaluatedQuestions.forEach((q) => {
+      max += q.bobot || 10;
       const ans = answers[q.id];
-      const evalRes = evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot);
+      const evalRes = gradeQuestionAnswer(q, ans);
       earned += evalRes.earnedScore;
     });
 
@@ -582,7 +839,7 @@ export const StudentDashboard: React.FC<Props> = ({
     setExamResult({ score: finalGrade, maxScore: 100 });
     setIsExamRunning(false);
 
-    // Rekam ke CBT / TKA Results di storage
+    // Rekam ke CBT Results di storage
     const storedRes = getStoredCBTResults();
     storedRes.push({
       examId: currentExam.id,
@@ -595,9 +852,87 @@ export const StudentDashboard: React.FC<Props> = ({
     });
     saveStoredCBTResults(storedRes);
 
+    // Jika TKA, rekam juga ke TKA Submissions agar muncul di Hasil/Rapor TKA
+    if (currentExam.category === 'tka') {
+      try {
+        const existingSubs = getStoredTKASubmissions();
+        const normMapelKey: 'Bahasa Indonesia' | 'Matematika' | 'IPAS' | 'Bahasa Inggris' | 'Koding dan Kecerdasan Artifisial (KKA)' =
+          currentExam.mapel.includes('IPAS')
+            ? 'IPAS'
+            : currentExam.mapel.includes('Koding') || currentExam.mapel.includes('KKA')
+            ? 'Koding dan Kecerdasan Artifisial (KKA)'
+            : currentExam.mapel === 'Matematika'
+            ? 'Matematika'
+            : currentExam.mapel === 'Bahasa Inggris'
+            ? 'Bahasa Inggris'
+            : 'Bahasa Indonesia';
+
+        const prevSub = existingSubs.find(
+          (s) => s.studentId === currentStudent.id && s.paket === currentExam.paketName
+        );
+        const updatedScores = {
+          'Bahasa Indonesia': prevSub?.scoresPerMapel?.['Bahasa Indonesia'] ?? 80,
+          'Matematika': prevSub?.scoresPerMapel?.['Matematika'] ?? 80,
+          'IPAS': prevSub?.scoresPerMapel?.['IPAS'] ?? 80,
+          'Bahasa Inggris': prevSub?.scoresPerMapel?.['Bahasa Inggris'] ?? 80,
+          'Koding dan Kecerdasan Artifisial (KKA)': prevSub?.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ?? 80,
+          [normMapelKey]: finalGrade,
+        };
+        const avgTotal = Math.round(
+          (updatedScores['Bahasa Indonesia'] +
+            updatedScores['Matematika'] +
+            updatedScores['IPAS'] +
+            updatedScores['Bahasa Inggris'] +
+            updatedScores['Koding dan Kecerdasan Artifisial (KKA)']) /
+            5
+        );
+        const predikat: 'A' | 'B' | 'C' | 'D' =
+          avgTotal >= 88 ? 'A' : avgTotal >= 78 ? 'B' : avgTotal >= 68 ? 'C' : 'D';
+        const newSub = {
+          id: `sub_${currentStudent.id}_${currentExam.paketName.replace(/\s+/g, '_')}_${Date.now()}`,
+          studentId: currentStudent.id,
+          studentName: currentStudent.nama,
+          nisn: currentStudent.nisn,
+          kelas: currentStudent.kelas,
+          fotoUrl: currentStudent.fotoUrl,
+          paket: currentExam.paketName,
+          answers,
+          scoresPerMapel: updatedScores,
+          skorTotal: avgTotal,
+          predikat,
+          status: (avgTotal >= 75 ? 'Tuntas' : 'Remedial') as 'Tuntas' | 'Remedial',
+          tanggalUjian: new Date().toLocaleDateString('id-ID', {
+            day: '2-digit',
+            month: 'long',
+            year: 'numeric',
+          }),
+          durasiPengerjaan: `${Math.max(1, currentExam.durasiMenit - Math.floor(timeLeft / 60))} Menit`,
+        };
+        const otherSubs = existingSubs.filter(
+          (s) => !(s.studentId === currentStudent.id && s.paket === currentExam.paketName)
+        );
+        saveStoredTKASubmissions([newSub, ...otherSubs]);
+      } catch (tkaErr) {
+        console.warn('Sync TKA submission error:', tkaErr);
+      }
+    }
+
     // Sinkronisasi ke asesmen siswa secara otomatis
     try {
       const filters = getActiveFilters();
+      const targetClass = currentStudent?.kelas || activeClass;
+      const normMapel = currentExam.mapel.toLowerCase();
+      const matchedSubject = subjects.find((s) => {
+        const sn = (s.name || '').toLowerCase();
+        const sc = (s.code || '').toUpperCase();
+        return (
+          sn === normMapel ||
+          sn.includes(normMapel) ||
+          normMapel.includes(sn) ||
+          ((normMapel.includes('koding') || normMapel.includes('kka')) &&
+            (sc.startsWith('KKA') || sn.includes('koding') || sn.includes('kka')))
+        );
+      });
       const subjectMap: Record<string, string> = {
         'Pendidikan Agama Islam': 's_pabp_islam',
         'Pendidikan Pancasila': 's_pancasila',
@@ -608,24 +943,30 @@ export const StudentDashboard: React.FC<Props> = ({
         'Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)': 's_pjok',
         'Bahasa Inggris': 's_binggris',
         'Muatan Lokal (PLBJ)': 's_plbj',
+        'Koding dan Kecerdasan Artifisial (KKA)': 's_k6_kka',
       };
-      const subId = subjectMap[currentExam.mapel] || 's_bindonesia';
-      const assessKey = `${filters.year}_${filters.semester}_${activeClass}_${subId}`;
+      const subId = matchedSubject?.id || subjectMap[currentExam.mapel] || 's_bindonesia';
+      const assessKey = `${filters.year}_${filters.semester}_${targetClass}_${subId}`;
       const existing = getStoredAssessments(assessKey);
 
       if (!existing[currentStudent.id]) {
         existing[currentStudent.id] = { sumatif: {}, remedial: {}, asts: 0, asas: 0 };
       }
 
-      if (currentExam.paketName.includes('ASTS')) {
+      const isRemedial = currentExam.paketName.toLowerCase().includes('remedial');
+      if (currentExam.paketName.toUpperCase().includes('ASTS')) {
         existing[currentStudent.id].asts = finalGrade;
-      } else if (currentExam.paketName.includes('ASAS')) {
+      } else if (currentExam.paketName.toUpperCase().includes('ASAS')) {
         existing[currentStudent.id].asas = finalGrade;
       } else {
-        const asMatch = currentExam.paketName.match(/(?:Sumatif|AS|UH)\s*(\d+)/i);
+        const asMatch = currentExam.paketName.match(/(?:Sumatif|Remedial|AS|UH)\s*(?:Inklusi\s*)?(\d+)/i);
         if (asMatch) {
           const idx = parseInt(asMatch[1]);
-          existing[currentStudent.id].sumatif[idx] = finalGrade;
+          if (isRemedial) {
+            existing[currentStudent.id].remedial[idx] = finalGrade;
+          } else {
+            existing[currentStudent.id].sumatif[idx] = finalGrade;
+          }
         }
       }
       saveStoredAssessments(assessKey, existing);
@@ -1348,50 +1689,237 @@ export const StudentDashboard: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* TAHAP A: PANEL PEMILIHAN UJIAN (DROPDOWN TUNGGAL) */}
-      <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
-        <div>
-          <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-wider mb-1 flex items-center gap-2">
-            <span className={`w-2.5 h-2.5 rounded-full ${viewMode === 'tka' ? 'bg-purple-600' : 'bg-rose-600'}`}></span>
-            Panel Pemilihan Ujian (Pilih Ujian Aktif):
-          </label>
-          <p className="text-xs text-slate-500 mb-2">
-            Pilihlah salah satu nama ujian dari menu dropdown di bawah ini. Waktu dan butir soal akan otomatis disesuaikan.
-          </p>
+      {/* TAHAP A: PANEL PEMILIHAN PAKET SOAL & MATA PELAJARAN */}
+      <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-wider mb-1 flex items-center gap-2">
+              <span className={`w-2.5 h-2.5 rounded-full ${viewMode === 'tka' ? 'bg-purple-600' : 'bg-rose-600'}`}></span>
+              {viewMode === 'tka'
+                ? 'Pilih Jenis Soal TKA & Mata Pelajaran'
+                : 'Pilih Paket Soal CBT & Mata Pelajaran'}
+            </label>
+            <p className="text-xs text-slate-500">
+              {viewMode === 'tka'
+                ? 'Pilih jenis TKA (misal: Simulasi 1 / Try Out 1) dan mata pelajaran yang diinginkan. Soal akan tampil sesuai paket & mapel yang dibuat guru.'
+                : 'Pilih jenis/paket soal (misal: Sumatif 1) dan mata pelajaran. Daftar paket soal yang tersedia akan otomatis muncul sesuai pilihan.'}
+            </p>
+          </div>
 
-          <select
-            value={selectedExamId}
-            disabled={isExamRunning}
-            onChange={(e) => {
-              setSelectedExamId(e.target.value);
-              setExamResult(null);
-            }}
-            className={`w-full p-3.5 rounded-2xl border-2 font-display font-extrabold text-sm outline-none transition cursor-pointer shadow-xs ${
-              isExamRunning
-                ? 'bg-slate-100 border-slate-300 text-slate-500 cursor-not-allowed'
-                : selectedExamId
-                ? viewMode === 'tka'
-                  ? 'border-purple-600 bg-purple-50/50 text-purple-950 focus:ring-3 focus:ring-purple-200'
-                  : 'border-rose-600 bg-rose-50/50 text-rose-950 focus:ring-3 focus:ring-rose-200'
-                : 'border-slate-300 bg-white text-slate-800 focus:border-rose-500'
-            }`}
-          >
-            <option value="">-- Silakan Pilih Ujian yang Sedang Aktif --</option>
-            {currentAvailableExams.map((exam) => (
-              <option key={exam.id} value={exam.id}>
-                {exam.judul} • [Waktu: {exam.durasiMenit} Menit]
-              </option>
-            ))}
-          </select>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* DROPDOWN 1: PAKET / JENIS SOAL */}
+            <div>
+              <label className="block text-[11px] font-extrabold text-slate-700 mb-1.5">
+                {viewMode === 'tka' ? '1. Jenis Soal / Simulasi TKA' : '1. Jenis / Paket Soal CBT'}
+              </label>
+              <select
+                value={selectedPaketFilter}
+                disabled={isExamRunning}
+                onChange={(e) => {
+                  const newPaket = e.target.value;
+                  setSelectedPaketFilter(newPaket);
+                  setExamResult(null);
+                  if (!newPaket) {
+                    setSelectedExamId('');
+                  }
+                }}
+                className={`w-full p-3 rounded-2xl border-2 font-display font-extrabold text-xs sm:text-sm outline-none transition cursor-pointer shadow-xs ${
+                  isExamRunning
+                    ? 'bg-slate-100 border-slate-300 text-slate-500 cursor-not-allowed'
+                    : selectedPaketFilter
+                    ? viewMode === 'tka'
+                      ? 'border-purple-600 bg-purple-50/40 text-purple-950'
+                      : 'border-rose-600 bg-rose-50/40 text-rose-950'
+                    : 'border-slate-300 bg-white text-slate-800'
+                }`}
+              >
+                <option value="">
+                  {viewMode === 'tka' ? '-- Semua / Pilih Jenis Soal TKA --' : '-- Semua / Pilih Jenis Soal CBT --'}
+                </option>
+                {availablePaketOptions.map((paket) => {
+                  const matchingInPaket = currentAvailableExams.filter((ex) => ex.paketName === paket);
+                  const qTotal = matchingInPaket.reduce((sum, ex) => sum + ex.soalList.length, 0);
+                  return (
+                    <option key={paket} value={paket}>
+                      {paket} {qTotal > 0 ? `(${matchingInPaket.length} Paket Mapel • ${qTotal} Soal)` : '(Belum ada soal)'}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            {/* DROPDOWN 2: MATA PELAJARAN */}
+            <div>
+              <label className="block text-[11px] font-extrabold text-slate-700 mb-1.5">
+                2. Mata Pelajaran
+              </label>
+              <select
+                value={selectedMapelFilter}
+                disabled={isExamRunning}
+                onChange={(e) => {
+                  setSelectedMapelFilter(e.target.value);
+                  setExamResult(null);
+                }}
+                className={`w-full p-3 rounded-2xl border-2 font-display font-extrabold text-xs sm:text-sm outline-none transition cursor-pointer shadow-xs ${
+                  isExamRunning
+                    ? 'bg-slate-100 border-slate-300 text-slate-500 cursor-not-allowed'
+                    : selectedMapelFilter
+                    ? viewMode === 'tka'
+                      ? 'border-purple-600 bg-purple-50/40 text-purple-950'
+                      : 'border-rose-600 bg-rose-50/40 text-rose-950'
+                    : 'border-slate-300 bg-white text-slate-800'
+                }`}
+              >
+                <option value="">-- Semua / Pilih Mata Pelajaran --</option>
+                {availableMapelOptions.map((mapel) => {
+                  const qCount = currentAvailableExams
+                    .filter((ex) => (!selectedPaketFilter || ex.paketName === selectedPaketFilter) && ex.mapel === mapel)
+                    .reduce((sum, ex) => sum + ex.soalList.length, 0);
+                  return (
+                    <option key={mapel} value={mapel}>
+                      {mapel} {qCount > 0 ? `(${qCount} Soal)` : '(Belum ada soal)'}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          </div>
+
+          {/* DROPDOWN / KARTU PAKET YANG SESUAI HASIL FILTER */}
+          {!isExamRunning && (
+            <div className="space-y-2.5 pt-1">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-extrabold text-slate-700">
+                  {selectedPaketFilter || selectedMapelFilter
+                    ? `Daftar Soal Tersedia (${filteredExamsForDropdown.length} Paket Cocok):`
+                    : `Pilih Paket Soal Tersedia (${filteredExamsForDropdown.length} Paket Aktif):`}
+                </span>
+                {(selectedPaketFilter || selectedMapelFilter) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedPaketFilter('');
+                      setSelectedMapelFilter('');
+                      setSelectedExamId('');
+                      setExamResult(null);
+                    }}
+                    className="text-[11px] font-bold text-slate-500 hover:text-slate-800 underline cursor-pointer"
+                  >
+                    Reset Filter
+                  </button>
+                )}
+              </div>
+
+              {filteredExamsForDropdown.length > 0 ? (
+                <>
+                  <select
+                    value={selectedExamId}
+                    onChange={(e) => {
+                      setSelectedExamId(e.target.value);
+                      setExamResult(null);
+                    }}
+                    className={`w-full p-3 rounded-2xl border-2 font-display font-extrabold text-xs sm:text-sm outline-none transition cursor-pointer ${
+                      selectedExamId
+                        ? viewMode === 'tka'
+                          ? 'border-purple-500 bg-purple-50/30 text-purple-950'
+                          : 'border-rose-500 bg-rose-50/30 text-rose-950'
+                        : 'border-slate-300 bg-slate-50 text-slate-800'
+                    }`}
+                  >
+                    <option value="">-- Pilih Paket Soal yang Akan Dikerjakan --</option>
+                    {filteredExamsForDropdown.map((exam) => (
+                      <option key={exam.id} value={exam.id}>
+                        {exam.paketName} • {exam.mapel}
+                        {exam.subPaket ? ` (${exam.subPaket})` : ''}
+                        {exam.kelas ? ` [${exam.kelas}]` : ''} • {exam.soalList.length} Soal • {exam.durasiMenit} Menit
+                      </option>
+                    ))}
+                  </select>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                    {filteredExamsForDropdown.map((exam) => {
+                      const isPicked = selectedExamId === exam.id;
+                      return (
+                        <button
+                          key={exam.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedExamId(exam.id);
+                            setExamResult(null);
+                          }}
+                          className={`p-3.5 rounded-2xl border-2 text-left transition cursor-pointer flex flex-col justify-between gap-2 ${
+                            isPicked
+                              ? viewMode === 'tka'
+                                ? 'border-purple-600 bg-purple-50 shadow-xs'
+                                : 'border-rose-600 bg-rose-50 shadow-xs'
+                              : 'border-slate-200 bg-slate-50/70 hover:bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center justify-between gap-1">
+                              <span
+                                className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md ${
+                                  viewMode === 'tka'
+                                    ? 'bg-purple-100 text-purple-800'
+                                    : 'bg-rose-100 text-rose-800'
+                                }`}
+                              >
+                                {exam.paketName}
+                              </span>
+                              {exam.subPaket && (
+                                <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md">
+                                  {exam.subPaket}
+                                </span>
+                              )}
+                            </div>
+                            <h4 className="font-display font-black text-xs text-slate-800 leading-snug">
+                              {exam.mapel}
+                            </h4>
+                            <p className="text-[11px] text-slate-500">
+                              {exam.soalList.length} Butir Soal • {exam.durasiMenit} Menit
+                              {exam.kelas ? ` • ${exam.kelas}` : ''}
+                            </p>
+                          </div>
+                          <span
+                            className={`text-[11px] font-extrabold ${
+                              isPicked
+                                ? viewMode === 'tka'
+                                  ? 'text-purple-700'
+                                  : 'text-rose-700'
+                                : 'text-slate-600'
+                            }`}
+                          >
+                            {isPicked ? '✓ Paket Terpilih' : 'Klik untuk Memilih →'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <div className="p-5 rounded-2xl bg-amber-50 border border-amber-200 text-center space-y-1">
+                  <h4 className="font-display font-black text-xs sm:text-sm text-amber-900">
+                    Belum Ada Soal untuk Pilihan Ini
+                  </h4>
+                  <p className="text-xs text-amber-800">
+                    Guru belum membuat butir soal untuk{' '}
+                    <strong>{selectedPaketFilter || 'Paket Ini'}</strong> —{' '}
+                    <strong>{selectedMapelFilter || 'Mata Pelajaran Ini'}</strong>. Silakan pilih kombinasi paket soal &amp; mata pelajaran lainnya.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           {isExamRunning && (
             <p className="text-[11px] text-amber-600 font-bold mt-1.5 flex items-center gap-1">
-              <Lock className="w-3.5 h-3.5" /> Pilihan dropdown terkunci selama ujian sedang berlangsung.
+              <Lock className="w-3.5 h-3.5" /> Pilihan paket &amp; mata pelajaran terkunci selama ujian berlangsung.
             </p>
           )}
         </div>
 
         {/* JIKA BELUM ADA UJIAN DIPILIH: AREA SOAL DAN WAKTU TERKUNCI */}
-        {!selectedExamId && (
+        {!selectedExamId && filteredExamsForDropdown.length > 0 && (
           <div className="p-8 rounded-3xl bg-slate-50 border-2 border-dashed border-slate-200 text-center space-y-2">
             <div className="w-12 h-12 rounded-2xl bg-slate-200 text-slate-500 flex items-center justify-center mx-auto">
               <Lock className="w-6 h-6" />
@@ -1400,7 +1928,7 @@ export const StudentDashboard: React.FC<Props> = ({
               Area Soal &amp; Menu Waktu Terkunci
             </h4>
             <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Silakan pilih salah satu paket ujian dari menu dropdown di atas terlebih dahulu untuk memunculkan detail ujian, durasi waktu pengerjaan, dan tombol mulai.
+              Silakan pilih paket soal &amp; mata pelajaran di atas untuk memunculkan detail ujian, durasi waktu pengerjaan, dan tombol mulai.
             </p>
           </div>
         )}
@@ -1412,11 +1940,16 @@ export const StudentDashboard: React.FC<Props> = ({
           } space-y-5 animate-in fade-in duration-300`}>
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 pb-4">
               <div>
-                <span className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
-                  viewMode === 'tka' ? 'bg-purple-200 text-purple-900' : 'bg-rose-200 text-rose-900'
-                }`}>
-                  {currentExam.mapel}
-                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
+                    viewMode === 'tka' ? 'bg-purple-200 text-purple-900' : 'bg-rose-200 text-rose-900'
+                  }`}>
+                    {currentExam.mapel}
+                  </span>
+                  <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-800">
+                    {currentExam.paketName}{currentExam.subPaket ? ` • ${currentExam.subPaket}` : ''}
+                  </span>
+                </div>
                 <h3 className="font-display font-black text-lg text-slate-800 mt-1">
                   {currentExam.judul}
                 </h3>
@@ -1510,7 +2043,7 @@ export const StudentDashboard: React.FC<Props> = ({
                 <div className="text-right hidden sm:block">
                   <span className="text-[10px] font-bold text-slate-300 block">Nomor Soal</span>
                   <span className="text-xs font-black text-white">
-                    {currentQIndex + 1} dari {currentExam.soalList.length}
+                    {currentQIndex + 1} dari {activeExamSoalList.length}
                   </span>
                 </div>
               </div>
@@ -1518,7 +2051,7 @@ export const StudentDashboard: React.FC<Props> = ({
 
             {/* Butir Soal & Pilihan Jawaban */}
             {(() => {
-              const q = currentExam.soalList[currentQIndex];
+              const q = activeExamSoalList[currentQIndex];
               if (!q) return null;
               const selectedAnswer = answers[q.id];
 
@@ -1526,25 +2059,146 @@ export const StudentDashboard: React.FC<Props> = ({
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-6">
                   {/* Nomor Soal & Bobot */}
                   <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                    <span className="font-display font-black text-sm text-slate-800">
-                      Soal Nomor #{currentQIndex + 1}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-display font-black text-sm text-slate-800">
+                        Soal Nomor #{currentQIndex + 1}
+                      </span>
+                      <span className="text-[10px] font-extrabold uppercase bg-slate-100 text-slate-700 px-2.5 py-0.5 rounded-lg">
+                        {q.tipe === 'pg'
+                          ? 'Pilihan Ganda'
+                          : q.tipe === 'pg_kompleks'
+                          ? 'PG Kompleks'
+                          : q.tipe === 'benar_salah'
+                          ? 'Benar / Salah'
+                          : q.tipe === 'isian'
+                          ? 'Isian Singkat'
+                          : q.tipe === 'menjodohkan'
+                          ? 'Menjodohkan'
+                          : 'Uraian'}
+                      </span>
+                    </div>
                     <span className="text-xs font-bold bg-slate-100 text-slate-700 px-3 py-1 rounded-xl">
                       Bobot: {q.bobot} Poin
                     </span>
                   </div>
+
+                  {/* Gambar Soal (Jika ada) */}
+                  {(q.gambarUrl || q.gambarUrl2) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                      {q.gambarUrl && (
+                        <img
+                          src={q.gambarUrl}
+                          alt="Gambar Soal 1"
+                          className="max-h-56 w-full object-contain rounded-xl bg-white border border-slate-100"
+                        />
+                      )}
+                      {q.gambarUrl2 && (
+                        <img
+                          src={q.gambarUrl2}
+                          alt="Gambar Soal 2"
+                          className="max-h-56 w-full object-contain rounded-xl bg-white border border-slate-100"
+                        />
+                      )}
+                    </div>
+                  )}
 
                   {/* Pertanyaan */}
                   <div className="text-sm font-semibold text-slate-800 leading-relaxed whitespace-pre-line">
                     {q.pertanyaan}
                   </div>
 
-                  {/* Pilihan Opsi Jawaban (A, B, C, D) */}
+                  {/* Pilihan Opsi Jawaban sesuai Tipe Soal */}
                   <div className="space-y-2.5">
-                    {q.opsi && q.opsi.length > 0 ? (
+                    {q.tipe === 'pg_kompleks' && q.opsi && q.opsi.length > 0 ? (
+                      <>
+                        <p className="text-[11px] font-bold text-slate-500">
+                          ✓ Pilih satu atau lebih jawaban yang benar:
+                        </p>
+                        {q.opsi.map((opsi, oIdx) => {
+                          const optKey = String.fromCharCode(65 + oIdx);
+                          const selectedArr: string[] = Array.isArray(selectedAnswer) ? selectedAnswer : [];
+                          const isChosen = selectedArr.includes(opsi) || selectedArr.includes(optKey);
+                          const optImg = q.opsiGambar?.[optKey];
+
+                          return (
+                            <div
+                              key={oIdx}
+                              onClick={() => {
+                                const updated = isChosen
+                                  ? selectedArr.filter((v) => v !== opsi && v !== optKey)
+                                  : [...selectedArr, opsi];
+                                setAnswers((prev) => ({
+                                  ...prev,
+                                  [q.id]: updated,
+                                }));
+                              }}
+                              className={`p-4 rounded-2xl border-2 transition cursor-pointer flex flex-col gap-2 ${
+                                isChosen
+                                  ? viewMode === 'tka'
+                                    ? 'border-purple-600 bg-purple-50 text-purple-950 font-bold shadow-xs'
+                                    : 'border-rose-600 bg-rose-50 text-rose-950 font-bold shadow-xs'
+                                  : 'border-slate-200 hover:border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                              }`}
+                            >
+                              <div className="flex items-center gap-3.5">
+                                <input
+                                  type="checkbox"
+                                  checked={isChosen}
+                                  onChange={() => {}}
+                                  className="w-4 h-4 rounded cursor-pointer"
+                                />
+                                <span className="w-7 h-7 rounded-lg font-mono font-black text-xs flex items-center justify-center shrink-0 bg-slate-100 text-slate-700 border border-slate-200">
+                                  {optKey}
+                                </span>
+                                <span className="text-xs leading-normal">{opsi}</span>
+                              </div>
+                              {optImg && (
+                                <img
+                                  src={optImg}
+                                  alt={`Gambar Opsi ${optKey}`}
+                                  className="h-20 w-auto object-contain rounded-lg border border-slate-200 bg-white ml-11"
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </>
+                    ) : q.tipe === 'benar_salah' ? (
+                      <div className="grid grid-cols-2 gap-3">
+                        {['Benar', 'Salah'].map((val) => {
+                          const isChosen = selectedAnswer === val;
+                          return (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() =>
+                                setAnswers((prev) => ({
+                                  ...prev,
+                                  [q.id]: val,
+                                }))
+                              }
+                              className={`p-4 rounded-2xl border-2 font-display font-black text-sm transition cursor-pointer ${
+                                isChosen
+                                  ? val === 'Benar'
+                                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                                    : 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                              }`}
+                            >
+                              {val === 'Benar' ? '✓ Benar' : '✗ Salah'}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : q.opsi && q.opsi.length > 0 ? (
                       q.opsi.map((opsi, oIdx) => {
-                        const optKey = opsi.charAt(0); // 'A', 'B', 'C', 'D'
-                        const isChosen = selectedAnswer === optKey || selectedAnswer === opsi;
+                        const optKey = String.fromCharCode(65 + oIdx); // 'A', 'B', 'C', 'D'
+                        const optImg = q.opsiGambar?.[optKey];
+                        const isChosen =
+                          selectedAnswer === opsi ||
+                          selectedAnswer === optKey ||
+                          (typeof selectedAnswer === 'object' &&
+                            (selectedAnswer?.text === opsi || selectedAnswer?.key === optKey));
 
                         return (
                           <div
@@ -1552,10 +2206,10 @@ export const StudentDashboard: React.FC<Props> = ({
                             onClick={() => {
                               setAnswers((prev) => ({
                                 ...prev,
-                                [q.id]: optKey,
+                                [q.id]: { key: optKey, text: opsi },
                               }));
                             }}
-                            className={`p-4 rounded-2xl border-2 transition cursor-pointer flex items-center gap-3.5 ${
+                            className={`p-4 rounded-2xl border-2 transition cursor-pointer flex flex-col gap-2 ${
                               isChosen
                                 ? viewMode === 'tka'
                                   ? 'border-purple-600 bg-purple-50 text-purple-950 font-bold shadow-xs'
@@ -1563,23 +2217,32 @@ export const StudentDashboard: React.FC<Props> = ({
                                 : 'border-slate-200 hover:border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
                             }`}
                           >
-                            <span className={`w-8 h-8 rounded-xl font-mono font-black text-xs flex items-center justify-center shrink-0 border ${
-                              isChosen
-                                ? viewMode === 'tka'
-                                  ? 'bg-purple-600 text-white border-purple-600'
-                                  : 'bg-rose-600 text-white border-rose-600'
-                                : 'bg-slate-100 text-slate-700 border-slate-200'
-                            }`}>
-                              {optKey}
-                            </span>
-                            <span className="text-xs leading-normal">{opsi}</span>
+                            <div className="flex items-center gap-3.5">
+                              <span className={`w-8 h-8 rounded-xl font-mono font-black text-xs flex items-center justify-center shrink-0 border ${
+                                isChosen
+                                  ? viewMode === 'tka'
+                                    ? 'bg-purple-600 text-white border-purple-600'
+                                    : 'bg-rose-600 text-white border-rose-600'
+                                  : 'bg-slate-100 text-slate-700 border-slate-200'
+                              }`}>
+                                {optKey}
+                              </span>
+                              <span className="text-xs leading-normal">{opsi}</span>
+                            </div>
+                            {optImg && (
+                              <img
+                                src={optImg}
+                                alt={`Gambar Opsi ${optKey}`}
+                                className="h-20 w-auto object-contain rounded-lg border border-slate-200 bg-white ml-11"
+                              />
+                            )}
                           </div>
                         );
                       })
                     ) : (
                       <textarea
                         rows={3}
-                        value={selectedAnswer || ''}
+                        value={typeof selectedAnswer === 'string' ? selectedAnswer : ''}
                         onChange={(e) => {
                           setAnswers((prev) => ({
                             ...prev,
@@ -1605,7 +2268,7 @@ export const StudentDashboard: React.FC<Props> = ({
                     </button>
 
                     <div className="flex items-center gap-2">
-                      {currentQIndex < currentExam.soalList.length - 1 ? (
+                      {currentQIndex < activeExamSoalList.length - 1 ? (
                         <button
                           type="button"
                           onClick={() => setCurrentQIndex((prev) => prev + 1)}
