@@ -619,19 +619,6 @@ export const Sidebar: React.FC<Props> = ({
                       <span>Manajemen ASAJ</span>
                     </button>
                   )}
-                  {(!searchQuery || 'portal alumni arsip lulusan buku induk ijazah skl rapor migrasi'.includes(searchQuery)) && (
-                    <button
-                      onClick={() => onSelectTab('portal-alumni')}
-                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'portal-alumni'
-                          ? 'bg-emerald-600 text-white shadow-xs'
-                          : 'text-slate-700 hover:bg-emerald-50'
-                      }`}
-                    >
-                      <Archive className="w-4 h-4" />
-                      <span>Portal Alumni &amp; Arsip Lulusan</span>
-                    </button>
-                  )}
                 </div>
               )}
             </div>
@@ -724,7 +711,26 @@ export const Sidebar: React.FC<Props> = ({
               )}
             </div>
 
-            {/* GRUP 6: 6. PENGATURAN & SISTEM */}
+            {/* MENU 6 (TERPISAH DI BAWAH TKA): 6. PORTAL ALUMNI & ARSIP LULUSAN */}
+            {(!searchQuery || '6 portal alumni arsip lulusan buku induk ijazah skl rapor migrasi'.includes(searchQuery)) && (
+              <button
+                type="button"
+                onClick={() => onSelectTab('portal-alumni')}
+                className={`w-full px-4 py-3 rounded-2xl font-display font-black text-xs uppercase tracking-wider flex items-center justify-between text-left transition border shadow-2xs cursor-pointer ${
+                  activeTab === 'portal-alumni'
+                    ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white border-transparent shadow-md'
+                    : 'border-teal-200/80 bg-teal-50/70 text-teal-900 hover:bg-teal-100/70'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <Archive className={`w-4 h-4 ${activeTab === 'portal-alumni' ? 'text-white' : 'text-teal-600'}`} />
+                  <span>6. PORTAL ALUMNI &amp; ARSIP</span>
+                </span>
+                <ChevronRight className={`w-4 h-4 ${activeTab === 'portal-alumni' ? 'text-white/90' : 'text-teal-600/70'}`} />
+              </button>
+            )}
+
+            {/* GRUP 7: 7. PENGATURAN & SISTEM */}
             <div className="rounded-2xl border border-slate-200 bg-slate-100/80 overflow-hidden shadow-2xs">
               <button
                 type="button"
@@ -733,7 +739,7 @@ export const Sidebar: React.FC<Props> = ({
               >
                 <span className="font-display font-black text-xs uppercase tracking-wider text-slate-700 flex items-center gap-2">
                   <Settings className="w-4 h-4 text-slate-600" />
-                  <span>6. PENGATURAN & SISTEM</span>
+                  <span>7. PENGATURAN &amp; SISTEM</span>
                 </span>
                 {openGroups.group5 ? (
                   <ChevronDown className="w-4 h-4 text-slate-500" />
