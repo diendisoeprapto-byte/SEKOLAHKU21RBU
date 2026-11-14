@@ -48,6 +48,7 @@ import {
 import { TKA_JENIS_LIST, TKA_MAPEL_LIST } from '../data/defaultData';
 import { evaluateQuestionScore, normalizeString } from '../utils/answerChecker';
 import { getLocalTodayStr } from '../utils/dateUtils';
+import { QuestionContent } from './QuestionContent';
 
 
 interface Props {
@@ -2082,30 +2083,16 @@ export const StudentDashboard: React.FC<Props> = ({
                     </span>
                   </div>
 
-                  {/* Gambar Soal (Jika ada) */}
-                  {(q.gambarUrl || q.gambarUrl2) && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-200">
-                      {q.gambarUrl && (
-                        <img
-                          src={q.gambarUrl}
-                          alt="Gambar Soal 1"
-                          className="max-h-56 w-full object-contain rounded-xl bg-white border border-slate-100"
-                        />
-                      )}
-                      {q.gambarUrl2 && (
-                        <img
-                          src={q.gambarUrl2}
-                          alt="Gambar Soal 2"
-                          className="max-h-56 w-full object-contain rounded-xl bg-white border border-slate-100"
-                        />
-                      )}
-                    </div>
-                  )}
-
-                  {/* Pertanyaan */}
-                  <div className="text-sm font-semibold text-slate-800 leading-relaxed whitespace-pre-line">
-                    {q.pertanyaan}
-                  </div>
+                  {/* Pertanyaan & Gambar Soal (Judul terpisah & posisi gambar sesuai pengaturan) */}
+                  <QuestionContent
+                    pertanyaan={q.pertanyaan}
+                    judulTeks={q.judulTeks}
+                    gambarUrl={q.gambarUrl}
+                    gambarUrl2={q.gambarUrl2}
+                    posisiGambar={q.posisiGambar}
+                    titleClassName="text-base sm:text-lg font-display font-black text-slate-900"
+                    bodyClassName="text-sm font-semibold text-slate-800 leading-relaxed"
+                  />
 
                   {/* Pilihan Opsi Jawaban sesuai Tipe Soal */}
                   <div className="space-y-2.5">

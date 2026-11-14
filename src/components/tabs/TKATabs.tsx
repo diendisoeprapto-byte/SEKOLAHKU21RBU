@@ -34,6 +34,7 @@ import {
   Sparkles,
   ChevronRight,
   Shuffle,
+  AlignCenter,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Student, TKACpTp, TKAQuestion, TKAJenis, ActiveUser } from '../../types';
@@ -52,6 +53,13 @@ import {
 } from '../../utils/storage';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxImporter';
+import { QuestionContent } from '../QuestionContent';
+import {
+  PosisiGambar,
+  extractPastedQuestionText,
+  toggleCenterTagOnSelection,
+  stripQuestionTags,
+} from '../../utils/questionFormat';
 
 interface Props {
   subType: 'siswa-tka' | 'cp-tp-tka' | 'bank-soal-tka' | 'analisis-tka' | 'hasil-tka' | 'tes-tka-siswa';
@@ -226,11 +234,14 @@ export const TKATabs: React.FC<Props> = ({
   const activeTp = activeCp?.tpList && activeCp.tpList[formTpIndex] ? activeCp.tpList[formTpIndex] : activeCp?.tpList?.[0];
 
   // Question Content & Media (Support up to 2 side-by-side images & option images)
+  const [formJudulTeks, setFormJudulTeks] = useState('');
   const [formPertanyaan, setFormPertanyaan] = useState('');
   const [formGambarUrl, setFormGambarUrl] = useState<string | null>(null);
   const [formGambarUrl2, setFormGambarUrl2] = useState<string | null>(null);
+  const [formPosisiGambar, setFormPosisiGambar] = useState<PosisiGambar>('bawah_judul');
   const [formOpsiGambar, setFormOpsiGambar] = useState<Record<string, string>>({});
   const [formBobot, setFormBobot] = useState(10);
+  const tkaPertanyaanTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // PG Options (A, B, C, D)
   const [pgOptionA, setPgOptionA] = useState('');
@@ -411,9 +422,11 @@ export const TKATabs: React.FC<Props> = ({
 
   const handleResetForm = () => {
     setEditingTkaQuestionId(null);
+    setFormJudulTeks('');
     setFormPertanyaan('');
     setFormGambarUrl(null);
     setFormGambarUrl2(null);
+    setFormPosisiGambar('bawah_judul');
     setFormOpsiGambar({});
     setFormBobot(10);
     setPgOptionA('');
@@ -433,10 +446,12 @@ export const TKATabs: React.FC<Props> = ({
     setFormPaket(q.jenisTka);
     setFormMapel(q.mapel);
     setFormTipe(q.tipe);
+    setFormJudulTeks(q.judulTeks || '');
     setFormPertanyaan(q.pertanyaan);
     setFormBobot(q.bobot || 10);
     setFormGambarUrl(q.gambarUrl || null);
     setFormGambarUrl2(q.gambarUrl2 || null);
+    setFormPosisiGambar(q.posisiGambar || 'bawah_judul');
     setFormOpsiGambar(q.opsiGambar || {});
 
     // Options
@@ -520,6 +535,7 @@ export const TKATabs: React.FC<Props> = ({
     }
 
     const autoEydPertanyaan = convertFractions(formPertanyaan);
+    const cleanJudulTeks = formJudulTeks.trim() || undefined;
 
     if (editingTkaQuestionId) {
       const updated = tkaQuestions.map((q) => {
@@ -531,6 +547,7 @@ export const TKATabs: React.FC<Props> = ({
             cpId: activeCp?.id || q.cpId || 'cp_tka_01',
             tpId: activeTp?.id || q.tpId || 'tp_01',
             tipe: formTipe,
+            judulTeks: cleanJudulTeks,
             pertanyaan: autoEydPertanyaan,
             opsi: parsedOpsi,
             opsiGambar: Object.keys(formOpsiGambar).length > 0 ? formOpsiGambar : undefined,
@@ -538,6 +555,7 @@ export const TKATabs: React.FC<Props> = ({
             bobot: Number(formBobot) || 10,
             gambarUrl: formGambarUrl || undefined,
             gambarUrl2: formGambarUrl2 || undefined,
+            posisiGambar: formPosisiGambar,
             pembahasan: `Level: ${formKesukaran} (${formKognitif}). Target: ${formTargetKelas}. CP: ${activeCp?.judulCp || '-'}. TP: ${activeTp?.judulTp || '-'}`,
           };
         }
@@ -555,6 +573,7 @@ export const TKATabs: React.FC<Props> = ({
         cpId: activeCp?.id || 'cp_tka_01',
         tpId: activeTp?.id || 'tp_01',
         tipe: formTipe,
+        judulTeks: cleanJudulTeks,
         pertanyaan: autoEydPertanyaan,
         opsi: parsedOpsi,
         opsiGambar: Object.keys(formOpsiGambar).length > 0 ? formOpsiGambar : undefined,
@@ -562,6 +581,7 @@ export const TKATabs: React.FC<Props> = ({
         bobot: Number(formBobot) || 10,
         gambarUrl: formGambarUrl || undefined,
         gambarUrl2: formGambarUrl2 || undefined,
+        posisiGambar: formPosisiGambar,
         pembahasan: `Level: ${formKesukaran} (${formKognitif}). Target: ${formTargetKelas}. CP: ${activeCp?.judulCp || '-'}. TP: ${activeTp?.judulTp || '-'}`,
       };
 
@@ -700,11 +720,18 @@ export const TKATabs: React.FC<Props> = ({
           const jenis = (row['Jenis TKA'] || row['jenisTka'] || 'Simulasi 1') as TKAJenis;
           const mapel = row['Mata Pelajaran'] || row['mapel'] || 'Bahasa Indonesia';
           const tipe = (row['Tipe Soal'] || row['tipe'] || 'isian') as any;
+          const judulRaw = String(row['Judul Teks'] || row['Judul'] || row['judulTeks'] || '').trim();
           const pertanyaan = row['Pertanyaan'] || row['pertanyaan'];
           const kunci = row['Kunci Jawaban'] || row['kunciJawaban'];
           const bobot = Number(row['Bobot'] || row['bobot']) || 10;
           const pembahasan = row['Pembahasan'] || row['pembahasan'] || '';
           const opsiRaw = row['Opsi Pilihan'] || row['opsi'];
+          const posisiRaw = String(row['Posisi Gambar'] || row['posisiGambar'] || '').toLowerCase();
+          const posisiGambar: PosisiGambar = /bawah[\s_]*pertanyaan/.test(posisiRaw)
+            ? 'bawah_pertanyaan'
+            : /kanan[\s_]*teks/.test(posisiRaw)
+            ? 'kanan_teks'
+            : 'bawah_judul';
 
           if (pertanyaan && kunci) {
             let opsiParsed: string[] | undefined = undefined;
@@ -717,10 +744,12 @@ export const TKATabs: React.FC<Props> = ({
               jenisTka: jenis,
               mapel,
               tipe,
+              judulTeks: judulRaw || undefined,
               pertanyaan: convertFractions(pertanyaan),
               opsi: opsiParsed,
               kunciJawaban: kunci,
               bobot,
+              posisiGambar,
               pembahasan,
               cpId: cpTpList[0]?.id || 'cp_tka_01',
               tpId: cpTpList[0]?.tpList?.[0]?.id || 'tp_01',
@@ -750,9 +779,11 @@ export const TKATabs: React.FC<Props> = ({
         'Jenis TKA': 'Simulasi 1',
         'Mata Pelajaran': 'Bahasa Indonesia',
         'Tipe Soal': 'isian',
+        'Judul Teks': 'Belajar Mandiri di Rumah',
         'Pertanyaan': 'Siapakah pihak keluarga inti yang membimbing belajar di rumah? (Jawaban singkat)',
         'Opsi Pilihan': '',
         'Kunci Jawaban': 'Orang tua / ayah / ibu',
+        'Posisi Gambar': 'bawah_judul',
         'Bobot': 10,
         'Pembahasan': 'Gunakan tanda / untuk opsi alternatif. Huruf besar/kecil otomatis benar.',
       },
@@ -760,9 +791,11 @@ export const TKATabs: React.FC<Props> = ({
         'Jenis TKA': 'Try Out 1',
         'Mata Pelajaran': 'Matematika',
         'Tipe Soal': 'pg',
+        'Judul Teks': '',
         'Pertanyaan': 'KPK dari bilangan 12 dan 18 adalah...',
         'Opsi Pilihan': '24, 36, 48, 72',
         'Kunci Jawaban': 'B',
+        'Posisi Gambar': 'bawah_pertanyaan',
         'Bobot': 10,
         'Pembahasan': 'Faktorisasi 12 dan 18 menghasilkan KPK 36.',
       },
@@ -1599,34 +1632,16 @@ export const TKATabs: React.FC<Props> = ({
                   <span className="text-xs font-bold text-slate-500 font-mono">Bobot: {curSimQ.bobot} Poin</span>
                 </div>
 
-                {(curSimQ.gambarUrl || curSimQ.gambarUrl2) && (
-                  <div className={`grid gap-3 mx-auto ${curSimQ.gambarUrl && curSimQ.gambarUrl2 ? 'grid-cols-1 sm:grid-cols-2 max-w-2xl' : 'grid-cols-1 max-w-lg'}`}>
-                    {curSimQ.gambarUrl && (
-                      <div className="flex flex-col items-center">
-                        <span className="text-[10px] font-bold text-slate-500 mb-1">Gambar 1</span>
-                        <img
-                          src={curSimQ.gambarUrl}
-                          alt="Gambar 1 Soal"
-                          className="max-h-56 rounded-xl border border-slate-200 object-contain w-full bg-slate-50 cursor-pointer hover:opacity-90 transition"
-                          onClick={() => onOpenZoom(curSimQ.gambarUrl!, 'Gambar 1 Soal TKA')}
-                        />
-                      </div>
-                    )}
-                    {curSimQ.gambarUrl2 && (
-                      <div className="flex flex-col items-center">
-                        <span className="text-[10px] font-bold text-slate-500 mb-1">Gambar 2 (Bersebelahan)</span>
-                        <img
-                          src={curSimQ.gambarUrl2}
-                          alt="Gambar 2 Soal"
-                          className="max-h-56 rounded-xl border border-slate-200 object-contain w-full bg-slate-50 cursor-pointer hover:opacity-90 transition"
-                          onClick={() => onOpenZoom(curSimQ.gambarUrl2!, 'Gambar 2 Soal TKA')}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <p className="text-sm font-bold text-slate-900 leading-relaxed">{curSimQ.pertanyaan}</p>
+                <QuestionContent
+                  pertanyaan={curSimQ.pertanyaan}
+                  judulTeks={curSimQ.judulTeks}
+                  gambarUrl={curSimQ.gambarUrl}
+                  gambarUrl2={curSimQ.gambarUrl2}
+                  posisiGambar={curSimQ.posisiGambar}
+                  onOpenZoom={onOpenZoom}
+                  titleClassName="text-base sm:text-lg font-display font-black text-slate-900"
+                  bodyClassName="text-sm font-bold text-slate-900 leading-relaxed"
+                />
 
                 {/* Input Answer */}
                 <div className="pt-2">
@@ -2025,29 +2040,77 @@ export const TKATabs: React.FC<Props> = ({
             {/* Row 3: Question Textarea + Fraction Converter + Upload Image + Green Point Box */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
               {/* Question Textarea Column */}
-              <div className="lg:col-span-8 space-y-1.5">
-                <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="lg:col-span-6 space-y-2">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                    <AlignCenter className="w-3.5 h-3.5 text-rose-600" />
+                    Judul Teks / Bacaan (Opsional • Ditengah & Terpisah dari Paragraf)
+                  </label>
+                  <input
+                    type="text"
+                    value={formJudulTeks}
+                    onChange={(e) => setFormJudulTeks(e.target.value)}
+                    placeholder="Contoh: Ekosistem Hutan Bakau (otomatis rata tengah, tidak menyatu dengan paragraf)"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 text-center font-bold placeholder:text-slate-400 outline-none focus:border-rose-400 bg-white"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="text-xs font-semibold text-slate-700">
                     Pertanyaan / Butir Soal (Otomatis EYD V Pecahan saat Disimpan)
                   </label>
-                  <button
-                    type="button"
-                    onClick={handleApplyFractionConvert}
-                    className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer"
-                  >
-                    <span>🔤</span> Ubah Pecahan (1/3 → satu pertiga)
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const el = tkaPertanyaanTextareaRef.current;
+                        const start = el?.selectionStart ?? formPertanyaan.length;
+                        const end = el?.selectionEnd ?? formPertanyaan.length;
+                        const { nextValue, nextCursor } = toggleCenterTagOnSelection(formPertanyaan, start, end);
+                        setFormPertanyaan(nextValue);
+                        setTimeout(() => {
+                          if (el) {
+                            el.focus();
+                            el.setSelectionRange(nextCursor, nextCursor);
+                          }
+                        }, 0);
+                      }}
+                      className="text-xs font-bold text-rose-700 hover:underline flex items-center gap-1 cursor-pointer bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200"
+                      title="Jadikan baris terpilih sebagai Judul (rata tengah dan terpisah dari paragraf)"
+                    >
+                      <AlignCenter className="w-3 h-3 text-rose-600" /> Tengah / Judul
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleApplyFractionConvert}
+                      className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>🔤</span> Ubah Pecahan (1/3 → satu pertiga)
+                    </button>
+                  </div>
                 </div>
                 <textarea
+                  ref={tkaPertanyaanTextareaRef}
                   rows={4}
                   value={formPertanyaan}
                   onChange={(e) => setFormPertanyaan(e.target.value)}
-                  placeholder="Tuliskan pertanyaan soal (contoh ketik 1/3 otomatis menjadi satu pertiga sesuai PUEBI / EYD V saat disimpan)..."
+                  onPaste={(e) => {
+                    const extracted = extractPastedQuestionText(e);
+                    if (extracted !== null) {
+                      e.preventDefault();
+                      const el = e.currentTarget;
+                      const start = el.selectionStart ?? formPertanyaan.length;
+                      const end = el.selectionEnd ?? formPertanyaan.length;
+                      const nextVal = formPertanyaan.slice(0, start) + extracted + formPertanyaan.slice(end);
+                      setFormPertanyaan(nextVal);
+                      showToast('Teks rata tengah dari salinan otomatis terdeteksi sebagai Judul terpisah!', 'success');
+                    }
+                  }}
+                  placeholder="Tuliskan teks bacaan atau pertanyaan. Jika menempel teks rata tengah atau pakai tombol [Tengah / Judul], teks tersebut otomatis menjadi Judul terpisah..."
                   className="w-full p-3 rounded-2xl border border-slate-300 text-xs text-slate-800 placeholder:text-slate-400 outline-none focus:border-rose-400 leading-relaxed"
                 />
               </div>
 
-              {/* Upload Gambar Column: 2 Slots (Side-by-Side) */}
+              {/* Upload Gambar Column: 2 Slots (Side-by-Side) + Posisi Gambar */}
               <div className="lg:col-span-4 space-y-2">
                 <label className="text-xs font-semibold text-slate-700 block">
                   Upload Gambar Soal (Maks. 2 Gambar Bersebelahan):
@@ -2104,6 +2167,20 @@ export const TKATabs: React.FC<Props> = ({
                       </div>
                     )}
                   </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-600 block">
+                    Posisi Tampil Gambar:
+                  </label>
+                  <select
+                    value={formPosisiGambar}
+                    onChange={(e) => setFormPosisiGambar(e.target.value as PosisiGambar)}
+                    className="w-full px-3 py-2 rounded-xl text-xs font-extrabold border border-slate-300 bg-white text-slate-800 outline-none focus:border-rose-500 cursor-pointer"
+                  >
+                    <option value="bawah_judul">Di Bawah Judul</option>
+                    <option value="bawah_pertanyaan">Di Bawah Pertanyaan</option>
+                    <option value="kanan_teks">Di Kanan Teks</option>
+                  </select>
                 </div>
               </div>
 
@@ -2452,34 +2529,15 @@ export const TKATabs: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  {(q.gambarUrl || q.gambarUrl2) && (
-                    <div className={`grid gap-3 pt-1 ${q.gambarUrl && q.gambarUrl2 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1 max-w-md'}`}>
-                      {q.gambarUrl && (
-                        <div className="flex flex-col items-start">
-                          <span className="text-[10px] font-bold text-slate-500 mb-1">Gambar 1:</span>
-                          <img
-                            src={q.gambarUrl}
-                            alt="Gambar 1 Soal"
-                            className="max-h-48 rounded-xl border border-slate-200 object-contain w-full bg-slate-50 cursor-pointer hover:opacity-90"
-                            onClick={() => onOpenZoom(q.gambarUrl!, 'Gambar 1 Soal TKA')}
-                          />
-                        </div>
-                      )}
-                      {q.gambarUrl2 && (
-                        <div className="flex flex-col items-start">
-                          <span className="text-[10px] font-bold text-slate-500 mb-1">Gambar 2 (Bersebelahan):</span>
-                          <img
-                            src={q.gambarUrl2}
-                            alt="Gambar 2 Soal"
-                            className="max-h-48 rounded-xl border border-slate-200 object-contain w-full bg-slate-50 cursor-pointer hover:opacity-90"
-                            onClick={() => onOpenZoom(q.gambarUrl2!, 'Gambar 2 Soal TKA')}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <p className="text-sm font-bold text-slate-900 leading-relaxed">{q.pertanyaan}</p>
+                  <QuestionContent
+                    pertanyaan={q.pertanyaan}
+                    judulTeks={q.judulTeks}
+                    gambarUrl={q.gambarUrl}
+                    gambarUrl2={q.gambarUrl2}
+                    posisiGambar={q.posisiGambar}
+                    onOpenZoom={onOpenZoom}
+                    compact
+                  />
 
                   {/* Options display */}
                   {q.opsi && q.opsi.length > 0 && (
@@ -3196,8 +3254,8 @@ export const TKATabs: React.FC<Props> = ({
                     {analisisList.map((q, idx) => (
                       <tr key={q.id || idx} className="hover:bg-slate-50 transition">
                         <td className="p-3 text-center font-bold text-slate-500">{idx + 1}</td>
-                        <td className="p-3 font-medium text-slate-800 max-w-md truncate" title={q.pertanyaan}>
-                          {q.pertanyaan}
+                        <td className="p-3 font-medium text-slate-800 max-w-md truncate" title={stripQuestionTags(q.pertanyaan)}>
+                          {stripQuestionTags(q.pertanyaan)}
                         </td>
                         <td className="p-3 text-center font-bold text-amber-900">{q.jenisTka}</td>
                         <td className="p-3 text-center font-semibold text-slate-700">{q.mapel}</td>
@@ -4255,38 +4313,17 @@ export const TKATabs: React.FC<Props> = ({
                     </span>
                   </div>
 
-                  {/* Question Text */}
-                  <div className="text-slate-800 font-medium text-sm leading-relaxed whitespace-pre-wrap">
-                    {activeQuestion?.pertanyaan}
-                  </div>
-
-                  {/* Question Images (Supports 2 images side-by-side) */}
-                  {(activeQuestion?.gambarUrl || activeQuestion?.gambarUrl2) && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-200">
-                      {activeQuestion?.gambarUrl && (
-                        <div className="space-y-1 text-center">
-                          <img
-                            src={activeQuestion.gambarUrl}
-                            alt="Gambar 1 Soal"
-                            onClick={() => onOpenZoom(activeQuestion.gambarUrl!, 'Gambar 1 Soal TKA')}
-                            className="max-h-48 w-full object-contain rounded-xl border border-slate-200 bg-white cursor-zoom-in"
-                          />
-                          <span className="text-[10px] text-slate-500 font-bold block">Klik untuk perbesar (Gambar 1)</span>
-                        </div>
-                      )}
-                      {activeQuestion?.gambarUrl2 && (
-                        <div className="space-y-1 text-center">
-                          <img
-                            src={activeQuestion.gambarUrl2}
-                            alt="Gambar 2 Soal"
-                            onClick={() => onOpenZoom(activeQuestion.gambarUrl2!, 'Gambar 2 Soal TKA')}
-                            className="max-h-48 w-full object-contain rounded-xl border border-slate-200 bg-white cursor-zoom-in"
-                          />
-                          <span className="text-[10px] text-slate-500 font-bold block">Klik untuk perbesar (Gambar 2)</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  {/* Question Text & Images (Judul terpisah & posisi gambar fleksibel) */}
+                  <QuestionContent
+                    pertanyaan={activeQuestion?.pertanyaan || ''}
+                    judulTeks={activeQuestion?.judulTeks}
+                    gambarUrl={activeQuestion?.gambarUrl}
+                    gambarUrl2={activeQuestion?.gambarUrl2}
+                    posisiGambar={activeQuestion?.posisiGambar}
+                    onOpenZoom={onOpenZoom}
+                    titleClassName="text-base sm:text-lg font-display font-black text-slate-900"
+                    bodyClassName="text-slate-800 font-medium text-sm leading-relaxed"
+                  />
 
                   {/* Answer Input depending on type */}
                   <div className="space-y-2.5 pt-2">

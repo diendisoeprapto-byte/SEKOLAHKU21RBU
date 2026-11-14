@@ -165,6 +165,8 @@ export interface CBTQuestion {
   tpId?: string; // Tujuan Pembelajaran referensi
   gambarUrl?: string;
   gambarUrl2?: string;
+  posisiGambar?: 'bawah_judul' | 'bawah_pertanyaan' | 'kanan_teks';
+  judulTeks?: string;
   opsiGambar?: { [key: string]: string };
   paket?: string;
   subPaket?: string;

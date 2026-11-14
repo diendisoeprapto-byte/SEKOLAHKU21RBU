@@ -23,6 +23,7 @@ import {
   Edit3,
   Save,
   Shuffle,
+  AlignCenter,
 } from 'lucide-react';
 import { Subject, CBTExam, CBTQuestion, Student, ActiveUser, isSiswaInklusi } from '../../types';
 import {
@@ -38,6 +39,12 @@ import {
 } from '../../utils/storage';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx } from '../../utils/docxImporter';
+import { QuestionContent } from '../QuestionContent';
+import {
+  PosisiGambar,
+  extractPastedQuestionText,
+  toggleCenterTagOnSelection,
+} from '../../utils/questionFormat';
 
 interface Props {
   activeUser: ActiveUser;
@@ -207,10 +214,13 @@ export const CBTTab: React.FC<Props> = ({
   const [newTpDescInput, setNewTpDescInput] = useState('');
 
   // Question Inputs
+  const [judulTeks, setJudulTeks] = useState('');
   const [pertanyaan, setPertanyaan] = useState('');
   const [gambarUrl, setGambarUrl] = useState<string | null>(null);
   const [gambarUrl2, setGambarUrl2] = useState<string | null>(null);
+  const [posisiGambar, setPosisiGambar] = useState<PosisiGambar>('bawah_judul');
   const [bobotPoin, setBobotPoin] = useState(10);
+  const pertanyaanTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Options for PG & images for options
   const [opsiA, setOpsiA] = useState('');
@@ -429,12 +439,14 @@ export const CBTTab: React.FC<Props> = ({
       cpId: currentCp.id,
       tpId: currentTp?.id || 'TP 1',
       tipe: selectedTipeSoal,
+      judulTeks: judulTeks.trim() || undefined,
       pertanyaan: pertanyaan.trim(),
       opsi: parsedOpsi,
       kunciJawaban: parsedKunci,
       bobot: Number(bobotPoin) || 10,
       gambarUrl: gambarUrl || undefined,
       gambarUrl2: gambarUrl2 || undefined,
+      posisiGambar,
       opsiGambar: Object.keys(opsiGambar).length > 0 ? opsiGambar : undefined,
       pembahasan: pembahasan.trim() || `Level ${levelKesukaran} • ${levelKognitif} • ${selectedPaket} (${selectedSubPaket})`,
       paket: selectedPaket,
@@ -477,6 +489,7 @@ export const CBTTab: React.FC<Props> = ({
 
   const handleResetForm = () => {
     setEditingQuestionId(null);
+    setJudulTeks('');
     setPertanyaan('');
     setOpsiA('');
     setOpsiB('');
@@ -487,16 +500,19 @@ export const CBTTab: React.FC<Props> = ({
     setPgKompleksKeys([]);
     setGambarUrl(null);
     setGambarUrl2(null);
+    setPosisiGambar('bawah_judul');
     setPembahasan('');
   };
 
   const handleEditQuestion = (q: CBTQuestion) => {
     setEditingQuestionId(q.id);
     setSelectedTipeSoal(q.tipe);
+    setJudulTeks(q.judulTeks || '');
     setPertanyaan(q.pertanyaan);
     setBobotPoin(q.bobot || 10);
     setGambarUrl(q.gambarUrl || null);
     setGambarUrl2(q.gambarUrl2 || null);
+    setPosisiGambar(q.posisiGambar || 'bawah_judul');
     setOpsiGambar(q.opsiGambar || {});
     setPembahasan(q.pembahasan || '');
 
@@ -1117,31 +1133,79 @@ export const CBTTab: React.FC<Props> = ({
               {/* ROW 3: PERTANYAAN, UPLOAD 2 GAMBAR BERSEBELAHAN & MENU POINT NILAI (MATCHING IMAGE 1) */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
                 {/* Left: Pertanyaan / Butir Soal */}
-                <div className="lg:col-span-6 space-y-1.5">
-                  <div className="flex items-center justify-between text-xs">
+                <div className="lg:col-span-6 space-y-2">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-display font-extrabold text-slate-700 flex items-center gap-1.5">
+                      <AlignCenter className="w-3.5 h-3.5 text-rose-600" />
+                      Judul Teks / Bacaan (Opsional • Otomatis Ditengah & Terpisah dari Paragraf)
+                    </label>
+                    <input
+                      type="text"
+                      value={judulTeks}
+                      onChange={(e) => setJudulTeks(e.target.value)}
+                      placeholder="Contoh: Kisah Semut dan Belalang (tampil di tengah, tidak menyatu dengan paragraf)"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs text-slate-800 text-center font-bold outline-none focus:border-rose-500"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                     <label className="font-display font-black text-slate-800">
                       Pertanyaan / Butir Soal (Otomatis EYD V Pecahan saat Disimpan)
                     </label>
-                    <button
-                      type="button"
-                      onClick={handleConvertFractions}
-                      className="text-[11px] font-extrabold text-emerald-700 hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      <Sparkles className="w-3 h-3 text-emerald-600" /> Ubah Pecahan (1/3 → satu pertiga)
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const el = pertanyaanTextareaRef.current;
+                          const start = el?.selectionStart ?? pertanyaan.length;
+                          const end = el?.selectionEnd ?? pertanyaan.length;
+                          const { nextValue, nextCursor } = toggleCenterTagOnSelection(pertanyaan, start, end);
+                          setPertanyaan(nextValue);
+                          setTimeout(() => {
+                            if (el) {
+                              el.focus();
+                              el.setSelectionRange(nextCursor, nextCursor);
+                            }
+                          }, 0);
+                        }}
+                        className="text-[11px] font-extrabold text-rose-700 hover:underline flex items-center gap-1 cursor-pointer bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200"
+                        title="Jadikan baris terpilih sebagai Judul (rata tengah dan terpisah dari paragraf)"
+                      >
+                        <AlignCenter className="w-3 h-3 text-rose-600" /> Tengah / Judul
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleConvertFractions}
+                        className="text-[11px] font-extrabold text-emerald-700 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Sparkles className="w-3 h-3 text-emerald-600" /> Ubah Pecahan (1/3 → satu pertiga)
+                      </button>
+                    </div>
                   </div>
                   <textarea
+                    ref={pertanyaanTextareaRef}
                     rows={4}
                     value={pertanyaan}
                     onChange={(e) => setPertanyaan(e.target.value)}
+                    onPaste={(e) => {
+                      const extracted = extractPastedQuestionText(e);
+                      if (extracted !== null) {
+                        e.preventDefault();
+                        const el = e.currentTarget;
+                        const start = el.selectionStart ?? pertanyaan.length;
+                        const end = el.selectionEnd ?? pertanyaan.length;
+                        const nextVal = pertanyaan.slice(0, start) + extracted + pertanyaan.slice(end);
+                        setPertanyaan(nextVal);
+                        showToast('Teks rata tengah dari salinan otomatis terdeteksi sebagai Judul terpisah!', 'success');
+                      }
+                    }}
                     required
-                    placeholder="Tuliskan pertanyaan soal (contoh ketik 1/3 otomatis menjadi satu pertiga sesuai PUEBI / EYD V saat disimpan)..."
+                    placeholder="Tuliskan teks bacaan atau pertanyaan. Jika menempel teks rata tengah atau pakai tombol [Tengah / Judul], teks tersebut otomatis menjadi Judul terpisah..."
                     className="w-full p-3 rounded-2xl border border-slate-300 bg-white text-xs text-slate-800 outline-none focus:border-rose-500 font-medium leading-relaxed"
                   />
                 </div>
 
-                {/* Middle: Upload Gambar Soal (Hingga 2 Gambar Bersebelahan) */}
-                <div className="lg:col-span-3 space-y-1.5">
+                {/* Middle: Upload Gambar Soal (Hingga 2 Gambar Bersebelahan) + Posisi Gambar */}
+                <div className="lg:col-span-3 space-y-2">
                   <div className="flex items-center justify-between text-xs">
                     <label className="font-display font-black text-slate-800">
                       Upload Gambar Soal
@@ -1152,7 +1216,7 @@ export const CBTTab: React.FC<Props> = ({
                       </span>
                     )}
                   </div>
-                  <div className="p-2.5 rounded-2xl border border-slate-200 bg-white grid grid-cols-2 gap-2 min-h-[108px]">
+                  <div className="p-2.5 rounded-2xl border border-slate-200 bg-white grid grid-cols-2 gap-2 min-h-[100px]">
                     {/* Slot 1: Gambar 1 */}
                     <div className="flex flex-col items-center justify-center p-1 rounded-xl bg-slate-50 border border-dashed border-slate-300 relative text-center">
                       {gambarUrl ? (
@@ -1200,6 +1264,20 @@ export const CBTTab: React.FC<Props> = ({
                         </label>
                       )}
                     </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-display font-bold text-slate-600 block">
+                      Posisi Tampil Gambar:
+                    </label>
+                    <select
+                      value={posisiGambar}
+                      onChange={(e) => setPosisiGambar(e.target.value as PosisiGambar)}
+                      className="w-full px-3 py-2 rounded-xl text-xs font-extrabold border border-slate-300 bg-white text-slate-800 outline-none focus:border-rose-500 cursor-pointer"
+                    >
+                      <option value="bawah_judul">Di Bawah Judul</option>
+                      <option value="bawah_pertanyaan">Di Bawah Pertanyaan</option>
+                      <option value="kanan_teks">Di Kanan Teks</option>
+                    </select>
                   </div>
                 </div>
 
@@ -1570,27 +1648,15 @@ export const CBTTab: React.FC<Props> = ({
                         </div>
                       </div>
 
-                      {/* Question Text & Images (Up to 2 Side-by-Side) */}
-                      <div className="space-y-2">
-                        {q.gambarUrl && q.gambarUrl2 ? (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-2">
-                            <div className="p-2 rounded-xl bg-slate-50 border border-slate-200 text-center">
-                              <span className="text-[10px] text-slate-500 font-bold block mb-1">Gambar 1</span>
-                              <img src={q.gambarUrl} alt="Gambar 1" className="max-h-48 rounded-lg object-contain mx-auto" />
-                            </div>
-                            <div className="p-2 rounded-xl bg-slate-50 border border-slate-200 text-center">
-                              <span className="text-[10px] text-slate-500 font-bold block mb-1">Gambar 2</span>
-                              <img src={q.gambarUrl2} alt="Gambar 2" className="max-h-48 rounded-lg object-contain mx-auto" />
-                            </div>
-                          </div>
-                        ) : q.gambarUrl ? (
-                          <img src={q.gambarUrl} alt="Gambar Soal" className="max-h-48 rounded-xl border border-slate-200 object-contain my-2" />
-                        ) : null}
-
-                        <p className="text-xs sm:text-sm font-semibold text-slate-800 leading-relaxed">
-                          {q.pertanyaan}
-                        </p>
-                      </div>
+                      {/* Question Text & Images (Judul terpisah & posisi gambar fleksibel) */}
+                      <QuestionContent
+                        pertanyaan={q.pertanyaan}
+                        judulTeks={q.judulTeks}
+                        gambarUrl={q.gambarUrl}
+                        gambarUrl2={q.gambarUrl2}
+                        posisiGambar={q.posisiGambar}
+                        compact
+                      />
 
                       {/* Options / Answer key with Option Image */}
                       {q.opsi && q.opsi.length > 0 && (
@@ -1777,25 +1843,16 @@ export const CBTTab: React.FC<Props> = ({
                     <span>Bobot: {currentQ.bobot} Poin</span>
                   </div>
 
-                  {/* Question Images: Up to 2 side-by-side */}
-                  {currentQ.gambarUrl && currentQ.gambarUrl2 ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-2">
-                      <div className="p-2 rounded-2xl bg-slate-50 border border-slate-200 text-center">
-                        <span className="text-[10px] text-slate-500 font-bold block mb-1">Gambar 1</span>
-                        <img src={currentQ.gambarUrl} alt="Gambar 1" className="max-h-56 rounded-xl object-contain mx-auto" />
-                      </div>
-                      <div className="p-2 rounded-2xl bg-slate-50 border border-slate-200 text-center">
-                        <span className="text-[10px] text-slate-500 font-bold block mb-1">Gambar 2</span>
-                        <img src={currentQ.gambarUrl2} alt="Gambar 2" className="max-h-56 rounded-xl object-contain mx-auto" />
-                      </div>
-                    </div>
-                  ) : currentQ.gambarUrl ? (
-                    <img src={currentQ.gambarUrl} alt="Gambar Soal" className="max-h-56 rounded-2xl border border-slate-200 object-contain my-2" />
-                  ) : null}
-
-                  <p className="text-sm sm:text-base font-bold text-slate-900 leading-relaxed">
-                    {currentQ.pertanyaan}
-                  </p>
+                  {/* Question Text & Images (Judul terpisah & posisi gambar fleksibel) */}
+                  <QuestionContent
+                    pertanyaan={currentQ.pertanyaan}
+                    judulTeks={currentQ.judulTeks}
+                    gambarUrl={currentQ.gambarUrl}
+                    gambarUrl2={currentQ.gambarUrl2}
+                    posisiGambar={currentQ.posisiGambar}
+                    titleClassName="text-base sm:text-lg font-display font-black text-slate-900"
+                    bodyClassName="text-sm sm:text-base font-bold text-slate-900 leading-relaxed"
+                  />
 
                   {/* Options with Option Images */}
                   {currentQ.opsi && currentQ.opsi.length > 0 && (

@@ -133,7 +133,7 @@ function parseSingleQuestionBlock(block: string, id: string): CBTQuestion | null
     }
   }
 
-  pertanyaan = qLines.join(' ').trim();
+  pertanyaan = qLines.join('\n').trim();
   if (!pertanyaan) return null;
 
   // Tentukan tipe soal
