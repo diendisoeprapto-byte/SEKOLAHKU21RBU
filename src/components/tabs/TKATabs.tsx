@@ -44,6 +44,10 @@ import {
   saveStoredTKACpTp,
   getStoredTKAQuestions,
   saveStoredTKAQuestions,
+  getStoredTKADurations,
+  saveStoredTKADurations,
+  getTKADurationKey,
+  getTKADurationMinutes,
   getStoredTKAResults,
   saveStoredTKAResults,
   getStoredTKASubmissions,
@@ -51,6 +55,7 @@ import {
   clearStoredTKASubmissions,
   TKASubmissionItem,
 } from '../../utils/storage';
+import { collectPersistentLocalBackup, pushAllDataToCloud } from '../../utils/cloudSync';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxImporter';
 import { QuestionContent } from '../QuestionContent';
@@ -154,17 +159,40 @@ export const TKATabs: React.FC<Props> = ({
   const [raguChecks, setRaguChecks] = useState<Record<string, boolean>>({});
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
   const [examTimerSeconds, setExamTimerSeconds] = useState(3600);
+  const [activeExamDurationSeconds, setActiveExamDurationSeconds] = useState(3600);
   const [isExamCompleted, setIsExamCompleted] = useState(false);
   const [lastExamResult, setLastExamResult] = useState<any | null>(null);
   const [selectedTestStudentId, setSelectedTestStudentId] = useState<string>(tkaStudents[0]?.id || '');
+  const handleFinishTkaExamRef = useRef<() => void>(() => {});
+  const handleSubmitSimRef = useRef<() => void>(() => {});
 
-  // Countdown timer for student CBT exam
+  // Pengaturan Waktu Pengerjaan Soal TKA (Menit) per Paket & Mapel
+  const [tkaDurations, setTkaDurations] = useState<Record<string, number>>(() => getStoredTKADurations());
+  const [durPanelPaket, setDurPanelPaket] = useState<string>(TKA_JENIS_LIST[0]);
+  const [durPanelMapel, setDurPanelMapel] = useState<string>('all');
+  const [durPanelMinutes, setDurPanelMinutes] = useState<number>(() =>
+    getTKADurationMinutes(getStoredTKADurations(), TKA_JENIS_LIST[0], 'all')
+  );
+
+  useEffect(() => {
+    const syncDurations = () => setTkaDurations(getStoredTKADurations());
+    window.addEventListener('sekolahku-tka-durations-updated', syncDurations);
+    return () => window.removeEventListener('sekolahku-tka-durations-updated', syncDurations);
+  }, []);
+
+  useEffect(() => {
+    setDurPanelMinutes(getTKADurationMinutes(tkaDurations, durPanelPaket, durPanelMapel));
+  }, [tkaDurations, durPanelPaket, durPanelMapel]);
+
+  // Countdown timer for student TKA exam (with auto-submit)
   useEffect(() => {
     if (!activeExamPaket || isExamCompleted) return;
     const interval = setInterval(() => {
       setExamTimerSeconds((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
+          showToast('Waktu pengerjaan TKA habis! Jawaban Anda otomatis dikumpulkan.', 'error');
+          setTimeout(() => handleFinishTkaExamRef.current(), 0);
           return 0;
         }
         return prev - 1;
@@ -241,7 +269,42 @@ export const TKATabs: React.FC<Props> = ({
   const [formPosisiGambar, setFormPosisiGambar] = useState<PosisiGambar>('bawah_judul');
   const [formOpsiGambar, setFormOpsiGambar] = useState<Record<string, string>>({});
   const [formBobot, setFormBobot] = useState(10);
+  const [formDurasiMenit, setFormDurasiMenit] = useState<number>(() =>
+    getTKADurationMinutes(getStoredTKADurations(), 'Simulasi 1', 'Bahasa Indonesia')
+  );
   const tkaPertanyaanTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    setFormDurasiMenit(getTKADurationMinutes(tkaDurations, formPaket, formMapel));
+  }, [formPaket, formMapel, tkaDurations]);
+
+  const handleSaveTkaDuration = (
+    paket: string,
+    mapel: string | null,
+    minutes: number,
+    silent: boolean = false
+  ) => {
+    const safeMins = Math.max(1, Math.min(300, Math.round(Number(minutes) || 60)));
+    const key = getTKADurationKey(paket, mapel);
+    setTkaDurations((prev) => {
+      const next = { ...prev, [key]: safeMins };
+      saveStoredTKADurations(next);
+      pushAllDataToCloud(
+        {
+          tkaDurations: next,
+          localStorageSnapshot: collectPersistentLocalBackup({ excludeLargeCollections: true }),
+        },
+        activeUser?.name || 'admin'
+      );
+      return next;
+    });
+    if (!silent) {
+      showToast(
+        `Waktu pengerjaan ${paket}${mapel && mapel !== 'all' ? ` (${mapel})` : ' (Semua Mapel)'} diatur menjadi ${safeMins} menit!`,
+        'success'
+      );
+    }
+  };
 
   // PG Options (A, B, C, D)
   const [pgOptionA, setPgOptionA] = useState('');
@@ -271,10 +334,27 @@ export const TKATabs: React.FC<Props> = ({
   const [simJenis, setSimJenis] = useState<TKAJenis>('Simulasi 1');
   const [simQuestionIdx, setSimQuestionIdx] = useState(0);
   const [simAnswers, setSimAnswers] = useState<Record<string, any>>({});
-  const [simTimeLeft, setSimTimeLeft] = useState(1800); // 30 mins
+  const [simTimeLeft, setSimTimeLeft] = useState(3600);
   const [simResult, setSimResult] = useState<{ score: number; max: number; details: any[] } | null>(null);
 
   const simulationQuestions = tkaQuestions.filter((q) => q.jenisTka === simJenis);
+
+  // Countdown timer for Bank Soal TKA CBT Simulation (auto-submit)
+  useEffect(() => {
+    if (!isSimulationRunning) return;
+    const interval = setInterval(() => {
+      setSimTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          showToast('Waktu simulasi TKA habis! Jawaban Anda otomatis dikumpulkan.', 'error');
+          setTimeout(() => handleSubmitSimRef.current(), 0);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isSimulationRunning]);
 
   // Fraction converter helper (1/3 -> satu pertiga)
   const convertFractions = (text: string) => {
@@ -563,7 +643,8 @@ export const TKATabs: React.FC<Props> = ({
       });
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
-      showToast('Perubahan butir soal TKA berhasil diperbarui!', 'success');
+      handleSaveTkaDuration(formPaket, formMapel, formDurasiMenit, true);
+      showToast('Perubahan butir soal TKA & waktu pengerjaan berhasil diperbarui!', 'success');
       handleResetForm();
     } else {
       const newQuestion: TKAQuestion = {
@@ -589,8 +670,9 @@ export const TKATabs: React.FC<Props> = ({
       const updated = [...tkaQuestions, newQuestion];
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
+      handleSaveTkaDuration(formPaket, formMapel, formDurasiMenit, true);
 
-      showToast(`Soal berhasil disimpan ke Bank Soal ${formPaket}!`, 'success');
+      showToast(`Soal berhasil disimpan ke Bank Soal ${formPaket} (Waktu: ${formDurasiMenit} Menit)!`, 'success');
       handleResetForm();
     }
   };
@@ -815,13 +897,14 @@ export const TKATabs: React.FC<Props> = ({
       showToast(`Belum ada butir soal yang dibuat untuk ${jenis}. Buat soal pada form terlebih dahulu!`, 'error');
       return;
     }
+    const simDurMins = getTKADurationMinutes(tkaDurations, jenis, null);
     setSimJenis(jenis);
     setSimQuestionIdx(0);
     setSimAnswers({});
-    setSimTimeLeft(1800);
+    setSimTimeLeft(simDurMins * 60);
     setSimResult(null);
     setIsSimulationRunning(true);
-    showToast(`Ujian CBT ${jenis} dimulai!`, 'success');
+    showToast(`Ujian CBT ${jenis} dimulai! (Waktu pengerjaan: ${simDurMins} Menit)`, 'success');
   };
 
   const handleSubmitSim = () => {
@@ -861,6 +944,7 @@ export const TKATabs: React.FC<Props> = ({
 
     showToast(`Ujian ${simJenis} Selesai! Nilai: ${finalPct}`, 'success');
   };
+  handleSubmitSimRef.current = handleSubmitSim;
 
   const filteredTkaQuestions = tkaQuestions.filter((q) => {
     if (filterJenisTka !== 'all' && q.jenisTka !== filterJenisTka) return false;
@@ -1555,6 +1639,7 @@ export const TKATabs: React.FC<Props> = ({
               <div className="flex flex-wrap gap-2 pt-1">
                 {TKA_JENIS_LIST.map((jenis) => {
                   const count = tkaQuestions.filter((q) => q.jenisTka === jenis).length;
+                  const durMins = getTKADurationMinutes(tkaDurations, jenis, null);
                   return (
                     <button
                       key={jenis}
@@ -1564,7 +1649,9 @@ export const TKATabs: React.FC<Props> = ({
                     >
                       <Play className="w-3.5 h-3.5 text-amber-600" />
                       <span>{jenis}</span>
-                      <span className="text-[10px] font-mono text-slate-500 font-bold">({count} soal)</span>
+                      <span className="text-[10px] font-mono text-slate-500 font-bold">
+                        ({count} soal • {durMins} mnt)
+                      </span>
                     </button>
                   );
                 })}
@@ -2184,8 +2271,8 @@ export const TKATabs: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Green Point Box (⭐ Menu Point Nilai Kanan Soal) */}
-              <div className="lg:col-span-2">
+              {/* Green Point Box & Amber Waktu Pengerjaan Box */}
+              <div className="lg:col-span-2 space-y-3">
                 <div className="p-3 rounded-2xl border-2 border-emerald-400 bg-emerald-50/30 text-center space-y-1">
                   <div className="text-xs font-bold text-emerald-800 flex items-center justify-center gap-1">
                     <span>⭐</span> Menu Point Nilai
@@ -2202,6 +2289,55 @@ export const TKATabs: React.FC<Props> = ({
                     <span className="text-xs font-bold text-slate-700">Poin</span>
                   </div>
                   <p className="text-[10px] text-emerald-700 font-medium">Bobot skor soal</p>
+                </div>
+
+                {/* Waktu Pengerjaan Soal TKA (Auto-Submit) */}
+                <div className="p-3 rounded-2xl border-2 border-amber-400 bg-amber-50/50 text-center space-y-1.5">
+                  <div className="text-xs font-bold text-amber-900 flex items-center justify-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-amber-600" /> Waktu Pengerjaan
+                  </div>
+                  <div className="flex items-center justify-center gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      max={300}
+                      value={formDurasiMenit || ''}
+                      onChange={(e) => setFormDurasiMenit(Number(e.target.value))}
+                      onBlur={() => {
+                        const saved = getTKADurationMinutes(tkaDurations, formPaket, formMapel);
+                        const clamped = Math.max(1, Math.min(300, Math.round(Number(formDurasiMenit) || 60)));
+                        setFormDurasiMenit(clamped);
+                        if (clamped !== saved) {
+                          handleSaveTkaDuration(formPaket, formMapel, clamped, false);
+                        }
+                      }}
+                      className="w-20 text-center text-lg font-display font-black text-slate-900 border-2 border-amber-500 rounded-xl py-1 bg-white outline-none"
+                      title="Setting waktu pengerjaan soal TKA (dalam menit). Otomatis auto-submit saat waktu habis."
+                    />
+                    <span className="text-xs font-bold text-slate-700">Mnt</span>
+                  </div>
+                  <div className="flex flex-wrap justify-center gap-1">
+                    {[30, 45, 60, 90].map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => {
+                          setFormDurasiMenit(m);
+                          handleSaveTkaDuration(formPaket, formMapel, m, false);
+                        }}
+                        className={`px-1.5 py-0.5 rounded-md text-[10px] font-black border cursor-pointer transition ${
+                          formDurasiMenit === m
+                            ? 'bg-amber-600 text-white border-amber-700'
+                            : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-100'
+                        }`}
+                      >
+                        {m}m
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-amber-800 font-medium leading-tight">
+                    {formPaket} • {formMapel.split(' ')[0]}
+                  </p>
                 </div>
               </div>
             </div>
@@ -2480,6 +2616,12 @@ export const TKATabs: React.FC<Props> = ({
                 <span className="text-xs font-bold bg-amber-50 text-amber-900 px-3 py-1.5 rounded-xl border border-amber-200">
                   Total: <strong>{filteredTkaQuestions.length} Soal</strong>
                 </span>
+                {filterJenisTka !== 'all' && (
+                  <span className="text-xs font-bold bg-purple-50 text-purple-900 px-3 py-1.5 rounded-xl border border-purple-200 flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-purple-600" />
+                    Waktu: <strong>{getTKADurationMinutes(tkaDurations, filterJenisTka, filterMapelTka)} Menit</strong>
+                  </span>
+                )}
               </div>
             </div>
 
@@ -2600,6 +2742,100 @@ export const TKATabs: React.FC<Props> = ({
                   Belum ada butir soal pada filter ini. Gunakan form di atas untuk menambahkan butir soal TKA.
                 </div>
               )}
+
+              {/* Setting Waktu Pengerjaan Soal TKA (Auto-Submit) */}
+              <div className="p-5 rounded-3xl bg-gradient-to-r from-purple-50 via-white to-amber-50 border-2 border-purple-300 shadow-xs space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-purple-600 text-white flex items-center justify-center shadow-md shadow-purple-500/20 shrink-0">
+                      <Clock className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex items-center gap-2">
+                        Pengaturan Waktu Pengerjaan Soal TKA
+                        <span className="text-[10px] font-extrabold uppercase bg-purple-100 text-purple-900 px-2 py-0.5 rounded-full">
+                          Auto-Submit Timer
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        Atur batas waktu pengerjaan per paket dan mata pelajaran TKA (tersinkron otomatis ke ruang ujian siswa).
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end pt-1">
+                  <div className="sm:col-span-4">
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Paket / Jenis TKA</label>
+                    <select
+                      value={durPanelPaket}
+                      onChange={(e) => setDurPanelPaket(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none focus:border-purple-500"
+                    >
+                      {TKA_JENIS_LIST.map((p) => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="sm:col-span-4">
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Mata Pelajaran</label>
+                    <select
+                      value={durPanelMapel}
+                      onChange={(e) => setDurPanelMapel(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none focus:border-purple-500"
+                    >
+                      <option value="all">Semua Mapel (Gabungan Paket)</option>
+                      {TKA_MAPEL_LIST.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Durasi (Menit)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={300}
+                      value={durPanelMinutes || ''}
+                      onChange={(e) => setDurPanelMinutes(Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-xl border-2 border-amber-400 bg-white text-xs font-black text-center text-slate-900 outline-none focus:border-purple-500"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <button
+                      type="button"
+                      onClick={() => handleSaveTkaDuration(durPanelPaket, durPanelMapel, durPanelMinutes)}
+                      className="w-full py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-display font-black text-xs shadow-xs cursor-pointer transition"
+                    >
+                      Simpan Waktu
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <span className="text-[11px] font-bold text-slate-500 mr-1">Pilihan Cepat:</span>
+                  {[15, 30, 45, 60, 90, 120].map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => {
+                        setDurPanelMinutes(m);
+                        handleSaveTkaDuration(durPanelPaket, durPanelMapel, m);
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer transition ${
+                        durPanelMinutes === m
+                          ? 'bg-purple-600 text-white border-purple-700'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-purple-50'
+                      }`}
+                    >
+                      {m} Menit
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               {/* Setting Acak Soal & Acak Jawaban TKA */}
               <div className="p-5 rounded-3xl bg-gradient-to-r from-amber-50 via-white to-rose-50 border-2 border-amber-300 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -4080,13 +4316,15 @@ export const TKATabs: React.FC<Props> = ({
             return;
           }
 
+          const durasiMenit = getTKADurationMinutes(tkaDurations, paketName, targetMapel);
           setActiveExamPaket(paketName);
           setActiveExamMapel(targetMapel);
           setConfirmFinishTkaExam(false);
           setStudentAnswers({});
           setRaguChecks({});
           setCurrentQuestionIdx(0);
-          setExamTimerSeconds(3600); // 60 minutes
+          setActiveExamDurationSeconds(durasiMenit * 60);
+          setExamTimerSeconds(durasiMenit * 60);
           setIsExamCompleted(false);
           setLastExamResult(null);
 
@@ -4109,7 +4347,7 @@ export const TKATabs: React.FC<Props> = ({
           setTkaRunningQuestions(list);
 
           showToast(
-            `Ujian ${paketName}${targetMapel ? ` (${targetMapel})` : ''} dimulai! [${list.length} Soal]`,
+            `Ujian ${paketName}${targetMapel ? ` (${targetMapel})` : ''} dimulai! [${list.length} Soal • ${durasiMenit} Menit]`,
             'success'
           );
         };
@@ -4180,7 +4418,10 @@ export const TKATabs: React.FC<Props> = ({
             finalTotalScore >= 88 ? 'A' : finalTotalScore >= 78 ? 'B' : finalTotalScore >= 68 ? 'C' : 'D';
           const status: 'Tuntas' | 'Remedial' = finalTotalScore >= 75 ? 'Tuntas' : 'Remedial';
 
-          const durationUsedMinutes = Math.max(1, Math.ceil((3600 - examTimerSeconds) / 60));
+          const durationUsedMinutes = Math.max(
+            1,
+            Math.ceil((activeExamDurationSeconds - examTimerSeconds) / 60)
+          );
 
           const paketLabel = activeExamMapel
             ? `${activeExamPaket || 'Simulasi 1'} (${activeExamMapel})`
@@ -4222,6 +4463,7 @@ export const TKATabs: React.FC<Props> = ({
           setIsExamCompleted(true);
           showToast(`Selamat! Ujian TKA selesai dengan skor: ${finalTotalScore} (Predikat ${predikat})`, 'success');
         };
+        handleFinishTkaExamRef.current = handleFinishExam;
 
         // MODE 1: Active CBT Exam Room
         if (activeExamPaket && !isExamCompleted) {
@@ -4731,7 +4973,7 @@ export const TKATabs: React.FC<Props> = ({
                 </div>
                 <p className="text-purple-100 text-[11px] leading-relaxed">
                   1. Soal terdiri dari 5 Mata Pelajaran: Bahasa Indonesia, Matematika, IPAS, Bahasa Inggris, dan Koding &amp; Kecerdasan Artifisial (KKA).<br />
-                  2. Durasi pengerjaan 60 Menit dengan sistem pengawasan CBT otomatis.<br />
+                  2. Durasi pengerjaan mengikuti pengaturan waktu tiap paket/mapel oleh guru dengan timer &amp; auto-submit CBT otomatis.<br />
                   3. Nilai KKTP ketuntasan adalah 75.00 poin. Hasil ujian langsung tersimpan dan terhubung ke Rapor TKA.
                 </p>
               </div>
@@ -4850,7 +5092,9 @@ export const TKATabs: React.FC<Props> = ({
                             </div>
                             <div className="p-2 rounded-xl bg-slate-50 border border-slate-100">
                               <span className="text-slate-400 block text-[10px]">Waktu Ujian</span>
-                              <span className="font-bold text-slate-700 font-mono">60 Menit</span>
+                              <span className="font-bold text-slate-700 font-mono">
+                                {getTKADurationMinutes(tkaDurations, paketName, selectedMapel)} Menit
+                              </span>
                             </div>
                           </div>
 

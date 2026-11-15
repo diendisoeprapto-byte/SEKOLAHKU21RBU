@@ -18,6 +18,7 @@ const STORAGE_KEYS = {
   CBT_RESULTS: 'sekolahku_cbt_results',
   TKA_CP_TP: 'sekolahku_tka_cp_tp',
   TKA_QUESTIONS: 'sekolahku_tka_questions',
+  TKA_DURATIONS: 'sekolahku_tka_durations',
   TKA_RESULTS: 'sekolahku_tka_results',
   TKA_SUBMISSIONS: 'sekolahku_tka_submissions',
   ACTIVE_USER: 'sekolahku_active_user',
@@ -363,6 +364,50 @@ export const getStoredTKAQuestions = (): TKAQuestion[] => {
 
 export const saveStoredTKAQuestions = (questions: TKAQuestion[]) => {
   localStorage.setItem(STORAGE_KEYS.TKA_QUESTIONS, JSON.stringify(questions));
+};
+
+export const getStoredTKADurations = (): Record<string, number> => {
+  const data = localStorage.getItem(STORAGE_KEYS.TKA_DURATIONS);
+  if (!data) return {};
+  try {
+    const parsed = JSON.parse(data);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveStoredTKADurations = (durations: Record<string, number>) => {
+  localStorage.setItem(STORAGE_KEYS.TKA_DURATIONS, JSON.stringify(durations));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
+  }
+};
+
+export const getTKADurationKey = (jenisTka: string, mapel?: string | null): string => {
+  return mapel && mapel !== 'all' ? `${jenisTka}__${mapel}` : `${jenisTka}__ALL`;
+};
+
+export const getTKADurationMinutes = (
+  durations: Record<string, number>,
+  jenisTka: string,
+  mapel?: string | null
+): number => {
+  if (mapel && mapel !== 'all') {
+    const exact = durations[`${jenisTka}__${mapel}`];
+    if (typeof exact === 'number' && exact > 0) return exact;
+  }
+  const pkgAll = durations[`${jenisTka}__ALL`];
+  if (typeof pkgAll === 'number' && pkgAll > 0) return pkgAll;
+  if (!mapel || mapel === 'all') {
+    const matchingValues = Object.entries(durations)
+      .filter(([k, v]) => k.startsWith(`${jenisTka}__`) && typeof v === 'number' && v > 0)
+      .map(([, v]) => v);
+    if (matchingValues.length === 1) {
+      return matchingValues[0];
+    }
+  }
+  return 60;
 };
 
 export const getStoredTKAResults = (): CBTExamResult[] => {

@@ -31,6 +31,7 @@ import {
   getActiveFilters,
   saveActiveFilters,
   saveStoredReportNotes,
+  saveStoredTKADurations,
   AttendanceRecordItem,
 } from './utils/storage';
 import { DEFAULT_SCHOOL_PROFILE, DEFAULT_TEACHERS, DEFAULT_STUDENTS, DEFAULT_SUBJECTS, DEFAULT_KALDIK_HOLIDAYS } from './data/defaultData';
@@ -68,9 +69,11 @@ import { PenilaianEkskulTab } from './components/tabs/PenilaianEkskulTab';
 import { DashboardKebiasaanTab } from './components/tabs/DashboardKebiasaanTab';
 import { ManajemenASAJTab } from './components/tabs/ManajemenASAJTab';
 import { PortalAlumniTab } from './components/tabs/PortalAlumniTab';
+import { PerpustakaanTab } from './components/tabs/PerpustakaanTab';
 import { StudentDashboard } from './components/StudentDashboard';
 import { testConnection } from './utils/firebase';
 import {
+  applyBackupMapToLocalStorage,
   pullAllDataFromCloud,
   pushAllDataToCloud,
   subscribeToCloudChanges,
@@ -100,6 +103,7 @@ export default function App() {
   const attendanceCollectionLoadedRef = React.useRef(false);
   const kaldikDocLoadedRef = React.useRef(false);
   const initialFilters = getActiveFilters();
+  const activeClassRef = React.useRef<string>(initialFilters.kelas);
   const [subjects, setSubjects] = useState<Subject[]>(() => getStoredSubjectsForClass(initialFilters.kelas));
   const [kaldikDays, setKaldikDays] = useState<KaldikDay[]>(getStoredKaldik());
   const [attendanceRecords, setAttendanceRecords] = useState<Record<string, AttendanceRecordItem>>(
@@ -133,6 +137,16 @@ export default function App() {
 
     const applyCloudPayload = (cloudData: any) => {
       if (!cloudData) return;
+      if (cloudData.localStorageSnapshot && typeof cloudData.localStorageSnapshot === 'object') {
+        const incomingRestoreVer = cloudData.restoreVersion ? String(cloudData.restoreVersion) : '';
+        const lastRestoreVer = localStorage.getItem('sekolahku_last_restore_version') || '';
+        if (!incomingRestoreVer || incomingRestoreVer !== lastRestoreVer) {
+          applyBackupMapToLocalStorage(cloudData.localStorageSnapshot);
+          if (incomingRestoreVer) {
+            localStorage.setItem('sekolahku_last_restore_version', incomingRestoreVer);
+          }
+        }
+      }
       if (cloudData.profile) {
         setProfile(cloudData.profile);
         saveStoredProfile(cloudData.profile);
@@ -148,11 +162,13 @@ export default function App() {
       }
       if (cloudData.subjectsByClass) {
         localStorage.setItem('sekolahku_subjects_by_class', JSON.stringify(cloudData.subjectsByClass));
-        const currentClassSubjects = getStoredSubjectsForClass(initialFilters.kelas);
+        const currentClassSubjects = getStoredSubjectsForClass(activeClassRef.current);
         setSubjects(currentClassSubjects);
       } else if (cloudData.subjects) {
         setSubjects(cloudData.subjects);
         saveStoredSubjects(cloudData.subjects);
+      } else if (cloudData.localStorageSnapshot) {
+        setSubjects(getStoredSubjectsForClass(activeClassRef.current));
       }
       if (cloudData.kaldikDays && !kaldikDocLoadedRef.current) {
         setKaldikDays(cloudData.kaldikDays);
@@ -170,6 +186,23 @@ export default function App() {
       }
       if (cloudData.reportNotes) {
         saveStoredReportNotes(cloudData.reportNotes);
+      }
+      if (typeof cloudData.cbtAcakSoal === 'boolean') {
+        localStorage.setItem('sekolahku_cbt_acak_soal', String(cloudData.cbtAcakSoal));
+      }
+      if (typeof cloudData.cbtAcakJawaban === 'boolean') {
+        localStorage.setItem('sekolahku_cbt_acak_jawaban', String(cloudData.cbtAcakJawaban));
+      }
+      if (typeof cloudData.tkaAcakSoal === 'boolean') {
+        localStorage.setItem('sekolahku_tka_acak_soal', String(cloudData.tkaAcakSoal));
+      }
+      if (typeof cloudData.tkaAcakJawaban === 'boolean') {
+        localStorage.setItem('sekolahku_tka_acak_jawaban', String(cloudData.tkaAcakJawaban));
+      }
+      if (cloudData.tkaDurations && typeof cloudData.tkaDurations === 'object') {
+        saveStoredTKADurations(cloudData.tkaDurations);
+      } else if (cloudData.localStorageSnapshot?.sekolahku_tka_durations) {
+        window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
       }
     };
 
@@ -294,8 +327,9 @@ export default function App() {
   const [activeSemester, setActiveSemester] = useState<string>(initialFilters.semester);
   const [activeClass, setActiveClass] = useState<string>(initialFilters.kelas);
 
-  // Sync subjects whenever activeClass changes to ensure grade-specific CP & TP
+  // Sync subjects & activeClassRef whenever activeClass changes to ensure grade-specific CP & TP
   useEffect(() => {
+    activeClassRef.current = activeClass;
     setSubjects(getStoredSubjectsForClass(activeClass));
   }, [activeClass]);
 
@@ -503,6 +537,16 @@ export default function App() {
     localStorage.removeItem('userNisn');
     localStorage.removeItem('userUid');
     showToast('Anda telah keluar dari aplikasi SEKOLAHKU', 'success');
+  };
+
+  // Refresh seluruh React state secara langsung setelah restore realtime tanpa reload paksa
+  const handleRefreshStateAfterRestore = () => {
+    setProfile(getStoredProfile());
+    setTeachers(getStoredTeachers());
+    setStudents(sortStudentsAlphabetically(getStoredStudents()));
+    setSubjects(getStoredSubjectsForClass(activeClassRef.current));
+    setKaldikDays(getStoredKaldik());
+    setAttendanceRecords(getStoredAttendance());
   };
 
   // Reset to Factory Default
@@ -950,6 +994,18 @@ export default function App() {
                 />
               )}
 
+              {/* Tab 4.10: Perpustakaan Digital & Literasi (Semua Peran) */}
+              {activeTab === 'perpustakaan' && (
+                <PerpustakaanTab
+                  activeUser={activeUser}
+                  profile={profile}
+                  students={students}
+                  activeClass={activeClass}
+                  showToast={showToast}
+                  onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
+                />
+              )}
+
               {/* Tab 5: Modul TKA (Siswa TKA, CP & TP TKA, Bank Soal TKA, Analisis Soal TKA) */}
               {activeUser.role !== 'siswa' &&
                 (activeTab === 'siswa-tka' ||
@@ -974,6 +1030,8 @@ export default function App() {
                   onSaveProfile={handleSaveProfile}
                   showToast={showToast}
                   onResetAll={handleResetAll}
+                  activeUserName={activeUser.name}
+                  onBackupRestored={handleRefreshStateAfterRestore}
                 />
               )}
             </main>

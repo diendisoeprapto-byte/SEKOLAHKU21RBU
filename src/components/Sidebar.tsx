@@ -64,7 +64,8 @@ export type TabId =
   | 'hasil-tka'
   | 'tes-tka-siswa'
   | 'manajemen-asaj'
-  | 'portal-alumni';
+  | 'portal-alumni'
+  | 'perpustakaan';
 
 interface Props {
   activeTab: TabId;
@@ -220,6 +221,18 @@ export const Sidebar: React.FC<Props> = ({
             >
               <GraduationCap className="w-5 h-5 text-emerald-600" />
               <span>Pengumuman Kelulusan (ASAJ)</span>
+            </button>
+
+            <button
+              onClick={() => onSelectTab('perpustakaan')}
+              className={`w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-3 text-left transition ${
+                activeTab === 'perpustakaan'
+                  ? 'bg-gradient-to-r from-rose-600 to-amber-600 text-white shadow-md'
+                  : 'text-slate-700 hover:bg-rose-50'
+              }`}
+            >
+              <BookOpen className={`w-5 h-5 ${activeTab === 'perpustakaan' ? 'text-white' : 'text-rose-600'}`} />
+              <span>Perpustakaan Digital</span>
             </button>
           </nav>
         ) : (
@@ -730,7 +743,26 @@ export const Sidebar: React.FC<Props> = ({
               </button>
             )}
 
-            {/* GRUP 7: 7. PENGATURAN & SISTEM */}
+            {/* MENU 7: 7. PERPUSTAKAAN DIGITAL */}
+            {(!searchQuery || '7 perpustakaan digital buku literasi duta baca peminjaman barcode sibi'.includes(searchQuery)) && (
+              <button
+                type="button"
+                onClick={() => onSelectTab('perpustakaan')}
+                className={`w-full px-4 py-3 rounded-2xl font-display font-black text-xs uppercase tracking-wider flex items-center justify-between text-left transition border shadow-2xs cursor-pointer ${
+                  activeTab === 'perpustakaan'
+                    ? 'bg-gradient-to-r from-rose-600 to-amber-600 text-white border-transparent shadow-md'
+                    : 'border-rose-200/80 bg-rose-50/70 text-rose-900 hover:bg-rose-100/70'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <BookOpen className={`w-4 h-4 ${activeTab === 'perpustakaan' ? 'text-white' : 'text-rose-600'}`} />
+                  <span>7. PERPUSTAKAAN DIGITAL</span>
+                </span>
+                <ChevronRight className={`w-4 h-4 ${activeTab === 'perpustakaan' ? 'text-white/90' : 'text-rose-600/70'}`} />
+              </button>
+            )}
+
+            {/* GRUP 8: 8. PENGATURAN & SISTEM */}
             <div className="rounded-2xl border border-slate-200 bg-slate-100/80 overflow-hidden shadow-2xs">
               <button
                 type="button"
@@ -739,7 +771,7 @@ export const Sidebar: React.FC<Props> = ({
               >
                 <span className="font-display font-black text-xs uppercase tracking-wider text-slate-700 flex items-center gap-2">
                   <Settings className="w-4 h-4 text-slate-600" />
-                  <span>7. PENGATURAN &amp; SISTEM</span>
+                  <span>8. PENGATURAN &amp; SISTEM</span>
                 </span>
                 {openGroups.group5 ? (
                   <ChevronDown className="w-4 h-4 text-slate-500" />

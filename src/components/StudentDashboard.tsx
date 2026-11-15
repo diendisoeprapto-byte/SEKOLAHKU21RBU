@@ -38,6 +38,9 @@ import {
   getStoredCBTResults,
   saveStoredCBTResults,
   getStoredTKAQuestions,
+  getStoredTKADurations,
+  getTKADurationKey,
+  getTKADurationMinutes,
   getStoredTKASubmissions,
   saveStoredTKASubmissions,
   getStoredAssessments,
@@ -96,6 +99,14 @@ export const StudentDashboard: React.FC<Props> = ({
     if (initialTab === 'tes-tka-siswa') return 'tka';
     return 'home';
   });
+
+  const [tkaDurations, setTkaDurations] = useState<Record<string, number>>(() => getStoredTKADurations());
+
+  useEffect(() => {
+    const syncDurations = () => setTkaDurations(getStoredTKADurations());
+    window.addEventListener('sekolahku-tka-durations-updated', syncDurations);
+    return () => window.removeEventListener('sekolahku-tka-durations-updated', syncDurations);
+  }, []);
 
   useEffect(() => {
     if (initialTab === 'laporan-kebiasaan') {
@@ -519,7 +530,7 @@ export const StudentDashboard: React.FC<Props> = ({
       category: 'tka',
       mapel: grp.mapel,
       judul: `${grp.jenisTka} - ${grp.mapel}`,
-      durasiMenit: 60,
+      durasiMenit: getTKADurationMinutes(tkaDurations, grp.jenisTka, grp.mapel),
       paketName: grp.jenisTka,
       subPaket: 'Paket 1',
       isTeacherCreated: true,
@@ -642,12 +653,18 @@ export const StudentDashboard: React.FC<Props> = ({
         (d) => d.paketName === sample.paketName && d.mapel === sample.mapel
       );
       if (!exists) {
-        merged.push(sample);
+        const customOverride =
+          tkaDurations[getTKADurationKey(sample.paketName, sample.mapel)] ||
+          tkaDurations[getTKADurationKey(sample.paketName, null)];
+        merged.push({
+          ...sample,
+          durasiMenit: customOverride && customOverride > 0 ? customOverride : sample.durasiMenit,
+        });
       }
     });
 
     return merged;
-  }, [viewMode]);
+  }, [viewMode, tkaDurations]);
 
   // Daftar ujian yang aktif tergantung mode (CBT atau TKA)
   const currentAvailableExams = viewMode === 'tka' ? tkaExamList : cbtExamList;
@@ -1048,11 +1065,11 @@ export const StudentDashboard: React.FC<Props> = ({
               <Layers className="w-5 h-5 text-rose-600" /> Fitur Pembelajaran &amp; Evaluasi Siswa
             </h2>
             <p className="text-xs text-slate-500">
-              Pilih salah satu dari 4 modul utama di bawah ini untuk memulai asesmen atau memantau capaian belajar:
+              Pilih salah satu modul di bawah ini untuk memulai asesmen, membaca buku, atau memantau capaian belajar:
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {/* Card 1: Ujian CBT */}
             <div
               onClick={() => {
@@ -1187,6 +1204,32 @@ export const StudentDashboard: React.FC<Props> = ({
 
               <div className="mt-6 pt-4 border-t border-amber-100 flex items-center justify-between text-xs font-black text-amber-600 group-hover:text-amber-700">
                 <span>Isi Form Laporan</span>
+                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
+              </div>
+            </div>
+
+            {/* Card 6: Perpustakaan Digital */}
+            <div
+              onClick={() => onNavigateTab('perpustakaan')}
+              className="group bg-white p-6 rounded-3xl border-2 border-sky-200 hover:border-sky-500 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden"
+            >
+              <div className="space-y-3">
+                <div className="w-14 h-14 rounded-2xl bg-sky-50 group-hover:bg-sky-600 text-sky-600 group-hover:text-white flex items-center justify-center transition shadow-xs">
+                  <BookOpen className="w-7 h-7" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-black uppercase text-sky-600 tracking-wider">Literasi &amp; Pustaka</span>
+                  <h3 className="font-display font-black text-lg text-slate-800 group-hover:text-sky-600 transition">
+                    Perpustakaan Digital
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                  Baca buku pelajaran dan cerita bergambar gratis, raih lencana Duta Literasi, dan cek Kartu Peminjaman Perpustakaanmu.
+                </p>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-sky-100 flex items-center justify-between text-xs font-black text-sky-600 group-hover:text-sky-700">
+                <span>Buka Perpustakaan</span>
                 <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
               </div>
             </div>

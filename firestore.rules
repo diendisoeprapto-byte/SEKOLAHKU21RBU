@@ -110,5 +110,23 @@ service cloud.firestore {
       allow read: if true;
       allow write: if true;
     }
+
+    // Perpustakaan Digital, Log Literasi & Kartu Peminjaman Barcode
+    match /perpustakaan/{bookId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    match /log_literasi/{logId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    match /peminjaman_perpustakaan/{loanId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    match /pinjaman/{pinjamanId} {
+      allow read: if true;
+      allow write: if true;
+    }
   }
 }

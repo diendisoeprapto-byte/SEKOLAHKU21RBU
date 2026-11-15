@@ -97,6 +97,62 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["id", "biodata", "kelulusan"]
+    },
+    "PerpustakaanBook": {
+      "title": "PerpustakaanBook",
+      "description": "Metadata katalog buku Perpustakaan Digital (Metadata-Only tanpa Firebase Storage)",
+      "type": "object",
+      "properties": {
+        "judul": { "type": "string" },
+        "penulis": { "type": "string" },
+        "kategori": { "type": "string" },
+        "kelas": { "type": "string" },
+        "cover_url": { "type": "string" },
+        "file_url": { "type": "string" },
+        "sumber": { "type": "string" },
+        "dibaca_count": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["judul", "penulis", "kategori", "kelas", "file_url"]
+    },
+    "LogLiterasi": {
+      "title": "LogLiterasi",
+      "description": "Riwayat log baca buku siswa untuk pemeringkatan Pembaca Terajin / Duta Literasi",
+      "type": "object",
+      "properties": {
+        "nisn": { "type": "string" },
+        "nama_siswa": { "type": "string" },
+        "kelas": { "type": "string" },
+        "buku_id": { "type": "string" },
+        "judul_buku": { "type": "string" },
+        "kategori_buku": { "type": "string" },
+        "waktu_baca": { "type": "string", "format": "date-time" },
+        "tanggal": { "type": "string" },
+        "bulan_tahun": { "type": "string" }
+      },
+      "required": ["nisn", "nama_siswa", "kelas", "buku_id", "judul_buku", "tanggal", "bulan_tahun"]
+    },
+    "PeminjamanPerpustakaan": {
+      "title": "PeminjamanPerpustakaan",
+      "description": "Data peminjaman buku siswa menggunakan Kartu Absensi Barcode",
+      "type": "object",
+      "properties": {
+        "student_id": { "type": "string" },
+        "barcode_id": { "type": "string" },
+        "nisn": { "type": "string" },
+        "nama_siswa": { "type": "string" },
+        "kelas": { "type": "string" },
+        "buku_id": { "type": "string" },
+        "judul_buku": { "type": "string" },
+        "kode_eksemplar": { "type": "string" },
+        "tanggal_pinjam": { "type": "string" },
+        "tanggal_kembali_rencana": { "type": "string" },
+        "tanggal_dikembalikan": { "type": "string" },
+        "status": { "type": "string" },
+        "petugas": { "type": "string" },
+        "catatan": { "type": "string" }
+      },
+      "required": ["barcode_id", "nisn", "nama_siswa", "judul_buku", "tanggal_pinjam", "status"]
     }
   },
   "firestore": {
@@ -127,6 +183,22 @@
     "/alumni/{alumniId}": {
       "schema": "Alumni",
       "description": "Arsip digital lulusan & buku induk alumni SDN Rawa Badak Utara 21"
+    },
+    "/perpustakaan/{bookId}": {
+      "schema": "PerpustakaanBook",
+      "description": "Katalog buku digital SDN Rawa Badak Utara 21"
+    },
+    "/log_literasi/{logId}": {
+      "schema": "LogLiterasi",
+      "description": "Log aktivitas membaca siswa harian untuk Duta Literasi"
+    },
+    "/peminjaman_perpustakaan/{loanId}": {
+      "schema": "PeminjamanPerpustakaan",
+      "description": "Catatan peminjaman buku menggunakan Kartu Absensi Barcode siswa (legacy)"
+    },
+    "/pinjaman/{pinjamanId}": {
+      "schema": "PeminjamanPerpustakaan",
+      "description": "Catatan checkout peminjaman buku perpustakaan yang menautkan barcode kartu absensi/perpustakaan siswa ke ID buku"
     }
   }
 }

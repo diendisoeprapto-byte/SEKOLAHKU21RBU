@@ -352,3 +352,57 @@ export interface KebiasaanReportItem {
   createdAt?: string;
 }
 
+export type PerpustakaanKategori =
+  | 'Buku Pelajaran'
+  | 'Buku Cerita/Literasi'
+  | 'Modul Ajar Guru'
+  | 'Buku Referensi';
+
+export type PerpustakaanKelas = 'Semua' | '1' | '2' | '3' | '4' | '5' | '6';
+
+export interface PerpustakaanBook {
+  id: string;
+  judul: string;
+  penulis: string;
+  kategori: PerpustakaanKategori;
+  kelas: PerpustakaanKelas;
+  cover_url: string;
+  file_url: string;
+  sumber: string;
+  dibaca_count: number;
+  createdAt?: any;
+}
+
+export interface LogLiterasiItem {
+  id?: string;
+  nisn: string;
+  nama_siswa: string;
+  kelas: string;
+  buku_id: string;
+  judul_buku: string;
+  kategori_buku: string;
+  waktu_baca?: any;
+  tanggal: string; // YYYY-MM-DD
+  bulan_tahun: string; // YYYY-MM
+}
+
+export interface PeminjamanPerpustakaanItem {
+  id: string;
+  student_id: string;
+  barcode_id: string;
+  nisn: string;
+  nama_siswa: string;
+  kelas: string;
+  buku_id: string;
+  judul_buku: string;
+  kode_eksemplar?: string;
+  tanggal_pinjam: string; // YYYY-MM-DD
+  tanggal_kembali_rencana: string; // YYYY-MM-DD
+  tanggal_dikembalikan?: string | null;
+  status: 'Dipinjam' | 'Dikembalikan';
+  petugas: string;
+  catatan?: string;
+  createdAt?: any;
+  sourceCollection?: 'pinjaman' | 'peminjaman_perpustakaan';
+}
+
