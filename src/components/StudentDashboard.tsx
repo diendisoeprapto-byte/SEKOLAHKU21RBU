@@ -32,7 +32,7 @@ import {
 } from 'lucide-react';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../utils/firebase';
-import { ActiveUser, Student, Subject, SchoolProfile, CBTQuestion, TUJUH_KEBIASAAN_LIST, KebiasaanReportItem } from '../types';
+import { ActiveUser, Student, Subject, SchoolProfile, CBTQuestion, TKAQuestion, TUJUH_KEBIASAAN_LIST, KebiasaanReportItem } from '../types';
 import {
   getStoredCBTExams,
   getStoredCBTResults,
@@ -52,6 +52,7 @@ import { TKA_JENIS_LIST, TKA_MAPEL_LIST } from '../data/defaultData';
 import { evaluateQuestionScore, normalizeString } from '../utils/answerChecker';
 import { getLocalTodayStr } from '../utils/dateUtils';
 import { QuestionContent } from './QuestionContent';
+import { StudentPerformanceStats } from './StudentPerformanceStats';
 
 
 interface Props {
@@ -101,11 +102,19 @@ export const StudentDashboard: React.FC<Props> = ({
   });
 
   const [tkaDurations, setTkaDurations] = useState<Record<string, number>>(() => getStoredTKADurations());
+  const [tkaQuestionsState, setTkaQuestionsState] = useState<TKAQuestion[]>(() => getStoredTKAQuestions());
 
   useEffect(() => {
     const syncDurations = () => setTkaDurations(getStoredTKADurations());
+    const syncTkaQuestions = () => setTkaQuestionsState(getStoredTKAQuestions());
     window.addEventListener('sekolahku-tka-durations-updated', syncDurations);
-    return () => window.removeEventListener('sekolahku-tka-durations-updated', syncDurations);
+    window.addEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
+    window.addEventListener('sekolahku-cloud-sync-updated', syncTkaQuestions);
+    return () => {
+      window.removeEventListener('sekolahku-tka-durations-updated', syncDurations);
+      window.removeEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
+      window.removeEventListener('sekolahku-cloud-sync-updated', syncTkaQuestions);
+    };
   }, []);
 
   useEffect(() => {
@@ -506,7 +515,7 @@ export const StudentDashboard: React.FC<Props> = ({
 
   // Daftar Ujian TKA (Dinamis dikelompokkan per Jenis TKA + Mata Pelajaran dari Bank Soal TKA Guru)
   const tkaExamList: ExamOptionItem[] = useMemo(() => {
-    const storedTkaQuestions = getStoredTKAQuestions();
+    const storedTkaQuestions = tkaQuestionsState;
     const groupedMap = new Map<string, { jenisTka: string; mapel: string; list: CBTQuestion[] }>();
 
     storedTkaQuestions.forEach((q) => {
@@ -664,7 +673,7 @@ export const StudentDashboard: React.FC<Props> = ({
     });
 
     return merged;
-  }, [viewMode, tkaDurations]);
+  }, [viewMode, tkaDurations, tkaQuestionsState]);
 
   // Daftar ujian yang aktif tergantung mode (CBT atau TKA)
   const currentAvailableExams = viewMode === 'tka' ? tkaExamList : cbtExamList;
@@ -857,7 +866,7 @@ export const StudentDashboard: React.FC<Props> = ({
     setExamResult({ score: finalGrade, maxScore: 100 });
     setIsExamRunning(false);
 
-    // Rekam ke CBT Results di storage
+    // Rekam ke CBT Results di storage (beserta metadata ujian untuk Statistik Performa)
     const storedRes = getStoredCBTResults();
     storedRes.push({
       examId: currentExam.id,
@@ -867,6 +876,11 @@ export const StudentDashboard: React.FC<Props> = ({
       nilai: finalGrade,
       waktuSelesai: new Date().toLocaleTimeString(),
       jawabanSiswa: answers,
+      category: currentExam.category,
+      mapel: currentExam.mapel,
+      judul: currentExam.judul,
+      paketName: currentExam.paketName,
+      tanggal: getLocalTodayStr(),
     });
     saveStoredCBTResults(storedRes);
 
@@ -1057,6 +1071,23 @@ export const StudentDashboard: React.FC<Props> = ({
             </div>
           </div>
         </div>
+
+        {/* Statistik Performa Rekap Nilai Ujian CBT & TKA (Recharts) */}
+        <StudentPerformanceStats
+          student={currentStudent}
+          cbtExams={cbtExamList}
+          tkaExams={tkaExamList}
+          onStartCbt={() => {
+            setViewMode('cbt');
+            setSelectedExamId('');
+            setIsExamRunning(false);
+          }}
+          onStartTka={() => {
+            setViewMode('tka');
+            setSelectedExamId('');
+            setIsExamRunning(false);
+          }}
+        />
 
         {/* 4 MENU UTAMA SISWA (DASHBOARD CARDS GRID) */}
         <div>

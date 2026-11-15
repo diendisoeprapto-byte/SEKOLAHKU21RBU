@@ -56,6 +56,7 @@ export const getStoredAdminPassword = (): string => {
 
 export const saveStoredAdminPassword = (password: string) => {
   localStorage.setItem(STORAGE_KEYS.ADMIN_PASSWORD, password);
+  notifyStorageMutation(STORAGE_KEYS.ADMIN_PASSWORD);
 };
 
 export const getStoredProfile = (): SchoolProfile => {
@@ -349,6 +350,9 @@ export const getStoredCBTResults = (): CBTExamResult[] => {
 
 export const saveStoredCBTResults = (results: CBTExamResult[]) => {
   localStorage.setItem(STORAGE_KEYS.CBT_RESULTS, JSON.stringify(results));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
+  }
   notifyStorageMutation(STORAGE_KEYS.CBT_RESULTS);
 };
 
@@ -394,6 +398,9 @@ export const getStoredTKAQuestions = (): TKAQuestion[] => {
 
 export const saveStoredTKAQuestions = (questions: TKAQuestion[]) => {
   localStorage.setItem(STORAGE_KEYS.TKA_QUESTIONS, JSON.stringify(questions));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
+  }
   notifyStorageMutation(STORAGE_KEYS.TKA_QUESTIONS);
 };
 
@@ -454,6 +461,9 @@ export const getStoredTKAResults = (): CBTExamResult[] => {
 
 export const saveStoredTKAResults = (results: CBTExamResult[]) => {
   localStorage.setItem(STORAGE_KEYS.TKA_RESULTS, JSON.stringify(results));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
+  }
   notifyStorageMutation(STORAGE_KEYS.TKA_RESULTS);
 };
 
@@ -492,6 +502,9 @@ export const getStoredTKASubmissions = (): TKASubmissionItem[] => {
 
 export const saveStoredTKASubmissions = (submissions: TKASubmissionItem[]) => {
   localStorage.setItem(STORAGE_KEYS.TKA_SUBMISSIONS, JSON.stringify(submissions));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
+  }
   notifyStorageMutation(STORAGE_KEYS.TKA_SUBMISSIONS);
 };
 

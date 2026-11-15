@@ -32,6 +32,8 @@ import {
   saveActiveFilters,
   saveStoredReportNotes,
   saveStoredTKADurations,
+  getStoredTKAQuestions,
+  saveStoredTKAQuestions,
   registerStorageMutationHook,
   runWithoutStorageSync,
   AttendanceRecordItem,
@@ -99,6 +101,10 @@ import {
   subscribeToKaldikDoc,
   saveKaldikToFirestore,
 } from './utils/attendanceFirestore';
+import {
+  subscribeToTkaQuestionsCollection,
+  saveTkaQuestionsBatchToFirestore,
+} from './utils/tkaFirestore';
 import { getLocalTodayStr } from './utils/dateUtils';
 
 export default function App() {
@@ -109,6 +115,7 @@ export default function App() {
   const studentsCollectionLoadedRef = React.useRef(false);
   const attendanceCollectionLoadedRef = React.useRef(false);
   const kaldikDocLoadedRef = React.useRef(false);
+  const tkaQuestionsCollectionLoadedRef = React.useRef(false);
   const activeUserRef = React.useRef<ActiveUser | null>(null);
   const [cloudSyncTick, setCloudSyncTick] = useState(0);
   const initialFilters = getActiveFilters();
@@ -256,9 +263,21 @@ export default function App() {
         }
       });
 
+      if (didMutateFromRemote && !tkaQuestionsCollectionLoadedRef.current) {
+        const pulledQuestions = getStoredTKAQuestions();
+        if (pulledQuestions.length > 0 && localStorage.getItem('sekolahku_tka_questions') !== null) {
+          tkaQuestionsCollectionLoadedRef.current = true;
+          localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+          saveTkaQuestionsBatchToFirestore(pulledQuestions).catch((err) =>
+            console.warn('Migrate snapshot TKA questions to collection warning:', err)
+          );
+        }
+      }
+
       if (!isLocalEcho) {
         window.dispatchEvent(new Event('sekolahku-cloud-sync-updated'));
         window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
+        window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
         setCloudSyncTick((t) => t + 1);
       }
     };
@@ -283,6 +302,14 @@ export default function App() {
       } else {
         // Seed initial local data into cloud if cloud is freshly created
         syncAllLocalToCloud('initial_seed');
+        if (!tkaQuestionsCollectionLoadedRef.current && activeUserRef.current?.role !== 'siswa') {
+          const initialQ = getStoredTKAQuestions();
+          if (initialQ.length > 0) {
+            tkaQuestionsCollectionLoadedRef.current = true;
+            localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+            saveTkaQuestionsBatchToFirestore(initialQ).catch(() => {});
+          }
+        }
       }
     });
 
@@ -360,11 +387,47 @@ export default function App() {
       }
     });
 
+    // Realtime listener langsung untuk koleksi 'tka_questions' di Firestore (single source of truth Bank Soal TKA)
+    const unsubTkaQuestions = subscribeToTkaQuestionsCollection(
+      (firestoreTkaQuestions) => {
+        const alreadySeeded = localStorage.getItem('sekolahku_tka_questions_seeded') === 'true';
+
+        if (firestoreTkaQuestions.length > 0) {
+          tkaQuestionsCollectionLoadedRef.current = true;
+          localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+          runWithoutStorageSync(() => {
+            saveStoredTKAQuestions(firestoreTkaQuestions);
+          });
+        } else if (!tkaQuestionsCollectionLoadedRef.current && !alreadySeeded) {
+          const hasStoredLocal = localStorage.getItem('sekolahku_tka_questions') !== null;
+          if (hasStoredLocal) {
+            const localQuestions = getStoredTKAQuestions();
+            if (localQuestions.length > 0) {
+              tkaQuestionsCollectionLoadedRef.current = true;
+              localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+              saveTkaQuestionsBatchToFirestore(localQuestions).catch((err) =>
+                console.warn('Initial TKA questions seed warning:', err)
+              );
+            }
+          }
+        } else {
+          tkaQuestionsCollectionLoadedRef.current = true;
+          runWithoutStorageSync(() => {
+            saveStoredTKAQuestions([]);
+          });
+        }
+      },
+      (err) => {
+        console.warn('TKA questions listener warning:', err);
+      }
+    );
+
     return () => {
       unsubscribe();
       unsubStudents();
       unsubAttendance();
       unsubKaldik();
+      unsubTkaQuestions();
     };
   }, []);
 
@@ -618,8 +681,10 @@ export default function App() {
     studentsCollectionLoadedRef.current = true;
     attendanceCollectionLoadedRef.current = true;
     kaldikDocLoadedRef.current = true;
+    tkaQuestionsCollectionLoadedRef.current = true;
     localStorage.setItem('sekolahku_students_seeded', 'true');
     localStorage.setItem('sekolahku_attendance_seeded', 'true');
+    localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
     setProfile(getStoredProfile());
     setTeachers(getStoredTeachers());
     setStudents(sortStudentsAlphabetically(getStoredStudents()));
@@ -1114,6 +1179,8 @@ export default function App() {
                   onResetAll={handleResetAll}
                   activeUserName={activeUser.name}
                   onBackupRestored={handleRefreshStateAfterRestore}
+                  isAdmin={activeUser.role === 'admin'}
+                  onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
                 />
               )}
             </main>

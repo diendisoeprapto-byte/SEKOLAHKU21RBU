@@ -57,6 +57,11 @@ import {
   TKASubmissionItem,
 } from '../../utils/storage';
 import { collectPersistentLocalBackup, pushAllDataToCloud } from '../../utils/cloudSync';
+import {
+  saveSingleTkaQuestionToFirestore,
+  deleteTkaQuestionFromFirestore,
+  saveTkaQuestionsBatchToFirestore,
+} from '../../utils/tkaFirestore';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxImporter';
 import { QuestionContent } from '../QuestionContent';
@@ -177,8 +182,21 @@ export const TKATabs: React.FC<Props> = ({
 
   useEffect(() => {
     const syncDurations = () => setTkaDurations(getStoredTKADurations());
+    const syncTkaQuestions = () => setTkaQuestions(getStoredTKAQuestions());
+    const syncCloudAll = () => {
+      setTkaQuestions(getStoredTKAQuestions());
+      setCpTpList(getStoredTKACpTp());
+      setTkaSubmissions(getStoredTKASubmissions());
+      setTkaDurations(getStoredTKADurations());
+    };
     window.addEventListener('sekolahku-tka-durations-updated', syncDurations);
-    return () => window.removeEventListener('sekolahku-tka-durations-updated', syncDurations);
+    window.addEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
+    window.addEventListener('sekolahku-cloud-sync-updated', syncCloudAll);
+    return () => {
+      window.removeEventListener('sekolahku-tka-durations-updated', syncDurations);
+      window.removeEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
+      window.removeEventListener('sekolahku-cloud-sync-updated', syncCloudAll);
+    };
   }, []);
 
   useEffect(() => {
@@ -650,8 +668,13 @@ export const TKATabs: React.FC<Props> = ({
         }
         return q;
       });
+      const editedIdx = updated.findIndex((q) => q.id === editingTkaQuestionId);
+      const editedItem = editedIdx >= 0 ? updated[editedIdx] : undefined;
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
+      if (editedItem) {
+        saveSingleTkaQuestionToFirestore(editedItem, editedIdx);
+      }
       handleSaveTkaDuration(formPaket, formMapel, formDurasiMenit, true);
       showToast('Perubahan butir soal TKA & waktu pengerjaan berhasil diperbarui!', 'success');
       handleResetForm();
@@ -679,6 +702,7 @@ export const TKATabs: React.FC<Props> = ({
       const updated = [...tkaQuestions, newQuestion];
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
+      saveSingleTkaQuestionToFirestore(newQuestion, updated.length - 1);
       handleSaveTkaDuration(formPaket, formMapel, formDurasiMenit, true);
 
       showToast(`Soal berhasil disimpan ke Bank Soal ${formPaket} (Waktu: ${formDurasiMenit} Menit)!`, 'success');
@@ -691,6 +715,7 @@ export const TKATabs: React.FC<Props> = ({
       const updated = tkaQuestions.filter((q) => q.id !== id);
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
+      deleteTkaQuestionFromFirestore(id);
       if (editingTkaQuestionId === id) {
         handleResetForm();
       }
@@ -712,6 +737,7 @@ export const TKATabs: React.FC<Props> = ({
       const updated = [...converted, ...tkaQuestions];
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
+      saveTkaQuestionsBatchToFirestore(updated);
       showToast(`Berhasil mengimpor ${converted.length} soal TKA dari berkas Word (${file.name})!`, 'success');
     } catch (err: any) {
       showToast('Gagal memproses berkas DOCX: ' + (err?.message || ''), 'error');
@@ -852,6 +878,7 @@ export const TKATabs: React.FC<Props> = ({
           const updated = [...importedQuestions, ...tkaQuestions];
           setTkaQuestions(updated);
           saveStoredTKAQuestions(updated);
+          saveTkaQuestionsBatchToFirestore(updated);
           showToast(`Berhasil mengimpor ${importedQuestions.length} butir soal TKA!`, 'success');
         } else {
           showToast('Tidak ada baris soal yang valid ditemukan dalam file.', 'error');

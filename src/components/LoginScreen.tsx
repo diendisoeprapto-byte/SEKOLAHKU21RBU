@@ -30,7 +30,11 @@ export const LoginScreen: React.FC<Props> = ({
 
     // 1. Check Admin
     const storedAdminPass = getStoredAdminPassword();
-    if (u === 'admin' && (p === storedAdminPass || p === 'admin' || p === '123')) {
+    const isAdminPassCustomized = localStorage.getItem('sekolahku_admin_password') !== null;
+    if (
+      u === 'admin' &&
+      (p === storedAdminPass || (!isAdminPassCustomized && (p === 'admin' || p === '123')))
+    ) {
       onLoginSuccess({
         role: 'admin',
         username: 'admin',

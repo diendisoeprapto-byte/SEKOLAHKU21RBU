@@ -91,7 +91,7 @@ export const Sidebar: React.FC<Props> = ({
     group3: false,
     group4: false,
     groupTka: false,
-    group5: false,
+    group5: activeUser.role === 'admin',
   });
 
   const toggleGroup = (grp: string) => {
@@ -773,13 +773,13 @@ export const Sidebar: React.FC<Props> = ({
                   <Settings className="w-4 h-4 text-slate-600" />
                   <span>8. PENGATURAN &amp; SISTEM</span>
                 </span>
-                {openGroups.group5 ? (
+                {openGroups.group5 || Boolean(searchQuery) ? (
                   <ChevronDown className="w-4 h-4 text-slate-500" />
                 ) : (
                   <ChevronRight className="w-4 h-4 text-slate-500" />
                 )}
               </button>
-              {openGroups.group5 && (
+              {(openGroups.group5 || Boolean(searchQuery)) && (
                 <div className="p-2 space-y-1 bg-white/80 border-t border-slate-200">
                   {(!searchQuery || 'backup logo restore kemendikbud monas'.includes(searchQuery)) && (
                     <button
@@ -794,19 +794,33 @@ export const Sidebar: React.FC<Props> = ({
                       <span>2 Logo & Backup Data</span>
                     </button>
                   )}
-                  {activeUser.role === 'admin' && onOpenChangePassword && (!searchQuery || 'ganti password sandi admin administrator'.includes(searchQuery)) && (
+                  {activeUser.role === 'admin' && onOpenChangePassword && (!searchQuery || 'rubah ganti ubah password sandi admin administrator'.includes(searchQuery)) && (
                     <button
                       type="button"
                       onClick={onOpenChangePassword}
                       className="w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition text-rose-700 bg-rose-50/70 hover:bg-rose-100 border border-rose-200 cursor-pointer"
                     >
                       <KeyRound className="w-4 h-4 text-rose-600" />
-                      <span>Ganti Password Admin</span>
+                      <span>Rubah Password Admin</span>
                     </button>
                   )}
                 </div>
               )}
             </div>
+
+            {activeUser.role === 'admin' && onOpenChangePassword && (!searchQuery || 'rubah ganti ubah password sandi admin administrator'.includes(searchQuery)) && (
+              <button
+                type="button"
+                onClick={onOpenChangePassword}
+                className="w-full px-4 py-3 rounded-2xl font-display font-black text-xs uppercase tracking-wider flex items-center justify-between text-left transition border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-950 shadow-2xs cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-amber-700" />
+                  <span>RUBAH PASSWORD ADMIN</span>
+                </span>
+                <ChevronRight className="w-4 h-4 text-amber-700/80" />
+              </button>
+            )}
           </nav>
         )}
       </div>

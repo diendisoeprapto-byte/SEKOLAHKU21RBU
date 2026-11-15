@@ -24,8 +24,9 @@ export const ChangePasswordModal: React.FC<Props> = ({ isOpen, onClose, showToas
     setErrorMessage('');
 
     const currentSavedPass = getStoredAdminPassword();
+    const isUsingDefault = localStorage.getItem('sekolahku_admin_password') === null;
 
-    if (oldPassword !== currentSavedPass) {
+    if (oldPassword !== currentSavedPass && !(isUsingDefault && oldPassword === '123')) {
       setErrorMessage('Password lama tidak sesuai! Silakan periksa kembali.');
       return;
     }
@@ -68,7 +69,7 @@ export const ChangePasswordModal: React.FC<Props> = ({ isOpen, onClose, showToas
             </div>
             <div>
               <h3 className="font-display font-black text-base sm:text-lg text-slate-800">
-                Ganti Password Administrator
+                Rubah Password Administrator
               </h3>
               <p className="text-[11px] text-slate-500">
                 Perbarui kata sandi akun Administrator aplikasi SEKOLAHKU

@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Clock,
   Radio,
+  KeyRound,
 } from 'lucide-react';
 import { SchoolProfile } from '../../types';
 import { exportFullSystemJSON } from '../../utils/storage';
@@ -34,6 +35,8 @@ interface Props {
   onResetAll: () => void;
   activeUserName?: string;
   onBackupRestored?: () => void;
+  isAdmin?: boolean;
+  onOpenChangePassword?: () => void;
 }
 
 function formatIsoTime(iso?: string): string {
@@ -53,6 +56,8 @@ export const BackupTab: React.FC<Props> = ({
   onResetAll,
   activeUserName = 'admin',
   onBackupRestored,
+  isAdmin = false,
+  onOpenChangePassword,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -440,6 +445,27 @@ export const BackupTab: React.FC<Props> = ({
             </div>
           </div>
         </div>
+
+        {/* Ubah Password Administrator */}
+        {isAdmin && onOpenChangePassword && (
+          <div className="p-6 rounded-3xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h4 className="font-display font-black text-sm text-amber-950 flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-amber-600" /> Rubah Password Administrator
+              </h4>
+              <p className="text-xs text-amber-800">
+                Ubah kata sandi login akun Administrator Utama dan sinkronkan otomatis ke seluruh perangkat.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenChangePassword}
+              className="bg-amber-500 hover:bg-amber-600 text-white font-display font-extrabold px-4 py-2.5 rounded-xl text-xs shrink-0 cursor-pointer shadow-xs flex items-center gap-1.5"
+            >
+              <KeyRound className="w-3.5 h-3.5" /> Rubah Password Admin
+            </button>
+          </div>
+        )}
 
         {/* Reset System to Factory SDN RBU 21 Defaults */}
         <div className="p-6 rounded-3xl bg-rose-50 border border-rose-200 flex flex-col sm:flex-row items-center justify-between gap-4">

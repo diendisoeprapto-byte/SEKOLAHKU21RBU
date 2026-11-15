@@ -28,6 +28,8 @@ import {
   getStoredReportNotes,
   getStoredTKADurations,
   saveStoredTKADurations,
+  getStoredTKAQuestions,
+  saveStoredTKAQuestions,
   runWithoutStorageSync,
   AttendanceRecordItem,
 } from './storage';
@@ -41,6 +43,10 @@ import {
   saveKaldikToFirestore,
   fetchKaldikFromFirestore,
 } from './attendanceFirestore';
+import {
+  replaceTkaQuestionsInFirestore,
+  fetchTkaQuestionsFromFirestore,
+} from './tkaFirestore';
 
 export interface CloudSyncPayload {
   version: number;
@@ -98,7 +104,7 @@ const SNAPSHOT_CHUNK_PREFIX = 'snapshot_chunk';
 const BACKUP_DOC_PATH = 'backups';
 const BACKUP_DOC_ID = 'latest';
 const BACKUP_CHUNK_PREFIX = 'latest_chunk';
-const CHUNK_CHAR_LIMIT = 320000;
+const CHUNK_CHAR_LIMIT = 250000;
 const PRIMARY_DOC_SAFE_CHAR_LIMIT = 620000;
 
 export const LAST_SNAPSHOT_REV_KEY = 'sekolahku_last_snapshot_revision';
@@ -115,12 +121,14 @@ const SESSION_ONLY_KEYS = new Set([
   LAST_PUSHED_VERSION_KEY,
   'sekolahku_students_seeded',
   'sekolahku_attendance_seeded',
+  'sekolahku_tka_questions_seeded',
 ]);
 
 function dispatchCloudSyncEvents() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-cloud-sync-updated'));
     window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
+    window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
   }
 }
 
@@ -642,7 +650,13 @@ export async function restoreBackupJsonToCloudRealtime(
     : getStoredKaldik();
   await saveKaldikToFirestore(restoredKaldik);
 
-  // 5. Simpan cadangan penuh ke backups/latest (chunked otomatis bila > 320 KB)
+  // 4b. Ganti penuh koleksi 'tka_questions' di Firestore agar Bank Soal TKA ikut realtime
+  const restoredTkaQuestions = Array.isArray(parsed.sekolahku_tka_questions)
+    ? parsed.sekolahku_tka_questions
+    : getStoredTKAQuestions();
+  await replaceTkaQuestionsInFirestore(restoredTkaQuestions);
+
+  // 5. Simpan cadangan penuh ke backups/latest (chunked otomatis bila > 250 KB)
   const fullBackupMap = collectPersistentLocalBackup();
   await writeCloudBackupDocs(fullBackupMap, username);
 
@@ -672,14 +686,21 @@ export async function pullBackupFromCloudRealtime(): Promise<{
 }> {
   let restoredKeysCount = 0;
 
-  const [backupSnap, primaryCloud, firestoreStudents, firestoreAttendance, firestoreKaldik] =
-    await Promise.all([
-      getDoc(doc(db, BACKUP_DOC_PATH, BACKUP_DOC_ID)),
-      pullAllDataFromCloud(),
-      fetchStudentsFromFirestore(),
-      fetchAttendanceFromFirestore(),
-      fetchKaldikFromFirestore(),
-    ]);
+  const [
+    backupSnap,
+    primaryCloud,
+    firestoreStudents,
+    firestoreAttendance,
+    firestoreKaldik,
+    firestoreTkaQuestions,
+  ] = await Promise.all([
+    getDoc(doc(db, BACKUP_DOC_PATH, BACKUP_DOC_ID)),
+    pullAllDataFromCloud(),
+    fetchStudentsFromFirestore(),
+    fetchAttendanceFromFirestore(),
+    fetchKaldikFromFirestore(),
+    fetchTkaQuestionsFromFirestore(),
+  ]);
 
   runWithoutStorageSync(() => {
     // Akan diisi dari async chunks di bawah sebelum blok ini tidak perlu async
@@ -760,6 +781,10 @@ export async function pullBackupFromCloudRealtime(): Promise<{
     }
     if (firestoreKaldik && firestoreKaldik.length > 0) {
       saveStoredKaldik(firestoreKaldik);
+    }
+    if (firestoreTkaQuestions && firestoreTkaQuestions.length > 0) {
+      saveStoredTKAQuestions(firestoreTkaQuestions);
+      localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
     }
 
     const rev = primaryCloud?.snapshotRevision || primaryCloud?.restoreVersion || primaryCloud?.version;

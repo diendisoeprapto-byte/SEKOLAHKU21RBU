@@ -189,10 +189,10 @@ export const Header: React.FC<Props> = ({
               type="button"
               onClick={onOpenChangePassword}
               className="bg-yellow-400 hover:bg-yellow-300 text-slate-900 font-display font-black text-xs px-3 py-2 rounded-2xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-              title="Ganti Password Administrator"
+              title="Rubah Password Administrator"
             >
-              <KeyRound className="w-3.5 h-3.5 text-slate-900" />
-              <span className="hidden sm:inline">Ganti Password</span>
+              <KeyRound className="w-3.5 h-3.5 text-slate-900 shrink-0" />
+              <span>Rubah Password</span>
             </button>
           )}
 

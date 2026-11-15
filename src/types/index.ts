@@ -242,6 +242,11 @@ export interface CBTExamResult {
   nilai: number; // 0-100
   waktuSelesai: string;
   jawabanSiswa: Record<string, any>;
+  category?: 'cbt' | 'tka';
+  mapel?: string;
+  judul?: string;
+  paketName?: string;
+  tanggal?: string;
 }
 
 export interface ActiveUser {
