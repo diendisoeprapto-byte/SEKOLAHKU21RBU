@@ -119,12 +119,12 @@ export const BackupTab: React.FC<Props> = ({
     setIsPulling(true);
     try {
       const result = await pullBackupFromCloudRealtime();
-      if (result.restoredKeysCount === 0 && result.studentsCount === 0) {
+      if (result.restoredKeysCount === 0 && result.studentsCount === 0 && result.attendanceCount === 0) {
         showToast('Belum ada data cadangan di Firebase Cloud Firestore.', 'error');
         return;
       }
       onBackupRestored?.();
-      const summary = `${result.restoredKeysCount} modul data & ${result.studentsCount} data siswa dipulihkan realtime dari Cloud Firestore.`;
+      const summary = `${result.restoredKeysCount} modul data, ${result.studentsCount} siswa, & ${result.attendanceCount} absensi dipulihkan realtime dari Cloud Firestore.`;
       setLastRestoreSummary(summary);
       showToast(summary, 'success');
     } catch (error) {

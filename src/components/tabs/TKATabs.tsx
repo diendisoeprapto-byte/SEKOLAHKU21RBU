@@ -53,6 +53,7 @@ import {
   getStoredTKASubmissions,
   saveStoredTKASubmissions,
   clearStoredTKASubmissions,
+  notifyStorageMutation,
   TKASubmissionItem,
 } from '../../utils/storage';
 import { collectPersistentLocalBackup, pushAllDataToCloud } from '../../utils/cloudSync';
@@ -210,11 +211,19 @@ export const TKATabs: React.FC<Props> = ({
   });
 
   useEffect(() => {
-    localStorage.setItem('sekolahku_tka_acak_soal', String(acakSoalTka));
+    const val = String(acakSoalTka);
+    if (localStorage.getItem('sekolahku_tka_acak_soal') !== val) {
+      localStorage.setItem('sekolahku_tka_acak_soal', val);
+      notifyStorageMutation('sekolahku_tka_acak_soal');
+    }
   }, [acakSoalTka]);
 
   useEffect(() => {
-    localStorage.setItem('sekolahku_tka_acak_jawaban', String(acakJawabanTka));
+    const val = String(acakJawabanTka);
+    if (localStorage.getItem('sekolahku_tka_acak_jawaban') !== val) {
+      localStorage.setItem('sekolahku_tka_acak_jawaban', val);
+      notifyStorageMutation('sekolahku_tka_acak_jawaban');
+    }
   }, [acakJawabanTka]);
 
   // Exam runtime questions list (shuffled if acakSoalTka is active)

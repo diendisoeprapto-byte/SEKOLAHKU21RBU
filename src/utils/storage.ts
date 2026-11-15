@@ -28,6 +28,28 @@ const STORAGE_KEYS = {
   ADMIN_PASSWORD: 'sekolahku_admin_password',
 };
 
+let storageMutationHook: ((key: string) => void) | null = null;
+let suppressStorageMutationHook = false;
+
+export const registerStorageMutationHook = (hook: (key: string) => void) => {
+  storageMutationHook = hook;
+};
+
+export const runWithoutStorageSync = <T>(fn: () => T): T => {
+  const prev = suppressStorageMutationHook;
+  suppressStorageMutationHook = true;
+  try {
+    return fn();
+  } finally {
+    suppressStorageMutationHook = prev;
+  }
+};
+
+export const notifyStorageMutation = (key: string) => {
+  if (suppressStorageMutationHook || !storageMutationHook) return;
+  storageMutationHook(key);
+};
+
 export const getStoredAdminPassword = (): string => {
   return localStorage.getItem(STORAGE_KEYS.ADMIN_PASSWORD) || 'admin';
 };
@@ -130,6 +152,7 @@ export const saveStoredSubjectsForClass = (kelasName: string, subjects: Subject[
   allByClass[targetClass] = subjects;
   localStorage.setItem(STORAGE_KEYS.SUBJECTS_BY_CLASS, JSON.stringify(allByClass));
   localStorage.setItem(STORAGE_KEYS.SUBJECTS, JSON.stringify(subjects));
+  notifyStorageMutation(STORAGE_KEYS.SUBJECTS_BY_CLASS);
 };
 
 export const getStoredSubjects = (kelasName?: string): Subject[] => {
@@ -223,6 +246,7 @@ export const setAssessmentCount = (key: string, count: number) => {
   }
   parsed[key] = Math.max(1, count);
   localStorage.setItem(STORAGE_KEYS.AS_COUNT, JSON.stringify(parsed));
+  notifyStorageMutation(STORAGE_KEYS.AS_COUNT);
 };
 
 // Assessment data: key is `${year}_${semester}_${kelas}_${subjectId}`
@@ -258,7 +282,9 @@ export const getStoredAssessments = (key: string): AssessmentData => {
 };
 
 export const saveStoredAssessments = (key: string, data: AssessmentData) => {
-  localStorage.setItem(`${STORAGE_KEYS.ASSESSMENTS}_${key}`, JSON.stringify(data));
+  const storageKey = `${STORAGE_KEYS.ASSESSMENTS}_${key}`;
+  localStorage.setItem(storageKey, JSON.stringify(data));
+  notifyStorageMutation(storageKey);
 };
 
 // Report notes per student
@@ -293,6 +319,7 @@ export const getStoredReportNotes = (): Record<string, StudentReportNotes> => {
 
 export const saveStoredReportNotes = (notes: Record<string, StudentReportNotes>) => {
   localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(notes));
+  notifyStorageMutation(STORAGE_KEYS.NOTES);
 };
 
 export const getStoredCBTExams = (): CBTExam[] => {
@@ -307,6 +334,7 @@ export const getStoredCBTExams = (): CBTExam[] => {
 
 export const saveStoredCBTExams = (exams: CBTExam[]) => {
   localStorage.setItem(STORAGE_KEYS.CBT_EXAMS, JSON.stringify(exams));
+  notifyStorageMutation(STORAGE_KEYS.CBT_EXAMS);
 };
 
 export const getStoredCBTResults = (): CBTExamResult[] => {
@@ -321,6 +349,7 @@ export const getStoredCBTResults = (): CBTExamResult[] => {
 
 export const saveStoredCBTResults = (results: CBTExamResult[]) => {
   localStorage.setItem(STORAGE_KEYS.CBT_RESULTS, JSON.stringify(results));
+  notifyStorageMutation(STORAGE_KEYS.CBT_RESULTS);
 };
 
 export const getStoredTKACpTp = (): TKACpTp[] => {
@@ -350,6 +379,7 @@ export const getStoredTKACpTp = (): TKACpTp[] => {
 
 export const saveStoredTKACpTp = (cpList: TKACpTp[]) => {
   localStorage.setItem(STORAGE_KEYS.TKA_CP_TP, JSON.stringify(cpList));
+  notifyStorageMutation(STORAGE_KEYS.TKA_CP_TP);
 };
 
 export const getStoredTKAQuestions = (): TKAQuestion[] => {
@@ -364,6 +394,7 @@ export const getStoredTKAQuestions = (): TKAQuestion[] => {
 
 export const saveStoredTKAQuestions = (questions: TKAQuestion[]) => {
   localStorage.setItem(STORAGE_KEYS.TKA_QUESTIONS, JSON.stringify(questions));
+  notifyStorageMutation(STORAGE_KEYS.TKA_QUESTIONS);
 };
 
 export const getStoredTKADurations = (): Record<string, number> => {
@@ -382,6 +413,7 @@ export const saveStoredTKADurations = (durations: Record<string, number>) => {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
   }
+  notifyStorageMutation(STORAGE_KEYS.TKA_DURATIONS);
 };
 
 export const getTKADurationKey = (jenisTka: string, mapel?: string | null): string => {
@@ -422,6 +454,7 @@ export const getStoredTKAResults = (): CBTExamResult[] => {
 
 export const saveStoredTKAResults = (results: CBTExamResult[]) => {
   localStorage.setItem(STORAGE_KEYS.TKA_RESULTS, JSON.stringify(results));
+  notifyStorageMutation(STORAGE_KEYS.TKA_RESULTS);
 };
 
 export interface TKASubmissionItem {
@@ -459,10 +492,12 @@ export const getStoredTKASubmissions = (): TKASubmissionItem[] => {
 
 export const saveStoredTKASubmissions = (submissions: TKASubmissionItem[]) => {
   localStorage.setItem(STORAGE_KEYS.TKA_SUBMISSIONS, JSON.stringify(submissions));
+  notifyStorageMutation(STORAGE_KEYS.TKA_SUBMISSIONS);
 };
 
 export const clearStoredTKASubmissions = () => {
   localStorage.removeItem(STORAGE_KEYS.TKA_SUBMISSIONS);
+  notifyStorageMutation(STORAGE_KEYS.TKA_SUBMISSIONS);
 };
 
 export const getStoredActiveUser = (): ActiveUser => {

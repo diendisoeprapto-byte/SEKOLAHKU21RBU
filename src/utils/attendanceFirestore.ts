@@ -6,6 +6,7 @@ import {
   setDoc,
   serverTimestamp,
   getDoc,
+  getDocs,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { AttendanceRecordItem, saveStoredAttendance } from './storage';
@@ -80,6 +81,87 @@ export async function saveBatchAttendanceToFirestore(
   } catch (error) {
     console.error('Gagal menyimpan batch kehadiran ke Firestore:', error);
     throw error;
+  }
+}
+
+/**
+ * Mengganti seluruh koleksi 'attendance' di Firestore agar persis sama dengan cadangan
+ * (menghapus dokumen kehadiran usang lalu menulis ulang data cadangan).
+ */
+export async function replaceAttendanceInFirestore(
+  records: AttendanceRecordItem[]
+): Promise<boolean> {
+  try {
+    const colRef = collection(db, ATTENDANCE_COLLECTION);
+    const normalized = (records || []).map((rec) => ({
+      ...rec,
+      id: rec.id || `${rec.date}_${rec.studentId}`,
+    }));
+    const targetIds = new Set(normalized.map((r) => r.id));
+
+    const existingSnap = await getDocs(colRef);
+    const staleIds: string[] = [];
+    existingSnap.forEach((docSnap) => {
+      if (!targetIds.has(docSnap.id)) {
+        staleIds.push(docSnap.id);
+      }
+    });
+
+    if (staleIds.length > 0) {
+      const CHUNK_SIZE = 400;
+      for (let i = 0; i < staleIds.length; i += CHUNK_SIZE) {
+        const chunk = staleIds.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((id) => batch.delete(doc(db, ATTENDANCE_COLLECTION, id)));
+        await batch.commit();
+      }
+    }
+
+    if (normalized.length > 0) {
+      const CHUNK_SIZE = 400;
+      for (let i = 0; i < normalized.length; i += CHUNK_SIZE) {
+        const chunk = normalized.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((rec) => {
+          const docRef = doc(db, ATTENDANCE_COLLECTION, rec.id);
+          batch.set(docRef, {
+            ...rec,
+            updatedAt: new Date().toISOString(),
+            serverTime: serverTimestamp(),
+          });
+        });
+        await batch.commit();
+      }
+    }
+
+    localStorage.setItem('sekolahku_attendance_seeded', 'true');
+    return true;
+  } catch (error) {
+    console.error('Gagal mengganti koleksi kehadiran di Firestore:', error);
+    throw error;
+  }
+}
+
+export async function fetchAttendanceFromFirestore(): Promise<Record<string, AttendanceRecordItem>> {
+  try {
+    const colRef = collection(db, ATTENDANCE_COLLECTION);
+    const snapshot = await getDocs(colRef);
+    const map: Record<string, AttendanceRecordItem> = {};
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() as AttendanceRecordItem;
+      const key = data.date && data.studentId ? `${data.date}_${data.studentId}` : docSnap.id;
+      map[key] = {
+        id: docSnap.id,
+        studentId: data.studentId,
+        date: data.date,
+        status: data.status,
+        time: data.time || '07:00',
+      };
+    });
+    return map;
+  } catch (error) {
+    console.error('Gagal mengambil data kehadiran dari Firestore:', error);
+    return {};
   }
 }
 

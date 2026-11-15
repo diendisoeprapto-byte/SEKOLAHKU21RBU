@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Student } from '../../types';
+import { notifyStorageMutation } from '../../utils/storage';
 import { pushAllDataToCloud } from '../../utils/cloudSync';
 
 export interface EkskulAssessmentItem {
@@ -69,6 +70,7 @@ export const getStoredPenilaianEkskul = (): PenilaianEkskulStore => {
 
 export const saveStoredPenilaianEkskul = (data: PenilaianEkskulStore) => {
   localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(data));
+  notifyStorageMutation('sekolahku_penilaian_ekskul');
 };
 
 export const PenilaianEkskulTab: React.FC<Props> = ({

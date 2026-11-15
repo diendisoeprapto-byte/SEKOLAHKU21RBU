@@ -32,6 +32,8 @@ import {
   saveActiveFilters,
   saveStoredReportNotes,
   saveStoredTKADurations,
+  registerStorageMutationHook,
+  runWithoutStorageSync,
   AttendanceRecordItem,
 } from './utils/storage';
 import { DEFAULT_SCHOOL_PROFILE, DEFAULT_TEACHERS, DEFAULT_STUDENTS, DEFAULT_SUBJECTS, DEFAULT_KALDIK_HOLIDAYS } from './data/defaultData';
@@ -75,9 +77,14 @@ import { testConnection } from './utils/firebase';
 import {
   applyBackupMapToLocalStorage,
   pullAllDataFromCloud,
+  pullSnapshotChunksFromCloud,
   pushAllDataToCloud,
+  scheduleRealtimeModuleSync,
   subscribeToCloudChanges,
   syncAllLocalToCloud,
+  LAST_PUSHED_VERSION_KEY,
+  LAST_RESTORE_VERSION_KEY,
+  LAST_SNAPSHOT_REV_KEY,
 } from './utils/cloudSync';
 import {
   subscribeToStudentsCollection,
@@ -102,6 +109,8 @@ export default function App() {
   const studentsCollectionLoadedRef = React.useRef(false);
   const attendanceCollectionLoadedRef = React.useRef(false);
   const kaldikDocLoadedRef = React.useRef(false);
+  const activeUserRef = React.useRef<ActiveUser | null>(null);
+  const [cloudSyncTick, setCloudSyncTick] = useState(0);
   const initialFilters = getActiveFilters();
   const activeClassRef = React.useRef<string>(initialFilters.kelas);
   const [subjects, setSubjects] = useState<Subject[]>(() => getStoredSubjectsForClass(initialFilters.kelas));
@@ -135,81 +144,142 @@ export default function App() {
   useEffect(() => {
     testConnection();
 
-    const applyCloudPayload = (cloudData: any) => {
+    // Sinkronkan perubahan modul apa pun (Penilaian, CBT, TKA, e-Rapor, Ekskul, Catatan) secara realtime ke cloud
+    registerStorageMutationHook(() => {
+      scheduleRealtimeModuleSync(activeUserRef.current?.name || 'admin');
+    });
+
+    let applyQueue: Promise<void> = Promise.resolve();
+
+    const applyCloudPayload = async (cloudData: any) => {
       if (!cloudData) return;
-      if (cloudData.localStorageSnapshot && typeof cloudData.localStorageSnapshot === 'object') {
-        const incomingRestoreVer = cloudData.restoreVersion ? String(cloudData.restoreVersion) : '';
-        const lastRestoreVer = localStorage.getItem('sekolahku_last_restore_version') || '';
-        if (!incomingRestoreVer || incomingRestoreVer !== lastRestoreVer) {
-          applyBackupMapToLocalStorage(cloudData.localStorageSnapshot);
-          if (incomingRestoreVer) {
-            localStorage.setItem('sekolahku_last_restore_version', incomingRestoreVer);
+
+      const incomingVersion = cloudData.version ? String(cloudData.version) : '';
+      const lastPushedVer = localStorage.getItem(LAST_PUSHED_VERSION_KEY) || '';
+      const isLocalEcho = Boolean(incomingVersion && lastPushedVer && incomingVersion === lastPushedVer);
+
+      let didMutateFromRemote = false;
+
+      // 1. Terapkan snapshot chunked bila ada revisi snapshot baru dari perangkat lain / restore backup
+      const incomingSnapRev = cloudData.snapshotRevision ? String(cloudData.snapshotRevision) : '';
+      const lastSnapRev = localStorage.getItem(LAST_SNAPSHOT_REV_KEY) || '';
+      const chunkCount = Number(cloudData.snapshotChunkCount || 0);
+
+      if (chunkCount > 0 && incomingSnapRev && !isLocalEcho && incomingSnapRev !== lastSnapRev) {
+        try {
+          const snapshotMap = await pullSnapshotChunksFromCloud(chunkCount);
+          if (snapshotMap && Object.keys(snapshotMap).length > 0) {
+            const incomingRestoreVer = cloudData.restoreVersion ? String(cloudData.restoreVersion) : '';
+            const lastRestoreVer = localStorage.getItem(LAST_RESTORE_VERSION_KEY) || '';
+            const isFullRestoreEvent = Boolean(incomingRestoreVer && incomingRestoreVer !== lastRestoreVer);
+
+            runWithoutStorageSync(() => {
+              applyBackupMapToLocalStorage(snapshotMap, { replaceAllNonSession: isFullRestoreEvent });
+              localStorage.setItem(LAST_SNAPSHOT_REV_KEY, incomingSnapRev);
+              if (incomingRestoreVer) {
+                localStorage.setItem(LAST_RESTORE_VERSION_KEY, incomingRestoreVer);
+              }
+            });
+            didMutateFromRemote = true;
           }
+        } catch (err) {
+          console.warn('Gagal mengambil snapshot chunked dari Firestore:', err);
+        }
+      } else if (cloudData.localStorageSnapshot && typeof cloudData.localStorageSnapshot === 'object') {
+        const incomingRestoreVer = cloudData.restoreVersion ? String(cloudData.restoreVersion) : '';
+        const lastRestoreVer = localStorage.getItem(LAST_RESTORE_VERSION_KEY) || '';
+        if (incomingRestoreVer && !isLocalEcho && incomingRestoreVer !== lastRestoreVer) {
+          runWithoutStorageSync(() => {
+            applyBackupMapToLocalStorage(cloudData.localStorageSnapshot);
+            localStorage.setItem(LAST_RESTORE_VERSION_KEY, incomingRestoreVer);
+          });
+          didMutateFromRemote = true;
         }
       }
-      if (cloudData.profile) {
-        setProfile(cloudData.profile);
-        saveStoredProfile(cloudData.profile);
-      }
-      if (cloudData.teachers) {
-        setTeachers(cloudData.teachers);
-        saveStoredTeachers(cloudData.teachers);
-      }
-      if (cloudData.students && !studentsCollectionLoadedRef.current) {
-        const sortedCloudStudents = sortStudentsAlphabetically(cloudData.students);
-        setStudents(sortedCloudStudents);
-        saveStoredStudents(sortedCloudStudents);
-      }
-      if (cloudData.subjectsByClass) {
-        localStorage.setItem('sekolahku_subjects_by_class', JSON.stringify(cloudData.subjectsByClass));
-        const currentClassSubjects = getStoredSubjectsForClass(activeClassRef.current);
-        setSubjects(currentClassSubjects);
-      } else if (cloudData.subjects) {
-        setSubjects(cloudData.subjects);
-        saveStoredSubjects(cloudData.subjects);
-      } else if (cloudData.localStorageSnapshot) {
-        setSubjects(getStoredSubjectsForClass(activeClassRef.current));
-      }
-      if (cloudData.kaldikDays && !kaldikDocLoadedRef.current) {
-        setKaldikDays(cloudData.kaldikDays);
-        saveStoredKaldik(cloudData.kaldikDays);
-      }
-      if (cloudData.attendance && !attendanceCollectionLoadedRef.current) {
-        setAttendanceRecords(cloudData.attendance);
-        saveStoredAttendance(cloudData.attendance);
-      }
-      if (cloudData.ekskulList) {
-        localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(cloudData.ekskulList));
-      }
-      if (cloudData.penilaianEkskul) {
-        localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(cloudData.penilaianEkskul));
-      }
-      if (cloudData.reportNotes) {
-        saveStoredReportNotes(cloudData.reportNotes);
-      }
-      if (typeof cloudData.cbtAcakSoal === 'boolean') {
-        localStorage.setItem('sekolahku_cbt_acak_soal', String(cloudData.cbtAcakSoal));
-      }
-      if (typeof cloudData.cbtAcakJawaban === 'boolean') {
-        localStorage.setItem('sekolahku_cbt_acak_jawaban', String(cloudData.cbtAcakJawaban));
-      }
-      if (typeof cloudData.tkaAcakSoal === 'boolean') {
-        localStorage.setItem('sekolahku_tka_acak_soal', String(cloudData.tkaAcakSoal));
-      }
-      if (typeof cloudData.tkaAcakJawaban === 'boolean') {
-        localStorage.setItem('sekolahku_tka_acak_jawaban', String(cloudData.tkaAcakJawaban));
-      }
-      if (cloudData.tkaDurations && typeof cloudData.tkaDurations === 'object') {
-        saveStoredTKADurations(cloudData.tkaDurations);
-      } else if (cloudData.localStorageSnapshot?.sekolahku_tka_durations) {
+
+      // 2. Terapkan field dokumen utama dalam mode suppressed agar tidak memantul balik ke Firestore
+      runWithoutStorageSync(() => {
+        if (cloudData.profile) {
+          setProfile(cloudData.profile);
+          saveStoredProfile(cloudData.profile);
+        }
+        if (cloudData.teachers) {
+          setTeachers(cloudData.teachers);
+          saveStoredTeachers(cloudData.teachers);
+        }
+        if (cloudData.students && !studentsCollectionLoadedRef.current) {
+          const sortedCloudStudents = sortStudentsAlphabetically(cloudData.students);
+          setStudents(sortedCloudStudents);
+          saveStoredStudents(sortedCloudStudents);
+        }
+        if (cloudData.subjectsByClass) {
+          localStorage.setItem('sekolahku_subjects_by_class', JSON.stringify(cloudData.subjectsByClass));
+          const currentClassSubjects = getStoredSubjectsForClass(activeClassRef.current);
+          setSubjects(currentClassSubjects);
+        } else if (cloudData.subjects) {
+          setSubjects(cloudData.subjects);
+          saveStoredSubjects(cloudData.subjects);
+        } else if (didMutateFromRemote) {
+          setSubjects(getStoredSubjectsForClass(activeClassRef.current));
+        }
+        if (cloudData.kaldikDays && !kaldikDocLoadedRef.current) {
+          setKaldikDays(cloudData.kaldikDays);
+          saveStoredKaldik(cloudData.kaldikDays);
+        }
+        if (cloudData.attendance && !attendanceCollectionLoadedRef.current) {
+          setAttendanceRecords(cloudData.attendance);
+          saveStoredAttendance(cloudData.attendance);
+        }
+        if (cloudData.ekskulList) {
+          localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(cloudData.ekskulList));
+        }
+        if (cloudData.penilaianEkskul) {
+          localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(cloudData.penilaianEkskul));
+        }
+        if (cloudData.reportNotes) {
+          saveStoredReportNotes(cloudData.reportNotes);
+        }
+        if (typeof cloudData.cbtAcakSoal === 'boolean') {
+          localStorage.setItem('sekolahku_cbt_acak_soal', String(cloudData.cbtAcakSoal));
+        }
+        if (typeof cloudData.cbtAcakJawaban === 'boolean') {
+          localStorage.setItem('sekolahku_cbt_acak_jawaban', String(cloudData.cbtAcakJawaban));
+        }
+        if (typeof cloudData.tkaAcakSoal === 'boolean') {
+          localStorage.setItem('sekolahku_tka_acak_soal', String(cloudData.tkaAcakSoal));
+        }
+        if (typeof cloudData.tkaAcakJawaban === 'boolean') {
+          localStorage.setItem('sekolahku_tka_acak_jawaban', String(cloudData.tkaAcakJawaban));
+        }
+        if (cloudData.tkaDurations && typeof cloudData.tkaDurations === 'object') {
+          saveStoredTKADurations(cloudData.tkaDurations);
+        }
+      });
+
+      if (!isLocalEcho) {
+        window.dispatchEvent(new Event('sekolahku-cloud-sync-updated'));
         window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
+        setCloudSyncTick((t) => t + 1);
       }
+    };
+
+    const enqueueCloudPayload = (cloudData: any) => {
+      applyQueue = applyQueue.then(() => applyCloudPayload(cloudData)).catch((err) => {
+        console.warn('Cloud sync queue error:', err);
+      });
     };
 
     // Pull initial cloud state if available
     pullAllDataFromCloud().then((cloudData) => {
-      if (cloudData && (cloudData.students || cloudData.teachers || cloudData.profile)) {
-        applyCloudPayload(cloudData);
+      if (
+        cloudData &&
+        (cloudData.profile ||
+          cloudData.teachers ||
+          cloudData.snapshotChunkCount ||
+          cloudData.snapshotRevision ||
+          cloudData.students)
+      ) {
+        enqueueCloudPayload(cloudData);
       } else {
         // Seed initial local data into cloud if cloud is freshly created
         syncAllLocalToCloud('initial_seed');
@@ -219,7 +289,7 @@ export default function App() {
     // Realtime listener for cross-device updates (Laptop <-> Tablet)
     const unsubscribe = subscribeToCloudChanges((cloudData) => {
       if (cloudData) {
-        applyCloudPayload(cloudData);
+        enqueueCloudPayload(cloudData);
       }
     });
 
@@ -321,6 +391,10 @@ export default function App() {
 
   const initialSession = getInitialSession();
   const [activeUser, setActiveUser] = useState<ActiveUser | null>(initialSession.user);
+
+  useEffect(() => {
+    activeUserRef.current = activeUser;
+  }, [activeUser]);
 
   // Filters State
   const [activeYear, setActiveYear] = useState<string>(initialFilters.year);
@@ -541,12 +615,18 @@ export default function App() {
 
   // Refresh seluruh React state secara langsung setelah restore realtime tanpa reload paksa
   const handleRefreshStateAfterRestore = () => {
+    studentsCollectionLoadedRef.current = true;
+    attendanceCollectionLoadedRef.current = true;
+    kaldikDocLoadedRef.current = true;
+    localStorage.setItem('sekolahku_students_seeded', 'true');
+    localStorage.setItem('sekolahku_attendance_seeded', 'true');
     setProfile(getStoredProfile());
     setTeachers(getStoredTeachers());
     setStudents(sortStudentsAlphabetically(getStoredStudents()));
     setSubjects(getStoredSubjectsForClass(activeClassRef.current));
     setKaldikDays(getStoredKaldik());
     setAttendanceRecords(getStoredAttendance());
+    setCloudSyncTick((t) => t + 1);
   };
 
   // Reset to Factory Default
@@ -688,6 +768,7 @@ export default function App() {
             />
 
             <main className="flex-1 min-w-0 space-y-6">
+              <React.Fragment key={`sync_${cloudSyncTick}`}>
               {/* Portal Siswa Khusus: Dashboard Cards, Alur Ujian (CBT & TKA), & Form Laporan 7 Kebiasaan */}
               {activeUser.role === 'siswa' &&
                 (activeTab === 'dashboard' ||
@@ -1022,6 +1103,7 @@ export default function App() {
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
                 />
               )}
+              </React.Fragment>
 
               {/* Tab 6: 2 Logo & Backup Data */}
               {activeTab === 'backup' && (

@@ -32,6 +32,7 @@ import {
   getStoredTeachers,
   getStoredSubjectsForClass,
   saveStoredSubjectsForClass,
+  notifyStorageMutation,
   CLASSES_LIST,
 } from '../../utils/storage';
 import { getGradeNumberFromClass } from '../../data/classCurriculumData';
@@ -325,6 +326,7 @@ export const KurikulumTabs: React.FC<Props> = ({
     const updated = [...ekskulList, newItem];
     setEkskulList(updated);
     localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(updated));
+    notifyStorageMutation('sekolahku_ekskul_list');
     setNewEkskulNama('');
     setNewEkskulPembina('');
     showToast(`Ekstrakurikuler ${newItem.nama} berhasil ditambahkan!`, 'success');
@@ -335,6 +337,7 @@ export const KurikulumTabs: React.FC<Props> = ({
       const updated = ekskulList.filter((_, i) => i !== index);
       setEkskulList(updated);
       localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(updated));
+    notifyStorageMutation('sekolahku_ekskul_list');
       showToast(`Ekstrakurikuler ${nama} berhasil dihapus!`, 'success');
     }
   };
@@ -352,6 +355,7 @@ export const KurikulumTabs: React.FC<Props> = ({
     });
     setEkskulList(updated);
     localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(updated));
+    notifyStorageMutation('sekolahku_ekskul_list');
   };
 
   const handleSelectAllClassMembers = (ekskulId: string, classToSelect: string) => {
@@ -369,6 +373,7 @@ export const KurikulumTabs: React.FC<Props> = ({
     });
     setEkskulList(updated);
     localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(updated));
+    notifyStorageMutation('sekolahku_ekskul_list');
     showToast(
       `Seluruh siswa ${classToSelect === 'all' ? 'sekolah' : classToSelect} berhasil ditambahkan ke ekstrakurikuler!`,
       'success'
@@ -389,6 +394,7 @@ export const KurikulumTabs: React.FC<Props> = ({
     });
     setEkskulList(updated);
     localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(updated));
+    notifyStorageMutation('sekolahku_ekskul_list');
     showToast(
       `Daftar siswa ${classToClear === 'all' ? 'sekolah' : classToClear} dihapus dari ekstrakurikuler!`,
       'success'
@@ -413,6 +419,7 @@ export const KurikulumTabs: React.FC<Props> = ({
     });
     setEkskulList(updated);
     localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(updated));
+    notifyStorageMutation('sekolahku_ekskul_list');
     pushAllDataToCloud({ ekskulList: updated });
     showToast(`Pembina ekstrakurikuler ${editingPembinaEkskul.nama} berhasil diperbarui menjadi "${tempPembinaName.trim()}"!`, 'success');
     setEditingPembinaEkskul(null);

@@ -13,7 +13,6 @@ import {
 import { db } from './firebase';
 import { Student } from '../types';
 import { saveStoredStudents } from './storage';
-import { pushAllDataToCloud } from './cloudSync';
 
 export const STUDENTS_COLLECTION = 'students';
 
@@ -69,13 +68,73 @@ export async function saveStudentsToFirestoreBatch(
     const sorted = sortStudentsAlphabetically(students || []);
     localStorage.setItem('sekolahku_students_seeded', 'true');
     saveStoredStudents(sorted);
-    pushAllDataToCloud({ students: sorted }, updatedBy).catch((e) =>
-      console.warn('Sync central school_data non-blocking warning:', e)
-    );
 
     return true;
   } catch (error) {
     console.error('Gagal menyimpan batch siswa ke Firestore:', error);
+    throw error;
+  }
+}
+
+/**
+ * Mengganti seluruh koleksi 'students' di Firestore agar persis sama dengan daftar siswa cadangan
+ * (menghapus siswa usang yang tidak ada di cadangan dan menyimpan seluruh siswa cadangan).
+ */
+export async function replaceStudentsInFirestore(
+  students: Student[],
+  _updatedBy: string = 'admin'
+): Promise<boolean> {
+  try {
+    const colRef = collection(db, STUDENTS_COLLECTION);
+    const normalizedStudents = (students || []).map((student, idx) => {
+      const studentId =
+        student.id ||
+        (student.nisn ? `std_${student.nisn.trim()}` : `std_${Date.now()}_${idx}`);
+      return { ...student, id: studentId };
+    });
+
+    const targetIds = new Set(normalizedStudents.map((s) => s.id));
+    const existingSnap = await getDocs(colRef);
+    const staleIds: string[] = [];
+    existingSnap.forEach((docSnap) => {
+      if (!targetIds.has(docSnap.id)) {
+        staleIds.push(docSnap.id);
+      }
+    });
+
+    if (staleIds.length > 0) {
+      const CHUNK_SIZE = 400;
+      for (let i = 0; i < staleIds.length; i += CHUNK_SIZE) {
+        const chunk = staleIds.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((id) => batch.delete(doc(db, STUDENTS_COLLECTION, id)));
+        await batch.commit();
+      }
+    }
+
+    if (normalizedStudents.length > 0) {
+      const CHUNK_SIZE = 400;
+      for (let i = 0; i < normalizedStudents.length; i += CHUNK_SIZE) {
+        const chunk = normalizedStudents.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((student) => {
+          const docRef = doc(db, STUDENTS_COLLECTION, student.id);
+          batch.set(docRef, {
+            ...student,
+            updatedAt: new Date().toISOString(),
+            serverTime: serverTimestamp(),
+          });
+        });
+        await batch.commit();
+      }
+    }
+
+    const sorted = sortStudentsAlphabetically(normalizedStudents);
+    localStorage.setItem('sekolahku_students_seeded', 'true');
+    saveStoredStudents(sorted);
+    return true;
+  } catch (error) {
+    console.error('Gagal mengganti koleksi siswa di Firestore:', error);
     throw error;
   }
 }
@@ -106,9 +165,6 @@ export async function saveSingleStudentToFirestore(
     if (remainingStudents) {
       const sorted = sortStudentsAlphabetically(remainingStudents);
       saveStoredStudents(sorted);
-      pushAllDataToCloud({ students: sorted }, updatedBy).catch((e) =>
-        console.warn('Sync central school_data non-blocking warning:', e)
-      );
     }
     return true;
   } catch (error) {
@@ -144,12 +200,11 @@ export async function deleteStudentFromFirestore(
       console.warn('Secondary cleanup query warning:', cleanupErr);
     }
 
-    // 3. Sinkronkan ke localStorage dan dokumen sentral school_data agar tidak muncul kembali
+    // 3. Sinkronkan ke localStorage
     localStorage.setItem('sekolahku_students_seeded', 'true');
     if (remainingStudents) {
       const sorted = sortStudentsAlphabetically(remainingStudents);
       saveStoredStudents(sorted);
-      await pushAllDataToCloud({ students: sorted }, updatedBy);
     }
 
     return true;
@@ -186,7 +241,6 @@ export async function deleteMultipleStudentsFromFirestore(
     const sorted = sortStudentsAlphabetically(remainingStudents);
     localStorage.setItem('sekolahku_students_seeded', 'true');
     saveStoredStudents(sorted);
-    await pushAllDataToCloud({ students: sorted }, updatedBy);
 
     return true;
   } catch (error) {

@@ -4,6 +4,7 @@ import {
   setDoc,
   onSnapshot,
   serverTimestamp,
+  deleteField,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import {
@@ -18,19 +19,33 @@ import {
   getStoredProfile,
   getStoredTeachers,
   getStoredStudents,
+  saveStoredStudents,
   getStoredSubjects,
   getStoredKaldik,
+  saveStoredKaldik,
   getStoredAttendance,
+  saveStoredAttendance,
   getStoredReportNotes,
   getStoredTKADurations,
   saveStoredTKADurations,
+  runWithoutStorageSync,
   AttendanceRecordItem,
 } from './storage';
-import { saveStudentsToFirestoreBatch, fetchStudentsFromFirestore } from './studentFirestore';
-import { saveBatchAttendanceToFirestore, saveKaldikToFirestore, fetchKaldikFromFirestore } from './attendanceFirestore';
+import {
+  replaceStudentsInFirestore,
+  fetchStudentsFromFirestore,
+} from './studentFirestore';
+import {
+  replaceAttendanceInFirestore,
+  fetchAttendanceFromFirestore,
+  saveKaldikToFirestore,
+  fetchKaldikFromFirestore,
+} from './attendanceFirestore';
 
 export interface CloudSyncPayload {
   version: number;
+  snapshotRevision?: number;
+  snapshotChunkCount?: number;
   restoreVersion?: number;
   lastUpdated: string;
   updatedBy: string;
@@ -72,27 +87,114 @@ export interface CloudBackupDocMeta {
   version: string;
   updatedBy?: string;
   totalKeys?: number;
+  chunkCount?: number;
   dataJson?: string;
   studentsStoredInCollection?: boolean;
 }
 
 const PRIMARY_DOC_PATH = 'school_data';
 const PRIMARY_DOC_ID = 'primary_data';
+const SNAPSHOT_CHUNK_PREFIX = 'snapshot_chunk';
 const BACKUP_DOC_PATH = 'backups';
 const BACKUP_DOC_ID = 'latest';
+const BACKUP_CHUNK_PREFIX = 'latest_chunk';
+const CHUNK_CHAR_LIMIT = 320000;
+const PRIMARY_DOC_SAFE_CHAR_LIMIT = 620000;
+
+export const LAST_SNAPSHOT_REV_KEY = 'sekolahku_last_snapshot_revision';
+export const LAST_PUSHED_VERSION_KEY = 'sekolahku_last_pushed_version';
+export const LAST_RESTORE_VERSION_KEY = 'sekolahku_last_restore_version';
 
 const SESSION_ONLY_KEYS = new Set([
   'sekolahku_active_user',
   'sekolahku_last_activity',
   'sekolahku_last_tab',
   'sekolahku_last_cloud_sync',
-  'sekolahku_last_restore_version',
+  LAST_RESTORE_VERSION_KEY,
+  LAST_SNAPSHOT_REV_KEY,
+  LAST_PUSHED_VERSION_KEY,
+  'sekolahku_students_seeded',
+  'sekolahku_attendance_seeded',
 ]);
+
+function dispatchCloudSyncEvents() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-cloud-sync-updated'));
+    window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
+  }
+}
+
+/**
+ * Memecah objek JSON besar menjadi dokumen chunk Firestore agar selalu aman di bawah batas 1 MiB.
+ */
+async function writeChunkedJsonDocs(
+  collectionName: string,
+  prefix: string,
+  dataObj: Record<string, any>
+): Promise<number> {
+  const jsonStr = JSON.stringify(dataObj || {});
+  const totalChunks = Math.max(1, Math.ceil(jsonStr.length / CHUNK_CHAR_LIMIT));
+  const writes: Promise<void>[] = [];
+
+  for (let i = 0; i < totalChunks; i++) {
+    const slice = jsonStr.slice(i * CHUNK_CHAR_LIMIT, (i + 1) * CHUNK_CHAR_LIMIT);
+    writes.push(
+      setDoc(doc(db, collectionName, `${prefix}_${i}`), {
+        index: i,
+        totalChunks,
+        data: slice,
+        updatedAt: new Date().toISOString(),
+      })
+    );
+  }
+
+  await Promise.all(writes);
+  return totalChunks;
+}
+
+/**
+ * Membaca dan menggabungkan kembali dokumen chunk JSON dari Firestore.
+ */
+export async function readChunkedJsonDocs(
+  collectionName: string,
+  prefix: string,
+  chunkCount: number
+): Promise<Record<string, any> | null> {
+  if (!chunkCount || chunkCount <= 0) return null;
+  try {
+    const snaps = await Promise.all(
+      Array.from({ length: chunkCount }, (_, i) =>
+        getDoc(doc(db, collectionName, `${prefix}_${i}`))
+      )
+    );
+    let combined = '';
+    for (const snap of snaps) {
+      if (!snap.exists()) return null;
+      const chunkData = snap.data()?.data;
+      if (typeof chunkData !== 'string') return null;
+      combined += chunkData;
+    }
+    if (!combined) return null;
+    const parsed = JSON.parse(combined);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch (err) {
+    console.error(`Gagal membaca chunk ${collectionName}/${prefix}:`, err);
+    return null;
+  }
+}
+
+export async function pullSnapshotChunksFromCloud(
+  chunkCount: number
+): Promise<Record<string, any> | null> {
+  return readChunkedJsonDocs(PRIMARY_DOC_PATH, SNAPSHOT_CHUNK_PREFIX, chunkCount);
+}
 
 /**
  * Mengumpulkan seluruh key persistent `sekolahku_*` dari localStorage
  */
-export function collectPersistentLocalBackup(options?: { excludeLargeCollections?: boolean }): Record<string, any> {
+export function collectPersistentLocalBackup(options?: {
+  excludeLargeCollections?: boolean;
+}): Record<string, any> {
   const backupData: Record<string, any> = {};
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
@@ -117,25 +219,74 @@ export function collectPersistentLocalBackup(options?: { excludeLargeCollections
 /**
  * Menerapkan map key-value hasil cadangan ke localStorage tanpa menghapus sesi login aktif
  */
-export function applyBackupMapToLocalStorage(dataMap: Record<string, any>): number {
+export function applyBackupMapToLocalStorage(
+  dataMap: Record<string, any>,
+  options?: { replaceAllNonSession?: boolean }
+): number {
   if (!dataMap || typeof dataMap !== 'object') return 0;
-  let count = 0;
-  Object.keys(dataMap).forEach((key) => {
-    if (!key.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(key)) return;
-    const val = dataMap[key];
-    if (val === undefined || val === null) return;
-    if (typeof val === 'object') {
-      localStorage.setItem(key, JSON.stringify(val));
-    } else {
-      localStorage.setItem(key, String(val));
+  return runWithoutStorageSync(() => {
+    if (options?.replaceAllNonSession) {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(k)) continue;
+        if (k === 'sekolahku_admin_password' && dataMap[k] === undefined) continue;
+        if (dataMap[k] === undefined) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
     }
-    count++;
+
+    let count = 0;
+    Object.keys(dataMap).forEach((key) => {
+      if (!key.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(key)) return;
+      const val = dataMap[key];
+      if (val === undefined || val === null) return;
+      if (typeof val === 'object') {
+        localStorage.setItem(key, JSON.stringify(val));
+      } else {
+        localStorage.setItem(key, String(val));
+      }
+      count++;
+    });
+    return count;
   });
-  return count;
 }
 
 /**
- * Mengirim seluruh data lokal ke cloud Firestore agar tersinkronisasi di semua perangkat
+ * Menjaga payload `school_data/primary_data` selalu aman di bawah batas 1 MiB Firestore.
+ * Data siswa dan absensi selalu disimpan di koleksinya masing-masing, tidak di dokumen sentral.
+ */
+function buildSizeSafePrimaryPayload(basePayload: Record<string, any>): Record<string, any> {
+  const cleanPayload: Record<string, any> = { ...basePayload };
+  delete cleanPayload.students;
+  delete cleanPayload.attendance;
+  delete cleanPayload.localStorageSnapshot;
+
+  // Urutan prioritas field opsional bila ukuran mendekati batas 620 KB (datanya tetap aman di snapshot_chunk_*)
+  const optionalLargeKeys = [
+    'penilaianEkskul',
+    'reportNotes',
+    'subjectsByClass',
+    'subjects',
+    'teachers',
+    'profile',
+    'kaldikDays',
+  ];
+
+  for (const key of optionalLargeKeys) {
+    if (JSON.stringify(cleanPayload).length <= PRIMARY_DOC_SAFE_CHAR_LIMIT) {
+      break;
+    }
+    delete cleanPayload[key];
+  }
+
+  return cleanPayload;
+}
+
+/**
+ * Mengirim data ringan ke dokumen sentral `school_data/primary_data`.
  */
 export async function pushAllDataToCloud(
   payload: Partial<CloudSyncPayload>,
@@ -143,14 +294,27 @@ export async function pushAllDataToCloud(
 ): Promise<boolean> {
   try {
     const docRef = doc(db, PRIMARY_DOC_PATH, PRIMARY_DOC_ID);
-    const dataToSave = {
+    const nextVersion = Date.now();
+    const safeBody = buildSizeSafePrimaryPayload({
       ...payload,
-      version: Date.now(),
+      version: nextVersion,
       lastUpdated: new Date().toISOString(),
       updatedBy: username,
-      serverTime: serverTimestamp(),
-    };
-    await setDoc(docRef, dataToSave, { merge: true });
+    });
+
+    localStorage.setItem(LAST_PUSHED_VERSION_KEY, String(nextVersion));
+
+    await setDoc(
+      docRef,
+      {
+        ...safeBody,
+        students: deleteField(),
+        attendance: deleteField(),
+        localStorageSnapshot: deleteField(),
+        serverTime: serverTimestamp(),
+      },
+      { merge: true }
+    );
     localStorage.setItem('sekolahku_last_cloud_sync', new Date().toISOString());
     return true;
   } catch (error) {
@@ -235,88 +399,180 @@ export function subscribeToCloudBackupDoc(
 }
 
 /**
- * Mengirim seluruh data localStorage (termasuk snapshot semua modul: nilai, CBT, TKA, ekskul, catatan wali)
- * ke cloud Firestore agar tersinkron sempurna secara real-time di semua perangkat
+ * Menulis cadangan penuh ke `backups/latest` (dengan chunking otomatis bila besar).
  */
-export async function syncAllLocalToCloud(username: string = 'admin'): Promise<boolean> {
-  try {
-    const profile = getStoredProfile();
-    const teachers = getStoredTeachers();
-    const students = getStoredStudents();
-    const subjects = getStoredSubjects();
-    const kaldikDays = getStoredKaldik();
-    const attendance = getStoredAttendance();
-    const reportNotes = getStoredReportNotes();
+async function writeCloudBackupDocs(
+  backupMap: Record<string, any>,
+  username: string
+): Promise<void> {
+  const jsonStr = JSON.stringify(backupMap || {});
+  const totalKeys = Object.keys(backupMap || {}).length;
 
-    let ekskulList: any = [];
-    try {
-      const ek = localStorage.getItem('sekolahku_ekskul_list');
-      if (ek) ekskulList = JSON.parse(ek);
-    } catch {}
-
-    let penilaianEkskul: any = {};
-    try {
-      const pe = localStorage.getItem('sekolahku_penilaian_ekskul');
-      if (pe) penilaianEkskul = JSON.parse(pe);
-    } catch {}
-
-    let subjectsByClass: any = {};
-    try {
-      const sbc = localStorage.getItem('sekolahku_subjects_by_class');
-      if (sbc) subjectsByClass = JSON.parse(sbc);
-    } catch {}
-
-    const cbtAcakSoal = localStorage.getItem('sekolahku_cbt_acak_soal') === 'true';
-    const cbtAcakJawaban = localStorage.getItem('sekolahku_cbt_acak_jawaban') === 'true';
-    const tkaAcakSoal = localStorage.getItem('sekolahku_tka_acak_soal') === 'true';
-    const tkaAcakJawaban = localStorage.getItem('sekolahku_tka_acak_jawaban') === 'true';
-    const tkaDurations = getStoredTKADurations();
-    const localStorageSnapshot = collectPersistentLocalBackup({ excludeLargeCollections: true });
-
-    // Pastikan dokumen backups/latest juga ter-update aman (jaga batas 1 MiB)
-    const fullBackupMap = collectPersistentLocalBackup();
-    let backupJson = JSON.stringify(fullBackupMap);
-    let studentsStoredInCollection = false;
-    if (backupJson.length > 820000) {
-      backupJson = JSON.stringify(localStorageSnapshot);
-      studentsStoredInCollection = true;
-    }
-
+  if (jsonStr.length <= CHUNK_CHAR_LIMIT) {
     await setDoc(doc(db, BACKUP_DOC_PATH, BACKUP_DOC_ID), {
       id: BACKUP_DOC_ID,
       timestamp: new Date().toISOString(),
-      version: '2.0',
+      version: '3.0',
       updatedBy: username,
-      totalKeys: Object.keys(fullBackupMap).length,
-      studentsStoredInCollection,
-      dataJson: backupJson,
+      totalKeys,
+      chunkCount: 0,
+      studentsStoredInCollection: true,
+      dataJson: jsonStr,
     });
-
-    return await pushAllDataToCloud(
-      {
-        profile,
-        teachers,
-        students,
-        subjects,
-        subjectsByClass,
-        kaldikDays,
-        attendance,
-        reportNotes,
-        ekskulList,
-        penilaianEkskul,
-        cbtAcakSoal,
-        cbtAcakJawaban,
-        tkaAcakSoal,
-        tkaAcakJawaban,
-        tkaDurations,
-        localStorageSnapshot,
-      },
-      username
+  } else {
+    const chunkCount = await writeChunkedJsonDocs(
+      BACKUP_DOC_PATH,
+      BACKUP_CHUNK_PREFIX,
+      backupMap
     );
+    await setDoc(doc(db, BACKUP_DOC_PATH, BACKUP_DOC_ID), {
+      id: BACKUP_DOC_ID,
+      timestamp: new Date().toISOString(),
+      version: '3.0',
+      updatedBy: username,
+      totalKeys,
+      chunkCount,
+      studentsStoredInCollection: true,
+      dataJson: '',
+    });
+  }
+}
+
+/**
+ * Mengumpulkan semua metadata non-koleksi dan mengirimkannya secara aman (chunked) ke Firestore.
+ */
+async function pushSnapshotAndPrimaryDocs(
+  username: string,
+  options?: { restoreVersion?: number }
+): Promise<number> {
+  const profile = getStoredProfile();
+  const teachers = getStoredTeachers();
+  const subjects = getStoredSubjects();
+  const kaldikDays = getStoredKaldik();
+  const reportNotes = getStoredReportNotes();
+  const tkaDurations = getStoredTKADurations();
+
+  let ekskulList: any = [];
+  try {
+    const ek = localStorage.getItem('sekolahku_ekskul_list');
+    if (ek) ekskulList = JSON.parse(ek);
+  } catch {}
+
+  let penilaianEkskul: any = {};
+  try {
+    const pe = localStorage.getItem('sekolahku_penilaian_ekskul');
+    if (pe) penilaianEkskul = JSON.parse(pe);
+  } catch {}
+
+  let subjectsByClass: any = {};
+  try {
+    const sbc = localStorage.getItem('sekolahku_subjects_by_class');
+    if (sbc) subjectsByClass = JSON.parse(sbc);
+  } catch {}
+
+  const cbtAcakSoal = localStorage.getItem('sekolahku_cbt_acak_soal') === 'true';
+  const cbtAcakJawaban = localStorage.getItem('sekolahku_cbt_acak_jawaban') === 'true';
+  const tkaAcakSoal = localStorage.getItem('sekolahku_tka_acak_soal') === 'true';
+  const tkaAcakJawaban = localStorage.getItem('sekolahku_tka_acak_jawaban') === 'true';
+
+  const slimSnapshot = collectPersistentLocalBackup({ excludeLargeCollections: true });
+  const snapshotChunkCount = await writeChunkedJsonDocs(
+    PRIMARY_DOC_PATH,
+    SNAPSHOT_CHUNK_PREFIX,
+    slimSnapshot
+  );
+
+  const prevRev = Number(localStorage.getItem(LAST_SNAPSHOT_REV_KEY) || 0);
+  const revision = Math.max(Date.now(), prevRev + 1);
+  localStorage.setItem(LAST_SNAPSHOT_REV_KEY, String(revision));
+  localStorage.setItem(LAST_PUSHED_VERSION_KEY, String(revision));
+  if (options?.restoreVersion) {
+    localStorage.setItem(LAST_RESTORE_VERSION_KEY, String(options.restoreVersion));
+  }
+
+  const primaryPayload = buildSizeSafePrimaryPayload({
+    profile,
+    teachers,
+    subjects,
+    subjectsByClass,
+    kaldikDays,
+    reportNotes,
+    ekskulList,
+    penilaianEkskul,
+    cbtAcakSoal,
+    cbtAcakJawaban,
+    tkaAcakSoal,
+    tkaAcakJawaban,
+    tkaDurations,
+    snapshotChunkCount,
+    snapshotRevision: revision,
+    ...(options?.restoreVersion ? { restoreVersion: options.restoreVersion } : {}),
+    version: revision,
+    lastUpdated: new Date().toISOString(),
+    updatedBy: username,
+  });
+
+  await setDoc(
+    doc(db, PRIMARY_DOC_PATH, PRIMARY_DOC_ID),
+    {
+      ...primaryPayload,
+      students: deleteField(),
+      attendance: deleteField(),
+      localStorageSnapshot: deleteField(),
+      serverTime: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  localStorage.setItem('sekolahku_last_cloud_sync', new Date().toISOString());
+  return revision;
+}
+
+/**
+ * Mengirim seluruh data localStorage (termasuk koleksi siswa, absensi, kaldik,
+ * serta snapshot chunked untuk seluruh modul) ke cloud Firestore secara aman & real-time.
+ */
+export async function syncAllLocalToCloud(username: string = 'admin'): Promise<boolean> {
+  try {
+    const fullBackupMap = collectPersistentLocalBackup();
+    await writeCloudBackupDocs(fullBackupMap, username);
+    await pushSnapshotAndPrimaryDocs(username);
+    return true;
   } catch (err) {
     console.error('Gagal sinkron penuh ke cloud:', err);
     return false;
   }
+}
+
+let moduleSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Menjadwalkan sinkronisasi real-time otomatis (debounced) setiap kali ada perubahan data modul lokal
+ * seperti Penilaian, CBT, TKA, Catatan Wali, Kurikulum, Ekskul, dsb.
+ */
+export function scheduleRealtimeModuleSync(username?: string) {
+  if (moduleSyncTimer) {
+    clearTimeout(moduleSyncTimer);
+  }
+  moduleSyncTimer = setTimeout(async () => {
+    try {
+      const actor =
+        username ||
+        (() => {
+          try {
+            const raw = localStorage.getItem('sekolahku_active_user');
+            return raw ? JSON.parse(raw).name || 'admin' : 'admin';
+          } catch {
+            return 'admin';
+          }
+        })();
+      const fullBackupMap = collectPersistentLocalBackup();
+      await writeCloudBackupDocs(fullBackupMap, actor);
+      await pushSnapshotAndPrimaryDocs(actor);
+    } catch (err) {
+      console.warn('Auto module realtime sync warning:', err);
+    }
+  }, 1000);
 }
 
 export interface RestoreCloudResult {
@@ -329,8 +585,8 @@ export interface RestoreCloudResult {
 
 /**
  * Memulihkan file cadangan JSON ke localStorage DAN langsung menyinkronkan seluruh koleksi
- * secara real-time ke Firebase Firestore (students, attendance, settings/kaldik_days,
- * school_data/primary_data, dan backups/latest) sehingga seluruh perangkat ikut terupdate real-time.
+ * secara real-time ke Firebase Firestore (replace koleksi students & attendance agar bersih,
+ * update settings/kaldik_days, tulis snapshot chunked ke school_data, dan backups/latest).
  */
 export async function restoreBackupJsonToCloudRealtime(
   jsonString: string,
@@ -341,23 +597,30 @@ export async function restoreBackupJsonToCloudRealtime(
     throw new Error('Format file cadangan JSON tidak valid.');
   }
 
-  // 1. Terapkan seluruh kunci persistent ke localStorage lokal
-  const restoredKeysCount = applyBackupMapToLocalStorage(parsed);
-  const restoreVersion = Date.now();
-  localStorage.setItem('sekolahku_last_restore_version', String(restoreVersion));
+  // Batalkan auto-sync tertunda sebelum restore agar tidak menimpa data cadangan
+  if (moduleSyncTimer) {
+    clearTimeout(moduleSyncTimer);
+    moduleSyncTimer = null;
+  }
 
-  // 2. Sinkronkan koleksi 'students' secara real-time ke Firestore
+  const restoreVersion = Date.now();
+
+  // 1. Terapkan seluruh kunci persistent ke localStorage lokal tanpa memicu hook auto-sync
+  const isFullBackup = Object.keys(parsed).length >= 3;
+  const restoredKeysCount = applyBackupMapToLocalStorage(parsed, {
+    replaceAllNonSession: isFullBackup,
+  });
+
+  // 2. Ganti penuh koleksi 'students' di Firestore (hapus siswa usang + tulis siswa cadangan)
   const restoredStudents: Student[] = Array.isArray(parsed.sekolahku_students)
     ? parsed.sekolahku_students
     : getStoredStudents();
-  if (Array.isArray(parsed.sekolahku_students) && restoredStudents.length > 0) {
-    await saveStudentsToFirestoreBatch(restoredStudents, username);
-  }
+  await replaceStudentsInFirestore(restoredStudents, username);
 
-  // 3. Sinkronkan koleksi 'attendance' secara real-time ke Firestore
+  // 3. Ganti penuh koleksi 'attendance' di Firestore (hapus absensi usang + tulis absensi cadangan)
   const rawAttendance = parsed.sekolahku_attendance_records;
   let attendanceList: AttendanceRecordItem[] = [];
-  if (rawAttendance && typeof rawAttendance === 'object') {
+  if (rawAttendance && typeof rawAttendance === 'object' && !Array.isArray(rawAttendance)) {
     attendanceList = Object.entries(rawAttendance)
       .map(([key, val]: [string, any]) => ({
         id: val?.id || key,
@@ -367,60 +630,26 @@ export async function restoreBackupJsonToCloudRealtime(
         time: val?.time || '07:00',
       }))
       .filter((r) => Boolean(r.studentId && r.date));
-    if (attendanceList.length > 0) {
-      await saveBatchAttendanceToFirestore(attendanceList);
-    }
+    await replaceAttendanceInFirestore(attendanceList);
+  } else {
+    const existingAtt = getStoredAttendance();
+    attendanceList = Object.values(existingAtt);
   }
 
   // 4. Sinkronkan Kaldik ke settings/kaldik_days
   const restoredKaldik: KaldikDay[] = Array.isArray(parsed.sekolahku_kaldik_holidays)
     ? parsed.sekolahku_kaldik_holidays
     : getStoredKaldik();
-  if (Array.isArray(parsed.sekolahku_kaldik_holidays) && restoredKaldik.length > 0) {
-    await saveKaldikToFirestore(restoredKaldik);
-  }
+  await saveKaldikToFirestore(restoredKaldik);
 
-  // 5. Bangun snapshot ringan (< 1 MiB) untuk school_data/primary_data & backups/latest
-  const slimSnapshot = collectPersistentLocalBackup({ excludeLargeCollections: true });
-  let backupJson = JSON.stringify(parsed);
-  let studentsStoredInCollection = false;
-  if (backupJson.length > 820000) {
-    backupJson = JSON.stringify(slimSnapshot);
-    studentsStoredInCollection = true;
-  }
+  // 5. Simpan cadangan penuh ke backups/latest (chunked otomatis bila > 320 KB)
+  const fullBackupMap = collectPersistentLocalBackup();
+  await writeCloudBackupDocs(fullBackupMap, username);
 
-  await setDoc(doc(db, BACKUP_DOC_PATH, BACKUP_DOC_ID), {
-    id: BACKUP_DOC_ID,
-    timestamp: new Date().toISOString(),
-    version: '2.0',
-    updatedBy: username,
-    totalKeys: Object.keys(parsed).length,
-    studentsStoredInCollection,
-    dataJson: backupJson,
-  });
+  // 6. Tulis snapshot chunked + dokumen sentral ringan school_data/primary_data (memicu onSnapshot di semua perangkat!)
+  await pushSnapshotAndPrimaryDocs(username, { restoreVersion });
 
-  await pushAllDataToCloud(
-    {
-      profile: parsed.sekolahku_school_profile || getStoredProfile(),
-      teachers: parsed.sekolahku_teachers || getStoredTeachers(),
-      students: restoredStudents,
-      subjects: parsed.sekolahku_subjects || getStoredSubjects(),
-      subjectsByClass: parsed.sekolahku_subjects_by_class || undefined,
-      kaldikDays: restoredKaldik,
-      attendance: rawAttendance || getStoredAttendance(),
-      reportNotes: parsed.sekolahku_report_notes || getStoredReportNotes(),
-      ekskulList: parsed.sekolahku_ekskul_list || undefined,
-      penilaianEkskul: parsed.sekolahku_penilaian_ekskul || undefined,
-      cbtAcakSoal: parsed.sekolahku_cbt_acak_soal === true || parsed.sekolahku_cbt_acak_soal === 'true',
-      cbtAcakJawaban: parsed.sekolahku_cbt_acak_jawaban === true || parsed.sekolahku_cbt_acak_jawaban === 'true',
-      tkaAcakSoal: parsed.sekolahku_tka_acak_soal === true || parsed.sekolahku_tka_acak_soal === 'true',
-      tkaAcakJawaban: parsed.sekolahku_tka_acak_jawaban === true || parsed.sekolahku_tka_acak_jawaban === 'true',
-      tkaDurations: parsed.sekolahku_tka_durations || getStoredTKADurations(),
-      localStorageSnapshot: slimSnapshot,
-      restoreVersion,
-    },
-    username
-  );
+  dispatchCloudSyncEvents();
 
   return {
     restoredKeysCount,
@@ -432,64 +661,120 @@ export async function restoreBackupJsonToCloudRealtime(
 }
 
 /**
- * Menarik cadangan terbaru langsung dari Firebase Firestore (backups/latest + school_data + students + kaldik)
+ * Menarik cadangan terbaru langsung dari Firebase Firestore
+ * (backups/latest + chunks + school_data + snapshot chunks + students + attendance + kaldik)
  * dan menerapkannya secara real-time ke aplikasi.
  */
 export async function pullBackupFromCloudRealtime(): Promise<{
   restoredKeysCount: number;
   studentsCount: number;
+  attendanceCount: number;
 }> {
   let restoredKeysCount = 0;
 
-  const [backupSnap, primaryCloud, firestoreStudents, firestoreKaldik] = await Promise.all([
-    getDoc(doc(db, BACKUP_DOC_PATH, BACKUP_DOC_ID)),
-    pullAllDataFromCloud(),
-    fetchStudentsFromFirestore(),
-    fetchKaldikFromFirestore(),
-  ]);
+  const [backupSnap, primaryCloud, firestoreStudents, firestoreAttendance, firestoreKaldik] =
+    await Promise.all([
+      getDoc(doc(db, BACKUP_DOC_PATH, BACKUP_DOC_ID)),
+      pullAllDataFromCloud(),
+      fetchStudentsFromFirestore(),
+      fetchAttendanceFromFirestore(),
+      fetchKaldikFromFirestore(),
+    ]);
+
+  runWithoutStorageSync(() => {
+    // Akan diisi dari async chunks di bawah sebelum blok ini tidak perlu async
+  });
 
   if (backupSnap.exists()) {
     const bData = backupSnap.data() as CloudBackupDocMeta;
-    if (bData?.dataJson) {
-      const parsed = JSON.parse(bData.dataJson);
-      restoredKeysCount += applyBackupMapToLocalStorage(parsed);
+    let parsedBackup: Record<string, any> | null = null;
+    if (bData?.chunkCount && bData.chunkCount > 0) {
+      parsedBackup = await readChunkedJsonDocs(
+        BACKUP_DOC_PATH,
+        BACKUP_CHUNK_PREFIX,
+        bData.chunkCount
+      );
+    } else if (bData?.dataJson) {
+      try {
+        parsedBackup = JSON.parse(bData.dataJson);
+      } catch {}
+    }
+    if (parsedBackup) {
+      restoredKeysCount += applyBackupMapToLocalStorage(parsedBackup);
     }
   }
 
-  if (primaryCloud?.localStorageSnapshot) {
-    restoredKeysCount += applyBackupMapToLocalStorage(primaryCloud.localStorageSnapshot);
+  if (primaryCloud?.snapshotChunkCount && primaryCloud.snapshotChunkCount > 0) {
+    const snapshotMap = await pullSnapshotChunksFromCloud(primaryCloud.snapshotChunkCount);
+    if (snapshotMap) {
+      restoredKeysCount += applyBackupMapToLocalStorage(snapshotMap);
+    }
   }
-  if (primaryCloud?.profile) {
-    localStorage.setItem('sekolahku_school_profile', JSON.stringify(primaryCloud.profile));
-    restoredKeysCount++;
-  }
-  if (primaryCloud?.teachers) {
-    localStorage.setItem('sekolahku_teachers', JSON.stringify(primaryCloud.teachers));
-    restoredKeysCount++;
-  }
-  if (primaryCloud?.subjectsByClass) {
-    localStorage.setItem('sekolahku_subjects_by_class', JSON.stringify(primaryCloud.subjectsByClass));
-    restoredKeysCount++;
-  }
-  if (primaryCloud?.reportNotes) {
-    localStorage.setItem('sekolahku_report_notes', JSON.stringify(primaryCloud.reportNotes));
-    restoredKeysCount++;
-  }
-  if (primaryCloud?.tkaDurations) {
-    saveStoredTKADurations(primaryCloud.tkaDurations);
-    restoredKeysCount++;
-  }
-  if (firestoreStudents.length > 0) {
-    localStorage.setItem('sekolahku_students', JSON.stringify(firestoreStudents));
-    localStorage.setItem('sekolahku_students_seeded', 'true');
-  }
-  if (firestoreKaldik && firestoreKaldik.length > 0) {
-    localStorage.setItem('sekolahku_kaldik_holidays', JSON.stringify(firestoreKaldik));
-  }
+
+  runWithoutStorageSync(() => {
+    if (primaryCloud?.localStorageSnapshot) {
+      restoredKeysCount += applyBackupMapToLocalStorage(primaryCloud.localStorageSnapshot);
+    }
+    if (primaryCloud?.profile) {
+      localStorage.setItem('sekolahku_school_profile', JSON.stringify(primaryCloud.profile));
+      restoredKeysCount++;
+    }
+    if (primaryCloud?.teachers) {
+      localStorage.setItem('sekolahku_teachers', JSON.stringify(primaryCloud.teachers));
+      restoredKeysCount++;
+    }
+    if (primaryCloud?.subjectsByClass) {
+      localStorage.setItem(
+        'sekolahku_subjects_by_class',
+        JSON.stringify(primaryCloud.subjectsByClass)
+      );
+      restoredKeysCount++;
+    }
+    if (primaryCloud?.reportNotes) {
+      localStorage.setItem('sekolahku_report_notes', JSON.stringify(primaryCloud.reportNotes));
+      restoredKeysCount++;
+    }
+    if (primaryCloud?.ekskulList) {
+      localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(primaryCloud.ekskulList));
+      restoredKeysCount++;
+    }
+    if (primaryCloud?.penilaianEkskul) {
+      localStorage.setItem(
+        'sekolahku_penilaian_ekskul',
+        JSON.stringify(primaryCloud.penilaianEkskul)
+      );
+      restoredKeysCount++;
+    }
+    if (primaryCloud?.tkaDurations) {
+      saveStoredTKADurations(primaryCloud.tkaDurations);
+      restoredKeysCount++;
+    }
+
+    if (firestoreStudents.length > 0) {
+      saveStoredStudents(firestoreStudents);
+      localStorage.setItem('sekolahku_students_seeded', 'true');
+    }
+    if (Object.keys(firestoreAttendance).length > 0) {
+      saveStoredAttendance(firestoreAttendance);
+      localStorage.setItem('sekolahku_attendance_seeded', 'true');
+    }
+    if (firestoreKaldik && firestoreKaldik.length > 0) {
+      saveStoredKaldik(firestoreKaldik);
+    }
+
+    const rev = primaryCloud?.snapshotRevision || primaryCloud?.restoreVersion || primaryCloud?.version;
+    if (rev) {
+      localStorage.setItem(LAST_SNAPSHOT_REV_KEY, String(rev));
+      localStorage.setItem(LAST_PUSHED_VERSION_KEY, String(rev));
+    }
+  });
+
+  dispatchCloudSyncEvents();
 
   return {
     restoredKeysCount,
     studentsCount: firestoreStudents.length,
+    attendanceCount: Object.keys(firestoreAttendance).length,
   };
 }
 

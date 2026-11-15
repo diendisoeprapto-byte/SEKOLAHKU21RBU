@@ -36,6 +36,7 @@ import {
   getActiveFilters,
   getStoredSubjectsForClass,
   saveStoredSubjectsForClass,
+  notifyStorageMutation,
 } from '../../utils/storage';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx } from '../../utils/docxImporter';
@@ -132,11 +133,19 @@ export const CBTTab: React.FC<Props> = ({
   });
 
   useEffect(() => {
-    localStorage.setItem('sekolahku_cbt_acak_soal', String(acakSoal));
+    const val = String(acakSoal);
+    if (localStorage.getItem('sekolahku_cbt_acak_soal') !== val) {
+      localStorage.setItem('sekolahku_cbt_acak_soal', val);
+      notifyStorageMutation('sekolahku_cbt_acak_soal');
+    }
   }, [acakSoal]);
 
   useEffect(() => {
-    localStorage.setItem('sekolahku_cbt_acak_jawaban', String(acakJawaban));
+    const val = String(acakJawaban);
+    if (localStorage.getItem('sekolahku_cbt_acak_jawaban') !== val) {
+      localStorage.setItem('sekolahku_cbt_acak_jawaban', val);
+      notifyStorageMutation('sekolahku_cbt_acak_jawaban');
+    }
   }, [acakJawaban]);
 
   // Exam runtime questions list (shuffled if acakSoal is active)
