@@ -29,12 +29,22 @@ import {
   Smile,
   ThumbsUp,
   Save,
-  PauseCircle,
   Trash2,
 } from 'lucide-react';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../utils/firebase';
-import { ActiveUser, Student, Subject, SchoolProfile, CBTExam, CBTQuestion, TKAQuestion, TUJUH_KEBIASAAN_LIST, KebiasaanReportItem } from '../types';
+import {
+  ActiveUser,
+  ActiveExamHeaderStatus,
+  Student,
+  Subject,
+  SchoolProfile,
+  CBTExam,
+  CBTQuestion,
+  TKAQuestion,
+  TUJUH_KEBIASAAN_LIST,
+  KebiasaanReportItem,
+} from '../types';
 import {
   getStoredCBTExams,
   getStoredCBTActivePackages,
@@ -46,19 +56,18 @@ import {
   getTKADurationMinutes,
   getStoredTKAActivePackages,
   isTKAPackageActive,
-  getStoredTKASubmissions,
-  saveStoredTKASubmissions,
+  normalizeTkaMapelKey,
   getStoredAssessments,
   saveStoredAssessments,
   getActiveFilters,
   CLASSES_LIST,
 } from '../utils/storage';
+import { upsertTkaSubmission } from '../utils/tkaFirestore';
 import {
   StudentExamDraft,
   buildQuestionOrderSnapshot,
   restoreQuestionsFromSnapshot,
   saveStudentExamDraft,
-  markStudentExamSessionPaused,
   getStudentExamDraftById,
   getLastActiveStudentExamDraft,
   clearStudentExamDraft,
@@ -82,6 +91,7 @@ interface Props {
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onNavigateTab: (tab: any) => void;
   initialTab?: string;
+  onExamStatusChange?: (status: ActiveExamHeaderStatus | null) => void;
 }
 
 interface ExamOptionItem {
@@ -108,6 +118,7 @@ export const StudentDashboard: React.FC<Props> = ({
   showToast,
   onNavigateTab,
   initialTab,
+  onExamStatusChange,
 }) => {
   // Mode tampilan siswa: 'home' (cards), 'cbt' (flow ujian CBT), 'tka' (flow ujian TKA), 'kebiasaan' (Form Laporan 7 Kebiasaan)
   const [viewMode, setViewMode] = useState<'home' | 'cbt' | 'tka' | 'kebiasaan'>(() => {
@@ -146,14 +157,24 @@ export const StudentDashboard: React.FC<Props> = ({
     window.addEventListener('sekolahku-tka-active-updated', syncTkaActive);
     window.addEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
     window.addEventListener('sekolahku-cloud-sync-updated', syncCloudAll);
+    window.addEventListener('storage', syncCloudAll);
     return () => {
       window.removeEventListener('sekolahku-cbt-exams-updated', syncCbt);
       window.removeEventListener('sekolahku-tka-durations-updated', syncDurations);
       window.removeEventListener('sekolahku-tka-active-updated', syncTkaActive);
       window.removeEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
       window.removeEventListener('sekolahku-cloud-sync-updated', syncCloudAll);
+      window.removeEventListener('storage', syncCloudAll);
     };
   }, []);
+
+  useEffect(() => {
+    setCbtExamsState(getStoredCBTExams());
+    setCbtActivePackages(getStoredCBTActivePackages());
+    setTkaDurations(getStoredTKADurations());
+    setTkaActivePackages(getStoredTKAActivePackages());
+    setTkaQuestionsState(getStoredTKAQuestions());
+  }, [viewMode]);
 
   useEffect(() => {
     if (initialTab === 'laporan-kebiasaan') {
@@ -172,6 +193,7 @@ export const StudentDashboard: React.FC<Props> = ({
   const [selectedMapelFilter, setSelectedMapelFilter] = useState<string>('');
   const [selectedExamId, setSelectedExamId] = useState<string>('');
   const [isExamRunning, setIsExamRunning] = useState<boolean>(false);
+  const [runningExamSnapshot, setRunningExamSnapshot] = useState<ExamOptionItem | null>(null);
   const [runningSoalList, setRunningSoalList] = useState<CBTQuestion[]>([]);
   const [currentQIndex, setCurrentQIndex] = useState<number>(0);
   const [answers, setAnswers] = useState<Record<string, any>>({});
@@ -341,7 +363,7 @@ export const StudentDashboard: React.FC<Props> = ({
 
   // Helper infer paketName dari CBTExam bila exam belum memiliki properti paketName
   const inferCbtPaketName = (judul: string, explicitPaket?: string): string => {
-    if (explicitPaket) return explicitPaket;
+    if (explicitPaket && explicitPaket.trim()) return explicitPaket.trim();
     const j = (judul || '').toLowerCase();
     if (j.includes('asts')) return 'ASTS (Sumatif Tengah Semester)';
     if (j.includes('asas')) return 'ASAS (Sumatif Akhir Semester)';
@@ -349,17 +371,26 @@ export const StudentDashboard: React.FC<Props> = ({
     if (sumatifMatch) return sumatifMatch[0];
     const remMatch = judul?.match(/Remedial\s*\d+/i);
     if (remMatch) return remMatch[0];
+    if (judul && judul.includes(' - ')) {
+      return judul.split(' - ')[0].trim();
+    }
     return 'ASAS (Sumatif Akhir Semester)';
   };
 
   // Daftar Ujian CBT Tersedia (Dinamis dari Bank Soal Guru + Paket Contoh Bawaan)
   const { allCbtExamsCatalog, cbtExamList } = useMemo(() => {
     const dynamicTeacherAll: Array<ExamOptionItem & { isActive: boolean }> = [];
+    const studentClassNorm = (currentStudent?.kelas || activeClass || '').trim().toLowerCase();
 
     cbtExamsState.forEach((ex) => {
       if (!Array.isArray(ex.soalList) || ex.soalList.length === 0) return;
       const paketName = inferCbtPaketName(ex.judul, ex.paketName);
       const subPaket = ex.subPaket || 'Paket 1';
+      const isExamActive =
+        typeof ex.aktif === 'boolean'
+          ? ex.aktif
+          : cbtActivePackages[ex.id] === true;
+
       dynamicTeacherAll.push({
         id: ex.id,
         category: 'cbt',
@@ -370,9 +401,16 @@ export const StudentDashboard: React.FC<Props> = ({
         subPaket,
         kelas: ex.kelas,
         isTeacherCreated: true,
-        isActive: ex.aktif === true,
+        isActive: isExamActive,
         soalList: ex.soalList,
       });
+    });
+
+    // Prioritaskan paket CBT yang sesuai kelas siswa di urutan paling atas
+    dynamicTeacherAll.sort((a, b) => {
+      const aMatch = (a.kelas || '').trim().toLowerCase() === studentClassNorm ? 0 : 1;
+      const bMatch = (b.kelas || '').trim().toLowerCase() === studentClassNorm ? 0 : 1;
+      return aMatch - bMatch;
     });
 
     const sampleCbtDefaults: ExamOptionItem[] = [
@@ -805,15 +843,38 @@ export const StudentDashboard: React.FC<Props> = ({
     }
   }, [selectedPaketFilter, selectedMapelFilter, filteredExamsForDropdown, isExamRunning]);
 
-  // Ujian yang sedang dipilih
+  // Ujian yang sedang dipilih (terkunci saat ujian berlangsung agar sync cloud tidak memutus ujian)
   const currentExam = useMemo(() => {
     return currentAvailableExams.find((e) => e.id === selectedExamId) || null;
   }, [currentAvailableExams, selectedExamId]);
 
+  const activeExamObj = isExamRunning || examResult ? runningExamSnapshot || currentExam : currentExam;
+
   const activeExamSoalList = useMemo(() => {
     if (isExamRunning && runningSoalList.length > 0) return runningSoalList;
-    return currentExam?.soalList || [];
-  }, [isExamRunning, runningSoalList, currentExam]);
+    return activeExamObj?.soalList || [];
+  }, [isExamRunning, runningSoalList, activeExamObj]);
+
+  // Sinkronkan timer ujian & nomor soal ke header merah aplikasi saat ujian berlangsung
+  useEffect(() => {
+    if (!onExamStatusChange) return;
+    if (isExamRunning && activeExamObj) {
+      onExamStatusChange({
+        isRunning: true,
+        timeLeft,
+        currentQuestion: currentQIndex + 1,
+        totalQuestions: activeExamSoalList.length,
+      });
+    } else {
+      onExamStatusChange(null);
+    }
+  }, [isExamRunning, activeExamObj, timeLeft, currentQIndex, activeExamSoalList.length, onExamStatusChange]);
+
+  useEffect(() => {
+    return () => {
+      onExamStatusChange?.(null);
+    };
+  }, [onExamStatusChange]);
 
   // Evaluasi skor mendukung baik format kunci huruf ("A"/"B") maupun teks penuh opsi ("Jantung")
   const gradeQuestionAnswer = (q: CBTQuestion, studentAns: any): { isCorrect: boolean; earnedScore: number } => {
@@ -864,7 +925,7 @@ export const StudentDashboard: React.FC<Props> = ({
   // Simpan referensi state ujian terbaru agar aman saat logout/unmount/beforeunload
   latestExamStateRef.current = {
     studentId: currentStudent?.id || '',
-    exam: currentExam,
+    exam: activeExamObj,
     selectedPaketFilter,
     selectedMapelFilter,
     currentQIndex,
@@ -886,6 +947,7 @@ export const StudentDashboard: React.FC<Props> = ({
     setSelectedPaketFilter(draft.selectedPaketFilter || examObj.paketName);
     setSelectedMapelFilter(draft.selectedMapelFilter || examObj.mapel);
     setSelectedExamId(examObj.id);
+    setRunningExamSnapshot(examObj);
     setRunningSoalList(restoredList);
     setAnswers(safeAnswers);
     setCurrentQIndex(safeIndex);
@@ -901,7 +963,7 @@ export const StudentDashboard: React.FC<Props> = ({
         isActiveSession: true,
         runningQuestionOrder: buildQuestionOrderSnapshot(restoredList),
       },
-      { immediateSync: true }
+      { immediateSync: false }
     );
 
     const noticeMsg = `Melanjutkan terakhir dikerjakan: Soal #${safeIndex + 1} (${answeredCount} jawaban tersimpan otomatis dipulihkan).`;
@@ -911,48 +973,48 @@ export const StudentDashboard: React.FC<Props> = ({
 
   // Auto-save jawaban, nomor soal terakhir, & urutan soal setiap kali berubah saat ujian berlangsung
   useEffect(() => {
-    if (!isExamRunning || !currentExam || !currentStudent?.id) return;
-    const soalToSave = activeExamSoalList.length > 0 ? activeExamSoalList : currentExam.soalList;
+    if (!isExamRunning || !activeExamObj || !currentStudent?.id) return;
+    const soalToSave = activeExamSoalList.length > 0 ? activeExamSoalList : activeExamObj.soalList;
     saveStudentExamDraft(
       {
         studentId: currentStudent.id,
-        examId: currentExam.id,
-        category: currentExam.category,
-        judul: currentExam.judul,
-        mapel: currentExam.mapel,
-        paketName: currentExam.paketName,
+        examId: activeExamObj.id,
+        category: activeExamObj.category,
+        judul: activeExamObj.judul,
+        mapel: activeExamObj.mapel,
+        paketName: activeExamObj.paketName,
         selectedPaketFilter,
         selectedMapelFilter,
         currentQIndex,
         answers,
-        timeLeft: latestExamStateRef.current.timeLeft || currentExam.durasiMenit * 60,
-        totalSeconds: currentExam.durasiMenit * 60,
+        timeLeft: latestExamStateRef.current.timeLeft || activeExamObj.durasiMenit * 60,
+        totalSeconds: activeExamObj.durasiMenit * 60,
         runningQuestionOrder: buildQuestionOrderSnapshot(soalToSave),
         isActiveSession: true,
         updatedAt: new Date().toISOString(),
       },
-      { immediateSync: true }
+      { immediateSync: false }
     );
-  }, [isExamRunning, currentExam?.id, currentStudent?.id, currentQIndex, answers, runningSoalList]);
+  }, [isExamRunning, activeExamObj?.id, currentStudent?.id, currentQIndex, answers, runningSoalList]);
 
-  // Auto-save sisa waktu ke localStorage tiap detik (sinkron cloud tiap ~12 detik agar ringan)
+  // Auto-save sisa waktu ke localStorage tiap detik
   useEffect(() => {
-    if (!isExamRunning || !currentExam || !currentStudent?.id || timeLeft <= 0) return;
-    const soalToSave = activeExamSoalList.length > 0 ? activeExamSoalList : currentExam.soalList;
+    if (!isExamRunning || !activeExamObj || !currentStudent?.id || timeLeft <= 0) return;
+    const soalToSave = activeExamSoalList.length > 0 ? activeExamSoalList : activeExamObj.soalList;
     saveStudentExamDraft(
       {
         studentId: currentStudent.id,
-        examId: currentExam.id,
-        category: currentExam.category,
-        judul: currentExam.judul,
-        mapel: currentExam.mapel,
-        paketName: currentExam.paketName,
+        examId: activeExamObj.id,
+        category: activeExamObj.category,
+        judul: activeExamObj.judul,
+        mapel: activeExamObj.mapel,
+        paketName: activeExamObj.paketName,
         selectedPaketFilter,
         selectedMapelFilter,
         currentQIndex,
         answers,
         timeLeft,
-        totalSeconds: currentExam.durasiMenit * 60,
+        totalSeconds: activeExamObj.durasiMenit * 60,
         runningQuestionOrder: buildQuestionOrderSnapshot(soalToSave),
         isActiveSession: true,
         updatedAt: new Date().toISOString(),
@@ -1087,6 +1149,7 @@ export const StudentDashboard: React.FC<Props> = ({
     }
 
     const initialSeconds = currentExam.durasiMenit * 60;
+    setRunningExamSnapshot(currentExam);
     setRunningSoalList(preparedList);
     setTimeLeft(initialSeconds);
     setCurrentQIndex(0);
@@ -1114,7 +1177,7 @@ export const StudentDashboard: React.FC<Props> = ({
           isActiveSession: true,
           updatedAt: new Date().toISOString(),
         },
-        { immediateSync: true }
+        { immediateSync: false }
       );
     }
 
@@ -1123,9 +1186,10 @@ export const StudentDashboard: React.FC<Props> = ({
 
   // Handler submit ujian (manual atau auto-submit ketika timer 0)
   const handleFinishExam = (isAutoSubmit: boolean = false) => {
-    if (!currentExam) return;
+    const finishedExam = activeExamObj;
+    if (!finishedExam) return;
 
-    const evaluatedQuestions = activeExamSoalList.length > 0 ? activeExamSoalList : currentExam.soalList;
+    const evaluatedQuestions = activeExamSoalList.length > 0 ? activeExamSoalList : finishedExam.soalList;
     let earned = 0;
     let max = 0;
 
@@ -1137,92 +1201,46 @@ export const StudentDashboard: React.FC<Props> = ({
     });
 
     const finalGrade = max > 0 ? Math.round((earned / max) * 100) : 100;
+    setRunningExamSnapshot(finishedExam);
     setExamResult({ score: finalGrade, maxScore: 100 });
     setIsExamRunning(false);
     setResumedNotice(null);
     if (currentStudent?.id) {
-      clearStudentExamDraft(currentStudent.id, currentExam.id);
+      clearStudentExamDraft(currentStudent.id, finishedExam.id);
       setDraftRevisionTick((t) => t + 1);
     }
 
     // Rekam ke CBT Results di storage (beserta metadata ujian untuk Statistik Performa)
     const storedRes = getStoredCBTResults();
     storedRes.push({
-      examId: currentExam.id,
+      examId: finishedExam.id,
       studentId: currentStudent.id,
       studentName: currentStudent.nama,
       skor: earned,
       nilai: finalGrade,
       waktuSelesai: new Date().toLocaleTimeString(),
       jawabanSiswa: answers,
-      category: currentExam.category,
-      mapel: currentExam.mapel,
-      judul: currentExam.judul,
-      paketName: currentExam.paketName,
+      category: finishedExam.category,
+      mapel: finishedExam.mapel,
+      judul: finishedExam.judul,
+      paketName: finishedExam.paketName,
       tanggal: getLocalTodayStr(),
     });
     saveStoredCBTResults(storedRes);
 
-    // Jika TKA, rekam juga ke TKA Submissions agar muncul di Hasil/Rapor TKA
-    if (currentExam.category === 'tka') {
+    // Jika TKA, rekam & gabungkan ke TKA Submissions (localStorage + Firestore) agar langsung masuk Analisis & Rekap TKA
+    if (finishedExam.category === 'tka') {
       try {
-        const existingSubs = getStoredTKASubmissions();
-        const normMapelKey: 'Bahasa Indonesia' | 'Matematika' | 'IPAS' | 'Bahasa Inggris' | 'Koding dan Kecerdasan Artifisial (KKA)' =
-          currentExam.mapel.includes('IPAS')
-            ? 'IPAS'
-            : currentExam.mapel.includes('Koding') || currentExam.mapel.includes('KKA')
-            ? 'Koding dan Kecerdasan Artifisial (KKA)'
-            : currentExam.mapel === 'Matematika'
-            ? 'Matematika'
-            : currentExam.mapel === 'Bahasa Inggris'
-            ? 'Bahasa Inggris'
-            : 'Bahasa Indonesia';
-
-        const prevSub = existingSubs.find(
-          (s) => s.studentId === currentStudent.id && s.paket === currentExam.paketName
-        );
-        const updatedScores = {
-          'Bahasa Indonesia': prevSub?.scoresPerMapel?.['Bahasa Indonesia'] ?? 80,
-          'Matematika': prevSub?.scoresPerMapel?.['Matematika'] ?? 80,
-          'IPAS': prevSub?.scoresPerMapel?.['IPAS'] ?? 80,
-          'Bahasa Inggris': prevSub?.scoresPerMapel?.['Bahasa Inggris'] ?? 80,
-          'Koding dan Kecerdasan Artifisial (KKA)': prevSub?.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ?? 80,
-          [normMapelKey]: finalGrade,
-        };
-        const avgTotal = Math.round(
-          (updatedScores['Bahasa Indonesia'] +
-            updatedScores['Matematika'] +
-            updatedScores['IPAS'] +
-            updatedScores['Bahasa Inggris'] +
-            updatedScores['Koding dan Kecerdasan Artifisial (KKA)']) /
-            5
-        );
-        const predikat: 'A' | 'B' | 'C' | 'D' =
-          avgTotal >= 88 ? 'A' : avgTotal >= 78 ? 'B' : avgTotal >= 68 ? 'C' : 'D';
-        const newSub = {
-          id: `sub_${currentStudent.id}_${currentExam.paketName.replace(/\s+/g, '_')}_${Date.now()}`,
-          studentId: currentStudent.id,
-          studentName: currentStudent.nama,
-          nisn: currentStudent.nisn,
-          kelas: currentStudent.kelas,
-          fotoUrl: currentStudent.fotoUrl,
-          paket: currentExam.paketName,
-          answers,
-          scoresPerMapel: updatedScores,
-          skorTotal: avgTotal,
-          predikat,
-          status: (avgTotal >= 75 ? 'Tuntas' : 'Remedial') as 'Tuntas' | 'Remedial',
-          tanggalUjian: new Date().toLocaleDateString('id-ID', {
-            day: '2-digit',
-            month: 'long',
-            year: 'numeric',
-          }),
-          durasiPengerjaan: `${Math.max(1, currentExam.durasiMenit - Math.floor(timeLeft / 60))} Menit`,
-        };
-        const otherSubs = existingSubs.filter(
-          (s) => !(s.studentId === currentStudent.id && s.paket === currentExam.paketName)
-        );
-        saveStoredTKASubmissions([newSub, ...otherSubs]);
+        const normMapelKey = normalizeTkaMapelKey(finishedExam.mapel);
+        const durationUsed = Math.max(1, finishedExam.durasiMenit - Math.floor(timeLeft / 60));
+        upsertTkaSubmission({
+          student: currentStudent,
+          paketName: finishedExam.paketName,
+          mapelScores: { [normMapelKey]: finalGrade },
+          completedMapelKeys: [normMapelKey],
+          questionAnswers: answers,
+          durasiMenitUsed: durationUsed,
+        });
       } catch (tkaErr) {
         console.warn('Sync TKA submission error:', tkaErr);
       }
@@ -1232,7 +1250,7 @@ export const StudentDashboard: React.FC<Props> = ({
     try {
       const filters = getActiveFilters();
       const targetClass = currentStudent?.kelas || activeClass;
-      const normMapel = currentExam.mapel.toLowerCase();
+      const normMapel = finishedExam.mapel.toLowerCase();
       const matchedSubject = subjects.find((s) => {
         const sn = (s.name || '').toLowerCase();
         const sc = (s.code || '').toUpperCase();
@@ -1256,7 +1274,7 @@ export const StudentDashboard: React.FC<Props> = ({
         'Muatan Lokal (PLBJ)': 's_plbj',
         'Koding dan Kecerdasan Artifisial (KKA)': 's_k6_kka',
       };
-      const subId = matchedSubject?.id || subjectMap[currentExam.mapel] || 's_bindonesia';
+      const subId = matchedSubject?.id || subjectMap[finishedExam.mapel] || 's_bindonesia';
       const assessKey = `${filters.year}_${filters.semester}_${targetClass}_${subId}`;
       const existing = getStoredAssessments(assessKey);
 
@@ -1264,13 +1282,13 @@ export const StudentDashboard: React.FC<Props> = ({
         existing[currentStudent.id] = { sumatif: {}, remedial: {}, asts: 0, asas: 0 };
       }
 
-      const isRemedial = currentExam.paketName.toLowerCase().includes('remedial');
-      if (currentExam.paketName.toUpperCase().includes('ASTS')) {
+      const isRemedial = finishedExam.paketName.toLowerCase().includes('remedial');
+      if (finishedExam.paketName.toUpperCase().includes('ASTS')) {
         existing[currentStudent.id].asts = finalGrade;
-      } else if (currentExam.paketName.toUpperCase().includes('ASAS')) {
+      } else if (finishedExam.paketName.toUpperCase().includes('ASAS')) {
         existing[currentStudent.id].asas = finalGrade;
       } else {
-        const asMatch = currentExam.paketName.match(/(?:Sumatif|Remedial|AS|UH)\s*(?:Inklusi\s*)?(\d+)/i);
+        const asMatch = finishedExam.paketName.match(/(?:Sumatif|Remedial|AS|UH)\s*(?:Inklusi\s*)?(\d+)/i);
         if (asMatch) {
           const idx = parseInt(asMatch[1]);
           if (isRemedial) {
@@ -2078,19 +2096,20 @@ export const StudentDashboard: React.FC<Props> = ({
       {/* Top Breadcrumb & Tombol Kembali */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-3xl border border-slate-200 shadow-xs">
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            disabled={isExamRunning}
-            onClick={() => {
-              setViewMode('home');
-              setSelectedExamId('');
-              setIsExamRunning(false);
-            }}
-            className="p-2 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition cursor-pointer"
-            title="Kembali ke Halaman Beranda Kartu Siswa"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
+          {!isExamRunning && (
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('home');
+                setSelectedExamId('');
+                setIsExamRunning(false);
+              }}
+              className="p-2 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
+              title="Kembali ke Halaman Beranda Kartu Siswa"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          )}
           <div>
             <span className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
               viewMode === 'tka' ? 'bg-purple-100 text-purple-900' : 'bg-rose-100 text-rose-900'
@@ -2098,7 +2117,13 @@ export const StudentDashboard: React.FC<Props> = ({
               {viewMode === 'tka' ? 'Modul TKA (Tes Kemampuan Akademik)' : 'Modul CBT (Computer Based Test)'}
             </span>
             <h2 className="text-base sm:text-lg font-display font-black text-slate-800">
-              {viewMode === 'tka' ? 'Persiapan Ujian TKA Siswa' : 'Persiapan Ujian CBT Siswa'}
+              {isExamRunning
+                ? viewMode === 'tka'
+                  ? 'Ujian TKA Sedang Berlangsung'
+                  : 'Ujian CBT Sedang Berlangsung'
+                : viewMode === 'tka'
+                ? 'Persiapan Ujian TKA Siswa'
+                : 'Persiapan Ujian CBT Siswa'}
             </h2>
           </div>
         </div>
@@ -2111,104 +2136,166 @@ export const StudentDashboard: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* TAHAP A: PANEL PEMILIHAN PAKET SOAL & MATA PELAJARAN */}
+      {/* TAHAP A: SAAT BELUM MULAI -> MENU PILIHAN JENIS SOAL & MAPEL; SAAT SUDAH MULAI -> DIGANTIKAN NAVIGASI NOMOR SOAL */}
       <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-wider mb-1 flex items-center gap-2">
-              <span className={`w-2.5 h-2.5 rounded-full ${viewMode === 'tka' ? 'bg-purple-600' : 'bg-rose-600'}`}></span>
-              {viewMode === 'tka'
-                ? 'Pilih Jenis Soal TKA & Mata Pelajaran'
-                : 'Pilih Paket Soal CBT & Mata Pelajaran'}
-            </label>
-            <p className="text-xs text-slate-500">
-              {viewMode === 'tka'
-                ? 'Pilih jenis TKA (misal: Simulasi 1 / Try Out 1) dan mata pelajaran yang diinginkan. Soal akan tampil sesuai paket & mapel yang dibuat guru.'
-                : 'Pilih jenis/paket soal (misal: Sumatif 1) dan mata pelajaran. Daftar paket soal yang tersedia akan otomatis muncul sesuai pilihan.'}
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* DROPDOWN 1: PAKET / JENIS SOAL */}
-            <div>
-              <label className="block text-[11px] font-extrabold text-slate-700 mb-1.5">
-                {viewMode === 'tka' ? '1. Jenis Soal / Simulasi TKA' : '1. Jenis / Paket Soal CBT'}
-              </label>
-              <select
-                value={selectedPaketFilter}
-                disabled={isExamRunning}
-                onChange={(e) => {
-                  const newPaket = e.target.value;
-                  setSelectedPaketFilter(newPaket);
-                  setExamResult(null);
-                  if (!newPaket) {
-                    setSelectedExamId('');
-                  }
-                }}
-                className={`w-full p-3 rounded-2xl border-2 font-display font-extrabold text-xs sm:text-sm outline-none transition cursor-pointer shadow-xs ${
-                  isExamRunning
-                    ? 'bg-slate-100 border-slate-300 text-slate-500 cursor-not-allowed'
-                    : selectedPaketFilter
-                    ? viewMode === 'tka'
-                      ? 'border-purple-600 bg-purple-50/40 text-purple-950'
-                      : 'border-rose-600 bg-rose-50/40 text-rose-950'
-                    : 'border-slate-300 bg-white text-slate-800'
-                }`}
-              >
-                <option value="">
-                  {viewMode === 'tka' ? '-- Semua / Pilih Jenis Soal TKA --' : '-- Semua / Pilih Jenis Soal CBT --'}
-                </option>
-                {availablePaketOptions.map((paket) => {
-                  const matchingInPaket = currentAvailableExams.filter((ex) => ex.paketName === paket);
-                  const qTotal = matchingInPaket.reduce((sum, ex) => sum + ex.soalList.length, 0);
-                  return (
-                    <option key={paket} value={paket}>
-                      {paket} {qTotal > 0 ? `(${matchingInPaket.length} Paket Aktif • ${qTotal} Soal)` : '(Belum diaktifkan)'}
-                    </option>
-                  );
-                })}
-              </select>
+        {isExamRunning && activeExamObj ? (
+          <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/70 border border-slate-200 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/70 pb-3">
+              <div>
+                <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                  <span
+                    className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
+                      viewMode === 'tka' ? 'bg-purple-100 text-purple-800' : 'bg-rose-100 text-rose-800'
+                    }`}
+                  >
+                    {activeExamObj.paketName}
+                  </span>
+                  <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-slate-200/70 text-slate-700">
+                    {activeExamObj.mapel}
+                  </span>
+                </div>
+                <h3 className="text-xs sm:text-sm font-display font-black text-slate-800">
+                  Navigasi Nomor Soal ({countAnsweredQuestions(answers)} / {activeExamSoalList.length} Terjawab)
+                </h3>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 font-bold">
+                <span className="flex items-center gap-1">
+                  <span className="w-3 h-3 rounded bg-emerald-500 inline-block"></span> Terjawab
+                </span>
+                <span className="flex items-center gap-1">
+                  <span
+                    className={`w-3 h-3 rounded inline-block ${
+                      viewMode === 'tka' ? 'bg-purple-600' : 'bg-rose-600'
+                    }`}
+                  ></span>{' '}
+                  Sedang Dibuka
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-3 h-3 rounded bg-slate-200 inline-block"></span> Belum Dijawab
+                </span>
+              </div>
             </div>
 
-            {/* DROPDOWN 2: MATA PELAJARAN */}
-            <div>
-              <label className="block text-[11px] font-extrabold text-slate-700 mb-1.5">
-                2. Mata Pelajaran
-              </label>
-              <select
-                value={selectedMapelFilter}
-                disabled={isExamRunning}
-                onChange={(e) => {
-                  setSelectedMapelFilter(e.target.value);
-                  setExamResult(null);
-                }}
-                className={`w-full p-3 rounded-2xl border-2 font-display font-extrabold text-xs sm:text-sm outline-none transition cursor-pointer shadow-xs ${
-                  isExamRunning
-                    ? 'bg-slate-100 border-slate-300 text-slate-500 cursor-not-allowed'
-                    : selectedMapelFilter
-                    ? viewMode === 'tka'
-                      ? 'border-purple-600 bg-purple-50/40 text-purple-950'
-                      : 'border-rose-600 bg-rose-50/40 text-rose-950'
-                    : 'border-slate-300 bg-white text-slate-800'
-                }`}
-              >
-                <option value="">-- Semua / Pilih Mata Pelajaran --</option>
-                {availableMapelOptions.map((mapel) => {
-                  const qCount = currentAvailableExams
-                    .filter((ex) => (!selectedPaketFilter || ex.paketName === selectedPaketFilter) && ex.mapel === mapel)
-                    .reduce((sum, ex) => sum + ex.soalList.length, 0);
-                  return (
-                    <option key={mapel} value={mapel}>
-                      {mapel} {qCount > 0 ? `(${qCount} Soal)` : '(Belum diaktifkan)'}
-                    </option>
-                  );
-                })}
-              </select>
+            <div className="flex flex-wrap gap-2">
+              {activeExamSoalList.map((item, idx) => {
+                const ansVal = answers[item.id];
+                const isAnswered =
+                  ansVal !== undefined &&
+                  ansVal !== null &&
+                  ansVal !== '' &&
+                  (!Array.isArray(ansVal) || ansVal.length > 0);
+                const isCurrent = idx === currentQIndex;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setCurrentQIndex(idx)}
+                    className={`w-9 h-9 rounded-xl font-mono text-xs font-black transition cursor-pointer ${
+                      isCurrent
+                        ? viewMode === 'tka'
+                          ? 'bg-purple-600 text-white ring-2 ring-purple-300 shadow-sm scale-105'
+                          : 'bg-rose-600 text-white ring-2 ring-rose-300 shadow-sm scale-105'
+                        : isAnswered
+                        ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                        : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    {idx + 1}
+                  </button>
+                );
+              })}
             </div>
           </div>
+        ) : !examResult ? (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-wider mb-1 flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${viewMode === 'tka' ? 'bg-purple-600' : 'bg-rose-600'}`}></span>
+                {viewMode === 'tka'
+                  ? 'Pilih Jenis Soal TKA & Mata Pelajaran'
+                  : 'Pilih Paket Soal CBT & Mata Pelajaran'}
+              </label>
+              <p className="text-xs text-slate-500">
+                {viewMode === 'tka'
+                  ? 'Pilih jenis TKA (misal: Simulasi 1 / Try Out 1) dan mata pelajaran yang diinginkan. Soal akan tampil sesuai paket & mapel yang dibuat guru.'
+                  : 'Pilih jenis/paket soal (misal: Sumatif 1) dan mata pelajaran. Daftar paket soal yang tersedia akan otomatis muncul sesuai pilihan.'}
+              </p>
+            </div>
 
-          {/* DROPDOWN / KARTU PAKET YANG SESUAI HASIL FILTER */}
-          {!isExamRunning && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* DROPDOWN 1: PAKET / JENIS SOAL */}
+              <div>
+                <label className="block text-[11px] font-extrabold text-slate-700 mb-1.5">
+                  {viewMode === 'tka' ? '1. Jenis Soal / Simulasi TKA' : '1. Jenis / Paket Soal CBT'}
+                </label>
+                <select
+                  value={selectedPaketFilter}
+                  onChange={(e) => {
+                    const newPaket = e.target.value;
+                    setSelectedPaketFilter(newPaket);
+                    setExamResult(null);
+                    if (!newPaket) {
+                      setSelectedExamId('');
+                    }
+                  }}
+                  className={`w-full p-3 rounded-2xl border-2 font-display font-extrabold text-xs sm:text-sm outline-none transition cursor-pointer shadow-xs ${
+                    selectedPaketFilter
+                      ? viewMode === 'tka'
+                        ? 'border-purple-600 bg-purple-50/40 text-purple-950'
+                        : 'border-rose-600 bg-rose-50/40 text-rose-950'
+                      : 'border-slate-300 bg-white text-slate-800'
+                  }`}
+                >
+                  <option value="">
+                    {viewMode === 'tka' ? '-- Semua / Pilih Jenis Soal TKA --' : '-- Semua / Pilih Jenis Soal CBT --'}
+                  </option>
+                  {availablePaketOptions.map((paket) => {
+                    const matchingInPaket = currentAvailableExams.filter((ex) => ex.paketName === paket);
+                    const qTotal = matchingInPaket.reduce((sum, ex) => sum + ex.soalList.length, 0);
+                    return (
+                      <option key={paket} value={paket}>
+                        {paket} {qTotal > 0 ? `(${matchingInPaket.length} Paket Aktif • ${qTotal} Soal)` : '(Belum diaktifkan)'}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              {/* DROPDOWN 2: MATA PELAJARAN */}
+              <div>
+                <label className="block text-[11px] font-extrabold text-slate-700 mb-1.5">
+                  2. Mata Pelajaran
+                </label>
+                <select
+                  value={selectedMapelFilter}
+                  onChange={(e) => {
+                    setSelectedMapelFilter(e.target.value);
+                    setExamResult(null);
+                  }}
+                  className={`w-full p-3 rounded-2xl border-2 font-display font-extrabold text-xs sm:text-sm outline-none transition cursor-pointer shadow-xs ${
+                    selectedMapelFilter
+                      ? viewMode === 'tka'
+                        ? 'border-purple-600 bg-purple-50/40 text-purple-950'
+                        : 'border-rose-600 bg-rose-50/40 text-rose-950'
+                      : 'border-slate-300 bg-white text-slate-800'
+                  }`}
+                >
+                  <option value="">-- Semua / Pilih Mata Pelajaran --</option>
+                  {availableMapelOptions.map((mapel) => {
+                    const qCount = currentAvailableExams
+                      .filter((ex) => (!selectedPaketFilter || ex.paketName === selectedPaketFilter) && ex.mapel === mapel)
+                      .reduce((sum, ex) => sum + ex.soalList.length, 0);
+                    return (
+                      <option key={mapel} value={mapel}>
+                        {mapel} {qCount > 0 ? `(${qCount} Soal)` : '(Belum diaktifkan)'}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+            </div>
+
+            {/* DROPDOWN / KARTU PAKET YANG SESUAI HASIL FILTER */}
             <div className="space-y-2.5 pt-1">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-extrabold text-slate-700">
@@ -2334,17 +2421,11 @@ export const StudentDashboard: React.FC<Props> = ({
                 </div>
               )}
             </div>
-          )}
-
-          {isExamRunning && (
-            <p className="text-[11px] text-amber-600 font-bold mt-1.5 flex items-center gap-1">
-              <Lock className="w-3.5 h-3.5" /> Pilihan paket &amp; mata pelajaran terkunci selama ujian berlangsung.
-            </p>
-          )}
-        </div>
+          </div>
+        ) : null}
 
         {/* JIKA BELUM ADA UJIAN DIPILIH: AREA SOAL DAN WAKTU TERKUNCI */}
-        {!selectedExamId && filteredExamsForDropdown.length > 0 && (
+        {!isExamRunning && !examResult && !selectedExamId && filteredExamsForDropdown.length > 0 && (
           <div className="p-8 rounded-3xl bg-slate-50 border-2 border-dashed border-slate-200 text-center space-y-2">
             <div className="w-12 h-12 rounded-2xl bg-slate-200 text-slate-500 flex items-center justify-center mx-auto">
               <Lock className="w-6 h-6" />
@@ -2479,70 +2560,8 @@ export const StudentDashboard: React.FC<Props> = ({
         )}
 
         {/* TAHAP C: ANTARMUKA SAAT UJIAN BERLANGSUNG */}
-        {isExamRunning && currentExam && (
+        {isExamRunning && activeExamObj && (
           <div className="space-y-4 pt-2">
-            {/* Header Atas: Sticky Countdown Timer Bar */}
-            <div className="sticky top-16 z-30 bg-slate-900 text-white p-4 rounded-3xl shadow-xl flex flex-wrap items-center justify-between gap-3 border-2 border-yellow-400">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] font-black uppercase text-yellow-300 tracking-wider">
-                    Sedang Mengerjakan: {currentExam.mapel}
-                  </span>
-                  <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 px-2 py-0.5 rounded-full flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3" /> Tersimpan Otomatis ({countAnsweredQuestions(answers)}/{activeExamSoalList.length})
-                  </span>
-                </div>
-                <h4 className="font-display font-black text-sm text-white truncate max-w-sm mt-0.5">
-                  {currentExam.judul}
-                </h4>
-              </div>
-
-              {/* Digital Countdown Timer & Jeda */}
-              <div className="flex flex-wrap items-center gap-2.5">
-                <div className="bg-black/60 px-4 py-2 rounded-2xl border border-yellow-400/80 flex items-center gap-2 font-mono">
-                  <Clock className="w-5 h-5 text-yellow-400 animate-pulse" />
-                  <div>
-                    <span className="text-[9px] font-bold text-yellow-200 uppercase block leading-none">
-                      Sisa Waktu
-                    </span>
-                    <span className={`text-xl font-black ${
-                      timeLeft <= 300 ? 'text-rose-400 animate-ping' : 'text-yellow-400'
-                    }`}>
-                      {formatTimer(timeLeft)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="text-right hidden sm:block px-1">
-                  <span className="text-[10px] font-bold text-slate-300 block">Nomor Soal</span>
-                  <span className="text-xs font-black text-white">
-                    {currentQIndex + 1} dari {activeExamSoalList.length}
-                  </span>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (currentStudent?.id) {
-                      markStudentExamSessionPaused(currentStudent.id, currentExam.id);
-                      setDraftRevisionTick((t) => t + 1);
-                    }
-                    setIsExamRunning(false);
-                    setResumedNotice(null);
-                    showToast(
-                      `Jawaban & posisi Soal #${currentQIndex + 1} tersimpan otomatis. Anda dapat melanjutkannya lagi nanti.`,
-                      'success'
-                    );
-                  }}
-                  className="px-3.5 py-2 rounded-2xl bg-white/10 hover:bg-white/20 text-white border border-white/25 font-display font-extrabold text-[11px] flex items-center gap-1.5 transition cursor-pointer"
-                  title="Simpan progres & keluar sementara dari ruang ujian"
-                >
-                  <PauseCircle className="w-4 h-4 text-yellow-300" />
-                  <span>Simpan &amp; Jeda</span>
-                </button>
-              </div>
-            </div>
-
             {/* Notice saat berhasil dipulihkan setelah logout / masuk kembali */}
             {resumedNotice && (
               <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center justify-between gap-3">
@@ -2791,60 +2810,11 @@ export const StudentDashboard: React.FC<Props> = ({
                 </div>
               );
             })()}
-
-            {/* Daftar Navigasi Nomor Soal (Menunjukkan soal terakhir & status terjawab) */}
-            <div className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-xs space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-display font-black text-slate-800">
-                  Navigasi Nomor Soal ({countAnsweredQuestions(answers)} / {activeExamSoalList.length} Terjawab)
-                </span>
-                <div className="flex items-center gap-3 text-[11px] text-slate-500 font-bold">
-                  <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded bg-emerald-500 inline-block"></span> Terjawab
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className={`w-3 h-3 rounded inline-block ${viewMode === 'tka' ? 'bg-purple-600' : 'bg-rose-600'}`}></span> Sedang Dibuka
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded bg-slate-200 inline-block"></span> Belum Dijawab
-                  </span>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {activeExamSoalList.map((item, idx) => {
-                  const ansVal = answers[item.id];
-                  const isAnswered =
-                    ansVal !== undefined &&
-                    ansVal !== null &&
-                    ansVal !== '' &&
-                    (!Array.isArray(ansVal) || ansVal.length > 0);
-                  const isCurrent = idx === currentQIndex;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => setCurrentQIndex(idx)}
-                      className={`w-9 h-9 rounded-xl font-mono text-xs font-black transition cursor-pointer ${
-                        isCurrent
-                          ? viewMode === 'tka'
-                            ? 'bg-purple-600 text-white ring-2 ring-purple-300 shadow-sm scale-105'
-                            : 'bg-rose-600 text-white ring-2 ring-rose-300 shadow-sm scale-105'
-                          : isAnswered
-                          ? 'bg-emerald-500 text-white hover:bg-emerald-600'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      }`}
-                    >
-                      {idx + 1}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
           </div>
         )}
 
         {/* HASIL UJIAN (MUNCUL SETELAH SELESAI / AUTO SUBMIT) */}
-        {examResult && currentExam && (
+        {examResult && activeExamObj && (
           <div className="p-8 rounded-3xl bg-white border-2 border-emerald-300 shadow-lg text-center space-y-4 animate-in zoom-in-95 duration-300">
             <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
               <CheckCircle2 className="w-10 h-10" />
@@ -2857,7 +2827,7 @@ export const StudentDashboard: React.FC<Props> = ({
                 Nilai Akhir: {examResult.score} / 100
               </h3>
               <p className="text-xs text-slate-500 mt-1">
-                {currentExam.judul} • Peserta: {currentStudent.nama}
+                {activeExamObj.judul} • Peserta: {currentStudent.nama}
               </p>
             </div>
 
@@ -2871,6 +2841,7 @@ export const StudentDashboard: React.FC<Props> = ({
                 onClick={() => {
                   setSelectedExamId('');
                   setExamResult(null);
+                  setRunningExamSnapshot(null);
                   setViewMode('home');
                 }}
                 className="px-6 py-2.5 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-display font-black text-xs shadow-md transition cursor-pointer"

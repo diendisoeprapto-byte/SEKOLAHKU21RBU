@@ -30,6 +30,8 @@ import {
   saveStoredTKADurations,
   getStoredTKAActivePackages,
   getStoredCBTActivePackages,
+  getStoredCBTExams,
+  saveStoredCBTExams,
   getStoredTKAQuestions,
   saveStoredTKAQuestions,
   runWithoutStorageSync,
@@ -49,6 +51,10 @@ import {
   replaceTkaQuestionsInFirestore,
   fetchTkaQuestionsFromFirestore,
 } from './tkaFirestore';
+import {
+  replaceCbtExamsInFirestore,
+  fetchCbtExamsFromFirestore,
+} from './cbtFirestore';
 import {
   replaceTeachersInFirestore,
   fetchTeachersFromFirestore,
@@ -131,6 +137,7 @@ const SESSION_ONLY_KEYS = new Set([
   'sekolahku_teachers_seeded',
   'sekolahku_attendance_seeded',
   'sekolahku_tka_questions_seeded',
+  'sekolahku_cbt_exams_seeded',
 ]);
 
 function dispatchCloudSyncEvents() {
@@ -236,11 +243,84 @@ export function collectPersistentLocalBackup(options?: {
 }
 
 /**
+ * Menggabungkan array hasil ujian (CBT/TKA) tanpa menghilangkan hasil siswa lain yang submit bersamaan
+ */
+function mergeExamResultsArrays(localArr: any[], incomingArr: any[]): any[] {
+  const map = new Map<string, any>();
+  const makeKey = (item: any, idx: number) =>
+    item && (item.examId || item.studentId)
+      ? `${item.examId || ''}__${item.studentId || ''}__${item.tanggal || ''}__${item.waktuSelesai || ''}`
+      : `idx_${idx}_${JSON.stringify(item)}`;
+
+  (Array.isArray(localArr) ? localArr : []).forEach((item, idx) => {
+    map.set(makeKey(item, idx), item);
+  });
+  (Array.isArray(incomingArr) ? incomingArr : []).forEach((item, idx) => {
+    const k = makeKey(item, idx);
+    if (!map.has(k)) {
+      map.set(k, item);
+    }
+  });
+  return Array.from(map.values());
+}
+
+/**
+ * Menggabungkan bucket draft ujian per studentId agar draft siswa lain tidak terhapus saat sinkronisasi
+ */
+function mergeDraftBucketsMap(
+  localBuckets: Record<string, any>,
+  incomingBuckets: Record<string, any>,
+  nestedField: 'draftsByExam' | 'draftsByKey',
+  currentStudentId?: string
+): Record<string, any> {
+  const merged: Record<string, any> = {
+    ...(incomingBuckets && typeof incomingBuckets === 'object' ? incomingBuckets : {}),
+  };
+
+  if (localBuckets && typeof localBuckets === 'object') {
+    Object.keys(localBuckets).forEach((sid) => {
+      const localBucket = localBuckets[sid];
+      const remoteBucket = merged[sid];
+      if (!remoteBucket) {
+        merged[sid] = localBucket;
+        return;
+      }
+
+      // Selalu lindungi bucket milik siswa yang sedang aktif login di perangkat ini
+      if (currentStudentId && sid === currentStudentId) {
+        merged[sid] = localBucket;
+        return;
+      }
+
+      const localNested = localBucket?.[nestedField] || {};
+      const remoteNested = remoteBucket?.[nestedField] || {};
+      const combinedNested: Record<string, any> = { ...remoteNested };
+
+      Object.keys(localNested).forEach((draftId) => {
+        const lDraft = localNested[draftId];
+        const rDraft = combinedNested[draftId];
+        if (!rDraft || (lDraft?.updatedAt || '') > (rDraft?.updatedAt || '')) {
+          combinedNested[draftId] = lDraft;
+        }
+      });
+
+      merged[sid] = {
+        ...remoteBucket,
+        ...localBucket,
+        [nestedField]: combinedNested,
+      };
+    });
+  }
+
+  return merged;
+}
+
+/**
  * Menerapkan map key-value hasil cadangan ke localStorage tanpa menghapus sesi login aktif
  */
 export function applyBackupMapToLocalStorage(
   dataMap: Record<string, any>,
-  options?: { replaceAllNonSession?: boolean }
+  options?: { replaceAllNonSession?: boolean; currentStudentId?: string }
 ): number {
   if (!dataMap || typeof dataMap !== 'object') return 0;
   return runWithoutStorageSync(() => {
@@ -257,11 +337,95 @@ export function applyBackupMapToLocalStorage(
       keysToRemove.forEach((k) => localStorage.removeItem(k));
     }
 
+    const isPartialRealtimeSync = !options?.replaceAllNonSession;
+    const tkaSubmissionsSeeded = localStorage.getItem('sekolahku_tka_submissions_seeded') === 'true';
+    const tkaQuestionsSeeded = localStorage.getItem('sekolahku_tka_questions_seeded') === 'true';
+    const cbtExamsSeeded = localStorage.getItem('sekolahku_cbt_exams_seeded') === 'true';
+
     let count = 0;
     Object.keys(dataMap).forEach((key) => {
       if (!key.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(key)) return;
       const val = dataMap[key];
       if (val === undefined || val === null) return;
+
+      if (isPartialRealtimeSync) {
+        // Koleksi dedicated Firestore tetap menjadi single source of truth
+        if (key === 'sekolahku_tka_submissions' && tkaSubmissionsSeeded) return;
+        if (key === 'sekolahku_tka_questions' && tkaQuestionsSeeded) return;
+        if (key === 'sekolahku_cbt_exams' && cbtExamsSeeded) return;
+
+        // Gabungkan draft ujian per studentId agar siswa lain yang sedang ujian tidak terganggu
+        if (
+          (key === 'sekolahku_student_exam_drafts_v1' || key === 'sekolahku_tka_exam_drafts_v1') &&
+          typeof val === 'object' &&
+          !Array.isArray(val)
+        ) {
+          let localParsed: Record<string, any> = {};
+          try {
+            const rawLocal = localStorage.getItem(key);
+            if (rawLocal) localParsed = JSON.parse(rawLocal) || {};
+          } catch {}
+          const nestedKey =
+            key === 'sekolahku_student_exam_drafts_v1' ? 'draftsByExam' : 'draftsByKey';
+          const merged = mergeDraftBucketsMap(
+            localParsed,
+            val,
+            nestedKey,
+            options?.currentStudentId
+          );
+          localStorage.setItem(key, JSON.stringify(merged));
+          count++;
+          return;
+        }
+
+        // Gabungkan hasil ujian CBT & TKA agar submit bersamaan tidak saling menimpa
+        if (
+          (key === 'sekolahku_cbt_results' || key === 'sekolahku_tka_results') &&
+          Array.isArray(val)
+        ) {
+          let localArr: any[] = [];
+          try {
+            const rawLocal = localStorage.getItem(key);
+            if (rawLocal) localArr = JSON.parse(rawLocal) || [];
+          } catch {}
+          const mergedArr = mergeExamResultsArrays(localArr, val);
+          localStorage.setItem(key, JSON.stringify(mergedArr));
+          count++;
+          return;
+        }
+
+        // Gabungkan nilai asesmen per studentId agar submit mapel yang sama oleh siswa berbeda tetap utuh
+        if (
+          key.startsWith('sekolahku_assessments_data_') &&
+          typeof val === 'object' &&
+          !Array.isArray(val)
+        ) {
+          let localAssess: Record<string, any> = {};
+          try {
+            const rawLocal = localStorage.getItem(key);
+            if (rawLocal) localAssess = JSON.parse(rawLocal) || {};
+          } catch {}
+          const mergedAssess: Record<string, any> = { ...localAssess };
+          Object.keys(val).forEach((sid) => {
+            const incomingStudent = val[sid];
+            const localStudent = mergedAssess[sid];
+            if (!localStudent) {
+              mergedAssess[sid] = incomingStudent;
+            } else {
+              mergedAssess[sid] = {
+                ...localStudent,
+                ...incomingStudent,
+                sumatif: { ...(localStudent.sumatif || {}), ...(incomingStudent.sumatif || {}) },
+                remedial: { ...(localStudent.remedial || {}), ...(incomingStudent.remedial || {}) },
+              };
+            }
+          });
+          localStorage.setItem(key, JSON.stringify(mergedAssess));
+          count++;
+          return;
+        }
+      }
+
       if (typeof val === 'object') {
         localStorage.setItem(key, JSON.stringify(val));
       } else {
@@ -679,6 +843,12 @@ export async function restoreBackupJsonToCloudRealtime(
     : getStoredTKAQuestions();
   await replaceTkaQuestionsInFirestore(restoredTkaQuestions);
 
+  // 4c. Ganti penuh koleksi 'cbt_exams' di Firestore agar Paket Soal CBT ikut realtime
+  const restoredCbtExams = Array.isArray(parsed.sekolahku_cbt_exams)
+    ? parsed.sekolahku_cbt_exams
+    : getStoredCBTExams();
+  await replaceCbtExamsInFirestore(restoredCbtExams);
+
   // 5. Simpan cadangan penuh ke backups/latest (chunked otomatis bila > 250 KB)
   const fullBackupMap = collectPersistentLocalBackup();
   await writeCloudBackupDocs(fullBackupMap, username);
@@ -717,6 +887,7 @@ export async function pullBackupFromCloudRealtime(): Promise<{
     firestoreAttendance,
     firestoreKaldik,
     firestoreTkaQuestions,
+    firestoreCbtExams,
   ] = await Promise.all([
     getDoc(doc(db, BACKUP_DOC_PATH, BACKUP_DOC_ID)),
     pullAllDataFromCloud(),
@@ -725,6 +896,7 @@ export async function pullBackupFromCloudRealtime(): Promise<{
     fetchAttendanceFromFirestore(),
     fetchKaldikFromFirestore(),
     fetchTkaQuestionsFromFirestore(),
+    fetchCbtExamsFromFirestore(),
   ]);
 
   runWithoutStorageSync(() => {
@@ -814,6 +986,10 @@ export async function pullBackupFromCloudRealtime(): Promise<{
     if (firestoreTkaQuestions && firestoreTkaQuestions.length > 0) {
       saveStoredTKAQuestions(firestoreTkaQuestions);
       localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+    }
+    if (firestoreCbtExams && firestoreCbtExams.length > 0) {
+      saveStoredCBTExams(firestoreCbtExams);
+      localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
     }
 
     const rev = primaryCloud?.snapshotRevision || primaryCloud?.restoreVersion || primaryCloud?.version;

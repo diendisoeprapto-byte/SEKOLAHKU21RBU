@@ -44,7 +44,8 @@ import {
   saveStoredSubjectsForClass,
   notifyStorageMutation,
 } from '../../utils/storage';
-import { collectPersistentLocalBackup, pushAllDataToCloud } from '../../utils/cloudSync';
+import { pushAllDataToCloud } from '../../utils/cloudSync';
+import { saveCbtExamToFirestore, saveCbtExamsBatchToFirestore } from '../../utils/cbtFirestore';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx } from '../../utils/docxImporter';
 import { QuestionContent } from '../QuestionContent';
@@ -88,9 +89,11 @@ export const CBTTab: React.FC<Props> = ({
     };
     window.addEventListener('sekolahku-cbt-exams-updated', syncExams);
     window.addEventListener('sekolahku-cloud-sync-updated', syncExams);
+    window.addEventListener('storage', syncExams);
     return () => {
       window.removeEventListener('sekolahku-cbt-exams-updated', syncExams);
       window.removeEventListener('sekolahku-cloud-sync-updated', syncExams);
+      window.removeEventListener('storage', syncExams);
     };
   }, []);
 
@@ -344,11 +347,10 @@ export const CBTTab: React.FC<Props> = ({
     { id: 'cbt_asas_pancasila', label: 'ASAS • Pendidikan Pancasila (Contoh Bawaan)' },
   ];
 
-  const syncCbtActivationToCloud = (nextActiveMap?: Record<string, boolean>) => {
+  const syncCbtActivationToCloud = (nextActiveMap: Record<string, boolean>) => {
     pushAllDataToCloud(
       {
-        ...(nextActiveMap ? { cbtActivePackages: nextActiveMap } : {}),
-        localStorageSnapshot: collectPersistentLocalBackup({ excludeLargeCollections: true }),
+        cbtActivePackages: nextActiveMap,
       },
       activeUser?.name || 'admin'
     );
@@ -368,12 +370,18 @@ export const CBTTab: React.FC<Props> = ({
 
     const updatedExam: CBTExam = {
       ...targetExam,
+      paketName: targetExam.paketName || inferPaketFromExam(targetExam),
+      subPaket: targetExam.subPaket || 'Paket 1',
       aktif: nextState,
     };
     const newExams = upsertExamInList(exams, updatedExam);
+    const nextMap = { ...cbtActivePackages, [updatedExam.id]: nextState };
     setExams(newExams);
+    setCbtActivePackages(nextMap);
     saveStoredCBTExams(newExams);
-    syncCbtActivationToCloud();
+    saveStoredCBTActivePackages(nextMap);
+    saveCbtExamToFirestore(updatedExam).catch(() => {});
+    syncCbtActivationToCloud(nextMap);
 
     showToast(
       nextState
@@ -388,12 +396,27 @@ export const CBTTab: React.FC<Props> = ({
       showToast('Belum ada paket soal CBT tersimpan untuk diatur.', 'error');
       return;
     }
-    const newExams = exams.map((ex) =>
-      Array.isArray(ex.soalList) && ex.soalList.length > 0 ? { ...ex, aktif: nextState } : ex
-    );
+    const nextMap = { ...cbtActivePackages };
+    const newExams = exams.map((ex) => {
+      if (Array.isArray(ex.soalList) && ex.soalList.length > 0) {
+        nextMap[ex.id] = nextState;
+        return {
+          ...ex,
+          paketName: ex.paketName || inferPaketFromExam(ex),
+          subPaket: ex.subPaket || 'Paket 1',
+          aktif: nextState,
+        };
+      }
+      return ex;
+    });
     setExams(newExams);
+    setCbtActivePackages(nextMap);
     saveStoredCBTExams(newExams);
-    syncCbtActivationToCloud();
+    saveStoredCBTActivePackages(nextMap);
+    saveCbtExamsBatchToFirestore(newExams.filter((ex) => Array.isArray(ex.soalList) && ex.soalList.length > 0)).catch(
+      () => {}
+    );
+    syncCbtActivationToCloud(nextMap);
     showToast(
       nextState
         ? `Semua ${savedExamBuckets.length} paket soal CBT tersimpan DIAKTIFKAN untuk siswa.`
@@ -593,6 +616,7 @@ export const CBTTab: React.FC<Props> = ({
     const newExams = upsertExamInList(exams, updatedExam);
     setExams(newExams);
     saveStoredCBTExams(newExams);
+    saveCbtExamToFirestore(updatedExam).catch(() => {});
 
     // Reset fields to blank
     handleResetForm();
@@ -662,6 +686,7 @@ export const CBTTab: React.FC<Props> = ({
     const newExams = upsertExamInList(exams, updatedExam);
     setExams(newExams);
     saveStoredCBTExams(newExams);
+    saveCbtExamToFirestore(updatedExam).catch(() => {});
     if (editingQuestionId === qId) {
       handleResetForm();
     }
@@ -707,6 +732,7 @@ export const CBTTab: React.FC<Props> = ({
       const newExams = upsertExamInList(exams, updatedExam);
       setExams(newExams);
       saveStoredCBTExams(newExams);
+      saveCbtExamToFirestore(updatedExam).catch(() => {});
 
       showToast(`Berhasil mengimpor ${res.count} soal ke ${selectedPaket} • ${selectedMapel} (${selectedSubPaket})!`, 'success');
     } catch (err: any) {
@@ -1108,9 +1134,11 @@ export const CBTTab: React.FC<Props> = ({
                       const mins = Number(e.target.value);
                       setExamDurationMinutes(mins);
                       if (exams.some((ex) => ex.id === activeExam.id)) {
-                        const updated = upsertExamInList(exams, { ...activeExam, durasiMenit: mins });
+                        const updatedExamObj = { ...activeExam, durasiMenit: mins };
+                        const updated = upsertExamInList(exams, updatedExamObj);
                         setExams(updated);
                         saveStoredCBTExams(updated);
+                        saveCbtExamToFirestore(updatedExamObj).catch(() => {});
                       }
                     }}
                     className="w-full px-3 py-2 rounded-2xl border-2 border-amber-400 bg-amber-50/60 text-xs font-black text-amber-950 outline-none shadow-xs"
@@ -2123,7 +2151,7 @@ export const CBTTab: React.FC<Props> = ({
                 <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200">
                   <div>
                     <span className="text-[10px] font-black uppercase text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                      Soal {currentQuestionIndex + 1} dari {activeExam.soalList.length}
+                      Soal {currentQuestionIndex + 1} dari {currentExamQuestions.length}
                     </span>
                     <h4 className="font-display font-black text-slate-800 text-sm mt-1">{activeExam.judul}</h4>
                   </div>
@@ -2133,6 +2161,50 @@ export const CBTTab: React.FC<Props> = ({
                       <Clock className="w-4 h-4 animate-spin" />
                       <span>{Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}</span>
                     </div>
+                  </div>
+                </div>
+
+                {/* Navigasi Nomor Soal */}
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-display font-black text-slate-800">
+                      Navigasi Nomor Soal ({Object.keys(studentAnswers).filter((k) => {
+                        const v = studentAnswers[k];
+                        return v !== undefined && v !== null && v !== '' && (!Array.isArray(v) || v.length > 0);
+                      }).length} / {currentExamQuestions.length} Terjawab)
+                    </span>
+                    <div className="flex items-center gap-3 text-[11px] text-slate-500 font-bold">
+                      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-emerald-500 inline-block"></span> Terjawab</span>
+                      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-rose-600 inline-block"></span> Sedang Dibuka</span>
+                      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-slate-200 inline-block"></span> Belum</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {currentExamQuestions.map((qItem, idx) => {
+                      const ansVal = studentAnswers[qItem.id];
+                      const isAns =
+                        ansVal !== undefined &&
+                        ansVal !== null &&
+                        ansVal !== '' &&
+                        (!Array.isArray(ansVal) || ansVal.length > 0);
+                      const isCurr = idx === currentQuestionIndex;
+                      return (
+                        <button
+                          key={qItem.id}
+                          type="button"
+                          onClick={() => setCurrentQuestionIndex(idx)}
+                          className={`w-8 h-8 rounded-xl font-mono text-xs font-black transition cursor-pointer ${
+                            isCurr
+                              ? 'bg-rose-600 text-white ring-2 ring-rose-300 shadow-xs scale-105'
+                              : isAns
+                              ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                          }`}
+                        >
+                          {idx + 1}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 

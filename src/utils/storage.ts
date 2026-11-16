@@ -528,6 +528,28 @@ export const saveStoredTKAResults = (results: CBTExamResult[]) => {
   notifyStorageMutation(STORAGE_KEYS.TKA_RESULTS);
 };
 
+export type TKAMapelScoreKey =
+  | 'Bahasa Indonesia'
+  | 'Matematika'
+  | 'IPAS'
+  | 'Bahasa Inggris'
+  | 'Koding dan Kecerdasan Artifisial (KKA)';
+
+export const normalizeTkaMapelKey = (mapel: string): TKAMapelScoreKey => {
+  const m = (mapel || '').toLowerCase();
+  if (m.includes('ipas') || m.includes('alam dan sosial')) return 'IPAS';
+  if (m.includes('koding') || m.includes('kka') || m.includes('artifisial')) {
+    return 'Koding dan Kecerdasan Artifisial (KKA)';
+  }
+  if (m.includes('matematika')) return 'Matematika';
+  if (m.includes('inggris')) return 'Bahasa Inggris';
+  return 'Bahasa Indonesia';
+};
+
+export const extractBaseTkaPaket = (paket: string): string => {
+  return (paket || '').replace(/\s*\([^)]*\)\s*$/, '').trim() || 'Simulasi 1';
+};
+
 export interface TKASubmissionItem {
   id: string;
   studentId: string;
@@ -536,6 +558,8 @@ export interface TKASubmissionItem {
   kelas: string;
   fotoUrl: string;
   paket: string;
+  paketDasar?: string;
+  completedMapels?: string[];
   answers: Record<string, any>;
   scoresPerMapel: {
     'Bahasa Indonesia': number;
@@ -549,6 +573,7 @@ export interface TKASubmissionItem {
   status: 'Tuntas' | 'Remedial';
   tanggalUjian: string;
   durasiPengerjaan?: string;
+  updatedAt?: string;
 }
 
 export const getStoredTKASubmissions = (): TKASubmissionItem[] => {
@@ -571,6 +596,9 @@ export const saveStoredTKASubmissions = (submissions: TKASubmissionItem[]) => {
 
 export const clearStoredTKASubmissions = () => {
   localStorage.removeItem(STORAGE_KEYS.TKA_SUBMISSIONS);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
+  }
   notifyStorageMutation(STORAGE_KEYS.TKA_SUBMISSIONS);
 };
 

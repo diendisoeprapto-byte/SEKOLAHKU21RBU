@@ -10,9 +10,18 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { TKAQuestion } from '../types';
-import { runWithoutStorageSync, saveStoredTKAQuestions } from './storage';
+import {
+  runWithoutStorageSync,
+  saveStoredTKAQuestions,
+  getStoredTKASubmissions,
+  saveStoredTKASubmissions,
+  TKASubmissionItem,
+  TKAMapelScoreKey,
+  extractBaseTkaPaket,
+} from './storage';
 
 export const TKA_QUESTIONS_COLLECTION = 'tka_questions';
+export const TKA_SUBMISSIONS_COLLECTION = 'tka_submissions';
 
 function sanitizeQuestionId(rawId?: string, fallbackIdx: number = 0): string {
   const base = (rawId || `tka_q_${Date.now()}_${fallbackIdx}`).trim();
@@ -217,3 +226,275 @@ export function subscribeToTkaQuestionsCollection(
     return () => {};
   }
 }
+
+// ============================================================================
+// TKA SUBMISSIONS (ANALISIS & REKAP HASIL TKA REAL-TIME FIRESTORE)
+// ============================================================================
+
+function makeSubmissionDocId(studentId: string, basePaket: string, fallbackId?: string): string {
+  const cleanStudent = (studentId || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '_');
+  const cleanPaket = (basePaket || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '_');
+  if (cleanStudent && cleanPaket) {
+    return `sub_${cleanStudent}_${cleanPaket}`;
+  }
+  return sanitizeQuestionId(fallbackId, 0);
+}
+
+export async function saveTkaSubmissionToFirestore(submission: TKASubmissionItem): Promise<boolean> {
+  try {
+    const basePaket = submission.paketDasar || extractBaseTkaPaket(submission.paket);
+    const docId = makeSubmissionDocId(submission.studentId, basePaket, submission.id);
+    const cleanSub = stripUndefinedDeep({
+      ...submission,
+      id: docId,
+      paket: basePaket,
+      paketDasar: basePaket,
+      updatedAt: new Date().toISOString(),
+      serverTime: serverTimestamp(),
+    });
+    await setDoc(doc(db, TKA_SUBMISSIONS_COLLECTION, docId), cleanSub, { merge: true });
+    localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+    return true;
+  } catch (error) {
+    console.error('Gagal menyimpan hasil TKA ke Firestore:', error);
+    return false;
+  }
+}
+
+export async function saveTkaSubmissionsBatchToFirestore(
+  submissions: TKASubmissionItem[]
+): Promise<boolean> {
+  try {
+    if (!submissions || submissions.length === 0) return true;
+    const CHUNK_SIZE = 25;
+    for (let i = 0; i < submissions.length; i += CHUNK_SIZE) {
+      const chunk = submissions.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+      chunk.forEach((sub, offset) => {
+        const basePaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
+        const docId = makeSubmissionDocId(sub.studentId, basePaket, sub.id || `sim_${i + offset}`);
+        const cleanSub = stripUndefinedDeep({
+          ...sub,
+          id: docId,
+          paket: basePaket,
+          paketDasar: basePaket,
+          updatedAt: new Date().toISOString(),
+          serverTime: serverTimestamp(),
+        });
+        batch.set(doc(db, TKA_SUBMISSIONS_COLLECTION, docId), cleanSub, { merge: true });
+      });
+      await batch.commit();
+    }
+    localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+    return true;
+  } catch (error) {
+    console.error('Gagal menyimpan batch hasil TKA ke Firestore:', error);
+    return false;
+  }
+}
+
+export async function clearTkaSubmissionsInFirestore(): Promise<boolean> {
+  try {
+    const snap = await getDocs(collection(db, TKA_SUBMISSIONS_COLLECTION));
+    const ids: string[] = [];
+    snap.forEach((d) => ids.push(d.id));
+    if (ids.length > 0) {
+      const CHUNK_SIZE = 350;
+      for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+        const chunk = ids.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((id) => batch.delete(doc(db, TKA_SUBMISSIONS_COLLECTION, id)));
+        await batch.commit();
+      }
+    }
+    localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+    return true;
+  } catch (error) {
+    console.error('Gagal menghapus koleksi tka_submissions di Firestore:', error);
+    return false;
+  }
+}
+
+export async function deleteTkaSubmissionsByPaketInFirestore(paketName: string): Promise<boolean> {
+  try {
+    const baseTarget = extractBaseTkaPaket(paketName);
+    const snap = await getDocs(collection(db, TKA_SUBMISSIONS_COLLECTION));
+    const idsToDelete: string[] = [];
+    snap.forEach((d) => {
+      const data = d.data() as any;
+      const subPaketBase = data?.paketDasar || extractBaseTkaPaket(data?.paket);
+      if (subPaketBase === baseTarget || data?.paket === paketName) {
+        idsToDelete.push(d.id);
+      }
+    });
+    if (idsToDelete.length > 0) {
+      const CHUNK_SIZE = 350;
+      for (let i = 0; i < idsToDelete.length; i += CHUNK_SIZE) {
+        const chunk = idsToDelete.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((id) => batch.delete(doc(db, TKA_SUBMISSIONS_COLLECTION, id)));
+        await batch.commit();
+      }
+    }
+    localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+    return true;
+  } catch (error) {
+    console.error(`Gagal menghapus submission paket ${paketName} di Firestore:`, error);
+    return false;
+  }
+}
+
+export function subscribeToTkaSubmissionsCollection(
+  onUpdate: (submissions: TKASubmissionItem[]) => void,
+  onError?: (err: any) => void
+): () => void {
+  try {
+    const colRef = collection(db, TKA_SUBMISSIONS_COLLECTION);
+    return onSnapshot(
+      colRef,
+      (snapshot) => {
+        const list: TKASubmissionItem[] = [];
+        snapshot.forEach((docSnap) => {
+          const raw = docSnap.data() as any;
+          const { serverTime: _st, ...rest } = raw || {};
+          list.push({
+            ...(rest as TKASubmissionItem),
+            id: docSnap.id,
+          });
+        });
+        list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+        onUpdate(list);
+      },
+      (error) => {
+        console.warn('TKA submissions onSnapshot listener info:', error?.message);
+        if (onError) onError(error);
+      }
+    );
+  } catch (error) {
+    console.warn('Gagal memasang listener tka_submissions:', error);
+    return () => {};
+  }
+}
+
+export interface UpsertTkaSubmissionParams {
+  student: {
+    id: string;
+    nama: string;
+    nisn: string;
+    kelas: string;
+    fotoUrl: string;
+  };
+  paketName: string;
+  mapelScores: Partial<Record<TKAMapelScoreKey, number>>;
+  completedMapelKeys: TKAMapelScoreKey[];
+  questionAnswers: Record<string, any>;
+  durasiMenitUsed: number;
+}
+
+/**
+ * Menggabungkan & menyimpan hasil pengerjaan TKA siswa ke localStorage dan Firestore
+ * sehingga langsung masuk ke Menu Analisis TKA maupun Report & Rekapitulasi Hasil TKA.
+ */
+export function upsertTkaSubmission(params: UpsertTkaSubmissionParams): {
+  mergedSub: TKASubmissionItem;
+  updatedList: TKASubmissionItem[];
+} {
+  const { student, paketName, mapelScores, completedMapelKeys, questionAnswers, durasiMenitUsed } = params;
+  const basePaket = extractBaseTkaPaket(paketName);
+  const existingSubs = getStoredTKASubmissions();
+
+  const prevSub = existingSubs.find(
+    (s) =>
+      s.studentId === student.id &&
+      (s.paket === basePaket || s.paketDasar === basePaket || extractBaseTkaPaket(s.paket) === basePaket)
+  );
+
+  const prevCompleted: TKAMapelScoreKey[] = Array.isArray(prevSub?.completedMapels)
+    ? (prevSub!.completedMapels as TKAMapelScoreKey[])
+    : prevSub?.scoresPerMapel
+    ? (
+        [
+          'Bahasa Indonesia',
+          'Matematika',
+          'IPAS',
+          'Bahasa Inggris',
+          'Koding dan Kecerdasan Artifisial (KKA)',
+        ] as TKAMapelScoreKey[]
+      ).filter((k) => Number(prevSub.scoresPerMapel?.[k] || 0) > 0)
+    : [];
+
+  const mergedCompleted = Array.from(new Set<TKAMapelScoreKey>([...prevCompleted, ...completedMapelKeys]));
+
+  const updatedScores: TKASubmissionItem['scoresPerMapel'] = {
+    'Bahasa Indonesia':
+      mapelScores['Bahasa Indonesia'] ?? prevSub?.scoresPerMapel?.['Bahasa Indonesia'] ?? 0,
+    'Matematika': mapelScores['Matematika'] ?? prevSub?.scoresPerMapel?.['Matematika'] ?? 0,
+    'IPAS': mapelScores['IPAS'] ?? prevSub?.scoresPerMapel?.['IPAS'] ?? 0,
+    'Bahasa Inggris':
+      mapelScores['Bahasa Inggris'] ?? prevSub?.scoresPerMapel?.['Bahasa Inggris'] ?? 0,
+    'Koding dan Kecerdasan Artifisial (KKA)':
+      mapelScores['Koding dan Kecerdasan Artifisial (KKA)'] ??
+      prevSub?.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ??
+      0,
+  };
+
+  const keysForAvg: TKAMapelScoreKey[] =
+    mergedCompleted.length > 0
+      ? mergedCompleted
+      : [
+          'Bahasa Indonesia',
+          'Matematika',
+          'IPAS',
+          'Bahasa Inggris',
+          'Koding dan Kecerdasan Artifisial (KKA)',
+        ];
+
+  const sumScores = keysForAvg.reduce((acc, k) => acc + Number(updatedScores[k] || 0), 0);
+  const avgTotal = keysForAvg.length > 0 ? Math.round(sumScores / keysForAvg.length) : 0;
+
+  const predikat: 'A' | 'B' | 'C' | 'D' =
+    avgTotal >= 88 ? 'A' : avgTotal >= 78 ? 'B' : avgTotal >= 68 ? 'C' : 'D';
+  const status: 'Tuntas' | 'Remedial' = avgTotal >= 75 ? 'Tuntas' : 'Remedial';
+
+  const docId = makeSubmissionDocId(student.id, basePaket);
+  const mergedSub: TKASubmissionItem = {
+    id: docId,
+    studentId: student.id,
+    studentName: student.nama,
+    nisn: student.nisn,
+    kelas: student.kelas,
+    fotoUrl: student.fotoUrl,
+    paket: basePaket,
+    paketDasar: basePaket,
+    completedMapels: mergedCompleted,
+    answers: {
+      ...(prevSub?.answers || {}),
+      ...questionAnswers,
+    },
+    scoresPerMapel: updatedScores,
+    skorTotal: avgTotal,
+    predikat,
+    status,
+    tanggalUjian: new Date().toLocaleDateString('id-ID', {
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+    }),
+    durasiPengerjaan: `${Math.max(1, durasiMenitUsed)} Menit`,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const otherSubs = existingSubs.filter(
+    (s) =>
+      !(
+        s.studentId === student.id &&
+        (s.paket === basePaket || s.paketDasar === basePaket || extractBaseTkaPaket(s.paket) === basePaket)
+      )
+  );
+  const updatedList = [mergedSub, ...otherSubs];
+  saveStoredTKASubmissions(updatedList);
+  saveTkaSubmissionToFirestore(mergedSub).catch(() => {});
+
+  return { mergedSub, updatedList };
+}
+

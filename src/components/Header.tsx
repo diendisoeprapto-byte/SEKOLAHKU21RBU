@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect } from 'react';
 import { Menu, Calendar, Clock, GraduationCap, Power, KeyRound, Lock } from 'lucide-react';
-import { SchoolProfile, ActiveUser } from '../types';
+import { SchoolProfile, ActiveUser, ActiveExamHeaderStatus } from '../types';
 import { ACADEMIC_YEARS, CLASSES_LIST } from '../utils/storage';
 
 interface Props {
@@ -13,6 +13,7 @@ interface Props {
   onToggleSidebar: () => void;
   onLogout: () => void;
   onOpenChangePassword?: () => void;
+  activeExamStatus?: ActiveExamHeaderStatus | null;
 }
 
 export const Header: React.FC<Props> = ({
@@ -25,6 +26,7 @@ export const Header: React.FC<Props> = ({
   onToggleSidebar,
   onLogout,
   onOpenChangePassword,
+  activeExamStatus,
 }) => {
   // Deteksi peran user: Kepsek, Administrator, Guru Mata Pelajaran, Tata Usaha, atau Guru Kelas
   const isGuruKelas = useMemo(() => {
@@ -107,6 +109,40 @@ export const Header: React.FC<Props> = ({
 
         {/* Filters and Profile */}
         <div className="flex flex-wrap items-center gap-2.5">
+          {activeExamStatus?.isRunning && (
+            <div className="flex items-center gap-3 bg-slate-900/95 text-white px-3.5 py-1.5 rounded-2xl border-2 border-yellow-400 shadow-md">
+              <div className="flex items-center gap-2 font-mono">
+                <Clock
+                  className={`w-4 h-4 shrink-0 ${
+                    activeExamStatus.timeLeft <= 300 ? 'text-rose-400 animate-pulse' : 'text-yellow-400'
+                  }`}
+                />
+                <div className="leading-tight">
+                  <span className="text-[9px] font-bold text-yellow-200 uppercase block leading-none">
+                    Sisa Waktu
+                  </span>
+                  <span
+                    className={`text-base sm:text-lg font-black leading-tight ${
+                      activeExamStatus.timeLeft <= 300 ? 'text-rose-400 animate-pulse' : 'text-yellow-400'
+                    }`}
+                  >
+                    {String(Math.floor(activeExamStatus.timeLeft / 60)).padStart(2, '0')}:
+                    {String(activeExamStatus.timeLeft % 60).padStart(2, '0')}
+                  </span>
+                </div>
+              </div>
+              <div className="h-7 w-px bg-white/20" />
+              <div className="leading-tight">
+                <span className="text-[9px] font-bold text-slate-300 uppercase block leading-none">
+                  Nomor Soal
+                </span>
+                <span className="text-xs sm:text-sm font-black text-white whitespace-nowrap">
+                  {activeExamStatus.currentQuestion} dari {activeExamStatus.totalQuestions}
+                </span>
+              </div>
+            </div>
+          )}
+
           {activeUser.role !== 'siswa' && (
             <div className="flex flex-wrap items-center gap-2 bg-white/15 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/25">
               <div className="flex items-center gap-1.5">

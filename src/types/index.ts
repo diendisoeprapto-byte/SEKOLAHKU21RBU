@@ -411,3 +411,9 @@ export interface PeminjamanPerpustakaanItem {
   sourceCollection?: 'pinjaman' | 'peminjaman_perpustakaan';
 }
 
+export interface ActiveExamHeaderStatus {
+  isRunning: boolean;
+  timeLeft: number;
+  currentQuestion: number;
+  totalQuestions: number;
+}

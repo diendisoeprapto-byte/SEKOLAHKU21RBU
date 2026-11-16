@@ -11,6 +11,7 @@ import {
   Subject,
   KaldikDay,
   ActiveUser,
+  ActiveExamHeaderStatus,
 } from './types';
 import {
   getStoredProfile,
@@ -34,8 +35,12 @@ import {
   saveStoredTKADurations,
   saveStoredCBTActivePackages,
   saveStoredTKAActivePackages,
+  getStoredCBTExams,
+  saveStoredCBTExams,
   getStoredTKAQuestions,
   saveStoredTKAQuestions,
+  getStoredTKASubmissions,
+  saveStoredTKASubmissions,
   registerStorageMutationHook,
   runWithoutStorageSync,
   AttendanceRecordItem,
@@ -106,7 +111,13 @@ import {
 import {
   subscribeToTkaQuestionsCollection,
   saveTkaQuestionsBatchToFirestore,
+  subscribeToTkaSubmissionsCollection,
+  saveTkaSubmissionsBatchToFirestore,
 } from './utils/tkaFirestore';
+import {
+  subscribeToCbtExamsCollection,
+  saveCbtExamsBatchToFirestore,
+} from './utils/cbtFirestore';
 import {
   subscribeToTeachersCollection,
   saveTeachersToFirestoreBatch,
@@ -125,8 +136,11 @@ export default function App() {
   const attendanceCollectionLoadedRef = React.useRef(false);
   const kaldikDocLoadedRef = React.useRef(false);
   const tkaQuestionsCollectionLoadedRef = React.useRef(false);
+  const tkaSubmissionsCollectionLoadedRef = React.useRef(false);
+  const cbtExamsCollectionLoadedRef = React.useRef(false);
   const activeUserRef = React.useRef<ActiveUser | null>(null);
-  const [cloudSyncTick, setCloudSyncTick] = useState(0);
+  const [restoreTick, setRestoreTick] = useState(0);
+  const [activeExamStatus, setActiveExamStatus] = useState<ActiveExamHeaderStatus | null>(null);
   const initialFilters = getActiveFilters();
   const activeClassRef = React.useRef<string>(initialFilters.kelas);
   const [subjects, setSubjects] = useState<Subject[]>(() => getStoredSubjectsForClass(initialFilters.kelas));
@@ -161,7 +175,15 @@ export default function App() {
     testConnection();
 
     // Sinkronkan perubahan modul apa pun (Penilaian, CBT, TKA, e-Rapor, Ekskul, Catatan) secara realtime ke cloud
-    registerStorageMutationHook(() => {
+    registerStorageMutationHook((storageKey) => {
+      if (
+        activeUserRef.current?.role === 'siswa' &&
+        (storageKey === 'sekolahku_student_exam_drafts_v1' ||
+          storageKey === 'sekolahku_tka_exam_drafts_v1' ||
+          storageKey === 'sekolahku_tka_submissions')
+      ) {
+        return;
+      }
       scheduleRealtimeModuleSync(activeUserRef.current?.name || 'admin');
     });
 
@@ -173,6 +195,8 @@ export default function App() {
       const incomingVersion = cloudData.version ? String(cloudData.version) : '';
       const lastPushedVer = localStorage.getItem(LAST_PUSHED_VERSION_KEY) || '';
       const isLocalEcho = Boolean(incomingVersion && lastPushedVer && incomingVersion === lastPushedVer);
+      const activeStudentId =
+        activeUserRef.current?.role === 'siswa' ? activeUserRef.current?.studentData?.id : undefined;
 
       let didMutateFromRemote = false;
 
@@ -190,7 +214,10 @@ export default function App() {
             const isFullRestoreEvent = Boolean(incomingRestoreVer && incomingRestoreVer !== lastRestoreVer);
 
             runWithoutStorageSync(() => {
-              applyBackupMapToLocalStorage(snapshotMap, { replaceAllNonSession: isFullRestoreEvent });
+              applyBackupMapToLocalStorage(snapshotMap, {
+                replaceAllNonSession: isFullRestoreEvent,
+                currentStudentId: activeStudentId,
+              });
               localStorage.setItem(LAST_SNAPSHOT_REV_KEY, incomingSnapRev);
               if (incomingRestoreVer) {
                 localStorage.setItem(LAST_RESTORE_VERSION_KEY, incomingRestoreVer);
@@ -206,7 +233,9 @@ export default function App() {
         const lastRestoreVer = localStorage.getItem(LAST_RESTORE_VERSION_KEY) || '';
         if (incomingRestoreVer && !isLocalEcho && incomingRestoreVer !== lastRestoreVer) {
           runWithoutStorageSync(() => {
-            applyBackupMapToLocalStorage(cloudData.localStorageSnapshot);
+            applyBackupMapToLocalStorage(cloudData.localStorageSnapshot, {
+              currentStudentId: activeStudentId,
+            });
             localStorage.setItem(LAST_RESTORE_VERSION_KEY, incomingRestoreVer);
           });
           didMutateFromRemote = true;
@@ -290,13 +319,23 @@ export default function App() {
         }
       }
 
+      if (didMutateFromRemote && !cbtExamsCollectionLoadedRef.current) {
+        const pulledCbtExams = getStoredCBTExams();
+        if (pulledCbtExams.length > 0 && localStorage.getItem('sekolahku_cbt_exams') !== null) {
+          cbtExamsCollectionLoadedRef.current = true;
+          localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+          saveCbtExamsBatchToFirestore(pulledCbtExams).catch((err) =>
+            console.warn('Migrate snapshot CBT exams to collection warning:', err)
+          );
+        }
+      }
+
       if (!isLocalEcho) {
         window.dispatchEvent(new Event('sekolahku-cloud-sync-updated'));
         window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
         window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
         window.dispatchEvent(new Event('sekolahku-tka-active-updated'));
         window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
-        setCloudSyncTick((t) => t + 1);
       }
     };
 
@@ -317,15 +356,23 @@ export default function App() {
           cloudData.students)
       ) {
         enqueueCloudPayload(cloudData);
-      } else {
-        // Seed initial local data into cloud if cloud is freshly created
+      } else if (activeUserRef.current?.role !== 'siswa') {
+        // Seed initial local data into cloud ONLY jika login sebagai guru/admin
         syncAllLocalToCloud('initial_seed');
-        if (!tkaQuestionsCollectionLoadedRef.current && activeUserRef.current?.role !== 'siswa') {
+        if (!tkaQuestionsCollectionLoadedRef.current) {
           const initialQ = getStoredTKAQuestions();
           if (initialQ.length > 0) {
             tkaQuestionsCollectionLoadedRef.current = true;
             localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
             saveTkaQuestionsBatchToFirestore(initialQ).catch(() => {});
+          }
+        }
+        if (!cbtExamsCollectionLoadedRef.current) {
+          const initialCbt = getStoredCBTExams();
+          if (initialCbt.length > 0 && localStorage.getItem('sekolahku_cbt_exams') !== null) {
+            cbtExamsCollectionLoadedRef.current = true;
+            localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+            saveCbtExamsBatchToFirestore(initialCbt).catch(() => {});
           }
         }
       }
@@ -473,6 +520,73 @@ export default function App() {
       }
     );
 
+    // Realtime listener langsung untuk koleksi 'tka_submissions' (Analisis & Rekap Hasil TKA real-time lintas perangkat)
+    const unsubTkaSubmissions = subscribeToTkaSubmissionsCollection(
+      (firestoreSubs) => {
+        const alreadySeeded = localStorage.getItem('sekolahku_tka_submissions_seeded') === 'true';
+
+        if (firestoreSubs.length > 0) {
+          tkaSubmissionsCollectionLoadedRef.current = true;
+          localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+          runWithoutStorageSync(() => {
+            saveStoredTKASubmissions(firestoreSubs);
+          });
+        } else if (!tkaSubmissionsCollectionLoadedRef.current && !alreadySeeded) {
+          const localSubs = getStoredTKASubmissions();
+          if (localSubs.length > 0) {
+            tkaSubmissionsCollectionLoadedRef.current = true;
+            localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+            saveTkaSubmissionsBatchToFirestore(localSubs).catch((err) =>
+              console.warn('Initial TKA submissions seed warning:', err)
+            );
+          }
+        } else {
+          tkaSubmissionsCollectionLoadedRef.current = true;
+          runWithoutStorageSync(() => {
+            saveStoredTKASubmissions([]);
+          });
+        }
+      },
+      (err) => {
+        console.warn('TKA submissions listener warning:', err);
+      }
+    );
+
+    // Realtime listener langsung untuk koleksi 'cbt_exams' di Firestore (single source of truth Paket Soal CBT)
+    const unsubCbtExams = subscribeToCbtExamsCollection(
+      (firestoreCbtExams) => {
+        const alreadySeeded = localStorage.getItem('sekolahku_cbt_exams_seeded') === 'true';
+
+        if (firestoreCbtExams.length > 0) {
+          cbtExamsCollectionLoadedRef.current = true;
+          localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+          runWithoutStorageSync(() => {
+            saveStoredCBTExams(firestoreCbtExams);
+          });
+        } else if (!cbtExamsCollectionLoadedRef.current && !alreadySeeded) {
+          const hasStoredLocal = localStorage.getItem('sekolahku_cbt_exams') !== null;
+          if (hasStoredLocal && activeUserRef.current?.role !== 'siswa') {
+            const localExams = getStoredCBTExams();
+            if (localExams.length > 0) {
+              cbtExamsCollectionLoadedRef.current = true;
+              localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+              saveCbtExamsBatchToFirestore(localExams).catch((err) =>
+                console.warn('Initial CBT exams seed warning:', err)
+              );
+            }
+          }
+        } else {
+          cbtExamsCollectionLoadedRef.current = true;
+          runWithoutStorageSync(() => {
+            saveStoredCBTExams([]);
+          });
+        }
+      },
+      (err) => {
+        console.warn('CBT exams listener warning:', err);
+      }
+    );
+
     return () => {
       unsubscribe();
       unsubStudents();
@@ -480,6 +594,8 @@ export default function App() {
       unsubAttendance();
       unsubKaldik();
       unsubTkaQuestions();
+      unsubTkaSubmissions();
+      unsubCbtExams();
     };
   }, []);
 
@@ -722,6 +838,7 @@ export default function App() {
 
   const handleLogout = () => {
     setActiveUser(null);
+    setActiveExamStatus(null);
     localStorage.removeItem('sekolahku_active_user');
     localStorage.removeItem('sekolahku_last_activity');
     localStorage.removeItem('userRole');
@@ -738,17 +855,19 @@ export default function App() {
     attendanceCollectionLoadedRef.current = true;
     kaldikDocLoadedRef.current = true;
     tkaQuestionsCollectionLoadedRef.current = true;
+    cbtExamsCollectionLoadedRef.current = true;
     localStorage.setItem('sekolahku_students_seeded', 'true');
     localStorage.setItem('sekolahku_teachers_seeded', 'true');
     localStorage.setItem('sekolahku_attendance_seeded', 'true');
     localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+    localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
     setProfile(getStoredProfile());
     setTeachers(sortTeachersAlphabetically(getStoredTeachers()));
     setStudents(sortStudentsAlphabetically(getStoredStudents()));
     setSubjects(getStoredSubjectsForClass(activeClassRef.current));
     setKaldikDays(getStoredKaldik());
     setAttendanceRecords(getStoredAttendance());
-    setCloudSyncTick((t) => t + 1);
+    setRestoreTick((t) => t + 1);
   };
 
   // Reset to Factory Default
@@ -877,6 +996,7 @@ export default function App() {
             onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
             onLogout={handleLogout}
             onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
+            activeExamStatus={activeExamStatus}
           />
 
           <div className="max-w-[1600px] w-full mx-auto flex-1 flex flex-col lg:flex-row gap-6 p-4 sm:p-6">
@@ -890,7 +1010,7 @@ export default function App() {
             />
 
             <main className="flex-1 min-w-0 space-y-6">
-              <React.Fragment key={`sync_${cloudSyncTick}`}>
+              <React.Fragment key={`restore_${restoreTick}`}>
               {/* Portal Siswa Khusus: Dashboard Cards, Alur Ujian (CBT & TKA), & Form Laporan 7 Kebiasaan */}
               {activeUser.role === 'siswa' &&
                 (activeTab === 'dashboard' ||
@@ -908,6 +1028,7 @@ export default function App() {
                     showToast={showToast}
                     onNavigateTab={setActiveTab}
                     initialTab={activeTab}
+                    onExamStatusChange={setActiveExamStatus}
                   />
                 )}
 

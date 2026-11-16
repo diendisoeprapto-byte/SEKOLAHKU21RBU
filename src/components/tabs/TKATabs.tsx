@@ -61,14 +61,23 @@ import {
   getStoredTKASubmissions,
   saveStoredTKASubmissions,
   clearStoredTKASubmissions,
+  getStoredCBTResults,
+  saveStoredCBTResults,
   notifyStorageMutation,
   TKASubmissionItem,
+  TKAMapelScoreKey,
+  normalizeTkaMapelKey,
+  extractBaseTkaPaket,
 } from '../../utils/storage';
 import { collectPersistentLocalBackup, pushAllDataToCloud } from '../../utils/cloudSync';
 import {
   saveSingleTkaQuestionToFirestore,
   deleteTkaQuestionFromFirestore,
   saveTkaQuestionsBatchToFirestore,
+  saveTkaSubmissionsBatchToFirestore,
+  clearTkaSubmissionsInFirestore,
+  deleteTkaSubmissionsByPaketInFirestore,
+  upsertTkaSubmission,
 } from '../../utils/tkaFirestore';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxImporter';
@@ -167,7 +176,7 @@ export const TKATabs: React.FC<Props> = ({
   // 5. Report & Hasil TKA State
   const [tkaSubmissions, setTkaSubmissions] = useState<TKASubmissionItem[]>(getStoredTKASubmissions());
   const [rankingScope, setRankingScope] = useState<'semua' | 'Kelas 6A' | 'Kelas 6B'>('semua');
-  const [hasilPaketTka, setHasilPaketTka] = useState<string>('Tryout TKA 1');
+  const [hasilPaketTka, setHasilPaketTka] = useState<string>('all');
   const [hasilKelasTka, setHasilKelasTka] = useState<'all' | 'Kelas 6A' | 'Kelas 6B'>('all');
   const [hasilStatusTka, setHasilStatusTka] = useState<'all' | 'Tuntas' | 'Remedial'>('all');
   const [searchHasilTka, setSearchHasilTka] = useState('');
@@ -205,6 +214,7 @@ export const TKATabs: React.FC<Props> = ({
     const syncDurations = () => setTkaDurations(getStoredTKADurations());
     const syncActivePackages = () => setTkaActivePackages(getStoredTKAActivePackages());
     const syncTkaQuestions = () => setTkaQuestions(getStoredTKAQuestions());
+    const syncSubmissions = () => setTkaSubmissions(getStoredTKASubmissions());
     const syncCloudAll = () => {
       setTkaQuestions(getStoredTKAQuestions());
       setCpTpList(getStoredTKACpTp());
@@ -215,14 +225,22 @@ export const TKATabs: React.FC<Props> = ({
     window.addEventListener('sekolahku-tka-durations-updated', syncDurations);
     window.addEventListener('sekolahku-tka-active-updated', syncActivePackages);
     window.addEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
+    window.addEventListener('sekolahku-exam-results-updated', syncSubmissions);
     window.addEventListener('sekolahku-cloud-sync-updated', syncCloudAll);
     return () => {
       window.removeEventListener('sekolahku-tka-durations-updated', syncDurations);
       window.removeEventListener('sekolahku-tka-active-updated', syncActivePackages);
       window.removeEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
+      window.removeEventListener('sekolahku-exam-results-updated', syncSubmissions);
       window.removeEventListener('sekolahku-cloud-sync-updated', syncCloudAll);
     };
   }, []);
+
+  useEffect(() => {
+    if (subType === 'analisis-tka' || subType === 'hasil-tka' || subType === 'tes-tka-siswa') {
+      setTkaSubmissions(getStoredTKASubmissions());
+    }
+  }, [subType]);
 
   useEffect(() => {
     setDurPanelMinutes(getTKADurationMinutes(tkaDurations, durPanelPaket, durPanelMapel));
@@ -740,17 +758,66 @@ export const TKATabs: React.FC<Props> = ({
     return updated;
   };
 
-  const handleClearSubmissions = () => {
-    if (confirm('Apakah Anda yakin ingin mengosongkan seluruh data hasil & analisis TKA?')) {
-      clearStoredTKASubmissions();
-      setTkaSubmissions([]);
-      showToast('Data Hasil dan Analisis TKA telah dikosongkan!', 'success');
+  const [clearTkaModalContext, setClearTkaModalContext] = useState<{
+    source: 'analisis' | 'rekap';
+    targetPaket: string;
+  } | null>(null);
+
+  const handleClearSubmissions = (
+    source: 'analisis' | 'rekap' = 'rekap',
+    targetPaket: string = 'all'
+  ) => {
+    setClearTkaModalContext({ source, targetPaket });
+  };
+
+  const executeClearTkaData = (scope: 'paket' | 'all') => {
+    const targetPaket = clearTkaModalContext?.targetPaket || 'all';
+    if (scope === 'paket' && targetPaket !== 'all') {
+      const baseTarget = extractBaseTkaPaket(targetPaket);
+      const remaining = tkaSubmissions.filter((s) => {
+        const subBase = s.paketDasar || extractBaseTkaPaket(s.paket);
+        return subBase !== baseTarget && s.paket !== targetPaket;
+      });
+      saveStoredTKASubmissions(remaining);
+      deleteTkaSubmissionsByPaketInFirestore(targetPaket).catch(() => {});
+
+      const existingCbtRes = getStoredCBTResults();
+      const filteredCbtRes = existingCbtRes.filter(
+        (r) =>
+          !(
+            r.category === 'tka' &&
+            (extractBaseTkaPaket(r.paketName || r.judul || '') === baseTarget ||
+              r.paketName === targetPaket)
+          )
+      );
+      if (filteredCbtRes.length !== existingCbtRes.length) {
+        saveStoredCBTResults(filteredCbtRes);
+      }
+
+      setTkaSubmissions(remaining);
+      setClearTkaModalContext(null);
+      showToast(`Data TKA untuk paket "${targetPaket}" berhasil dikosongkan!`, 'success');
+      return;
     }
+
+    clearStoredTKASubmissions();
+    clearTkaSubmissionsInFirestore().catch(() => {});
+    saveStoredTKAResults([]);
+
+    const existingCbtRes = getStoredCBTResults();
+    const filteredCbtRes = existingCbtRes.filter((r) => r.category !== 'tka');
+    if (filteredCbtRes.length !== existingCbtRes.length) {
+      saveStoredCBTResults(filteredCbtRes);
+    }
+
+    setTkaSubmissions([]);
+    setClearTkaModalContext(null);
+    showToast('Seluruh data Analisis & Rekap Hasil TKA telah dikosongkan!', 'success');
   };
 
   const handleSeedSimulatedSubmissions = () => {
-    const paketToSeed = hasilPaketTka || 'Tryout TKA 1';
-    const seeded: TKASubmissionItem[] = tkaStudents.map((s, idx) => {
+    const paketToSeed = hasilPaketTka && hasilPaketTka !== 'all' ? hasilPaketTka : 'Simulasi 1';
+    const seeded: TKASubmissionItem[] = tkaStudents.map((s) => {
       const hashString = `${s.id}_${s.nisn}_${paketToSeed}`;
       let h = 0;
       for (let i = 0; i < hashString.length; i++) {
@@ -785,6 +852,14 @@ export const TKATabs: React.FC<Props> = ({
         kelas: s.kelas,
         fotoUrl: s.fotoUrl,
         paket: paketToSeed,
+        paketDasar: paketToSeed,
+        completedMapels: [
+          'Bahasa Indonesia',
+          'Matematika',
+          'IPAS',
+          'Bahasa Inggris',
+          'Koding dan Kecerdasan Artifisial (KKA)',
+        ],
         answers,
         scoresPerMapel: {
           'Bahasa Indonesia': skorIndo,
@@ -798,12 +873,16 @@ export const TKATabs: React.FC<Props> = ({
         status,
         tanggalUjian: '04 November 2026',
         durasiPengerjaan: '45 Menit',
+        updatedAt: new Date().toISOString(),
       };
     });
 
-    saveStoredTKASubmissions(seeded);
-    setTkaSubmissions(seeded);
-    showToast(`Data simulasi pengerjaan siswa (${seeded.length} siswa) berhasil dimuat!`, 'success');
+    const otherExisting = tkaSubmissions.filter((s) => extractBaseTkaPaket(s.paket) !== paketToSeed);
+    const mergedAll = [...seeded, ...otherExisting];
+    saveStoredTKASubmissions(mergedAll);
+    saveTkaSubmissionsBatchToFirestore(seeded).catch(() => {});
+    setTkaSubmissions(mergedAll);
+    showToast(`Data simulasi pengerjaan siswa (${seeded.length} siswa) untuk ${paketToSeed} berhasil dimuat!`, 'success');
   };
 
   const handleApplyFractionConvert = () => {
@@ -3474,7 +3553,10 @@ export const TKATabs: React.FC<Props> = ({
 
         // Submissions matching selected package (or all packages)
         const relevantSubmissions = tkaSubmissions.filter((s) => {
-          if (analisisPaketTka !== 'all' && s.paket !== analisisPaketTka) return false;
+          if (analisisPaketTka !== 'all') {
+            const baseSubPaket = s.paketDasar || extractBaseTkaPaket(s.paket);
+            if (baseSubPaket !== analisisPaketTka && s.paket !== analisisPaketTka) return false;
+          }
           return true;
         });
 
@@ -3482,7 +3564,16 @@ export const TKATabs: React.FC<Props> = ({
 
         const analisisList = filteredAnalisisQuestions.map((q) => {
           const rawKesukaran = (q as any).tingkatKesukaran || 'Sedang';
-          if (totalPesertaSub === 0) {
+          const qNormMapel = normalizeTkaMapelKey(q.mapel);
+
+          // Saring peserta yang mengerjakan butir/mapel soal ini
+          const questionParticipants = relevantSubmissions.filter((sub) => {
+            if (sub.answers && q.id in sub.answers) return true;
+            if (!sub.completedMapels || sub.completedMapels.length === 0) return true;
+            return sub.completedMapels.includes(qNormMapel);
+          });
+
+          if (questionParticipants.length === 0) {
             return {
               ...q,
               tkLabel: rawKesukaran,
@@ -3497,31 +3588,50 @@ export const TKATabs: React.FC<Props> = ({
           }
 
           let correctCount = 0;
-          relevantSubmissions.forEach((sub) => {
+          questionParticipants.forEach((sub) => {
             const studentAns = sub.answers ? sub.answers[q.id] : undefined;
-            const evalResult = evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, q.bobot || 10);
+            const evalResult = evaluateQuestionScore(
+              q.tipe,
+              studentAns,
+              q.kunciJawaban,
+              q.bobot || 10,
+              q.opsi
+            );
             if (evalResult.isCorrect) correctCount++;
           });
 
-          const pct = Math.round((correctCount / totalPesertaSub) * 100);
-          const tkValue = Number((correctCount / totalPesertaSub).toFixed(2));
+          const pesertaQ = questionParticipants.length;
+          const pct = Math.round((correctCount / pesertaQ) * 100);
+          const tkValue = Number((correctCount / pesertaQ).toFixed(2));
           const tkLabel = pct >= 70 ? 'Mudah' : pct >= 30 ? 'Sedang' : 'Sukar';
 
           // Daya Pembeda: Upper half vs Lower half
-          const sortedSubs = [...relevantSubmissions].sort((a, b) => b.skorTotal - a.skorTotal);
+          const sortedSubs = [...questionParticipants].sort((a, b) => b.skorTotal - a.skorTotal);
           const half = Math.max(1, Math.floor(sortedSubs.length / 2));
           const upperGroup = sortedSubs.slice(0, half);
           const lowerGroup = sortedSubs.slice(sortedSubs.length - half);
 
           let upperCorrect = 0;
           upperGroup.forEach((sub) => {
-            const res = evaluateQuestionScore(q.tipe, sub.answers ? sub.answers[q.id] : undefined, q.kunciJawaban, q.bobot || 10);
+            const res = evaluateQuestionScore(
+              q.tipe,
+              sub.answers ? sub.answers[q.id] : undefined,
+              q.kunciJawaban,
+              q.bobot || 10,
+              q.opsi
+            );
             if (res.isCorrect) upperCorrect++;
           });
 
           let lowerCorrect = 0;
           lowerGroup.forEach((sub) => {
-            const res = evaluateQuestionScore(q.tipe, sub.answers ? sub.answers[q.id] : undefined, q.kunciJawaban, q.bobot || 10);
+            const res = evaluateQuestionScore(
+              q.tipe,
+              sub.answers ? sub.answers[q.id] : undefined,
+              q.kunciJawaban,
+              q.bobot || 10,
+              q.opsi
+            );
             if (res.isCorrect) lowerCorrect++;
           });
 
@@ -3537,7 +3647,7 @@ export const TKATabs: React.FC<Props> = ({
             dpValue,
             dpLabel,
             status,
-            pesertaCount: totalPesertaSub,
+            pesertaCount: pesertaQ,
             correctCount,
           };
         });
@@ -3545,8 +3655,9 @@ export const TKATabs: React.FC<Props> = ({
         const countMudah = analisisList.filter((a) => a.tkLabel === 'Mudah').length;
         const countSedang = analisisList.filter((a) => a.tkLabel === 'Sedang').length;
         const countSukar = analisisList.filter((a) => a.tkLabel === 'Sukar').length;
-        const avgPct = totalAnalisis > 0 && totalPesertaSub > 0
-          ? Math.round(analisisList.reduce((acc, c) => acc + c.pct, 0) / totalAnalisis)
+        const testedAnalisisList = analisisList.filter((a) => a.pesertaCount > 0);
+        const avgPct = testedAnalisisList.length > 0
+          ? Math.round(testedAnalisisList.reduce((acc, c) => acc + c.pct, 0) / testedAnalisisList.length)
           : 0;
 
         const handleExportExcelTka = () => {
@@ -3601,8 +3712,8 @@ export const TKATabs: React.FC<Props> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleClearSubmissions}
-                  className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-display font-black px-3 py-2 rounded-xl text-xs border border-rose-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                  onClick={() => handleClearSubmissions('analisis', analisisPaketTka)}
+                  className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-display font-black px-3.5 py-2 rounded-xl text-xs border border-rose-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
                   title="Kosongkan data analisis dan hasil TKA"
                 >
                   <Trash2 className="w-4 h-4 text-rose-600" /> Kosongkan Data
@@ -4114,29 +4225,38 @@ export const TKATabs: React.FC<Props> = ({
         // Read directly from real student test submissions
         const recordsForPaket = tkaSubmissions
           .filter((sub) => {
-            if (hasilPaketTka !== 'all' && sub.paket !== hasilPaketTka) return false;
-            return true;
+            if (hasilPaketTka === 'all') return true;
+            const baseSubPaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
+            return baseSubPaket === hasilPaketTka || sub.paket === hasilPaketTka;
           })
-          .map((sub) => ({
-            ...sub,
-            id: sub.id,
-            studentId: sub.studentId,
-            nama: sub.studentName,
-            nisn: sub.nisn,
-            kelas: sub.kelas,
-            fotoUrl: sub.fotoUrl,
-            paket: sub.paket,
-            skorIndo: sub.scoresPerMapel?.['Bahasa Indonesia'] ?? 0,
-            skorMtk: sub.scoresPerMapel?.['Matematika'] ?? 0,
-            skorIpas: sub.scoresPerMapel?.['IPAS'] ?? 0,
-            skorInggris: sub.scoresPerMapel?.['Bahasa Inggris'] ?? 0,
-            skorKka: sub.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ?? 78,
-            skorTotal: sub.skorTotal,
-            predikat: sub.predikat,
-            status: sub.status,
-            tanggalUjian: sub.tanggalUjian || '04 November 2026',
-            durasiPengerjaan: sub.durasiPengerjaan || '45 Menit',
-          }));
+          .map((sub) => {
+            const completed = sub.completedMapels;
+            const hasMapel = (key: TKAMapelScoreKey) =>
+              !completed || completed.length === 0 || completed.includes(key);
+            return {
+              ...sub,
+              id: sub.id,
+              studentId: sub.studentId,
+              nama: sub.studentName,
+              nisn: sub.nisn,
+              kelas: sub.kelas,
+              fotoUrl: sub.fotoUrl,
+              paket: sub.paketDasar || extractBaseTkaPaket(sub.paket),
+              completedMapels: completed,
+              skorIndo: hasMapel('Bahasa Indonesia') ? (sub.scoresPerMapel?.['Bahasa Indonesia'] ?? 0) : null,
+              skorMtk: hasMapel('Matematika') ? (sub.scoresPerMapel?.['Matematika'] ?? 0) : null,
+              skorIpas: hasMapel('IPAS') ? (sub.scoresPerMapel?.['IPAS'] ?? 0) : null,
+              skorInggris: hasMapel('Bahasa Inggris') ? (sub.scoresPerMapel?.['Bahasa Inggris'] ?? 0) : null,
+              skorKka: hasMapel('Koding dan Kecerdasan Artifisial (KKA)')
+                ? (sub.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ?? 0)
+                : null,
+              skorTotal: sub.skorTotal,
+              predikat: sub.predikat,
+              status: sub.status,
+              tanggalUjian: sub.tanggalUjian || '04 November 2026',
+              durasiPengerjaan: sub.durasiPengerjaan || '45 Menit',
+            };
+          });
 
         // Ranking Calculation according to selected scope (Semua, Kelas 6A, Kelas 6B)
         const rankedPool = recordsForPaket
@@ -4174,22 +4294,16 @@ export const TKATabs: React.FC<Props> = ({
         const tuntasCount = rankedPool.filter((r) => r.status === 'Tuntas').length;
         const tuntasPercent = totalPeserta > 0 ? Math.round((tuntasCount / totalPeserta) * 100) : 0;
 
-        // Subject averages for chart
-        const avgIndo = totalPeserta > 0
-          ? Math.round(rankedPool.reduce((acc, r) => acc + r.skorIndo, 0) / totalPeserta)
-          : 0;
-        const avgMtk = totalPeserta > 0
-          ? Math.round(rankedPool.reduce((acc, r) => acc + r.skorMtk, 0) / totalPeserta)
-          : 0;
-        const avgIpas = totalPeserta > 0
-          ? Math.round(rankedPool.reduce((acc, r) => acc + r.skorIpas, 0) / totalPeserta)
-          : 0;
-        const avgInggris = totalPeserta > 0
-          ? Math.round(rankedPool.reduce((acc, r) => acc + r.skorInggris, 0) / totalPeserta)
-          : 0;
-        const avgKka = totalPeserta > 0
-          ? Math.round(rankedPool.reduce((acc, r) => acc + r.skorKka, 0) / totalPeserta)
-          : 0;
+        // Subject averages across students who completed each mapel
+        const calcMapelAvg = (vals: Array<number | null>) => {
+          const valid = vals.filter((v): v is number => v !== null);
+          return valid.length > 0 ? Math.round(valid.reduce((acc, v) => acc + v, 0) / valid.length) : 0;
+        };
+        const avgIndo = calcMapelAvg(rankedPool.map((r) => r.skorIndo));
+        const avgMtk = calcMapelAvg(rankedPool.map((r) => r.skorMtk));
+        const avgIpas = calcMapelAvg(rankedPool.map((r) => r.skorIpas));
+        const avgInggris = calcMapelAvg(rankedPool.map((r) => r.skorInggris));
+        const avgKka = calcMapelAvg(rankedPool.map((r) => r.skorKka));
 
         // Predicate distribution for chart
         const countA = rankedPool.filter((r) => r.predikat === 'A').length;
@@ -4205,11 +4319,11 @@ export const TKATabs: React.FC<Props> = ({
             'Nama Siswa': r.nama,
             'Kelas': r.kelas,
             'Paket Ujian TKA': r.paket,
-            'Bahasa Indonesia': r.skorIndo,
-            'Matematika': r.skorMtk,
-            'IPAS': r.skorIpas,
-            'Bahasa Inggris': r.skorInggris,
-            'Koding & Kecerdasan Artifisial (KKA)': r.skorKka,
+            'Bahasa Indonesia': r.skorIndo ?? '-',
+            'Matematika': r.skorMtk ?? '-',
+            'IPAS': r.skorIpas ?? '-',
+            'Bahasa Inggris': r.skorInggris ?? '-',
+            'Koding & Kecerdasan Artifisial (KKA)': r.skorKka ?? '-',
             'Rata-rata Skor': r.skorTotal,
             'Predikat': r.predikat,
             'Status (KKTP 75)': r.status,
@@ -4245,7 +4359,7 @@ export const TKATabs: React.FC<Props> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleClearSubmissions}
+                  onClick={() => handleClearSubmissions('rekap', hasilPaketTka)}
                   className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-display font-black px-3.5 py-2.5 rounded-xl text-xs border border-rose-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
                   title="Kosongkan seluruh data hasil & analisis TKA"
                 >
@@ -4288,7 +4402,8 @@ export const TKATabs: React.FC<Props> = ({
                       Data Hasil Ujian TKA Masih Kosong
                     </h3>
                     <p className="text-xs text-amber-800">
-                      Belum ada pengerjaan siswa yang tersimpan untuk paket <strong>"{hasilPaketTka}"</strong>.
+                      Belum ada pengerjaan siswa yang tersimpan untuk paket{' '}
+                      <strong>"{hasilPaketTka === 'all' ? 'Semua Paket TKA' : hasilPaketTka}"</strong>.
                       Siswa dapat mengerjakan melalui menu <strong>"Tes Kemampuan Akademik (TKA)"</strong>, atau Anda dapat mengeklik tombol simulasi di bawah untuk mengisinya secara instan untuk kelas 6A dan 6B.
                     </p>
                   </div>
@@ -4315,6 +4430,7 @@ export const TKATabs: React.FC<Props> = ({
                     onChange={(e) => setHasilPaketTka(e.target.value)}
                     className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-slate-50 focus:bg-white focus:border-purple-600 outline-none cursor-pointer"
                   >
+                    <option value="all">Semua Paket TKA ({tkaSubmissions.length} Data)</option>
                     {TKA_JENIS_LIST.map((j) => (
                       <option key={j} value={j}>
                         {j}
@@ -4773,7 +4889,12 @@ export const TKATabs: React.FC<Props> = ({
                             />
                             <div>
                               <div className="font-bold text-slate-800">{r.nama}</div>
-                              <div className="text-[10px] text-slate-400 font-mono">NISN: {r.nisn}</div>
+                              <div className="text-[10px] text-slate-400 font-mono flex flex-wrap items-center gap-1.5">
+                                <span>NISN: {r.nisn}</span>
+                                <span className="px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 font-bold border border-purple-100">
+                                  {r.paket}
+                                </span>
+                              </div>
                             </div>
                           </div>
                         </td>
@@ -4782,11 +4903,11 @@ export const TKATabs: React.FC<Props> = ({
                             {r.kelas}
                           </span>
                         </td>
-                        <td className="p-3 text-center font-mono font-bold text-slate-700">{r.skorIndo}</td>
-                        <td className="p-3 text-center font-mono font-bold text-slate-700">{r.skorMtk}</td>
-                        <td className="p-3 text-center font-mono font-bold text-slate-700">{r.skorIpas}</td>
-                        <td className="p-3 text-center font-mono font-bold text-slate-700">{r.skorInggris}</td>
-                        <td className="p-3 text-center font-mono font-bold text-indigo-700">{r.skorKka}</td>
+                        <td className="p-3 text-center font-mono font-bold text-slate-700">{r.skorIndo ?? '—'}</td>
+                        <td className="p-3 text-center font-mono font-bold text-slate-700">{r.skorMtk ?? '—'}</td>
+                        <td className="p-3 text-center font-mono font-bold text-slate-700">{r.skorIpas ?? '—'}</td>
+                        <td className="p-3 text-center font-mono font-bold text-slate-700">{r.skorInggris ?? '—'}</td>
+                        <td className="p-3 text-center font-mono font-bold text-indigo-700">{r.skorKka ?? '—'}</td>
                         <td className="p-3 text-center font-mono font-black text-sm text-purple-700 bg-purple-50/60">
                           {r.skorTotal}
                         </td>
@@ -4969,105 +5090,62 @@ export const TKATabs: React.FC<Props> = ({
           displayExamQuestions.forEach((q) => {
             const studentAns = studentAnswers[q.id];
             const weight = q.bobot || 10;
-            let res = evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, weight);
-            // Support PG option key ('A'/'B'/'C'/'D') vs full option text match
-            if (q.tipe === 'pg' && !res.isCorrect && typeof studentAns === 'string' && q.opsi && q.opsi.length > 0) {
-              const letterIdx = studentAns.trim().toUpperCase().charCodeAt(0) - 65;
-              if (letterIdx >= 0 && letterIdx < q.opsi.length) {
-                const chosenOptionText = q.opsi[letterIdx];
-                if (chosenOptionText.trim().toLowerCase() === String(q.kunciJawaban || '').trim().toLowerCase()) {
-                  res = { isCorrect: true, earnedScore: weight };
-                }
-              }
-            }
+            const res = evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, weight, q.opsi);
             totalScoreEarned += res.earnedScore;
             totalMaxScore += weight;
 
-            const normalizedMapelKey =
-              q.mapel.includes('IPAS')
-                ? 'IPAS'
-                : q.mapel.includes('Koding') || q.mapel.includes('KKA')
-                ? 'Koding dan Kecerdasan Artifisial (KKA)'
-                : subjectScores[q.mapel]
-                ? q.mapel
-                : 'Bahasa Indonesia';
+            const normalizedMapelKey = normalizeTkaMapelKey(q.mapel);
             subjectScores[normalizedMapelKey].earned += res.earnedScore;
             subjectScores[normalizedMapelKey].max += weight;
           });
 
-          const finalIndo = subjectScores['Bahasa Indonesia'].max > 0
-            ? Math.round((subjectScores['Bahasa Indonesia'].earned / subjectScores['Bahasa Indonesia'].max) * 100)
-            : 82;
-          const finalMtk = subjectScores['Matematika'].max > 0
-            ? Math.round((subjectScores['Matematika'].earned / subjectScores['Matematika'].max) * 100)
-            : 78;
-          const finalIpas = subjectScores['IPAS'].max > 0
-            ? Math.round((subjectScores['IPAS'].earned / subjectScores['IPAS'].max) * 100)
-            : 80;
-          const finalInggris = subjectScores['Bahasa Inggris'].max > 0
-            ? Math.round((subjectScores['Bahasa Inggris'].earned / subjectScores['Bahasa Inggris'].max) * 100)
-            : 84;
-          const finalKka = subjectScores['Koding dan Kecerdasan Artifisial (KKA)'].max > 0
-            ? Math.round((subjectScores['Koding dan Kecerdasan Artifisial (KKA)'].earned / subjectScores['Koding dan Kecerdasan Artifisial (KKA)'].max) * 100)
-            : 83;
+          const completedMapelKeys: TKAMapelScoreKey[] = [];
+          const mapelScores: Partial<Record<TKAMapelScoreKey, number>> = {};
 
-          const finalTotalScore = totalMaxScore > 0
-            ? Math.round((totalScoreEarned / totalMaxScore) * 100)
-            : Math.round((finalIndo + finalMtk + finalIpas + finalInggris + finalKka) / 5);
+          (Object.keys(subjectScores) as TKAMapelScoreKey[]).forEach((mKey) => {
+            if (subjectScores[mKey].max > 0) {
+              completedMapelKeys.push(mKey);
+              mapelScores[mKey] = Math.round(
+                (subjectScores[mKey].earned / subjectScores[mKey].max) * 100
+              );
+            }
+          });
 
-          const predikat: 'A' | 'B' | 'C' | 'D' =
-            finalTotalScore >= 88 ? 'A' : finalTotalScore >= 78 ? 'B' : finalTotalScore >= 68 ? 'C' : 'D';
-          const status: 'Tuntas' | 'Remedial' = finalTotalScore >= 75 ? 'Tuntas' : 'Remedial';
+          if (completedMapelKeys.length === 0 && activeExamMapel) {
+            const fallbackKey = normalizeTkaMapelKey(activeExamMapel);
+            completedMapelKeys.push(fallbackKey);
+            mapelScores[fallbackKey] =
+              totalMaxScore > 0 ? Math.round((totalScoreEarned / totalMaxScore) * 100) : 0;
+          }
 
           const durationUsedMinutes = Math.max(
             1,
             Math.ceil((activeExamDurationSeconds - examTimerSeconds) / 60)
           );
 
-          const paketLabel = activeExamMapel
-            ? `${activeExamPaket || 'Simulasi 1'} (${activeExamMapel})`
-            : activeExamPaket || 'Tryout TKA 1';
-
-          const newSubmission: TKASubmissionItem = {
-            id: `sub_${currentStudent.id}_${(activeExamPaket || 'TKA').replace(/\s+/g, '_')}_${Date.now()}`,
-            studentId: currentStudent.id,
-            studentName: currentStudent.nama,
-            nisn: currentStudent.nisn,
-            kelas: currentStudent.kelas,
-            fotoUrl: currentStudent.fotoUrl,
-            paket: paketLabel,
-            answers: studentAnswers,
-            scoresPerMapel: {
-              'Bahasa Indonesia': finalIndo,
-              'Matematika': finalMtk,
-              'IPAS': finalIpas,
-              'Bahasa Inggris': finalInggris,
-              'Koding dan Kecerdasan Artifisial (KKA)': finalKka,
-            },
-            skorTotal: finalTotalScore,
-            predikat,
-            status,
-            tanggalUjian: new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }),
-            durasiPengerjaan: `${durationUsedMinutes} Menit`,
-          };
-
-          // Save submission
-          const otherSubs = tkaSubmissions.filter(
-            (s) => !(s.studentId === currentStudent.id && s.paket === paketLabel)
-          );
-          const updated = [newSubmission, ...otherSubs];
-          setTkaSubmissions(updated);
-          saveStoredTKASubmissions(updated);
+          const paketBase = activeExamPaket || 'Simulasi 1';
+          const { mergedSub, updatedList } = upsertTkaSubmission({
+            student: currentStudent,
+            paketName: paketBase,
+            mapelScores,
+            completedMapelKeys,
+            questionAnswers: studentAnswers,
+            durasiMenitUsed: durationUsedMinutes,
+          });
+          setTkaSubmissions(updatedList);
 
           setConfirmFinishTkaExam(false);
-          setLastExamResult(newSubmission);
+          setLastExamResult(mergedSub);
           setIsExamCompleted(true);
           setTkaResumedNotice(null);
           if (currentStudent?.id && activeExamPaket) {
             clearTkaRoomDraft(currentStudent.id, activeExamPaket, activeExamMapel);
             setTkaDraftRevision((v) => v + 1);
           }
-          showToast(`Selamat! Ujian TKA selesai dengan skor: ${finalTotalScore} (Predikat ${predikat})`, 'success');
+          showToast(
+            `Selamat! Ujian TKA selesai dengan skor: ${mergedSub.skorTotal} (Predikat ${mergedSub.predikat}) — tersinkron ke Analisis & Rekap TKA.`,
+            'success'
+          );
         };
         handleFinishTkaExamRef.current = handleFinishExam;
 
@@ -5488,7 +5566,7 @@ export const TKATabs: React.FC<Props> = ({
                   Hasil Ujian: {lastExamResult.paket}
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  Selamat <strong className="text-purple-700">{lastExamResult.studentName}</strong> ({lastExamResult.kelas}), lembar jawaban Anda telah diperiksa otomatis.
+                  Selamat <strong className="text-purple-700">{lastExamResult.nama || lastExamResult.studentName}</strong> ({lastExamResult.kelas}), lembar jawaban Anda telah diperiksa otomatis dan masuk ke Analisis &amp; Rekap TKA.
                 </p>
               </div>
 
@@ -5521,38 +5599,49 @@ export const TKATabs: React.FC<Props> = ({
               </div>
 
               {/* Subject Breakdown */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-left">
-                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
-                  <span className="text-[10px] text-slate-400 font-bold block">B. INDONESIA</span>
-                  <span className="text-lg font-black text-slate-800 font-mono">
-                    {lastExamResult.scoresPerMapel?.['Bahasa Indonesia']}
-                  </span>
-                </div>
-                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
-                  <span className="text-[10px] text-slate-400 font-bold block">MATEMATIKA</span>
-                  <span className="text-lg font-black text-slate-800 font-mono">
-                    {lastExamResult.scoresPerMapel?.['Matematika']}
-                  </span>
-                </div>
-                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
-                  <span className="text-[10px] text-slate-400 font-bold block">IPAS</span>
-                  <span className="text-lg font-black text-slate-800 font-mono">
-                    {lastExamResult.scoresPerMapel?.['IPAS']}
-                  </span>
-                </div>
-                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
-                  <span className="text-[10px] text-slate-400 font-bold block">B. INGGRIS</span>
-                  <span className="text-lg font-black text-slate-800 font-mono">
-                    {lastExamResult.scoresPerMapel?.['Bahasa Inggris']}
-                  </span>
-                </div>
-                <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200">
-                  <span className="text-[10px] text-indigo-500 font-bold block">KKA (KODING/AI)</span>
-                  <span className="text-lg font-black text-indigo-800 font-mono">
-                    {lastExamResult.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ?? 83}
-                  </span>
-                </div>
-              </div>
+              {(() => {
+                const completedSet: string[] | undefined = lastExamResult.completedMapels;
+                const getMapelDisplay = (mapelKey: string, val: number | undefined) => {
+                  if (completedSet && completedSet.length > 0 && !completedSet.includes(mapelKey)) {
+                    return '—';
+                  }
+                  return val ?? 0;
+                };
+                return (
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-left">
+                    <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-bold block">B. INDONESIA</span>
+                      <span className="text-lg font-black text-slate-800 font-mono">
+                        {getMapelDisplay('Bahasa Indonesia', lastExamResult.scoresPerMapel?.['Bahasa Indonesia'] ?? lastExamResult.skorIndo)}
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-bold block">MATEMATIKA</span>
+                      <span className="text-lg font-black text-slate-800 font-mono">
+                        {getMapelDisplay('Matematika', lastExamResult.scoresPerMapel?.['Matematika'] ?? lastExamResult.skorMtk)}
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-bold block">IPAS</span>
+                      <span className="text-lg font-black text-slate-800 font-mono">
+                        {getMapelDisplay('IPAS', lastExamResult.scoresPerMapel?.['IPAS'] ?? lastExamResult.skorIpas)}
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-bold block">B. INGGRIS</span>
+                      <span className="text-lg font-black text-slate-800 font-mono">
+                        {getMapelDisplay('Bahasa Inggris', lastExamResult.scoresPerMapel?.['Bahasa Inggris'] ?? lastExamResult.skorInggris)}
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200">
+                      <span className="text-[10px] text-indigo-500 font-bold block">KKA (KODING/AI)</span>
+                      <span className="text-lg font-black text-indigo-800 font-mono">
+                        {getMapelDisplay('Koding dan Kecerdasan Artifisial (KKA)', lastExamResult.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ?? lastExamResult.skorKka)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="flex flex-wrap items-center justify-center gap-3 pt-3">
                 <button
@@ -5709,9 +5798,17 @@ export const TKATabs: React.FC<Props> = ({
                   .map((paketName) => {
                     const selectedMapel = studentTkaFilterMapel === 'all' ? null : studentTkaFilterMapel;
                     const paketLookupKey = selectedMapel ? `${paketName} (${selectedMapel})` : paketName;
-                    const existingSub = tkaSubmissions.find(
-                      (s) => s.studentId === currentStudent.id && s.paket === paketLookupKey
-                    );
+                    const selectedMapelNorm = selectedMapel ? normalizeTkaMapelKey(selectedMapel) : null;
+                    const existingSub = tkaSubmissions.find((s) => {
+                      if (s.studentId !== currentStudent.id) return false;
+                      const base = s.paketDasar || extractBaseTkaPaket(s.paket);
+                      if (base !== paketName && s.paket !== paketLookupKey) return false;
+                      if (!selectedMapelNorm) return true;
+                      if (s.completedMapels && s.completedMapels.length > 0) {
+                        return s.completedMapels.includes(selectedMapelNorm);
+                      }
+                      return s.paket === paketLookupKey || s.paket === paketName;
+                    });
                     const qCount = tkaQuestions.filter(
                       (q) => q.jenisTka === paketName && (!selectedMapel || q.mapel === selectedMapel)
                     ).length;
@@ -5913,46 +6010,75 @@ export const TKATabs: React.FC<Props> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  <tr>
-                    <td className="p-3 text-center font-bold">1</td>
-                    <td className="p-3 font-bold text-slate-800">Bahasa Indonesia (Literasi Membaca)</td>
-                    <td className="p-3 text-center text-slate-500 font-mono">20%</td>
-                    <td className="p-3 text-center font-mono font-black text-sm text-purple-700">{selectedHasilStudent.skorIndo}</td>
-                    <td className="p-3 text-center font-black">{selectedHasilStudent.skorIndo >= 85 ? 'A' : 'B'}</td>
-                    <td className="p-3 text-slate-600 text-[11px]">Sangat terampil menemukan gagasan pokok dan menganalisis simpulan teks informatif.</td>
-                  </tr>
-                  <tr>
-                    <td className="p-3 text-center font-bold">2</td>
-                    <td className="p-3 font-bold text-slate-800">Matematika (Numerasi &amp; Penalaran)</td>
-                    <td className="p-3 text-center text-slate-500 font-mono">20%</td>
-                    <td className="p-3 text-center font-mono font-black text-sm text-purple-700">{selectedHasilStudent.skorMtk}</td>
-                    <td className="p-3 text-center font-black">{selectedHasilStudent.skorMtk >= 85 ? 'A' : 'B'}</td>
-                    <td className="p-3 text-slate-600 text-[11px]">Mampu menyelesaikan soal aplikasi operasi pecahan, perbandingan, dan bangun ruang.</td>
-                  </tr>
-                  <tr>
-                    <td className="p-3 text-center font-bold">3</td>
-                    <td className="p-3 font-bold text-slate-800">IPAS (Sains &amp; Lingkungan Sosial)</td>
-                    <td className="p-3 text-center text-slate-500 font-mono">20%</td>
-                    <td className="p-3 text-center font-mono font-black text-sm text-purple-700">{selectedHasilStudent.skorIpas}</td>
-                    <td className="p-3 text-center font-black">{selectedHasilStudent.skorIpas >= 85 ? 'A' : 'B'}</td>
-                    <td className="p-3 text-slate-600 text-[11px]">Memahami siklus ekosistem, sifat energi, serta interaksi sosial kemasyarakatan.</td>
-                  </tr>
-                  <tr>
-                    <td className="p-3 text-center font-bold">4</td>
-                    <td className="p-3 font-bold text-slate-800">Bahasa Inggris (Literasi Global)</td>
-                    <td className="p-3 text-center text-slate-500 font-mono">20%</td>
-                    <td className="p-3 text-center font-mono font-black text-sm text-purple-700">{selectedHasilStudent.skorInggris}</td>
-                    <td className="p-3 text-center font-black">{selectedHasilStudent.skorInggris >= 85 ? 'A' : 'B'}</td>
-                    <td className="p-3 text-slate-600 text-[11px]">Mampu memahami ungkapan kontekstual, deskripsi harian, dan kosa kata fungsional.</td>
-                  </tr>
-                  <tr>
-                    <td className="p-3 text-center font-bold">5</td>
-                    <td className="p-3 font-bold text-indigo-800">Koding &amp; Kecerdasan Artifisial (KKA)</td>
-                    <td className="p-3 text-center text-slate-500 font-mono">20%</td>
-                    <td className="p-3 text-center font-mono font-black text-sm text-indigo-700">{selectedHasilStudent.skorKka ?? 78}</td>
-                    <td className="p-3 text-center font-black">{(selectedHasilStudent.skorKka ?? 78) >= 85 ? 'A' : 'B'}</td>
-                    <td className="p-3 text-slate-600 text-[11px]">Menerapkan berpikir komputasional, logika blok algoritma, dan etika aman Kecerdasan Artifisial.</td>
-                  </tr>
+                  {(() => {
+                    const completedMapels: string[] | undefined = selectedHasilStudent.completedMapels;
+                    const hasMapel = (key: string) => !completedMapels || completedMapels.length === 0 || completedMapels.includes(key);
+                    const predFromScore = (score: number) =>
+                      score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : 'D';
+                    const rows = [
+                      {
+                        no: 1,
+                        key: 'Bahasa Indonesia',
+                        label: 'Bahasa Indonesia (Literasi Membaca)',
+                        score: selectedHasilStudent.skorIndo ?? 0,
+                        desc: 'Sangat terampil menemukan gagasan pokok dan menganalisis simpulan teks informatif.',
+                        isIndigo: false,
+                      },
+                      {
+                        no: 2,
+                        key: 'Matematika',
+                        label: 'Matematika (Numerasi & Penalaran)',
+                        score: selectedHasilStudent.skorMtk ?? 0,
+                        desc: 'Mampu menyelesaikan soal aplikasi operasi pecahan, perbandingan, dan bangun ruang.',
+                        isIndigo: false,
+                      },
+                      {
+                        no: 3,
+                        key: 'IPAS',
+                        label: 'IPAS (Sains & Lingkungan Sosial)',
+                        score: selectedHasilStudent.skorIpas ?? 0,
+                        desc: 'Memahami siklus ekosistem, sifat energi, serta interaksi sosial kemasyarakatan.',
+                        isIndigo: false,
+                      },
+                      {
+                        no: 4,
+                        key: 'Bahasa Inggris',
+                        label: 'Bahasa Inggris (Literasi Global)',
+                        score: selectedHasilStudent.skorInggris ?? 0,
+                        desc: 'Mampu memahami ungkapan kontekstual, deskripsi harian, dan kosa kata fungsional.',
+                        isIndigo: false,
+                      },
+                      {
+                        no: 5,
+                        key: 'Koding dan Kecerdasan Artifisial (KKA)',
+                        label: 'Koding & Kecerdasan Artifisial (KKA)',
+                        score: selectedHasilStudent.skorKka ?? 0,
+                        desc: 'Menerapkan berpikir komputasional, logika blok algoritma, dan etika aman Kecerdasan Artifisial.',
+                        isIndigo: true,
+                      },
+                    ];
+                    return rows.map((row) => {
+                      const attempted = hasMapel(row.key);
+                      return (
+                        <tr key={row.key}>
+                          <td className="p-3 text-center font-bold">{row.no}</td>
+                          <td className={`p-3 font-bold ${row.isIndigo ? 'text-indigo-800' : 'text-slate-800'}`}>
+                            {row.label}
+                          </td>
+                          <td className="p-3 text-center text-slate-500 font-mono">20%</td>
+                          <td className={`p-3 text-center font-mono font-black text-sm ${row.isIndigo ? 'text-indigo-700' : 'text-purple-700'}`}>
+                            {attempted ? row.score : '—'}
+                          </td>
+                          <td className="p-3 text-center font-black">
+                            {attempted ? predFromScore(row.score) : '—'}
+                          </td>
+                          <td className="p-3 text-slate-600 text-[11px]">
+                            {attempted ? row.desc : 'Belum dikerjakan pada paket ini.'}
+                          </td>
+                        </tr>
+                      );
+                    });
+                  })()}
                   <tr className="bg-purple-50 font-black">
                     <td colSpan={3} className="p-3 text-right uppercase text-purple-900">
                       Rata-Rata Nilai Akhir Komposit TKA:
@@ -6159,6 +6285,65 @@ export const TKATabs: React.FC<Props> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* ================= MODAL KONFIRMASI KOSONGKAN DATA TKA ================= */}
+      {clearTkaModalContext && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-rose-200 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-display font-black text-base text-slate-800 flex items-center gap-2">
+                <Trash2 className="w-5 h-5 text-rose-600" /> Kosongkan Data{' '}
+                {clearTkaModalContext.source === 'analisis' ? 'Analisis TKA' : 'Rekap TKA'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setClearTkaModalContext(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-full cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1.5 leading-relaxed">
+              <p className="font-bold">
+                Tindakan ini akan menghapus data hasil pengerjaan &amp; analisis siswa dari sistem sekolah (termasuk sinkronisasi Cloud Firestore).
+              </p>
+              <p className="text-[11px] text-rose-700">
+                Bank Soal TKA tidak akan ikut terhapus, hanya data nilai &amp; jawaban hasil ujian siswa.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 pt-1">
+              {clearTkaModalContext.targetPaket !== 'all' && (
+                <button
+                  type="button"
+                  onClick={() => executeClearTkaData('paket')}
+                  className="w-full px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-display font-black cursor-pointer shadow-xs transition flex items-center justify-center gap-1.5"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Kosongkan Paket "{clearTkaModalContext.targetPaket}" Saja</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => executeClearTkaData('all')}
+                className="w-full px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-display font-black cursor-pointer shadow-sm transition flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Kosongkan Semua Data Hasil &amp; Analisis TKA</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setClearTkaModalContext(null)}
+                className="w-full px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer transition"
+              >
+                Batal
+              </button>
+            </div>
           </div>
         </div>
       )}
