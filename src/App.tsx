@@ -32,6 +32,8 @@ import {
   saveActiveFilters,
   saveStoredReportNotes,
   saveStoredTKADurations,
+  saveStoredCBTActivePackages,
+  saveStoredTKAActivePackages,
   getStoredTKAQuestions,
   saveStoredTKAQuestions,
   registerStorageMutationHook,
@@ -261,6 +263,12 @@ export default function App() {
         if (cloudData.tkaDurations && typeof cloudData.tkaDurations === 'object') {
           saveStoredTKADurations(cloudData.tkaDurations);
         }
+        if (cloudData.cbtActivePackages && typeof cloudData.cbtActivePackages === 'object') {
+          saveStoredCBTActivePackages(cloudData.cbtActivePackages);
+        }
+        if (cloudData.tkaActivePackages && typeof cloudData.tkaActivePackages === 'object') {
+          saveStoredTKAActivePackages(cloudData.tkaActivePackages);
+        }
       });
 
       if (didMutateFromRemote && !tkaQuestionsCollectionLoadedRef.current) {
@@ -276,7 +284,9 @@ export default function App() {
 
       if (!isLocalEcho) {
         window.dispatchEvent(new Event('sekolahku-cloud-sync-updated'));
+        window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
         window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
+        window.dispatchEvent(new Event('sekolahku-tka-active-updated'));
         window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
         setCloudSyncTick((t) => t + 1);
       }

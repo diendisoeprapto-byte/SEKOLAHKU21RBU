@@ -32,15 +32,18 @@ import {
 } from 'lucide-react';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../utils/firebase';
-import { ActiveUser, Student, Subject, SchoolProfile, CBTQuestion, TKAQuestion, TUJUH_KEBIASAAN_LIST, KebiasaanReportItem } from '../types';
+import { ActiveUser, Student, Subject, SchoolProfile, CBTExam, CBTQuestion, TKAQuestion, TUJUH_KEBIASAAN_LIST, KebiasaanReportItem } from '../types';
 import {
   getStoredCBTExams,
+  getStoredCBTActivePackages,
   getStoredCBTResults,
   saveStoredCBTResults,
   getStoredTKAQuestions,
   getStoredTKADurations,
   getTKADurationKey,
   getTKADurationMinutes,
+  getStoredTKAActivePackages,
+  isTKAPackageActive,
   getStoredTKASubmissions,
   saveStoredTKASubmissions,
   getStoredAssessments,
@@ -101,19 +104,41 @@ export const StudentDashboard: React.FC<Props> = ({
     return 'home';
   });
 
+  const [cbtExamsState, setCbtExamsState] = useState<CBTExam[]>(() => getStoredCBTExams());
+  const [cbtActivePackages, setCbtActivePackages] = useState<Record<string, boolean>>(() =>
+    getStoredCBTActivePackages()
+  );
   const [tkaDurations, setTkaDurations] = useState<Record<string, number>>(() => getStoredTKADurations());
+  const [tkaActivePackages, setTkaActivePackages] = useState<Record<string, boolean>>(() =>
+    getStoredTKAActivePackages()
+  );
   const [tkaQuestionsState, setTkaQuestionsState] = useState<TKAQuestion[]>(() => getStoredTKAQuestions());
 
   useEffect(() => {
+    const syncCbt = () => {
+      setCbtExamsState(getStoredCBTExams());
+      setCbtActivePackages(getStoredCBTActivePackages());
+    };
     const syncDurations = () => setTkaDurations(getStoredTKADurations());
+    const syncTkaActive = () => setTkaActivePackages(getStoredTKAActivePackages());
     const syncTkaQuestions = () => setTkaQuestionsState(getStoredTKAQuestions());
+    const syncCloudAll = () => {
+      syncCbt();
+      syncDurations();
+      syncTkaActive();
+      syncTkaQuestions();
+    };
+    window.addEventListener('sekolahku-cbt-exams-updated', syncCbt);
     window.addEventListener('sekolahku-tka-durations-updated', syncDurations);
+    window.addEventListener('sekolahku-tka-active-updated', syncTkaActive);
     window.addEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
-    window.addEventListener('sekolahku-cloud-sync-updated', syncTkaQuestions);
+    window.addEventListener('sekolahku-cloud-sync-updated', syncCloudAll);
     return () => {
+      window.removeEventListener('sekolahku-cbt-exams-updated', syncCbt);
       window.removeEventListener('sekolahku-tka-durations-updated', syncDurations);
+      window.removeEventListener('sekolahku-tka-active-updated', syncTkaActive);
       window.removeEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
-      window.removeEventListener('sekolahku-cloud-sync-updated', syncTkaQuestions);
+      window.removeEventListener('sekolahku-cloud-sync-updated', syncCloudAll);
     };
   }, []);
 
@@ -289,15 +314,14 @@ export const StudentDashboard: React.FC<Props> = ({
   };
 
   // Daftar Ujian CBT Tersedia (Dinamis dari Bank Soal Guru + Paket Contoh Bawaan)
-  const cbtExamList: ExamOptionItem[] = useMemo(() => {
-    const storedExams = getStoredCBTExams();
-    const dynamicTeacherExams: ExamOptionItem[] = [];
+  const { allCbtExamsCatalog, cbtExamList } = useMemo(() => {
+    const dynamicTeacherAll: Array<ExamOptionItem & { isActive: boolean }> = [];
 
-    storedExams.forEach((ex) => {
+    cbtExamsState.forEach((ex) => {
       if (!Array.isArray(ex.soalList) || ex.soalList.length === 0) return;
       const paketName = inferCbtPaketName(ex.judul, ex.paketName);
       const subPaket = ex.subPaket || 'Paket 1';
-      dynamicTeacherExams.push({
+      dynamicTeacherAll.push({
         id: ex.id,
         category: 'cbt',
         mapel: ex.mapel,
@@ -307,6 +331,7 @@ export const StudentDashboard: React.FC<Props> = ({
         subPaket,
         kelas: ex.kelas,
         isTeacherCreated: true,
+        isActive: ex.aktif === true,
         soalList: ex.soalList,
       });
     });
@@ -497,24 +522,29 @@ export const StudentDashboard: React.FC<Props> = ({
       },
     ];
 
-    const merged = [...dynamicTeacherExams];
+    const catalogAll: ExamOptionItem[] = [...dynamicTeacherAll];
+    const activeOnly: ExamOptionItem[] = dynamicTeacherAll.filter((ex) => ex.isActive);
+
     sampleCbtDefaults.forEach((sample) => {
-      const alreadyHasSameBucket = dynamicTeacherExams.some(
+      const alreadyHasSameBucket = dynamicTeacherAll.some(
         (d) =>
           d.paketName === sample.paketName &&
           d.mapel === sample.mapel &&
           (d.subPaket || 'Paket 1') === (sample.subPaket || 'Paket 1')
       );
       if (!alreadyHasSameBucket) {
-        merged.push(sample);
+        catalogAll.push(sample);
+        if (cbtActivePackages[sample.id] === true) {
+          activeOnly.push(sample);
+        }
       }
     });
 
-    return merged;
-  }, [viewMode, currentStudent?.kelas, activeClass]);
+    return { allCbtExamsCatalog: catalogAll, cbtExamList: activeOnly };
+  }, [cbtExamsState, cbtActivePackages, currentStudent?.kelas, activeClass]);
 
   // Daftar Ujian TKA (Dinamis dikelompokkan per Jenis TKA + Mata Pelajaran dari Bank Soal TKA Guru)
-  const tkaExamList: ExamOptionItem[] = useMemo(() => {
+  const { allTkaExamsCatalog, tkaExamList } = useMemo(() => {
     const storedTkaQuestions = tkaQuestionsState;
     const groupedMap = new Map<string, { jenisTka: string; mapel: string; list: CBTQuestion[] }>();
 
@@ -656,7 +686,11 @@ export const StudentDashboard: React.FC<Props> = ({
       },
     ];
 
-    const merged = [...dynamicTkaExams];
+    const catalogAll: ExamOptionItem[] = [...dynamicTkaExams];
+    const activeOnly: ExamOptionItem[] = dynamicTkaExams.filter((d) =>
+      isTKAPackageActive(tkaActivePackages, d.paketName, d.mapel)
+    );
+
     sampleTkaDefaults.forEach((sample) => {
       const exists = dynamicTkaExams.some(
         (d) => d.paketName === sample.paketName && d.mapel === sample.mapel
@@ -665,15 +699,19 @@ export const StudentDashboard: React.FC<Props> = ({
         const customOverride =
           tkaDurations[getTKADurationKey(sample.paketName, sample.mapel)] ||
           tkaDurations[getTKADurationKey(sample.paketName, null)];
-        merged.push({
+        const item = {
           ...sample,
           durasiMenit: customOverride && customOverride > 0 ? customOverride : sample.durasiMenit,
-        });
+        };
+        catalogAll.push(item);
+        if (isTKAPackageActive(tkaActivePackages, sample.paketName, sample.mapel)) {
+          activeOnly.push(item);
+        }
       }
     });
 
-    return merged;
-  }, [viewMode, tkaDurations, tkaQuestionsState]);
+    return { allTkaExamsCatalog: catalogAll, tkaExamList: activeOnly };
+  }, [tkaDurations, tkaActivePackages, tkaQuestionsState]);
 
   // Daftar ujian yang aktif tergantung mode (CBT atau TKA)
   const currentAvailableExams = viewMode === 'tka' ? tkaExamList : cbtExamList;
@@ -805,7 +843,7 @@ export const StudentDashboard: React.FC<Props> = ({
   // Handler mulai ujian (mengunci dropdown dan memunculkan soal)
   const handleStartExam = () => {
     if (!currentExam) {
-      showToast('Pilih paket soal dan mata pelajaran terlebih dahulu!', 'error');
+      showToast('Paket soal belum dipilih atau belum diaktifkan oleh guru.', 'error');
       return;
     }
     if (currentExam.soalList.length === 0) {
@@ -1075,8 +1113,8 @@ export const StudentDashboard: React.FC<Props> = ({
         {/* Statistik Performa Rekap Nilai Ujian CBT & TKA (Recharts + Ekspor PDF/Excel) */}
         <StudentPerformanceStats
           student={currentStudent}
-          cbtExams={cbtExamList}
-          tkaExams={tkaExamList}
+          cbtExams={allCbtExamsCatalog}
+          tkaExams={allTkaExamsCatalog}
           profile={profile}
           activeYear={activeYear}
           activeSemester={activeSemester}
@@ -1820,7 +1858,7 @@ export const StudentDashboard: React.FC<Props> = ({
                   const qTotal = matchingInPaket.reduce((sum, ex) => sum + ex.soalList.length, 0);
                   return (
                     <option key={paket} value={paket}>
-                      {paket} {qTotal > 0 ? `(${matchingInPaket.length} Paket Mapel • ${qTotal} Soal)` : '(Belum ada soal)'}
+                      {paket} {qTotal > 0 ? `(${matchingInPaket.length} Paket Aktif • ${qTotal} Soal)` : '(Belum diaktifkan)'}
                     </option>
                   );
                 })}
@@ -1856,7 +1894,7 @@ export const StudentDashboard: React.FC<Props> = ({
                     .reduce((sum, ex) => sum + ex.soalList.length, 0);
                   return (
                     <option key={mapel} value={mapel}>
-                      {mapel} {qCount > 0 ? `(${qCount} Soal)` : '(Belum ada soal)'}
+                      {mapel} {qCount > 0 ? `(${qCount} Soal)` : '(Belum diaktifkan)'}
                     </option>
                   );
                 })}
@@ -1976,14 +2014,17 @@ export const StudentDashboard: React.FC<Props> = ({
                   </div>
                 </>
               ) : (
-                <div className="p-5 rounded-2xl bg-amber-50 border border-amber-200 text-center space-y-1">
+                <div className="p-6 rounded-2xl bg-amber-50 border border-amber-200 text-center space-y-1.5">
+                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto mb-1">
+                    <Lock className="w-5 h-5" />
+                  </div>
                   <h4 className="font-display font-black text-xs sm:text-sm text-amber-900">
-                    Belum Ada Soal untuk Pilihan Ini
+                    Belum Ada Paket Soal {viewMode === 'tka' ? 'TKA' : 'CBT'} yang Diaktifkan
                   </h4>
-                  <p className="text-xs text-amber-800">
-                    Guru belum membuat butir soal untuk{' '}
-                    <strong>{selectedPaketFilter || 'Paket Ini'}</strong> —{' '}
-                    <strong>{selectedMapelFilter || 'Mata Pelajaran Ini'}</strong>. Silakan pilih kombinasi paket soal &amp; mata pelajaran lainnya.
+                  <p className="text-xs text-amber-800 max-w-lg mx-auto">
+                    {currentAvailableExams.length === 0
+                      ? `Saat ini guru atau admin belum mengaktifkan paket soal ${viewMode === 'tka' ? 'TKA' : 'CBT'}. Soal akan otomatis muncul di sini setelah paket diaktifkan.`
+                      : `Paket soal untuk ${selectedPaketFilter || 'kategori ini'} — ${selectedMapelFilter || 'mata pelajaran ini'} belum diaktifkan atau belum memiliki soal. Silakan pilih paket lain yang sudah berstatus aktif.`}
                   </p>
                 </div>
               )}

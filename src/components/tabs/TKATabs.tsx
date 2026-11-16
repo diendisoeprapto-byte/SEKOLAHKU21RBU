@@ -35,6 +35,9 @@ import {
   ChevronRight,
   Shuffle,
   AlignCenter,
+  Power,
+  Lock,
+  EyeOff,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Student, TKACpTp, TKAQuestion, TKAJenis, ActiveUser } from '../../types';
@@ -48,6 +51,9 @@ import {
   saveStoredTKADurations,
   getTKADurationKey,
   getTKADurationMinutes,
+  getStoredTKAActivePackages,
+  saveStoredTKAActivePackages,
+  isTKAPackageActive,
   getStoredTKAResults,
   saveStoredTKAResults,
   getStoredTKASubmissions,
@@ -172,8 +178,11 @@ export const TKATabs: React.FC<Props> = ({
   const handleFinishTkaExamRef = useRef<() => void>(() => {});
   const handleSubmitSimRef = useRef<() => void>(() => {});
 
-  // Pengaturan Waktu Pengerjaan Soal TKA (Menit) per Paket & Mapel
+  // Pengaturan Waktu Pengerjaan & Aktivasi Paket Soal TKA
   const [tkaDurations, setTkaDurations] = useState<Record<string, number>>(() => getStoredTKADurations());
+  const [tkaActivePackages, setTkaActivePackages] = useState<Record<string, boolean>>(() =>
+    getStoredTKAActivePackages()
+  );
   const [durPanelPaket, setDurPanelPaket] = useState<string>(TKA_JENIS_LIST[0]);
   const [durPanelMapel, setDurPanelMapel] = useState<string>('all');
   const [durPanelMinutes, setDurPanelMinutes] = useState<number>(() =>
@@ -182,18 +191,22 @@ export const TKATabs: React.FC<Props> = ({
 
   useEffect(() => {
     const syncDurations = () => setTkaDurations(getStoredTKADurations());
+    const syncActivePackages = () => setTkaActivePackages(getStoredTKAActivePackages());
     const syncTkaQuestions = () => setTkaQuestions(getStoredTKAQuestions());
     const syncCloudAll = () => {
       setTkaQuestions(getStoredTKAQuestions());
       setCpTpList(getStoredTKACpTp());
       setTkaSubmissions(getStoredTKASubmissions());
       setTkaDurations(getStoredTKADurations());
+      setTkaActivePackages(getStoredTKAActivePackages());
     };
     window.addEventListener('sekolahku-tka-durations-updated', syncDurations);
+    window.addEventListener('sekolahku-tka-active-updated', syncActivePackages);
     window.addEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
     window.addEventListener('sekolahku-cloud-sync-updated', syncCloudAll);
     return () => {
       window.removeEventListener('sekolahku-tka-durations-updated', syncDurations);
+      window.removeEventListener('sekolahku-tka-active-updated', syncActivePackages);
       window.removeEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
       window.removeEventListener('sekolahku-cloud-sync-updated', syncCloudAll);
     };
@@ -331,6 +344,116 @@ export const TKATabs: React.FC<Props> = ({
         'success'
       );
     }
+  };
+
+  const SAMPLE_TKA_DEFAULTS_META = [
+    { jenisTka: 'Tryout TKA 1', mapel: 'Bahasa Indonesia', label: 'Tryout TKA 1 · Bahasa Indonesia (Contoh Bawaan)' },
+    { jenisTka: 'Tryout TKA 2', mapel: 'Matematika', label: 'Tryout TKA 2 · Matematika (Contoh Bawaan)' },
+    { jenisTka: 'Tryout TKA 3', mapel: 'Ilmu Pengetahuan Alam dan Sosial (IPAS)', label: 'Tryout TKA 3 · IPAS (Contoh Bawaan)' },
+  ];
+
+  const tkaPackageBuckets = useMemo(() => {
+    const map = new Map<string, { jenisTka: string; mapel: string; count: number }>();
+    tkaQuestions.forEach((q) => {
+      const jenis = q.jenisTka || 'Simulasi 1';
+      const mapel = q.mapel || 'Bahasa Indonesia';
+      const key = `${jenis}__${mapel}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        map.set(key, { jenisTka: jenis, mapel, count: 1 });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) =>
+      `${a.jenisTka} ${a.mapel}`.localeCompare(`${b.jenisTka} ${b.mapel}`, 'id')
+    );
+  }, [tkaQuestions]);
+
+  const handleToggleTkaPackageActive = (
+    jenis: string,
+    mapel: string | null,
+    forceNext?: boolean
+  ) => {
+    const isAllMapel = !mapel || mapel === 'all';
+    const currentActive = isAllMapel
+      ? tkaActivePackages[`${jenis}__ALL`] === true
+      : isTKAPackageActive(tkaActivePackages, jenis, mapel);
+    const nextState = typeof forceNext === 'boolean' ? forceNext : !currentActive;
+
+    if (nextState) {
+      const hasBankQuestions = tkaQuestions.some(
+        (q) => (q.jenisTka || 'Simulasi 1') === jenis && (isAllMapel || q.mapel === mapel)
+      );
+      const isSampleBuiltIn = SAMPLE_TKA_DEFAULTS_META.some(
+        (s) => s.jenisTka === jenis && (isAllMapel || s.mapel === mapel)
+      );
+      if (!hasBankQuestions && !isSampleBuiltIn) {
+        showToast(
+          `Belum ada butir soal untuk ${jenis}${!isAllMapel ? ` (${mapel})` : ''}. Tambahkan minimal 1 soal terlebih dahulu sebelum mengaktifkan paket ini.`,
+          'error'
+        );
+        return;
+      }
+    }
+
+    setTkaActivePackages((prev) => {
+      const next = { ...prev };
+      if (isAllMapel) {
+        next[`${jenis}__ALL`] = nextState;
+        Object.keys(next).forEach((k) => {
+          if (k.startsWith(`${jenis}__`) && k !== `${jenis}__ALL`) {
+            next[k] = nextState;
+          }
+        });
+      } else {
+        next[`${jenis}__${mapel}`] = nextState;
+      }
+      saveStoredTKAActivePackages(next);
+      pushAllDataToCloud(
+        {
+          tkaActivePackages: next,
+          localStorageSnapshot: collectPersistentLocalBackup({ excludeLargeCollections: true }),
+        },
+        activeUser?.name || 'admin'
+      );
+      return next;
+    });
+
+    showToast(
+      nextState
+        ? `Paket TKA "${jenis}${!isAllMapel ? ` • ${mapel}` : ' (Semua Mapel)'}" DIAKTIFKAN dan kini muncul di dashboard siswa!`
+        : `Paket TKA "${jenis}${!isAllMapel ? ` • ${mapel}` : ' (Semua Mapel)'}" DINONAKTIFKAN (belum muncul di siswa).`,
+      'success'
+    );
+  };
+
+  const handleSetAllTkaPackagesActive = (nextState: boolean) => {
+    if (tkaPackageBuckets.length === 0) {
+      showToast('Belum ada paket soal TKA di Bank Soal untuk diatur.', 'error');
+      return;
+    }
+    setTkaActivePackages((prev) => {
+      const next = { ...prev };
+      tkaPackageBuckets.forEach((b) => {
+        next[`${b.jenisTka}__${b.mapel}`] = nextState;
+      });
+      saveStoredTKAActivePackages(next);
+      pushAllDataToCloud(
+        {
+          tkaActivePackages: next,
+          localStorageSnapshot: collectPersistentLocalBackup({ excludeLargeCollections: true }),
+        },
+        activeUser?.name || 'admin'
+      );
+      return next;
+    });
+    showToast(
+      nextState
+        ? `Semua ${tkaPackageBuckets.length} paket soal TKA di Bank Soal DIAKTIFKAN untuk siswa.`
+        : `Semua ${tkaPackageBuckets.length} paket soal TKA di Bank Soal DINONAKTIFKAN.`,
+      'success'
+    );
   };
 
   // PG Options (A, B, C, D)
@@ -2653,10 +2776,38 @@ export const TKATabs: React.FC<Props> = ({
                   Total: <strong>{filteredTkaQuestions.length} Soal</strong>
                 </span>
                 {filterJenisTka !== 'all' && (
-                  <span className="text-xs font-bold bg-purple-50 text-purple-900 px-3 py-1.5 rounded-xl border border-purple-200 flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5 text-purple-600" />
-                    Waktu: <strong>{getTKADurationMinutes(tkaDurations, filterJenisTka, filterMapelTka)} Menit</strong>
-                  </span>
+                  <>
+                    <span className="text-xs font-bold bg-purple-50 text-purple-900 px-3 py-1.5 rounded-xl border border-purple-200 flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-purple-600" />
+                      Waktu: <strong>{getTKADurationMinutes(tkaDurations, filterJenisTka, filterMapelTka)} Menit</strong>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleTkaPackageActive(filterJenisTka, filterMapelTka)}
+                      className={`text-xs font-extrabold px-3 py-1.5 rounded-xl border flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+                        (filterMapelTka === 'all'
+                          ? tkaActivePackages[`${filterJenisTka}__ALL`] === true
+                          : isTKAPackageActive(tkaActivePackages, filterJenisTka, filterMapelTka))
+                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-amber-100 hover:bg-amber-200 text-amber-950 border-amber-300'
+                      }`}
+                      title="Klik untuk mengaktifkan atau menonaktifkan paket TKA ini di halaman siswa"
+                    >
+                      {(filterMapelTka === 'all'
+                        ? tkaActivePackages[`${filterJenisTka}__ALL`] === true
+                        : isTKAPackageActive(tkaActivePackages, filterJenisTka, filterMapelTka)) ? (
+                        <>
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Aktif di Siswa</span>
+                        </>
+                      ) : (
+                        <>
+                          <Lock className="w-3.5 h-3.5" />
+                          <span>Belum Diaktifkan</span>
+                        </>
+                      )}
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -2778,6 +2929,181 @@ export const TKATabs: React.FC<Props> = ({
                   Belum ada butir soal pada filter ini. Gunakan form di atas untuk menambahkan butir soal TKA.
                 </div>
               )}
+
+              {/* Setting Aktivasi Paket Soal TKA (Wajib Diaktifkan Agar Muncul di Siswa) */}
+              <div className="p-5 rounded-3xl bg-gradient-to-r from-sky-50 via-white to-purple-50 border-2 border-sky-300 shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-10 h-10 rounded-2xl text-white flex items-center justify-center shadow-md shrink-0 ${
+                        (durPanelMapel === 'all'
+                          ? tkaActivePackages[`${durPanelPaket}__ALL`] === true
+                          : isTKAPackageActive(tkaActivePackages, durPanelPaket, durPanelMapel))
+                          ? 'bg-emerald-600 shadow-emerald-500/20'
+                          : 'bg-slate-700 shadow-slate-500/20'
+                      }`}
+                    >
+                      <Power className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex flex-wrap items-center gap-2">
+                        <span>Pengaturan Aktivasi Paket Soal TKA</span>
+                        <span
+                          className={`text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full ${
+                            (durPanelMapel === 'all'
+                              ? tkaActivePackages[`${durPanelPaket}__ALL`] === true
+                              : isTKAPackageActive(tkaActivePackages, durPanelPaket, durPanelMapel))
+                              ? 'bg-emerald-100 text-emerald-900'
+                              : 'bg-amber-100 text-amber-900'
+                          }`}
+                        >
+                          {(durPanelMapel === 'all'
+                            ? tkaActivePackages[`${durPanelPaket}__ALL`] === true
+                            : isTKAPackageActive(tkaActivePackages, durPanelPaket, durPanelMapel))
+                            ? 'Aktif di Siswa'
+                            : 'Belum Diaktifkan'}
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-slate-600 mt-0.5">
+                        Paket TKA yang belum diaktifkan tidak akan muncul di dashboard siswa. Aktifkan paket atau mata pelajaran yang siap dikerjakan.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleToggleTkaPackageActive(durPanelPaket, durPanelMapel)}
+                    className={`px-4 py-2.5 rounded-2xl text-xs font-display font-black inline-flex items-center gap-2 transition cursor-pointer shadow-xs whitespace-nowrap shrink-0 ${
+                      (durPanelMapel === 'all'
+                        ? tkaActivePackages[`${durPanelPaket}__ALL`] === true
+                        : isTKAPackageActive(tkaActivePackages, durPanelPaket, durPanelMapel))
+                        ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    }`}
+                  >
+                    {(durPanelMapel === 'all'
+                      ? tkaActivePackages[`${durPanelPaket}__ALL`] === true
+                      : isTKAPackageActive(tkaActivePackages, durPanelPaket, durPanelMapel)) ? (
+                      <>
+                        <EyeOff className="w-4 h-4" />
+                        <span>
+                          Nonaktifkan {durPanelPaket}
+                          {durPanelMapel !== 'all' ? ` (${durPanelMapel.split(' ')[0]})` : ''}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <Power className="w-4 h-4" />
+                        <span>
+                          Aktifkan {durPanelPaket}
+                          {durPanelMapel !== 'all' ? ` (${durPanelMapel.split(' ')[0]})` : ''}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Daftar Status Paket TKA Tersedia di Bank Soal */}
+                {tkaPackageBuckets.length > 0 && (
+                  <div className="pt-3 border-t border-sky-200/80 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-extrabold text-slate-700">
+                        Status Paket Soal TKA Tersedia (
+                        {
+                          tkaPackageBuckets.filter((b) =>
+                            isTKAPackageActive(tkaActivePackages, b.jenisTka, b.mapel)
+                          ).length
+                        }
+                        /{tkaPackageBuckets.length} Aktif):
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleSetAllTkaPackagesActive(true)}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 text-[11px] font-bold transition cursor-pointer"
+                        >
+                          Aktifkan Semua
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSetAllTkaPackagesActive(false)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 text-[11px] font-bold transition cursor-pointer"
+                        >
+                          Nonaktifkan Semua
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {tkaPackageBuckets.map((b) => {
+                        const isPkgOn = isTKAPackageActive(tkaActivePackages, b.jenisTka, b.mapel);
+                        const mins = getTKADurationMinutes(tkaDurations, b.jenisTka, b.mapel);
+                        return (
+                          <div
+                            key={`tka_act_${b.jenisTka}_${b.mapel}`}
+                            className={`px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs ${
+                              isPkgOn ? 'bg-emerald-50/70 border-emerald-300' : 'bg-white border-slate-200'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="font-bold text-slate-900 truncate">
+                                {b.jenisTka} · {b.mapel}
+                              </div>
+                              <div className="text-[11px] text-slate-500">
+                                {b.count} Butir Soal · {mins} Menit
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleTkaPackageActive(b.jenisTka, b.mapel)}
+                              className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold shrink-0 whitespace-nowrap cursor-pointer transition ${
+                                isPkgOn
+                                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                  : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                              }`}
+                            >
+                              {isPkgOn ? 'Aktif ✓' : 'Nonaktif'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Paket Contoh Tryout TKA Bawaan */}
+                <div className="pt-2 border-t border-sky-200/70 space-y-2">
+                  <span className="text-[11px] font-bold text-slate-600 block">
+                    Paket Contoh Tryout TKA Bawaan (Default Nonaktif agar tidak muncul sebelum diaktifkan):
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {SAMPLE_TKA_DEFAULTS_META.map((smp) => {
+                      const isSampleOn = isTKAPackageActive(tkaActivePackages, smp.jenisTka, smp.mapel);
+                      return (
+                        <div
+                          key={`${smp.jenisTka}_${smp.mapel}`}
+                          className={`px-3 py-1.5 rounded-xl border flex items-center justify-between gap-2 text-[11px] ${
+                            isSampleOn ? 'bg-emerald-50/70 border-emerald-300' : 'bg-white/80 border-slate-200'
+                          }`}
+                        >
+                          <span className="font-semibold text-slate-700 truncate">{smp.label}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleTkaPackageActive(smp.jenisTka, smp.mapel)}
+                            className={`px-2.5 py-1 rounded-lg font-extrabold shrink-0 cursor-pointer transition ${
+                              isSampleOn
+                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                            }`}
+                          >
+                            {isSampleOn ? 'Aktif ✓' : 'Nonaktif'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
 
               {/* Setting Waktu Pengerjaan Soal TKA (Auto-Submit) */}
               <div className="p-5 rounded-3xl bg-gradient-to-r from-purple-50 via-white to-amber-50 border-2 border-purple-300 shadow-xs space-y-3">

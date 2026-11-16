@@ -15,10 +15,12 @@ const STORAGE_KEYS = {
   AS_COUNT: 'sekolahku_assessment_counts', // subject/class -> number of AS columns
   NOTES: 'sekolahku_report_notes',
   CBT_EXAMS: 'sekolahku_cbt_exams',
+  CBT_ACTIVE_PACKAGES: 'sekolahku_cbt_active_packages',
   CBT_RESULTS: 'sekolahku_cbt_results',
   TKA_CP_TP: 'sekolahku_tka_cp_tp',
   TKA_QUESTIONS: 'sekolahku_tka_questions',
   TKA_DURATIONS: 'sekolahku_tka_durations',
+  TKA_ACTIVE_PACKAGES: 'sekolahku_tka_active_packages',
   TKA_RESULTS: 'sekolahku_tka_results',
   TKA_SUBMISSIONS: 'sekolahku_tka_submissions',
   ACTIVE_USER: 'sekolahku_active_user',
@@ -335,7 +337,29 @@ export const getStoredCBTExams = (): CBTExam[] => {
 
 export const saveStoredCBTExams = (exams: CBTExam[]) => {
   localStorage.setItem(STORAGE_KEYS.CBT_EXAMS, JSON.stringify(exams));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
+  }
   notifyStorageMutation(STORAGE_KEYS.CBT_EXAMS);
+};
+
+export const getStoredCBTActivePackages = (): Record<string, boolean> => {
+  const data = localStorage.getItem(STORAGE_KEYS.CBT_ACTIVE_PACKAGES);
+  if (!data) return {};
+  try {
+    const parsed = JSON.parse(data);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveStoredCBTActivePackages = (activeMap: Record<string, boolean>) => {
+  localStorage.setItem(STORAGE_KEYS.CBT_ACTIVE_PACKAGES, JSON.stringify(activeMap));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
+  }
+  notifyStorageMutation(STORAGE_KEYS.CBT_ACTIVE_PACKAGES);
 };
 
 export const getStoredCBTResults = (): CBTExamResult[] => {
@@ -447,6 +471,39 @@ export const getTKADurationMinutes = (
     }
   }
   return 60;
+};
+
+export const getStoredTKAActivePackages = (): Record<string, boolean> => {
+  const data = localStorage.getItem(STORAGE_KEYS.TKA_ACTIVE_PACKAGES);
+  if (!data) return {};
+  try {
+    const parsed = JSON.parse(data);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveStoredTKAActivePackages = (activeMap: Record<string, boolean>) => {
+  localStorage.setItem(STORAGE_KEYS.TKA_ACTIVE_PACKAGES, JSON.stringify(activeMap));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-tka-active-updated'));
+  }
+  notifyStorageMutation(STORAGE_KEYS.TKA_ACTIVE_PACKAGES);
+};
+
+export const isTKAPackageActive = (
+  activeMap: Record<string, boolean>,
+  jenisTka: string,
+  mapel?: string | null
+): boolean => {
+  if (mapel && mapel !== 'all') {
+    const exact = activeMap[`${jenisTka}__${mapel}`];
+    if (typeof exact === 'boolean') return exact;
+  }
+  const pkgAll = activeMap[`${jenisTka}__ALL`];
+  if (typeof pkgAll === 'boolean') return pkgAll;
+  return false;
 };
 
 export const getStoredTKAResults = (): CBTExamResult[] => {

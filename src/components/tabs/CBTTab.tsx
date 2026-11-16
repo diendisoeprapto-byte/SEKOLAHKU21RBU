@@ -24,11 +24,17 @@ import {
   Save,
   Shuffle,
   AlignCenter,
+  Power,
+  Lock,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { Subject, CBTExam, CBTQuestion, Student, ActiveUser, isSiswaInklusi } from '../../types';
 import {
   getStoredCBTExams,
   saveStoredCBTExams,
+  getStoredCBTActivePackages,
+  saveStoredCBTActivePackages,
   getStoredCBTResults,
   saveStoredCBTResults,
   getStoredAssessments,
@@ -38,6 +44,7 @@ import {
   saveStoredSubjectsForClass,
   notifyStorageMutation,
 } from '../../utils/storage';
+import { collectPersistentLocalBackup, pushAllDataToCloud } from '../../utils/cloudSync';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx } from '../../utils/docxImporter';
 import { QuestionContent } from '../QuestionContent';
@@ -65,11 +72,27 @@ export const CBTTab: React.FC<Props> = ({
   showToast,
 }) => {
   const [exams, setExams] = useState<CBTExam[]>(getStoredCBTExams());
+  const [cbtActivePackages, setCbtActivePackages] = useState<Record<string, boolean>>(() =>
+    getStoredCBTActivePackages()
+  );
   const [isExamRunning, setIsExamRunning] = useState(false);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [studentAnswers, setStudentAnswers] = useState<Record<string, any>>({});
   const [timeLeft, setTimeLeft] = useState(3600); // 60 mins
   const [examResult, setExamResult] = useState<{ score: number; total: number } | null>(null);
+
+  useEffect(() => {
+    const syncExams = () => {
+      setExams(getStoredCBTExams());
+      setCbtActivePackages(getStoredCBTActivePackages());
+    };
+    window.addEventListener('sekolahku-cbt-exams-updated', syncExams);
+    window.addEventListener('sekolahku-cloud-sync-updated', syncExams);
+    return () => {
+      window.removeEventListener('sekolahku-cbt-exams-updated', syncExams);
+      window.removeEventListener('sekolahku-cloud-sync-updated', syncExams);
+    };
+  }, []);
 
   // Tab mode for teacher: "bank-soal" (default for teacher) or "ujian"
   const [subTab, setSubTab] = useState<'bank-soal' | 'ujian'>('bank-soal');
@@ -297,7 +320,7 @@ export const CBTTab: React.FC<Props> = ({
       paketName: selectedPaket,
       subPaket: selectedSubPaket,
       durasiMenit: examDurationMinutes || 60,
-      aktif: true,
+      aktif: false,
       soalList: [],
     };
   }, [exams, selectedPaket, selectedSubPaket, selectedMapel, targetKelas, examDurationMinutes]);
@@ -313,6 +336,85 @@ export const CBTTab: React.FC<Props> = ({
   const savedExamBuckets = useMemo(() => {
     return exams.filter((e) => Array.isArray(e.soalList) && e.soalList.length > 0);
   }, [exams]);
+
+  const SAMPLE_CBT_DEFAULTS_META = [
+    { id: 'cbt_ipas_as1', label: 'Sumatif 1 (AS 1) • IPAS (Contoh Bawaan)' },
+    { id: 'cbt_mtk_as2', label: 'Sumatif 2 (AS 2) • Matematika (Contoh Bawaan)' },
+    { id: 'cbt_asts_indo', label: 'ASTS • Bahasa Indonesia (Contoh Bawaan)' },
+    { id: 'cbt_asas_pancasila', label: 'ASAS • Pendidikan Pancasila (Contoh Bawaan)' },
+  ];
+
+  const syncCbtActivationToCloud = (nextActiveMap?: Record<string, boolean>) => {
+    pushAllDataToCloud(
+      {
+        ...(nextActiveMap ? { cbtActivePackages: nextActiveMap } : {}),
+        localStorageSnapshot: collectPersistentLocalBackup({ excludeLargeCollections: true }),
+      },
+      activeUser?.name || 'admin'
+    );
+  };
+
+  const handleToggleExamActive = (targetExam: CBTExam, forceNext?: boolean) => {
+    const existingRecord = exams.find((e) => e.id === targetExam.id);
+    const nextState = typeof forceNext === 'boolean' ? forceNext : !Boolean(existingRecord?.aktif);
+
+    if (nextState && (!targetExam.soalList || targetExam.soalList.length === 0)) {
+      showToast(
+        'Tambahkan minimal 1 butir soal terlebih dahulu sebelum mengaktifkan paket soal CBT ini.',
+        'error'
+      );
+      return;
+    }
+
+    const updatedExam: CBTExam = {
+      ...targetExam,
+      aktif: nextState,
+    };
+    const newExams = upsertExamInList(exams, updatedExam);
+    setExams(newExams);
+    saveStoredCBTExams(newExams);
+    syncCbtActivationToCloud();
+
+    showToast(
+      nextState
+        ? `Paket "${targetExam.paketName || targetExam.judul} • ${targetExam.mapel}" DIAKTIFKAN dan kini muncul di dashboard siswa!`
+        : `Paket "${targetExam.paketName || targetExam.judul} • ${targetExam.mapel}" DINONAKTIFKAN (belum muncul di siswa).`,
+      'success'
+    );
+  };
+
+  const handleSetAllSavedExamsActive = (nextState: boolean) => {
+    if (savedExamBuckets.length === 0) {
+      showToast('Belum ada paket soal CBT tersimpan untuk diatur.', 'error');
+      return;
+    }
+    const newExams = exams.map((ex) =>
+      Array.isArray(ex.soalList) && ex.soalList.length > 0 ? { ...ex, aktif: nextState } : ex
+    );
+    setExams(newExams);
+    saveStoredCBTExams(newExams);
+    syncCbtActivationToCloud();
+    showToast(
+      nextState
+        ? `Semua ${savedExamBuckets.length} paket soal CBT tersimpan DIAKTIFKAN untuk siswa.`
+        : `Semua ${savedExamBuckets.length} paket soal CBT tersimpan DINONAKTIFKAN.`,
+      'success'
+    );
+  };
+
+  const handleToggleSampleCbtActive = (sampleId: string, label: string) => {
+    const nextVal = !Boolean(cbtActivePackages[sampleId]);
+    const nextMap = { ...cbtActivePackages, [sampleId]: nextVal };
+    setCbtActivePackages(nextMap);
+    saveStoredCBTActivePackages(nextMap);
+    syncCbtActivationToCloud(nextMap);
+    showToast(
+      nextVal
+        ? `${label} DIAKTIFKAN untuk siswa.`
+        : `${label} DINONAKTIFKAN dari halaman siswa.`,
+      'success'
+    );
+  };
 
   // Find currently selected CP & TP
   const currentCp = cpList.find((c) => c.id === selectedCpId) || cpList[0];
@@ -484,7 +586,7 @@ export const CBTTab: React.FC<Props> = ({
       paketName: selectedPaket,
       subPaket: selectedSubPaket,
       durasiMenit: examDurationMinutes || activeExam.durasiMenit || 60,
-      aktif: true,
+      aktif: exams.some((e) => e.id === activeExam.id) ? Boolean(activeExam.aktif) : false,
       soalList: updatedQuestions,
     };
 
@@ -598,7 +700,7 @@ export const CBTTab: React.FC<Props> = ({
         paketName: selectedPaket,
         subPaket: selectedSubPaket,
         durasiMenit: examDurationMinutes || activeExam.durasiMenit || 60,
-        aktif: true,
+        aktif: exams.some((e) => e.id === activeExam.id) ? Boolean(activeExam.aktif) : false,
         soalList: [...importedWithMeta, ...activeExam.soalList],
       };
 
@@ -873,7 +975,29 @@ export const CBTTab: React.FC<Props> = ({
                 )}
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleToggleExamActive(activeExam)}
+                  className={`font-display font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer whitespace-nowrap ${
+                    activeExam.aktif && activeExam.soalList.length > 0
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      : 'bg-amber-100 hover:bg-amber-200 text-amber-950 border border-amber-300'
+                  }`}
+                  title="Aktifkan atau nonaktifkan paket soal ini agar muncul atau tersembunyi di dashboard siswa"
+                >
+                  {activeExam.aktif && activeExam.soalList.length > 0 ? (
+                    <>
+                      <Eye className="w-4 h-4" />
+                      <span>Paket Aktif di Siswa</span>
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-4 h-4" />
+                      <span>Belum Diaktifkan</span>
+                    </>
+                  )}
+                </button>
                 <button
                   type="button"
                   onClick={() => docxInputRef.current?.click()}
@@ -1525,7 +1649,7 @@ export const CBTTab: React.FC<Props> = ({
               {savedExamBuckets.length > 0 && (
                 <div className="p-3.5 rounded-2xl bg-indigo-50/60 border border-indigo-200 space-y-2">
                   <span className="text-[11px] font-extrabold text-indigo-900 uppercase tracking-wider block">
-                    Paket &amp; Mapel Tersedia untuk Ujian Siswa ({savedExamBuckets.length} Paket Aktif):
+                    Daftar Paket &amp; Mapel CBT Tersimpan ({savedExamBuckets.filter((e) => e.aktif).length} Aktif dari {savedExamBuckets.length} Paket):
                   </span>
                   <div className="flex flex-wrap gap-2">
                     {savedExamBuckets.map((ex) => {
@@ -1544,13 +1668,21 @@ export const CBTTab: React.FC<Props> = ({
                             handleMapelChange(ex.mapel);
                             setTargetKelas(ex.kelas);
                           }}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer border ${
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer border inline-flex items-center gap-2 ${
                             isCurrent
                               ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
                               : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300'
                           }`}
                         >
-                          {exPaket} • {ex.mapel} ({exSub}) [{ex.kelas}] — {ex.soalList.length} Soal
+                          <span
+                            className={`w-2 h-2 rounded-full shrink-0 ${
+                              ex.aktif ? 'bg-emerald-400' : 'bg-slate-400'
+                            }`}
+                          />
+                          <span>
+                            {exPaket} • {ex.mapel} ({exSub}) [{ex.kelas}] — {ex.soalList.length} Soal (
+                            {ex.aktif ? 'Aktif' : 'Nonaktif'})
+                          </span>
                         </button>
                       );
                     })}
@@ -1729,6 +1861,165 @@ export const CBTTab: React.FC<Props> = ({
                     Belum ada soal pada filter ini. Buat soal menggunakan form di atas!
                   </div>
                 )}
+
+                {/* Setting Aktivasi Paket Soal CBT (Wajib Diaktifkan Agar Muncul di Siswa) */}
+                <div className="p-5 rounded-3xl bg-gradient-to-r from-sky-50 via-white to-indigo-50 border-2 border-sky-300 shadow-xs space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`w-10 h-10 rounded-2xl text-white flex items-center justify-center shadow-md shrink-0 ${
+                          activeExam.aktif && activeExam.soalList.length > 0
+                            ? 'bg-emerald-600 shadow-emerald-500/20'
+                            : 'bg-slate-700 shadow-slate-500/20'
+                        }`}
+                      >
+                        <Power className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex flex-wrap items-center gap-2">
+                          <span>Pengaturan Aktivasi Paket Soal CBT</span>
+                          <span
+                            className={`text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full ${
+                              activeExam.aktif && activeExam.soalList.length > 0
+                                ? 'bg-emerald-100 text-emerald-900'
+                                : 'bg-amber-100 text-amber-900'
+                            }`}
+                          >
+                            {activeExam.aktif && activeExam.soalList.length > 0
+                              ? 'Aktif di Siswa'
+                              : 'Belum Diaktifkan'}
+                          </span>
+                        </h4>
+                        <p className="text-[11px] text-slate-600 mt-0.5">
+                          Paket soal yang belum diaktifkan tidak akan muncul di halaman ujian siswa. Aktifkan saat ujian siap dilaksanakan.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleExamActive(activeExam)}
+                        className={`px-4 py-2.5 rounded-2xl text-xs font-display font-black inline-flex items-center gap-2 transition cursor-pointer shadow-xs whitespace-nowrap ${
+                          activeExam.aktif && activeExam.soalList.length > 0
+                            ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                        }`}
+                      >
+                        {activeExam.aktif && activeExam.soalList.length > 0 ? (
+                          <>
+                            <EyeOff className="w-4 h-4" />
+                            <span>Nonaktifkan Paket Ini</span>
+                          </>
+                        ) : (
+                          <>
+                            <Power className="w-4 h-4" />
+                            <span>Aktifkan Paket Ini</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Daftar Status Paket Soal CBT Tersimpan */}
+                  {savedExamBuckets.length > 0 && (
+                    <div className="pt-3 border-t border-sky-200/80 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-extrabold text-slate-700">
+                          Kelola Status Tampil Paket Soal CBT ({savedExamBuckets.filter((e) => e.aktif).length}/{savedExamBuckets.length} Aktif):
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleSetAllSavedExamsActive(true)}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 text-[11px] font-bold transition cursor-pointer"
+                          >
+                            Aktifkan Semua
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSetAllSavedExamsActive(false)}
+                            className="px-2.5 py-1 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 text-[11px] font-bold transition cursor-pointer"
+                          >
+                            Nonaktifkan Semua
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {savedExamBuckets.map((ex) => {
+                          const exPaket = inferPaketFromExam(ex);
+                          const exSub = ex.subPaket || 'Paket 1';
+                          return (
+                            <div
+                              key={`act_${ex.id}`}
+                              className={`px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs ${
+                                ex.aktif
+                                  ? 'bg-emerald-50/70 border-emerald-300'
+                                  : 'bg-white border-slate-200'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="font-bold text-slate-900 truncate">
+                                  {exPaket} · {ex.mapel}
+                                </div>
+                                <div className="text-[11px] text-slate-500 truncate">
+                                  {exSub} · {ex.kelas} · {ex.soalList.length} Soal · {ex.durasiMenit} Menit
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleExamActive(ex)}
+                                className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold shrink-0 whitespace-nowrap cursor-pointer transition ${
+                                  ex.aktif
+                                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                    : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                                }`}
+                              >
+                                {ex.aktif ? 'Aktif ✓' : 'Nonaktif'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Paket Contoh Bawaan CBT */}
+                  <div className="pt-2 border-t border-sky-200/70 space-y-2">
+                    <span className="text-[11px] font-bold text-slate-600 block">
+                      Paket Soal Contoh Bawaan (Default Nonaktif agar tidak muncul sebelum diaktifkan):
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {SAMPLE_CBT_DEFAULTS_META.map((smp) => {
+                        const isSampleOn = Boolean(cbtActivePackages[smp.id]);
+                        return (
+                          <div
+                            key={smp.id}
+                            className={`px-3 py-1.5 rounded-xl border flex items-center justify-between gap-2 text-[11px] ${
+                              isSampleOn
+                                ? 'bg-emerald-50/70 border-emerald-300'
+                                : 'bg-white/80 border-slate-200'
+                            }`}
+                          >
+                            <span className="font-semibold text-slate-700 truncate">{smp.label}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleSampleCbtActive(smp.id, smp.label)}
+                              className={`px-2.5 py-1 rounded-lg font-extrabold shrink-0 cursor-pointer transition ${
+                                isSampleOn
+                                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                  : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                              }`}
+                            >
+                              {isSampleOn ? 'Aktif ✓' : 'Nonaktif'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
 
                 {/* Setting Acak Soal & Acak Jawaban */}
                 <div className="p-5 rounded-3xl bg-gradient-to-r from-emerald-50 via-white to-teal-50 border-2 border-emerald-300 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">

@@ -28,6 +28,8 @@ import {
   getStoredReportNotes,
   getStoredTKADurations,
   saveStoredTKADurations,
+  getStoredTKAActivePackages,
+  getStoredCBTActivePackages,
   getStoredTKAQuestions,
   saveStoredTKAQuestions,
   runWithoutStorageSync,
@@ -84,6 +86,8 @@ export interface CloudSyncPayload {
   tkaAcakSoal?: boolean;
   tkaAcakJawaban?: boolean;
   tkaDurations?: Record<string, number>;
+  cbtActivePackages?: Record<string, boolean>;
+  tkaActivePackages?: Record<string, boolean>;
   localStorageSnapshot?: Record<string, any>;
 }
 
@@ -127,7 +131,9 @@ const SESSION_ONLY_KEYS = new Set([
 function dispatchCloudSyncEvents() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-cloud-sync-updated'));
+    window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
     window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
+    window.dispatchEvent(new Event('sekolahku-tka-active-updated'));
     window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
   }
 }
@@ -459,6 +465,8 @@ async function pushSnapshotAndPrimaryDocs(
   const kaldikDays = getStoredKaldik();
   const reportNotes = getStoredReportNotes();
   const tkaDurations = getStoredTKADurations();
+  const cbtActivePackages = getStoredCBTActivePackages();
+  const tkaActivePackages = getStoredTKAActivePackages();
 
   let ekskulList: any = [];
   try {
@@ -512,6 +520,8 @@ async function pushSnapshotAndPrimaryDocs(
     tkaAcakSoal,
     tkaAcakJawaban,
     tkaDurations,
+    cbtActivePackages,
+    tkaActivePackages,
     snapshotChunkCount,
     snapshotRevision: revision,
     ...(options?.restoreVersion ? { restoreVersion: options.restoreVersion } : {}),

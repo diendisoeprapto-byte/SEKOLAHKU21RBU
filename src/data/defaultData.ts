@@ -453,7 +453,7 @@ export const DEFAULT_CBT_EXAM: CBTExam = {
   mapel: "Ilmu Pengetahuan Alam dan Sosial (IPAS)",
   kelas: "Kelas 6A",
   durasiMenit: 60,
-  aktif: true,
+  aktif: false,
   soalList: [
     {
       id: "q1",
