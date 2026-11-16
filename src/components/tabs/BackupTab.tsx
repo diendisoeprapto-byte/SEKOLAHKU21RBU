@@ -15,7 +15,7 @@ import {
   KeyRound,
 } from 'lucide-react';
 import { SchoolProfile } from '../../types';
-import { exportFullSystemJSON } from '../../utils/storage';
+import { exportFullSystemJSON, resetStoredAdminPassword } from '../../utils/storage';
 import { testConnection, handleFirestoreError, OperationType } from '../../utils/firebase';
 import {
   CloudBackupDocMeta,
@@ -67,6 +67,7 @@ export const BackupTab: React.FC<Props> = ({
   const [cloudBackupMeta, setCloudBackupMeta] = useState<CloudBackupDocMeta | null>(null);
   const [cloudSyncMeta, setCloudSyncMeta] = useState<CloudSyncPayload | null>(null);
   const [lastRestoreSummary, setLastRestoreSummary] = useState<string>('');
+  const [confirmResetAdminPass, setConfirmResetAdminPass] = useState(false);
 
   // Realtime listeners (onSnapshot) for backups/latest & school_data/primary_data
   useEffect(() => {
@@ -446,24 +447,56 @@ export const BackupTab: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Ubah Password Administrator */}
+        {/* Ubah & Reset Password Administrator */}
         {isAdmin && onOpenChangePassword && (
           <div className="p-6 rounded-3xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="space-y-1">
               <h4 className="font-display font-black text-sm text-amber-950 flex items-center gap-2">
-                <KeyRound className="w-4 h-4 text-amber-600" /> Rubah Password Administrator
+                <KeyRound className="w-4 h-4 text-amber-600" /> Akun &amp; Password Administrator
               </h4>
               <p className="text-xs text-amber-800">
-                Ubah kata sandi login akun Administrator Utama dan sinkronkan otomatis ke seluruh perangkat.
+                Ubah kata sandi login akun Administrator Utama atau reset ke password default (<span className="font-mono font-bold">admin</span>) dan sinkronkan otomatis ke seluruh perangkat.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={onOpenChangePassword}
-              className="bg-amber-500 hover:bg-amber-600 text-white font-display font-extrabold px-4 py-2.5 rounded-xl text-xs shrink-0 cursor-pointer shadow-xs flex items-center gap-1.5"
-            >
-              <KeyRound className="w-3.5 h-3.5" /> Rubah Password Admin
-            </button>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {confirmResetAdminPass ? (
+                <div className="flex items-center gap-1.5 bg-white px-2.5 py-1.5 rounded-xl border border-amber-300">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetStoredAdminPassword();
+                      setConfirmResetAdminPass(false);
+                      showToast('Password akun Administrator di-reset ke default ("admin")!', 'success');
+                    }}
+                    className="bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold px-3 py-1.5 rounded-lg text-xs cursor-pointer"
+                  >
+                    Ya, Reset ke "admin"
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmResetAdminPass(false)}
+                    className="bg-slate-100 text-slate-700 font-bold px-2.5 py-1.5 rounded-lg text-xs cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetAdminPass(true)}
+                  className="bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-display font-extrabold px-4 py-2.5 rounded-xl text-xs cursor-pointer shadow-xs flex items-center gap-1.5"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-amber-700" /> Reset Password Admin
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onOpenChangePassword}
+                className="bg-amber-500 hover:bg-amber-600 text-white font-display font-extrabold px-4 py-2.5 rounded-xl text-xs cursor-pointer shadow-xs flex items-center gap-1.5"
+              >
+                <KeyRound className="w-3.5 h-3.5" /> Rubah Password Admin
+              </button>
+            </div>
           </div>
         )}
 

@@ -75,6 +75,11 @@ export const saveStoredAdminPassword = (password: string) => {
   notifyStorageMutation(STORAGE_KEYS.ADMIN_PASSWORD);
 };
 
+export const resetStoredAdminPassword = () => {
+  localStorage.setItem(STORAGE_KEYS.ADMIN_PASSWORD, 'admin');
+  notifyStorageMutation(STORAGE_KEYS.ADMIN_PASSWORD);
+};
+
 export const getStoredProfile = (): SchoolProfile => {
   const data = localStorage.getItem(STORAGE_KEYS.PROFILE);
   if (!data) return DEFAULT_SCHOOL_PROFILE;

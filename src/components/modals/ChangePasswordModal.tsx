@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
-import { KeyRound, Eye, EyeOff, ShieldCheck, Check, AlertCircle } from 'lucide-react';
-import { getStoredAdminPassword, saveStoredAdminPassword } from '../../utils/storage';
+import { KeyRound, Eye, EyeOff, ShieldCheck, Check, AlertCircle, RotateCcw } from 'lucide-react';
+import {
+  getStoredAdminPassword,
+  saveStoredAdminPassword,
+  resetStoredAdminPassword,
+} from '../../utils/storage';
 
 interface Props {
   isOpen: boolean;
@@ -16,6 +20,7 @@ export const ChangePasswordModal: React.FC<Props> = ({ isOpen, onClose, showToas
   const [showNew, setShowNew] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [confirmResetAdmin, setConfirmResetAdmin] = useState(false);
 
   if (!isOpen) return null;
 
@@ -47,6 +52,18 @@ export const ChangePasswordModal: React.FC<Props> = ({ isOpen, onClose, showToas
     setNewPassword('');
     setConfirmPassword('');
     setErrorMessage('');
+    setConfirmResetAdmin(false);
+    onClose();
+  };
+
+  const handleResetAdminToDefault = () => {
+    resetStoredAdminPassword();
+    showToast('Password administrator berhasil di-reset ke default ("admin")!', 'success');
+    setOldPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setErrorMessage('');
+    setConfirmResetAdmin(false);
     onClose();
   };
 
@@ -55,6 +72,7 @@ export const ChangePasswordModal: React.FC<Props> = ({ isOpen, onClose, showToas
     setNewPassword('');
     setConfirmPassword('');
     setErrorMessage('');
+    setConfirmResetAdmin(false);
     onClose();
   };
 
@@ -180,20 +198,51 @@ export const ChangePasswordModal: React.FC<Props> = ({ isOpen, onClose, showToas
             </span>
           </div>
 
-          <div className="flex items-center justify-end gap-2.5 pt-2">
-            <button
-              type="button"
-              onClick={handleClose}
-              className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer transition"
-            >
-              Batal
-            </button>
-            <button
-              type="submit"
-              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 text-white font-display font-extrabold text-xs shadow-md flex items-center gap-1.5 cursor-pointer transition"
-            >
-              <Check className="w-4 h-4" /> Simpan Password Baru
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+            <div>
+              {confirmResetAdmin ? (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleResetAdminToDefault}
+                    className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-extrabold cursor-pointer"
+                  >
+                    Ya, Reset ke "admin"
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmResetAdmin(false)}
+                    className="px-2.5 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetAdmin(true)}
+                  className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition"
+                  title="Kembalikan password Administrator ke default ('admin')"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Reset Admin
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleClose}
+                className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer transition"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 text-white font-display font-extrabold text-xs shadow-md flex items-center gap-1.5 cursor-pointer transition"
+              >
+                <Check className="w-4 h-4" /> Simpan Password Baru
+              </button>
+            </div>
           </div>
         </form>
       </div>

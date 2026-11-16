@@ -1,7 +1,22 @@
 import React, { useState } from 'react';
-import { User, Lock, ArrowRight, ShieldCheck, QrCode, BookOpen, Laptop, BarChart2, Globe } from 'lucide-react';
+import {
+  User,
+  Lock,
+  ArrowRight,
+  ShieldCheck,
+  QrCode,
+  BookOpen,
+  Laptop,
+  BarChart2,
+  Globe,
+  Eye,
+  EyeOff,
+  AlertCircle,
+  RotateCcw,
+  KeyRound,
+} from 'lucide-react';
 import { SchoolProfile, Teacher, Student, ActiveUser } from '../types';
-import { getStoredAdminPassword } from '../utils/storage';
+import { getStoredAdminPassword, resetStoredAdminPassword } from '../utils/storage';
 
 interface Props {
   profile: SchoolProfile;
@@ -22,80 +37,126 @@ export const LoginScreen: React.FC<Props> = ({
 }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [isResetAdminOpen, setIsResetAdminOpen] = useState(false);
+  const [resetNpsnInput, setResetNpsnInput] = useState('');
+  const [resetError, setResetError] = useState('');
+
+  const handleResetAdminPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError('');
+    const inputNpsn = resetNpsnInput.trim();
+    const schoolNpsn = (profile.npsn || '').trim();
+    if (!inputNpsn || (schoolNpsn && inputNpsn !== schoolNpsn)) {
+      setResetError('NPSN sekolah tidak sesuai dengan data profil sekolah di SEKOLAHKU.');
+      return;
+    }
+    resetStoredAdminPassword();
+    setIsResetAdminOpen(false);
+    setResetNpsnInput('');
+    setUsername('admin');
+    setPassword('');
+    setLoginError('');
+    showToast('Password akun Administrator berhasil di-reset ke default ("admin").', 'success');
+  };
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
+    setLoginError('');
+
     const u = username.trim().toLowerCase();
     const p = password.trim();
 
-    // 1. Check Admin
-    const storedAdminPass = getStoredAdminPassword();
+    if (!u || !p) {
+      const msg = 'Username dan password wajib diisi sesuai data aplikasi SEKOLAHKU.';
+      setLoginError(msg);
+      showToast(msg, 'error');
+      return;
+    }
+
+    // 1. Verifikasi Akun Administrator (default 'admin'/'123' saat belum diubah, atau sesuai password tersimpan)
+    const storedAdminPass = getStoredAdminPassword().trim();
     const isAdminPassCustomized = localStorage.getItem('sekolahku_admin_password') !== null;
-    if (
-      u === 'admin' &&
-      (p === storedAdminPass || (!isAdminPassCustomized && (p === 'admin' || p === '123')))
-    ) {
-      onLoginSuccess({
-        role: 'admin',
-        username: 'admin',
-        name: 'Administrator Utama',
-        detail: `Admin ${profile.name}`,
-        fotoUrl: profile.logoSekolahUrl,
-      });
-      showToast('Berhasil masuk sebagai Administrator!', 'success');
+    if (u === 'admin') {
+      if (p === storedAdminPass || (!isAdminPassCustomized && (p === 'admin' || p === '123'))) {
+        onLoginSuccess({
+          role: 'admin',
+          username: 'admin',
+          name: 'Administrator Utama',
+          detail: `Admin ${profile.name}`,
+          fotoUrl: profile.logoSekolahUrl,
+        });
+        showToast('Berhasil masuk sebagai Administrator!', 'success');
+        return;
+      }
+      const msg = 'Password Administrator tidak sesuai dengan data aplikasi SEKOLAHKU.';
+      setLoginError(msg);
+      showToast(msg, 'error');
       return;
     }
 
-    // 2. Check Teacher
-    const teacher = teachers.find(
-      (t) => t.username.toLowerCase() === u && (t.password === p || p === '123' || p === 'admin')
+    // 2. Verifikasi Akun Guru / Pegawai (username & password harus sesuai data Guru & Pegawai)
+    const matchedTeacherByUsername = teachers.find(
+      (t) => Boolean(t.username?.trim()) && t.username.trim().toLowerCase() === u
     );
-    if (teacher) {
-      onLoginSuccess({
-        role: 'guru',
-        username: teacher.username,
-        name: teacher.nama,
-        detail: teacher.penugasan,
-        fotoUrl: teacher.fotoUrl,
-        kelasDiampu: teacher.penugasan.startsWith('Kelas') ? teacher.penugasan : undefined,
-      });
-      showToast(`Selamat datang, ${teacher.nama}!`, 'success');
+    if (matchedTeacherByUsername) {
+      const expectedTeacherPass = (matchedTeacherByUsername.password || '').trim();
+      if (expectedTeacherPass && p === expectedTeacherPass) {
+        onLoginSuccess({
+          role: 'guru',
+          username: matchedTeacherByUsername.username,
+          name: matchedTeacherByUsername.nama,
+          detail: matchedTeacherByUsername.penugasan,
+          fotoUrl: matchedTeacherByUsername.fotoUrl,
+          kelasDiampu: matchedTeacherByUsername.penugasan.startsWith('Kelas')
+            ? matchedTeacherByUsername.penugasan
+            : undefined,
+        });
+        showToast(`Selamat datang, ${matchedTeacherByUsername.nama}!`, 'success');
+        return;
+      }
+      const msg = 'Password Guru/Pegawai tidak sesuai dengan data aplikasi SEKOLAHKU.';
+      setLoginError(msg);
+      showToast(msg, 'error');
       return;
     }
 
-    // 3. Check Student
-    const student = students.find(
-      (s) =>
-        (s.username.toLowerCase() === u || s.nisn === u || s.barcodeId.toLowerCase() === u) &&
-        (s.password === p || p === '123' || p === '')
-    );
-    if (student) {
-      onLoginSuccess({
-        role: 'siswa',
-        username: student.username,
-        name: student.nama,
-        detail: `${student.kelas} • ${student.nisn}`,
-        fotoUrl: student.fotoUrl,
-        studentData: student,
+    // 3. Verifikasi Akun Siswa (username / NISN / barcodeId & password harus sesuai data Siswa)
+    const matchedStudents = students.filter((s) => {
+      const sUser = (s.username || '').trim().toLowerCase();
+      const sNisn = (s.nisn || '').trim().toLowerCase();
+      const sBarcode = (s.barcodeId || '').trim().toLowerCase();
+      return (sUser !== '' && sUser === u) || (sNisn !== '' && sNisn === u) || (sBarcode !== '' && sBarcode === u);
+    });
+
+    if (matchedStudents.length > 0) {
+      const validStudent = matchedStudents.find((s) => {
+        const expectedStudentPass = (s.password || '').trim();
+        return expectedStudentPass !== '' && p === expectedStudentPass;
       });
-      showToast(`Selamat datang, ${student.nama}!`, 'success');
+      if (validStudent) {
+        onLoginSuccess({
+          role: 'siswa',
+          username: validStudent.username,
+          name: validStudent.nama,
+          detail: `${validStudent.kelas} • ${validStudent.nisn}`,
+          fotoUrl: validStudent.fotoUrl,
+          studentData: validStudent,
+        });
+        showToast(`Selamat datang, ${validStudent.nama}!`, 'success');
+        return;
+      }
+      const msg = 'Password Siswa tidak sesuai dengan data aplikasi SEKOLAHKU.';
+      setLoginError(msg);
+      showToast(msg, 'error');
       return;
     }
 
-    // Fallback: If username given, allow standard teacher or admin entry for smooth testing
-    if (u) {
-      onLoginSuccess({
-        role: 'admin',
-        username: u,
-        name: `Pengguna: ${username}`,
-        detail: `Akses ${profile.name}`,
-        fotoUrl: profile.logoSekolahUrl,
-      });
-      showToast('Masuk dengan akses resmi!', 'success');
-      return;
-    }
-
-    showToast('Username atau password tidak boleh kosong.', 'error');
+    // Tidak ada akun yang terdaftar di data aplikasi SEKOLAHKU -> Tolak login
+    const msg = 'Login ditolak! Username atau password tidak terdaftar di data aplikasi SEKOLAHKU.';
+    setLoginError(msg);
+    showToast(msg, 'error');
   };
 
   return (
@@ -169,11 +230,18 @@ export const LoginScreen: React.FC<Props> = ({
             </h2>
             <p className="text-xs text-slate-500 mt-1">
               Silakan masuk menggunakan akun Administrator, Guru / Wali Kelas, atau Akun Siswa{' '}
-              <strong className="text-slate-700">{profile.name}</strong>.
+              <strong className="text-slate-700">{profile.name}</strong> yang terdaftar.
             </p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
+            {loginError && (
+              <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                <span>{loginError}</span>
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-extrabold uppercase text-slate-600 mb-1.5">
                 Username Pengguna
@@ -183,9 +251,12 @@ export const LoginScreen: React.FC<Props> = ({
                 <input
                   type="text"
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  onChange={(e) => {
+                    setUsername(e.target.value);
+                    if (loginError) setLoginError('');
+                  }}
                   required
-                  placeholder="admin / username guru / username siswa..."
+                  placeholder="admin / username guru / username atau NISN siswa..."
                   className="w-full pl-11 pr-4 py-3 rounded-2xl border-2 border-slate-200 focus:border-rose-600 outline-none text-sm font-bold text-slate-800 transition"
                 />
               </div>
@@ -198,12 +269,24 @@ export const LoginScreen: React.FC<Props> = ({
               <div className="relative">
                 <Lock className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Masukkan password..."
-                  className="w-full pl-11 pr-4 py-3 rounded-2xl border-2 border-slate-200 focus:border-rose-600 outline-none text-sm font-bold text-slate-800 transition"
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (loginError) setLoginError('');
+                  }}
+                  required
+                  placeholder="Masukkan password sesuai data akun..."
+                  className="w-full pl-11 pr-11 py-3 rounded-2xl border-2 border-slate-200 focus:border-rose-600 outline-none text-sm font-bold text-slate-800 transition"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  aria-label={showPassword ? 'Sembunyikan password' : 'Tampilkan password'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
             </div>
 
@@ -216,20 +299,105 @@ export const LoginScreen: React.FC<Props> = ({
             </button>
           </form>
 
-          <div className="mt-8 pt-5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+          <div className="mt-8 pt-5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
             <span className="flex items-center gap-1 font-semibold">
               <ShieldCheck className="w-4 h-4 text-rose-600" /> {profile.name}
             </span>
-            <button
-              type="button"
-              onClick={onOpenGoogleSitesGuide}
-              className="text-rose-600 font-bold hover:underline flex items-center gap-1 cursor-pointer"
-            >
-              <Globe className="w-3.5 h-3.5" /> Panduan Google Sites
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setResetError('');
+                  setResetNpsnInput('');
+                  setIsResetAdminOpen(true);
+                }}
+                className="text-amber-700 font-bold hover:underline flex items-center gap-1 cursor-pointer"
+                title="Reset password akun Administrator ke setelan awal ('admin')"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Reset Admin
+              </button>
+              <button
+                type="button"
+                onClick={onOpenGoogleSitesGuide}
+                className="text-rose-600 font-bold hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <Globe className="w-3.5 h-3.5" /> Panduan Google Sites
+              </button>
+            </div>
           </div>
         </div>
       </div>
+
+      {isResetAdminOpen && (
+        <div className="fixed inset-0 z-[950] bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white max-w-md w-full rounded-3xl p-6 shadow-2xl border-2 border-amber-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-display font-black text-base text-slate-800">
+                    Reset Password Admin
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Kembalikan password akun Administrator ke default (<span className="font-mono font-bold">admin</span>)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsResetAdminOpen(false)}
+                className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 flex items-center justify-center font-bold text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleResetAdminPassword} className="space-y-3">
+              {resetError && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{resetError}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-extrabold text-slate-700 mb-1">
+                  Verifikasi NPSN Sekolah ({profile.name})
+                </label>
+                <input
+                  type="text"
+                  value={resetNpsnInput}
+                  onChange={(e) => {
+                    setResetNpsnInput(e.target.value);
+                    if (resetError) setResetError('');
+                  }}
+                  required
+                  placeholder="Masukkan NPSN resmi sekolah..."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-slate-50 focus:bg-white focus:border-amber-500 outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsResetAdminOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-display font-extrabold text-xs shadow-xs cursor-pointer flex items-center gap-1.5"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Reset ke Default (admin)
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </section>
   );
 };
