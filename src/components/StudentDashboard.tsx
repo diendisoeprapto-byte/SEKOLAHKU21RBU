@@ -1032,7 +1032,7 @@ export const StudentDashboard: React.FC<Props> = ({
     return (
       <section className="space-y-6">
         {/* Hero Greeting Siswa */}
-        <div className="bg-gradient-to-r from-rose-600 via-rose-700 to-amber-600 p-6 sm:p-8 rounded-[2.5rem] text-white shadow-xl relative overflow-hidden">
+        <div className="no-print bg-gradient-to-r from-rose-600 via-rose-700 to-amber-600 p-6 sm:p-8 rounded-[2.5rem] text-white shadow-xl relative overflow-hidden">
           <div className="absolute right-0 top-0 w-80 h-80 bg-white/10 rounded-full blur-3xl pointer-events-none"></div>
 
           <div className="relative z-10 flex flex-col md:flex-row items-center md:items-start justify-between gap-6">
@@ -1072,11 +1072,15 @@ export const StudentDashboard: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Statistik Performa Rekap Nilai Ujian CBT & TKA (Recharts) */}
+        {/* Statistik Performa Rekap Nilai Ujian CBT & TKA (Recharts + Ekspor PDF/Excel) */}
         <StudentPerformanceStats
           student={currentStudent}
           cbtExams={cbtExamList}
           tkaExams={tkaExamList}
+          profile={profile}
+          activeYear={activeYear}
+          activeSemester={activeSemester}
+          showToast={showToast}
           onStartCbt={() => {
             setViewMode('cbt');
             setSelectedExamId('');
@@ -1090,7 +1094,7 @@ export const StudentDashboard: React.FC<Props> = ({
         />
 
         {/* 4 MENU UTAMA SISWA (DASHBOARD CARDS GRID) */}
-        <div>
+        <div className="no-print">
           <div className="mb-4">
             <h2 className="text-lg font-display font-black text-slate-800 flex items-center gap-2">
               <Layers className="w-5 h-5 text-rose-600" /> Fitur Pembelajaran &amp; Evaluasi Siswa

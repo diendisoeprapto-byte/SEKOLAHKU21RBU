@@ -12,6 +12,7 @@ import {
   ReferenceLine,
   Legend,
 } from 'recharts';
+import * as XLSX from 'xlsx';
 import {
   TrendingUp,
   TrendingDown,
@@ -21,14 +22,18 @@ import {
   AlertCircle,
   Laptop,
   Sparkles,
+  FileSpreadsheet,
+  Printer,
+  BookOpen,
 } from 'lucide-react';
-import { CBTExamResult, Student } from '../types';
+import { CBTExamResult, SchoolProfile, Student } from '../types';
 import {
   getStoredCBTResults,
   getStoredTKAResults,
   getStoredTKASubmissions,
   TKASubmissionItem,
 } from '../utils/storage';
+import { getLocalTodayStr } from '../utils/dateUtils';
 
 interface ExamCatalogMeta {
   id: string;
@@ -44,6 +49,10 @@ interface Props {
   tkaExams: ExamCatalogMeta[];
   onStartCbt: () => void;
   onStartTka: () => void;
+  profile?: SchoolProfile;
+  activeYear?: string;
+  activeSemester?: string;
+  showToast?: (msg: string, type?: 'success' | 'error') => void;
 }
 
 interface PerformanceEntry {
@@ -111,8 +120,13 @@ export const StudentPerformanceStats: React.FC<Props> = ({
   tkaExams,
   onStartCbt,
   onStartTka,
+  profile,
+  activeYear = '2026/2027',
+  activeSemester = 'Ganjil',
+  showToast,
 }) => {
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'CBT' | 'TKA'>('all');
+  const [selectedSubject, setSelectedSubject] = useState<string>('all');
   const [chartView, setChartView] = useState<'trend' | 'subject'>('trend');
   const [cbtResults, setCbtResults] = useState<CBTExamResult[]>(() => getStoredCBTResults());
   const [tkaResults, setTkaResults] = useState<CBTExamResult[]>(() => getStoredTKAResults());
@@ -210,10 +224,37 @@ export const StudentPerformanceStats: React.FC<Props> = ({
     }));
   }, [student, cbtResults, tkaResults, tkaSubmissions, examLookup]);
 
-  const filteredEntries = useMemo(() => {
+  const categoryEntries = useMemo(() => {
     if (categoryFilter === 'all') return entries;
     return entries.filter((e) => e.category === categoryFilter);
   }, [entries, categoryFilter]);
+
+  const availableSubjects = useMemo(() => {
+    return Array.from(new Set(categoryEntries.map((e) => e.mapel))).sort((a, b) =>
+      a.localeCompare(b, 'id')
+    );
+  }, [categoryEntries]);
+
+  const effectiveSubject =
+    selectedSubject === 'all' || availableSubjects.includes(selectedSubject)
+      ? selectedSubject
+      : 'all';
+
+  const filteredEntries = useMemo(() => {
+    const base =
+      effectiveSubject === 'all'
+        ? categoryEntries
+        : categoryEntries.filter((e) => e.mapel === effectiveSubject);
+
+    return base.map((item, idx) => ({
+      ...item,
+      urutan: idx + 1,
+      labelPendek:
+        effectiveSubject === 'all'
+          ? `#${idx + 1} ${shortenMapel(item.mapel)}`
+          : `#${idx + 1} ${item.category}`,
+    }));
+  }, [categoryEntries, effectiveSubject]);
 
   const subjectChartData = useMemo(() => {
     const grouped = new Map<
@@ -293,25 +334,125 @@ export const StudentPerformanceStats: React.FC<Props> = ({
     };
   }, [filteredEntries]);
 
-  return (
-    <section className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-7 space-y-6">
-      {/* Header & Controls */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
-            <span>Rekap Evaluasi Siswa</span>
-            <span aria-hidden="true">·</span>
-            <span>CBT &amp; TKA</span>
-          </div>
-          <h2 className="text-lg sm:text-xl font-display font-black text-slate-900 mt-0.5 flex items-center gap-2">
-            <BarChart3 className="w-5 h-5 text-rose-600 shrink-0" />
-            <span>Statistik Performa Belajar</span>
-          </h2>
-        </div>
+  const categoryLabel =
+    categoryFilter === 'all' ? 'Semua Ujian (CBT & TKA)' : `Ujian ${categoryFilter}`;
+  const subjectLabel =
+    effectiveSubject === 'all' ? 'Semua Mata Pelajaran' : effectiveSubject;
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Segmented Filter Kategori */}
-          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
+  const tanggalCetakIndo = useMemo(
+    () =>
+      new Date().toLocaleDateString('id-ID', {
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric',
+      }),
+    []
+  );
+
+  const handleExportExcel = () => {
+    if (filteredEntries.length === 0) {
+      showToast?.('Belum ada data nilai ujian untuk diunduh ke Excel.', 'error');
+      return;
+    }
+
+    const schoolName = profile?.name || 'SDN Rawa Badak Utara 21';
+    const studentName = student?.nama || 'Siswa';
+    const safeName = studentName
+      .trim()
+      .replace(/[^a-zA-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+
+    const aoa: (string | number)[][] = [
+      ['REKAPITULASI STATISTIK PERFORMA UJIAN SISWA (CBT & TKA)'],
+      [schoolName],
+      [],
+      ['Nama Siswa', studentName, '', 'Tahun Pelajaran', activeYear],
+      ['NISN', student?.nisn || '-', '', 'Semester', activeSemester],
+      ['Kelas', student?.kelas || '-', '', 'Kategori Laporan', categoryLabel],
+      ['Mata Pelajaran', subjectLabel, '', 'Ketuntasan KKTP', `>= ${KKTP_THRESHOLD}`],
+      ['Tanggal Unduh', tanggalCetakIndo, '', '', ''],
+      [],
+      [
+        'Ringkasan Performa',
+        `Rata-Rata: ${metrics.avg}`,
+        `Nilai Tertinggi: ${metrics.highest}`,
+        `Ujian Selesai: ${metrics.total} (${metrics.cbtCount} CBT, ${metrics.tkaCount} TKA)`,
+        `Ketuntasan: ${metrics.passRate}% (${metrics.passedCount}/${metrics.total})`,
+      ],
+      [],
+      ['No', 'Kategori', 'Mata Pelajaran', 'Judul Ujian', 'Waktu Pengerjaan', 'Nilai', 'Keterangan'],
+      ...filteredEntries.map((row) => [
+        row.urutan,
+        row.category,
+        row.mapel,
+        row.judul,
+        row.waktu,
+        row.nilai,
+        row.status,
+      ]),
+    ];
+
+    const wb = XLSX.utils.book_new();
+    const wsDetail = XLSX.utils.aoa_to_sheet(aoa);
+    wsDetail['!cols'] = [
+      { wch: 6 },
+      { wch: 12 },
+      { wch: 24 },
+      { wch: 36 },
+      { wch: 22 },
+      { wch: 10 },
+      { wch: 16 },
+    ];
+    XLSX.utils.book_append_sheet(wb, wsDetail, 'Rekap Nilai Ujian');
+
+    if (subjectChartData.length > 0) {
+      const subjectRows = subjectChartData.map((item, idx) => ({
+        No: idx + 1,
+        'Mata Pelajaran': item.fullMapel,
+        'Rata-Rata CBT': typeof item.CBT === 'number' ? item.CBT : '-',
+        'Rata-Rata TKA': typeof item.TKA === 'number' ? item.TKA : '-',
+      }));
+      const wsSubject = XLSX.utils.json_to_sheet(subjectRows);
+      wsSubject['!cols'] = [{ wch: 6 }, { wch: 28 }, { wch: 16 }, { wch: 16 }];
+      XLSX.utils.book_append_sheet(wb, wsSubject, 'Ringkasan Per Mapel');
+    }
+
+    const fileName = `Rekap_Performa_${safeName || 'Siswa'}_${getLocalTodayStr()}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+    showToast?.('File Excel rekap nilai ujian berhasil diunduh.', 'success');
+  };
+
+  const handleExportPDF = () => {
+    if (filteredEntries.length === 0) {
+      showToast?.('Belum ada data nilai ujian untuk dicetak atau disimpan ke PDF.', 'error');
+      return;
+    }
+    showToast?.('Membuka dialog cetak — pilih "Simpan sebagai PDF" untuk menyimpan dokumen.', 'success');
+    setTimeout(() => {
+      window.print();
+    }, 100);
+  };
+
+  return (
+    <>
+      <section className="no-print bg-white rounded-3xl border border-slate-200 p-6 sm:p-7 space-y-6">
+        {/* Header & Controls */}
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+              <span>Rekap Evaluasi Siswa</span>
+              <span aria-hidden="true">·</span>
+              <span>CBT &amp; TKA</span>
+            </div>
+            <h2 className="text-lg sm:text-xl font-display font-black text-slate-900 mt-0.5 flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-rose-600 shrink-0" />
+              <span>Statistik Performa Belajar</span>
+            </h2>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Segmented Filter Kategori */}
+            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
             {(
               [
                 { id: 'all', label: 'Semua Ujian' },
@@ -332,6 +473,35 @@ export const StudentPerformanceStats: React.FC<Props> = ({
                 {opt.label}
               </button>
             ))}
+          </div>
+
+          {/* Dropdown Pilih Mata Pelajaran */}
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-xl border border-slate-200/80">
+            <BookOpen className="w-3.5 h-3.5 text-rose-600 shrink-0" aria-hidden="true" />
+            <label htmlFor="stats-subject-filter" className="text-xs font-bold text-slate-600 whitespace-nowrap">
+              Mapel:
+            </label>
+            <select
+              id="stats-subject-filter"
+              aria-label="Pilih Mata Pelajaran"
+              value={effectiveSubject}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedSubject(val);
+                if (val !== 'all') {
+                  setChartView('trend');
+                }
+              }}
+              disabled={availableSubjects.length === 0}
+              className="bg-transparent text-xs font-bold text-slate-900 focus:outline-none cursor-pointer max-w-[170px] truncate disabled:opacity-50"
+            >
+              <option value="all">Semua Mata Pelajaran</option>
+              {availableSubjects.map((mapel) => (
+                <option key={mapel} value={mapel}>
+                  {mapel}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Segmented Mode Grafik */}
@@ -357,6 +527,28 @@ export const StudentPerformanceStats: React.FC<Props> = ({
               }`}
             >
               Per Mapel
+            </button>
+          </div>
+
+          {/* Tombol Unduh Laporan untuk Orang Tua */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              title="Unduh rekap nilai ujian dalam format Excel (.xlsx)"
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-xs"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+              <span>Unduh Excel</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleExportPDF}
+              title="Cetak atau simpan rekap nilai ujian sebagai dokumen PDF"
+              className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-xs"
+            >
+              <Printer className="w-3.5 h-3.5 shrink-0" />
+              <span>Unduh PDF</span>
             </button>
           </div>
         </div>
@@ -453,8 +645,12 @@ export const StudentPerformanceStats: React.FC<Props> = ({
             <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
               <div className="text-xs font-bold text-slate-700">
                 {chartView === 'trend'
-                  ? 'Grafik Tren Perkembangan Nilai (Skala 0–100)'
-                  : 'Rata-Rata Nilai per Mata Pelajaran (CBT vs TKA)'}
+                  ? `Grafik Tren Perkembangan Nilai${
+                      effectiveSubject !== 'all' ? ` — ${effectiveSubject}` : ''
+                    } (Skala 0–100)`
+                  : `Rata-Rata Nilai per Mata Pelajaran${
+                      effectiveSubject !== 'all' ? ` — ${effectiveSubject}` : ''
+                    } (CBT vs TKA)`}
               </div>
               <div className="flex items-center gap-4 text-xs text-slate-500">
                 <span className="inline-flex items-center gap-1.5">
@@ -678,5 +874,218 @@ export const StudentPerformanceStats: React.FC<Props> = ({
         </div>
       )}
     </section>
+
+      {/* ================================================================= */}
+      {/* PRINTABLE A4 REPORT FOR PARENTS (Unduh PDF / Cetak Laporan)       */}
+      {/* ================================================================= */}
+      <div className="hidden print-only a4-rapor-sheet text-slate-900">
+        {/* Kop Surat Resmi Sekolah */}
+        <div className="flex items-center justify-between border-b-4 border-double border-slate-900 pb-3 mb-4">
+          {profile?.logoKemendikbudUrl ? (
+            <img
+              src={profile.logoKemendikbudUrl}
+              alt="Logo Dinas"
+              className="w-16 h-16 object-contain"
+            />
+          ) : (
+            <div className="w-16 h-16" />
+          )}
+          <div className="text-center flex-1 px-4">
+            <div className="text-[11px] font-bold uppercase tracking-wide">
+              Pemerintah Provinsi DKI Jakarta · Suku Dinas Pendidikan Jakarta Utara
+            </div>
+            <div className="font-display font-black text-lg uppercase">
+              {profile?.name || 'SDN Rawa Badak Utara 21'}
+            </div>
+            <div className="text-xs">
+              {profile?.alamat || 'Jl. Rawa Badak Utara'} · {profile?.kota || 'Jakarta Utara'}
+              {profile?.npsn ? ` · NPSN: ${profile.npsn}` : ''}
+            </div>
+          </div>
+          {profile?.logoSekolahUrl ? (
+            <img
+              src={profile.logoSekolahUrl}
+              alt="Logo Sekolah"
+              className="w-16 h-16 object-contain"
+            />
+          ) : (
+            <div className="w-16 h-16" />
+          )}
+        </div>
+
+        {/* Judul Laporan */}
+        <div className="text-center mb-4">
+          <h2 className="font-display font-black text-base uppercase underline">
+            LAPORAN REKAPITULASI STATISTIK PERFORMA UJIAN SISWA
+          </h2>
+          <p className="text-xs mt-1">
+            Salinan Progres Belajar untuk Orang Tua / Wali Murid · Kategori:{' '}
+            <strong>{categoryLabel}</strong> · Mata Pelajaran: <strong>{subjectLabel}</strong>
+          </p>
+        </div>
+
+        {/* Identitas Siswa */}
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs border border-slate-800 rounded p-3 mb-4 bg-slate-50">
+          <div className="flex justify-between gap-2">
+            <span className="text-slate-600">Nama Siswa</span>
+            <span className="font-bold text-right">{student?.nama || '-'}</span>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span className="text-slate-600">Tahun Pelajaran</span>
+            <span className="font-bold text-right">
+              {activeYear} ({activeSemester})
+            </span>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span className="text-slate-600">NISN</span>
+            <span className="font-mono font-bold text-right">{student?.nisn || '-'}</span>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span className="text-slate-600">Kelas</span>
+            <span className="font-bold text-right">{student?.kelas || '-'}</span>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span className="text-slate-600">Batas Ketuntasan (KKTP)</span>
+            <span className="font-bold text-right tabular-nums">{KKTP_THRESHOLD}</span>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span className="text-slate-600">Tanggal Laporan</span>
+            <span className="font-bold text-right">{tanggalCetakIndo}</span>
+          </div>
+        </div>
+
+        {/* Ringkasan Statistik */}
+        <div className="grid grid-cols-4 border border-slate-800 divide-x divide-slate-800 mb-4 text-center">
+          <div className="p-2.5">
+            <div className="text-[10px] uppercase font-bold text-slate-600">Rata-Rata Nilai</div>
+            <div className="text-lg font-black tabular-nums mt-0.5">{metrics.avg}</div>
+          </div>
+          <div className="p-2.5">
+            <div className="text-[10px] uppercase font-bold text-slate-600">Nilai Tertinggi</div>
+            <div className="text-lg font-black tabular-nums mt-0.5">{metrics.highest}</div>
+          </div>
+          <div className="p-2.5">
+            <div className="text-[10px] uppercase font-bold text-slate-600">Ujian Selesai</div>
+            <div className="text-lg font-black tabular-nums mt-0.5">
+              {metrics.total}{' '}
+              <span className="text-[10px] font-semibold">
+                ({metrics.cbtCount} CBT · {metrics.tkaCount} TKA)
+              </span>
+            </div>
+          </div>
+          <div className="p-2.5">
+            <div className="text-[10px] uppercase font-bold text-slate-600">Ketuntasan</div>
+            <div className="text-lg font-black tabular-nums mt-0.5">
+              {metrics.passRate}%{' '}
+              <span className="text-[10px] font-semibold">
+                ({metrics.passedCount}/{metrics.total})
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Ringkasan Rata-Rata per Mata Pelajaran */}
+        {subjectChartData.length > 0 && (
+          <div className="mb-4">
+            <div className="text-xs font-bold uppercase mb-1.5">
+              A. Ringkasan Rata-Rata Nilai per Mata Pelajaran
+            </div>
+            <table className="w-full border-collapse border border-slate-800 text-xs">
+              <thead>
+                <tr className="bg-slate-100">
+                  <th className="border border-slate-800 py-1.5 px-2 w-10 text-center">No</th>
+                  <th className="border border-slate-800 py-1.5 px-3 text-left">Mata Pelajaran</th>
+                  <th className="border border-slate-800 py-1.5 px-3 text-center w-28">
+                    Rata-Rata CBT
+                  </th>
+                  <th className="border border-slate-800 py-1.5 px-3 text-center w-28">
+                    Rata-Rata TKA
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {subjectChartData.map((s, idx) => (
+                  <tr key={s.fullMapel}>
+                    <td className="border border-slate-800 py-1 px-2 text-center tabular-nums">
+                      {idx + 1}
+                    </td>
+                    <td className="border border-slate-800 py-1 px-3 font-semibold">{s.fullMapel}</td>
+                    <td className="border border-slate-800 py-1 px-3 text-center font-mono tabular-nums">
+                      {typeof s.CBT === 'number' ? s.CBT : '-'}
+                    </td>
+                    <td className="border border-slate-800 py-1 px-3 text-center font-mono tabular-nums">
+                      {typeof s.TKA === 'number' ? s.TKA : '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Tabel Riwayat Nilai Ujian */}
+        <div className="mb-6">
+          <div className="text-xs font-bold uppercase mb-1.5">
+            B. Rincian Riwayat Nilai Ujian ({filteredEntries.length} Sesi)
+          </div>
+          <table className="w-full border-collapse border border-slate-800 text-xs">
+            <thead>
+              <tr className="bg-slate-100">
+                <th className="border border-slate-800 py-1.5 px-2 w-10 text-center">No</th>
+                <th className="border border-slate-800 py-1.5 px-2 w-16 text-center">Jenis</th>
+                <th className="border border-slate-800 py-1.5 px-3 text-left">Mata Pelajaran</th>
+                <th className="border border-slate-800 py-1.5 px-3 text-left">Judul Ujian</th>
+                <th className="border border-slate-800 py-1.5 px-2 text-center">Waktu</th>
+                <th className="border border-slate-800 py-1.5 px-2 w-14 text-center">Nilai</th>
+                <th className="border border-slate-800 py-1.5 px-2 w-24 text-center">Keterangan</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredEntries.map((row) => (
+                <tr key={`print_${row.key}`}>
+                  <td className="border border-slate-800 py-1 px-2 text-center tabular-nums">
+                    {row.urutan}
+                  </td>
+                  <td className="border border-slate-800 py-1 px-2 text-center font-bold">
+                    {row.category}
+                  </td>
+                  <td className="border border-slate-800 py-1 px-3">{row.mapel}</td>
+                  <td className="border border-slate-800 py-1 px-3 font-semibold">{row.judul}</td>
+                  <td className="border border-slate-800 py-1 px-2 text-center whitespace-nowrap">
+                    {row.waktu}
+                  </td>
+                  <td className="border border-slate-800 py-1 px-2 text-center font-mono font-bold tabular-nums">
+                    {row.nilai}
+                  </td>
+                  <td className="border border-slate-800 py-1 px-2 text-center font-semibold">
+                    {row.status}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Tanda Tangan Orang Tua & Kepala Sekolah */}
+        <div className="grid grid-cols-2 gap-8 text-xs mt-8">
+          <div className="text-center">
+            <div>Mengetahui,</div>
+            <div className="font-bold">Orang Tua / Wali Murid</div>
+            <div className="h-16" />
+            <div className="font-bold sig-name-line min-w-[160px]">&nbsp;</div>
+            <div className="text-[11px] text-slate-600">Tanda Tangan &amp; Nama Jelas</div>
+          </div>
+          <div className="text-center">
+            <div>Jakarta, {tanggalCetakIndo}</div>
+            <div className="font-bold">Kepala {profile?.name || 'SDN Rawa Badak Utara 21'}</div>
+            <div className="h-16" />
+            <div className="font-bold sig-name-line">
+              {profile?.kepalaSekolah?.nama || 'Kepala Sekolah'}
+            </div>
+            <div>NIP. {profile?.kepalaSekolah?.nip || '-'}</div>
+          </div>
+        </div>
+      </div>
+    </>
   );
 };
