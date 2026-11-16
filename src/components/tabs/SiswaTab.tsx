@@ -27,6 +27,7 @@ import {
   generateAccountUsername,
 } from '../../utils/excel';
 import { renderBarcodeToCanvas } from '../../utils/barcode';
+import { BarcodePrintModal } from '../BarcodePrintModal';
 import { CLASSES_LIST, ACADEMIC_YEARS } from '../../utils/storage';
 import {
   saveStudentsToFirestoreBatch,
@@ -95,6 +96,7 @@ export const SiswaTab: React.FC<Props> = ({
   const [deletingStudent, setDeletingStudent] = useState<Student | null>(null);
   const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState<boolean>(false);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [isBatchPrintOpen, setIsBatchPrintOpen] = useState<boolean>(false);
 
   // Sinkronkan filter dengan activeClass jika berubah dari global header
   useEffect(() => {
@@ -1329,23 +1331,42 @@ export const SiswaTab: React.FC<Props> = ({
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-display font-extrabold text-lg text-slate-800 flex items-center gap-2">
-            <QrCode className="w-5 h-5 text-rose-600" /> Kartu Barcode Absensi Siswa ({activeClass})
+            <QrCode className="w-5 h-5 text-rose-600" /> Kartu Barcode Absensi Siswa ({selectedFilterClass === 'SEMUA' ? 'Semua Kelas' : selectedFilterClass})
           </h3>
           <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={selectedFilterClass}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedFilterClass(val);
+                if (val !== 'SEMUA' && onSelectClass) {
+                  onSelectClass(val);
+                }
+              }}
+              className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800"
+              title="Pilih kelas untuk tampilan & cetak kartu"
+            >
+              {CLASSES_LIST.map((c) => (
+                <option key={c} value={c}>
+                  Kelas {c} ({classStudentCounts[c] || 0})
+                </option>
+              ))}
+              <option value="SEMUA">Semua Kelas ({students.length})</option>
+            </select>
             <a
-              href={`/kartu-pelajar.html?sekolah=${encodeURIComponent(profile.name)}&tahun=${encodeURIComponent(activeYear)}&kelas=${encodeURIComponent(activeClass)}`}
+              href={`/kartu-pelajar.html?sekolah=${encodeURIComponent(profile.name)}&tahun=${encodeURIComponent(activeYear)}&kelas=${encodeURIComponent(selectedFilterClass === 'SEMUA' ? activeClass : selectedFilterClass)}`}
               target="_blank"
               rel="noopener noreferrer"
               className="bg-sky-600 hover:bg-sky-700 text-white font-display font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5"
             >
-              <Printer className="w-4 h-4" /> Cetak Kartu Pelajar (KTP 85,6×53,98mm)
+              <Printer className="w-4 h-4" /> Cetak Satuan (KTP 85,6×53,98mm)
             </a>
             <button
               type="button"
-              onClick={() => window.print()}
-              className="bg-amber-400 hover:bg-amber-500 text-slate-900 font-display font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
+              onClick={() => setIsBatchPrintOpen(true)}
+              className="bg-amber-400 hover:bg-amber-500 text-slate-900 font-display font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
             >
-              <Printer className="w-4 h-4" /> Cetak Kartu Barcode
+              <Printer className="w-4 h-4" /> Cetak Satu Lembar Per Kelas
             </button>
           </div>
         </div>
@@ -1437,6 +1458,16 @@ export const SiswaTab: React.FC<Props> = ({
           ))}
         </div>
       </div>
+
+      {/* Modal Cetak Massal Kartu Barcode Satu Lembar Per Kelas */}
+      <BarcodePrintModal
+        isOpen={isBatchPrintOpen}
+        onClose={() => setIsBatchPrintOpen(false)}
+        students={students}
+        profile={profile}
+        initialClass={selectedFilterClass === 'SEMUA' ? activeClass : selectedFilterClass}
+        activeYear={activeYear}
+      />
     </section>
   );
 };
