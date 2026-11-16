@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Laptop,
   Sparkles,
@@ -29,6 +29,8 @@ import {
   Smile,
   ThumbsUp,
   Save,
+  PauseCircle,
+  Trash2,
 } from 'lucide-react';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../utils/firebase';
@@ -51,6 +53,17 @@ import {
   getActiveFilters,
   CLASSES_LIST,
 } from '../utils/storage';
+import {
+  StudentExamDraft,
+  buildQuestionOrderSnapshot,
+  restoreQuestionsFromSnapshot,
+  saveStudentExamDraft,
+  markStudentExamSessionPaused,
+  getStudentExamDraftById,
+  getLastActiveStudentExamDraft,
+  clearStudentExamDraft,
+  countAnsweredQuestions,
+} from '../utils/examDraft';
 import { TKA_JENIS_LIST, TKA_MAPEL_LIST } from '../data/defaultData';
 import { evaluateQuestionScore, normalizeString } from '../utils/answerChecker';
 import { getLocalTodayStr } from '../utils/dateUtils';
@@ -164,6 +177,32 @@ export const StudentDashboard: React.FC<Props> = ({
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [examResult, setExamResult] = useState<{ score: number; maxScore: number } | null>(null);
+  const [resumedNotice, setResumedNotice] = useState<string | null>(null);
+  const [draftRevisionTick, setDraftRevisionTick] = useState<number>(0);
+
+  const autoResumedModeRef = useRef<string>('');
+  const handleFinishExamRef = useRef<(isAutoSubmit?: boolean) => void>(() => {});
+  const latestExamStateRef = useRef<{
+    studentId: string;
+    exam: ExamOptionItem | null;
+    selectedPaketFilter: string;
+    selectedMapelFilter: string;
+    currentQIndex: number;
+    answers: Record<string, any>;
+    timeLeft: number;
+    runningSoalList: CBTQuestion[];
+    isExamRunning: boolean;
+  }>({
+    studentId: '',
+    exam: null,
+    selectedPaketFilter: '',
+    selectedMapelFilter: '',
+    currentQIndex: 0,
+    answers: {},
+    timeLeft: 0,
+    runningSoalList: [],
+    isExamRunning: false,
+  });
 
   // Cari data siswa saat ini
   const currentStudent = useMemo(() => {
@@ -822,6 +861,164 @@ export const StudentDashboard: React.FC<Props> = ({
     return evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, q.bobot);
   };
 
+  // Simpan referensi state ujian terbaru agar aman saat logout/unmount/beforeunload
+  latestExamStateRef.current = {
+    studentId: currentStudent?.id || '',
+    exam: currentExam,
+    selectedPaketFilter,
+    selectedMapelFilter,
+    currentQIndex,
+    answers,
+    timeLeft,
+    runningSoalList: activeExamSoalList,
+    isExamRunning,
+  };
+
+  // Fungsi memulihkan draft ujian ke posisi soal & jawaban terakhir
+  const resumeFromDraft = (draft: StudentExamDraft, examObj: ExamOptionItem) => {
+    const restoredList = restoreQuestionsFromSnapshot(examObj.soalList, draft.runningQuestionOrder);
+    const safeIndex = Math.min(Math.max(0, draft.currentQIndex || 0), Math.max(0, restoredList.length - 1));
+    const safeAnswers = draft.answers || {};
+    const safeTimeLeft = draft.timeLeft > 0 ? draft.timeLeft : examObj.durasiMenit * 60;
+    const answeredCount = countAnsweredQuestions(safeAnswers);
+
+    setViewMode(examObj.category);
+    setSelectedPaketFilter(draft.selectedPaketFilter || examObj.paketName);
+    setSelectedMapelFilter(draft.selectedMapelFilter || examObj.mapel);
+    setSelectedExamId(examObj.id);
+    setRunningSoalList(restoredList);
+    setAnswers(safeAnswers);
+    setCurrentQIndex(safeIndex);
+    setTimeLeft(safeTimeLeft);
+    setExamResult(null);
+    setIsExamRunning(true);
+
+    saveStudentExamDraft(
+      {
+        ...draft,
+        currentQIndex: safeIndex,
+        timeLeft: safeTimeLeft,
+        isActiveSession: true,
+        runningQuestionOrder: buildQuestionOrderSnapshot(restoredList),
+      },
+      { immediateSync: true }
+    );
+
+    const noticeMsg = `Melanjutkan terakhir dikerjakan: Soal #${safeIndex + 1} (${answeredCount} jawaban tersimpan otomatis dipulihkan).`;
+    setResumedNotice(noticeMsg);
+    showToast(`Melanjutkan "${examObj.judul}" pada Soal #${safeIndex + 1}!`, 'success');
+  };
+
+  // Auto-save jawaban, nomor soal terakhir, & urutan soal setiap kali berubah saat ujian berlangsung
+  useEffect(() => {
+    if (!isExamRunning || !currentExam || !currentStudent?.id) return;
+    const soalToSave = activeExamSoalList.length > 0 ? activeExamSoalList : currentExam.soalList;
+    saveStudentExamDraft(
+      {
+        studentId: currentStudent.id,
+        examId: currentExam.id,
+        category: currentExam.category,
+        judul: currentExam.judul,
+        mapel: currentExam.mapel,
+        paketName: currentExam.paketName,
+        selectedPaketFilter,
+        selectedMapelFilter,
+        currentQIndex,
+        answers,
+        timeLeft: latestExamStateRef.current.timeLeft || currentExam.durasiMenit * 60,
+        totalSeconds: currentExam.durasiMenit * 60,
+        runningQuestionOrder: buildQuestionOrderSnapshot(soalToSave),
+        isActiveSession: true,
+        updatedAt: new Date().toISOString(),
+      },
+      { immediateSync: true }
+    );
+  }, [isExamRunning, currentExam?.id, currentStudent?.id, currentQIndex, answers, runningSoalList]);
+
+  // Auto-save sisa waktu ke localStorage tiap detik (sinkron cloud tiap ~12 detik agar ringan)
+  useEffect(() => {
+    if (!isExamRunning || !currentExam || !currentStudent?.id || timeLeft <= 0) return;
+    const soalToSave = activeExamSoalList.length > 0 ? activeExamSoalList : currentExam.soalList;
+    saveStudentExamDraft(
+      {
+        studentId: currentStudent.id,
+        examId: currentExam.id,
+        category: currentExam.category,
+        judul: currentExam.judul,
+        mapel: currentExam.mapel,
+        paketName: currentExam.paketName,
+        selectedPaketFilter,
+        selectedMapelFilter,
+        currentQIndex,
+        answers,
+        timeLeft,
+        totalSeconds: currentExam.durasiMenit * 60,
+        runningQuestionOrder: buildQuestionOrderSnapshot(soalToSave),
+        isActiveSession: true,
+        updatedAt: new Date().toISOString(),
+      },
+      { immediateSync: false }
+    );
+  }, [timeLeft]);
+
+  // Flush draft otomatis saat siswa klik Logout / unmount / menutup tab browser
+  useEffect(() => {
+    const flushActiveDraft = () => {
+      const snap = latestExamStateRef.current;
+      if (!snap.isExamRunning || !snap.exam || !snap.studentId) return;
+      const soalToSave = snap.runningSoalList.length > 0 ? snap.runningSoalList : snap.exam.soalList;
+      saveStudentExamDraft(
+        {
+          studentId: snap.studentId,
+          examId: snap.exam.id,
+          category: snap.exam.category,
+          judul: snap.exam.judul,
+          mapel: snap.exam.mapel,
+          paketName: snap.exam.paketName,
+          selectedPaketFilter: snap.selectedPaketFilter,
+          selectedMapelFilter: snap.selectedMapelFilter,
+          currentQIndex: snap.currentQIndex,
+          answers: snap.answers,
+          timeLeft: snap.timeLeft,
+          totalSeconds: snap.exam.durasiMenit * 60,
+          runningQuestionOrder: buildQuestionOrderSnapshot(soalToSave),
+          isActiveSession: true,
+          updatedAt: new Date().toISOString(),
+        },
+        { immediateSync: true }
+      );
+    };
+
+    window.addEventListener('beforeunload', flushActiveDraft);
+    window.addEventListener('pagehide', flushActiveDraft);
+    return () => {
+      flushActiveDraft();
+      window.removeEventListener('beforeunload', flushActiveDraft);
+      window.removeEventListener('pagehide', flushActiveDraft);
+    };
+  }, []);
+
+  // Auto-resume otomatis ketika siswa masuk kembali ke menu soal CBT / TKA setelah logout/reload
+  useEffect(() => {
+    if (viewMode === 'home' || viewMode === 'kebiasaan') {
+      autoResumedModeRef.current = '';
+      return;
+    }
+    if (isExamRunning || examResult || !currentStudent?.id) return;
+
+    const modeKey = `${currentStudent.id}:${viewMode}`;
+    if (autoResumedModeRef.current === modeKey) return;
+
+    const activeDraft = getLastActiveStudentExamDraft(currentStudent.id, viewMode);
+    if (!activeDraft || activeDraft.timeLeft <= 0) return;
+
+    const matchingExam = currentAvailableExams.find((e) => e.id === activeDraft.examId);
+    if (!matchingExam || matchingExam.soalList.length === 0) return;
+
+    autoResumedModeRef.current = modeKey;
+    resumeFromDraft(activeDraft, matchingExam);
+  }, [viewMode, isExamRunning, examResult, currentStudent?.id, currentAvailableExams]);
+
   // Timer interval saat ujian berlangsung
   useEffect(() => {
     let timer: any;
@@ -830,7 +1027,7 @@ export const StudentDashboard: React.FC<Props> = ({
         setTimeLeft((prev) => {
           if (prev <= 1) {
             clearInterval(timer);
-            handleFinishExam(true); // Auto-submit ketika waktu habis!
+            handleFinishExamRef.current(true); // Auto-submit ketika waktu habis!
             return 0;
           }
           return prev - 1;
@@ -841,7 +1038,7 @@ export const StudentDashboard: React.FC<Props> = ({
   }, [isExamRunning, timeLeft]);
 
   // Handler mulai ujian (mengunci dropdown dan memunculkan soal)
-  const handleStartExam = () => {
+  const handleStartExam = (forceFresh: boolean = false) => {
     if (!currentExam) {
       showToast('Paket soal belum dipilih atau belum diaktifkan oleh guru.', 'error');
       return;
@@ -849,6 +1046,19 @@ export const StudentDashboard: React.FC<Props> = ({
     if (currentExam.soalList.length === 0) {
       showToast('Belum ada butir soal pada paket yang dipilih.', 'error');
       return;
+    }
+
+    if (!forceFresh && currentStudent?.id) {
+      const existingDraft = getStudentExamDraftById(currentStudent.id, currentExam.id);
+      if (existingDraft && existingDraft.timeLeft > 0) {
+        resumeFromDraft(existingDraft, currentExam);
+        return;
+      }
+    }
+
+    if (forceFresh && currentStudent?.id) {
+      clearStudentExamDraft(currentStudent.id, currentExam.id);
+      setDraftRevisionTick((t) => t + 1);
     }
 
     const acakSoal =
@@ -876,13 +1086,39 @@ export const StudentDashboard: React.FC<Props> = ({
       });
     }
 
+    const initialSeconds = currentExam.durasiMenit * 60;
     setRunningSoalList(preparedList);
-    setTimeLeft(currentExam.durasiMenit * 60);
+    setTimeLeft(initialSeconds);
     setCurrentQIndex(0);
     setAnswers({});
     setExamResult(null);
+    setResumedNotice(null);
     setIsExamRunning(true);
-    showToast(`Ujian "${currentExam.judul}" dimulai! Waktu Anda: ${currentExam.durasiMenit} Menit.`, 'success');
+
+    if (currentStudent?.id) {
+      saveStudentExamDraft(
+        {
+          studentId: currentStudent.id,
+          examId: currentExam.id,
+          category: currentExam.category,
+          judul: currentExam.judul,
+          mapel: currentExam.mapel,
+          paketName: currentExam.paketName,
+          selectedPaketFilter: selectedPaketFilter || currentExam.paketName,
+          selectedMapelFilter: selectedMapelFilter || currentExam.mapel,
+          currentQIndex: 0,
+          answers: {},
+          timeLeft: initialSeconds,
+          totalSeconds: initialSeconds,
+          runningQuestionOrder: buildQuestionOrderSnapshot(preparedList),
+          isActiveSession: true,
+          updatedAt: new Date().toISOString(),
+        },
+        { immediateSync: true }
+      );
+    }
+
+    showToast(`Ujian "${currentExam.judul}" dimulai! Jawaban tersimpan otomatis.`, 'success');
   };
 
   // Handler submit ujian (manual atau auto-submit ketika timer 0)
@@ -903,6 +1139,11 @@ export const StudentDashboard: React.FC<Props> = ({
     const finalGrade = max > 0 ? Math.round((earned / max) * 100) : 100;
     setExamResult({ score: finalGrade, maxScore: 100 });
     setIsExamRunning(false);
+    setResumedNotice(null);
+    if (currentStudent?.id) {
+      clearStudentExamDraft(currentStudent.id, currentExam.id);
+      setDraftRevisionTick((t) => t + 1);
+    }
 
     // Rekam ke CBT Results di storage (beserta metadata ujian untuk Statistik Performa)
     const storedRes = getStoredCBTResults();
@@ -1056,12 +1297,24 @@ export const StudentDashboard: React.FC<Props> = ({
       );
     }
   };
+  handleFinishExamRef.current = handleFinishExam;
 
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
+
+  const pendingHomeDraft = useMemo(() => {
+    void draftRevisionTick;
+    if (!currentStudent?.id) return null;
+    const draft = getLastActiveStudentExamDraft(currentStudent.id);
+    if (!draft || draft.timeLeft <= 0) return null;
+    const catalog = draft.category === 'tka' ? tkaExamList : cbtExamList;
+    const matchedExam = catalog.find((e) => e.id === draft.examId);
+    if (!matchedExam || matchedExam.soalList.length === 0) return null;
+    return { draft, exam: matchedExam };
+  }, [currentStudent?.id, cbtExamList, tkaExamList, draftRevisionTick, viewMode]);
 
   // =========================================================================
   // VIEW 1: DASHBOARD CARDS UTAMA SISWA (4 MENU KARTU GRID)
@@ -1109,6 +1362,58 @@ export const StudentDashboard: React.FC<Props> = ({
             </div>
           </div>
         </div>
+
+        {/* Banner Lanjutkan Ujian Terakhir (Muncul jika siswa sempat logout/keluar saat mengerjakan soal) */}
+        {pendingHomeDraft && (
+          <div className="no-print p-5 rounded-3xl bg-gradient-to-r from-amber-50 via-white to-emerald-50 border-2 border-amber-300 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <Save className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-black uppercase bg-amber-100 text-amber-800 px-2.5 py-0.5 rounded-full border border-amber-300">
+                    Jawaban Tersimpan Otomatis
+                  </span>
+                  <span className="text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full">
+                    {pendingHomeDraft.exam.category === 'tka' ? 'Ujian TKA' : 'Ujian CBT'}
+                  </span>
+                </div>
+                <h3 className="font-display font-black text-base text-slate-800 mt-1">
+                  Lanjutkan Terakhir Dikerjakan: {pendingHomeDraft.exam.judul}
+                </h3>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Posisi terakhir: <strong className="text-rose-700">Soal #{pendingHomeDraft.draft.currentQIndex + 1}</strong> dari {pendingHomeDraft.exam.soalList.length} soal •{' '}
+                  <strong className="text-emerald-700">{countAnsweredQuestions(pendingHomeDraft.draft.answers)} jawaban tersimpan</strong> • Sisa waktu:{' '}
+                  <strong className="font-mono text-slate-800">{formatTimer(pendingHomeDraft.draft.timeLeft)}</strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  clearStudentExamDraft(currentStudent.id, pendingHomeDraft.exam.id);
+                  setDraftRevisionTick((t) => t + 1);
+                  showToast('Draft pengerjaan ujian dihapus.', 'success');
+                }}
+                className="px-3.5 py-2.5 rounded-2xl bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 font-display font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Hapus Draft</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => resumeFromDraft(pendingHomeDraft.draft, pendingHomeDraft.exam)}
+                className="px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black text-xs shadow-md shadow-emerald-600/20 flex items-center gap-2 transition cursor-pointer"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                <span>Lanjutkan Soal #{pendingHomeDraft.draft.currentQIndex + 1}</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Statistik Performa Rekap Nilai Ujian CBT & TKA (Recharts + Ekspor PDF/Excel) */}
         <StudentPerformanceStats
@@ -2112,21 +2417,64 @@ export const StudentDashboard: React.FC<Props> = ({
               💡 <strong>Petunjuk Pengerjaan:</strong> Pastikan Anda membaca setiap butir soal dengan teliti. Ketika tombol "Mulai Ujian" ditekan, timer hitungan mundur akan langsung berjalan. Jika waktu habis, seluruh jawaban yang telah dipilih akan otomatis tersimpan dan terkirim ke sistem sekolah.
             </div>
 
-            {/* Tombol Mulai Ujian */}
-            <div className="flex justify-end pt-2">
-              <button
-                type="button"
-                onClick={handleStartExam}
-                className={`font-display font-black text-white px-8 py-3.5 rounded-2xl text-sm shadow-lg flex items-center gap-2 cursor-pointer transition transform active:scale-95 ${
-                  viewMode === 'tka'
-                    ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-500/25'
-                    : 'bg-rose-600 hover:bg-rose-700 shadow-rose-500/25'
-                }`}
-              >
-                <Play className="w-5 h-5 fill-current" />
-                <span>Mulai Ujian Sekarang</span>
-              </button>
-            </div>
+            {/* Tombol Mulai Ujian / Lanjutkan Draft Tersimpan */}
+            {(() => {
+              const savedDraft = currentStudent?.id
+                ? getStudentExamDraftById(currentStudent.id, currentExam.id)
+                : null;
+              const hasValidDraft = Boolean(savedDraft && savedDraft.timeLeft > 0);
+              const savedAnsCount = hasValidDraft ? countAnsweredQuestions(savedDraft!.answers) : 0;
+
+              return (
+                <div className="space-y-3 pt-2">
+                  {hasValidDraft && savedDraft && (
+                    <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-900">
+                      <div>
+                        <strong className="font-black">✓ Progres Pengerjaan Sebelumnya Tersimpan:</strong>{' '}
+                        Terakhir pada <strong>Soal #{savedDraft.currentQIndex + 1}</strong> • {savedAnsCount} dari {currentExam.soalList.length} soal terjawab • Sisa waktu{' '}
+                        <span className="font-mono font-black">{formatTimer(savedDraft.timeLeft)}</span>.
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap justify-end gap-2.5">
+                    {hasValidDraft && savedDraft ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleStartExam(true)}
+                          className="font-display font-extrabold bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 px-5 py-3 rounded-2xl text-xs flex items-center gap-2 cursor-pointer transition"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          <span>Mulai Ulang dari Awal</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => resumeFromDraft(savedDraft, currentExam)}
+                          className="font-display font-black text-white bg-emerald-600 hover:bg-emerald-700 px-8 py-3.5 rounded-2xl text-sm shadow-lg shadow-emerald-600/25 flex items-center gap-2 cursor-pointer transition transform active:scale-95"
+                        >
+                          <Play className="w-5 h-5 fill-current" />
+                          <span>Lanjutkan Soal #{savedDraft.currentQIndex + 1}</span>
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleStartExam(false)}
+                        className={`font-display font-black text-white px-8 py-3.5 rounded-2xl text-sm shadow-lg flex items-center gap-2 cursor-pointer transition transform active:scale-95 ${
+                          viewMode === 'tka'
+                            ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-500/25'
+                            : 'bg-rose-600 hover:bg-rose-700 shadow-rose-500/25'
+                        }`}
+                      >
+                        <Play className="w-5 h-5 fill-current" />
+                        <span>Mulai Ujian Sekarang</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -2136,16 +2484,21 @@ export const StudentDashboard: React.FC<Props> = ({
             {/* Header Atas: Sticky Countdown Timer Bar */}
             <div className="sticky top-16 z-30 bg-slate-900 text-white p-4 rounded-3xl shadow-xl flex flex-wrap items-center justify-between gap-3 border-2 border-yellow-400">
               <div>
-                <span className="text-[10px] font-black uppercase text-yellow-300 tracking-wider">
-                  Sedang Mengerjakan: {currentExam.mapel}
-                </span>
-                <h4 className="font-display font-black text-sm text-white truncate max-w-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-black uppercase text-yellow-300 tracking-wider">
+                    Sedang Mengerjakan: {currentExam.mapel}
+                  </span>
+                  <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3" /> Tersimpan Otomatis ({countAnsweredQuestions(answers)}/{activeExamSoalList.length})
+                  </span>
+                </div>
+                <h4 className="font-display font-black text-sm text-white truncate max-w-sm mt-0.5">
                   {currentExam.judul}
                 </h4>
               </div>
 
-              {/* Digital Countdown Timer */}
-              <div className="flex items-center gap-3">
+              {/* Digital Countdown Timer & Jeda */}
+              <div className="flex flex-wrap items-center gap-2.5">
                 <div className="bg-black/60 px-4 py-2 rounded-2xl border border-yellow-400/80 flex items-center gap-2 font-mono">
                   <Clock className="w-5 h-5 text-yellow-400 animate-pulse" />
                   <div>
@@ -2160,14 +2513,52 @@ export const StudentDashboard: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div className="text-right hidden sm:block">
+                <div className="text-right hidden sm:block px-1">
                   <span className="text-[10px] font-bold text-slate-300 block">Nomor Soal</span>
                   <span className="text-xs font-black text-white">
                     {currentQIndex + 1} dari {activeExamSoalList.length}
                   </span>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (currentStudent?.id) {
+                      markStudentExamSessionPaused(currentStudent.id, currentExam.id);
+                      setDraftRevisionTick((t) => t + 1);
+                    }
+                    setIsExamRunning(false);
+                    setResumedNotice(null);
+                    showToast(
+                      `Jawaban & posisi Soal #${currentQIndex + 1} tersimpan otomatis. Anda dapat melanjutkannya lagi nanti.`,
+                      'success'
+                    );
+                  }}
+                  className="px-3.5 py-2 rounded-2xl bg-white/10 hover:bg-white/20 text-white border border-white/25 font-display font-extrabold text-[11px] flex items-center gap-1.5 transition cursor-pointer"
+                  title="Simpan progres & keluar sementara dari ruang ujian"
+                >
+                  <PauseCircle className="w-4 h-4 text-yellow-300" />
+                  <span>Simpan &amp; Jeda</span>
+                </button>
               </div>
             </div>
+
+            {/* Notice saat berhasil dipulihkan setelah logout / masuk kembali */}
+            {resumedNotice && (
+              <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{resumedNotice}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setResumedNotice(null)}
+                  className="text-emerald-700 hover:text-emerald-950 font-black px-2 py-0.5 rounded-lg cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
 
             {/* Butir Soal & Pilihan Jawaban */}
             {(() => {
@@ -2400,6 +2791,55 @@ export const StudentDashboard: React.FC<Props> = ({
                 </div>
               );
             })()}
+
+            {/* Daftar Navigasi Nomor Soal (Menunjukkan soal terakhir & status terjawab) */}
+            <div className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-xs space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-display font-black text-slate-800">
+                  Navigasi Nomor Soal ({countAnsweredQuestions(answers)} / {activeExamSoalList.length} Terjawab)
+                </span>
+                <div className="flex items-center gap-3 text-[11px] text-slate-500 font-bold">
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded bg-emerald-500 inline-block"></span> Terjawab
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className={`w-3 h-3 rounded inline-block ${viewMode === 'tka' ? 'bg-purple-600' : 'bg-rose-600'}`}></span> Sedang Dibuka
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded bg-slate-200 inline-block"></span> Belum Dijawab
+                  </span>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {activeExamSoalList.map((item, idx) => {
+                  const ansVal = answers[item.id];
+                  const isAnswered =
+                    ansVal !== undefined &&
+                    ansVal !== null &&
+                    ansVal !== '' &&
+                    (!Array.isArray(ansVal) || ansVal.length > 0);
+                  const isCurrent = idx === currentQIndex;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setCurrentQIndex(idx)}
+                      className={`w-9 h-9 rounded-xl font-mono text-xs font-black transition cursor-pointer ${
+                        isCurrent
+                          ? viewMode === 'tka'
+                            ? 'bg-purple-600 text-white ring-2 ring-purple-300 shadow-sm scale-105'
+                            : 'bg-rose-600 text-white ring-2 ring-rose-300 shadow-sm scale-105'
+                          : isAnswered
+                          ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      {idx + 1}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
 

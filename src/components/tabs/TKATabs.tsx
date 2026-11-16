@@ -38,6 +38,8 @@ import {
   Power,
   Lock,
   EyeOff,
+  PauseCircle,
+  RotateCcw,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Student, TKACpTp, TKAQuestion, TKAJenis, ActiveUser } from '../../types';
@@ -77,6 +79,16 @@ import {
   toggleCenterTagOnSelection,
   stripQuestionTags,
 } from '../../utils/questionFormat';
+import {
+  TKAExamRoomDraft,
+  buildQuestionOrderSnapshot,
+  restoreQuestionsFromSnapshot,
+  saveTkaRoomDraft,
+  getTkaRoomDraft,
+  getLastActiveTkaRoomDraft,
+  clearTkaRoomDraft,
+  countAnsweredQuestions,
+} from '../../utils/examDraft';
 
 interface Props {
   subType: 'siswa-tka' | 'cp-tp-tka' | 'bank-soal-tka' | 'analisis-tka' | 'hasil-tka' | 'tes-tka-siswa';
@@ -259,6 +271,200 @@ export const TKATabs: React.FC<Props> = ({
 
   // Exam runtime questions list (shuffled if acakSoalTka is active)
   const [tkaRunningQuestions, setTkaRunningQuestions] = useState<TKAQuestion[]>([]);
+  const [tkaResumedNotice, setTkaResumedNotice] = useState<string | null>(null);
+  const [tkaDraftRevision, setTkaDraftRevision] = useState<number>(0);
+  const autoResumedTkaRef = useRef<string>('');
+  const latestTkaRoomRef = useRef<{
+    studentId: string;
+    activeExamPaket: string | null;
+    activeExamMapel: string | null;
+    currentQuestionIdx: number;
+    studentAnswers: Record<string, any>;
+    raguChecks: Record<string, boolean>;
+    examTimerSeconds: number;
+    activeExamDurationSeconds: number;
+    tkaRunningQuestions: TKAQuestion[];
+    isExamCompleted: boolean;
+  }>({
+    studentId: '',
+    activeExamPaket: null,
+    activeExamMapel: null,
+    currentQuestionIdx: 0,
+    studentAnswers: {},
+    raguChecks: {},
+    examTimerSeconds: 3600,
+    activeExamDurationSeconds: 3600,
+    tkaRunningQuestions: [],
+    isExamCompleted: false,
+  });
+
+  const activeTkaRoomStudent = useMemo(() => {
+    if (activeUser.role === 'siswa' && activeUser.studentData) return activeUser.studentData;
+    return tkaStudents.find((s) => s.id === selectedTestStudentId) || tkaStudents[0] || students[0];
+  }, [activeUser, tkaStudents, selectedTestStudentId, students]);
+
+  latestTkaRoomRef.current = {
+    studentId: activeTkaRoomStudent?.id || '',
+    activeExamPaket,
+    activeExamMapel,
+    currentQuestionIdx,
+    studentAnswers,
+    raguChecks,
+    examTimerSeconds,
+    activeExamDurationSeconds,
+    tkaRunningQuestions,
+    isExamCompleted,
+  };
+
+  const resumeFromTkaDraft = (draft: TKAExamRoomDraft) => {
+    const baseQuestions = tkaQuestions.filter((q) => {
+      if (q.jenisTka !== draft.paketName) return false;
+      if (draft.mapelName && draft.mapelName !== 'all' && q.mapel !== draft.mapelName) return false;
+      return true;
+    });
+    if (baseQuestions.length === 0) return;
+
+    const restoredList = restoreQuestionsFromSnapshot(baseQuestions, draft.runningQuestionOrder);
+    const safeIdx = Math.min(Math.max(0, draft.currentQuestionIdx || 0), Math.max(0, restoredList.length - 1));
+    const safeTimer = draft.examTimerSeconds > 0 ? draft.examTimerSeconds : draft.activeExamDurationSeconds || 3600;
+
+    setActiveExamPaket(draft.paketName);
+    setActiveExamMapel(draft.mapelName || null);
+    setConfirmFinishTkaExam(false);
+    setStudentAnswers(draft.studentAnswers || {});
+    setRaguChecks(draft.raguChecks || {});
+    setCurrentQuestionIdx(safeIdx);
+    setActiveExamDurationSeconds(draft.activeExamDurationSeconds || safeTimer);
+    setExamTimerSeconds(safeTimer);
+    setIsExamCompleted(false);
+    setLastExamResult(null);
+    setTkaRunningQuestions(restoredList);
+
+    saveTkaRoomDraft(
+      {
+        ...draft,
+        currentQuestionIdx: safeIdx,
+        examTimerSeconds: safeTimer,
+        isActiveSession: true,
+        runningQuestionOrder: buildQuestionOrderSnapshot(restoredList),
+      },
+      { immediateSync: true }
+    );
+
+    const ansCount = countAnsweredQuestions(draft.studentAnswers || {});
+    setTkaResumedNotice(
+      `Melanjutkan terakhir dikerjakan: Soal #${safeIdx + 1} (${ansCount} jawaban tersimpan otomatis dipulihkan).`
+    );
+    showToast(`Melanjutkan TKA ${draft.paketName} di Soal #${safeIdx + 1}!`, 'success');
+  };
+
+  // Auto-save jawaban, ragu-ragu, & posisi soal TKA tiap perubahan
+  useEffect(() => {
+    if (subType !== 'tes-tka-siswa' || !activeExamPaket || isExamCompleted || !activeTkaRoomStudent?.id) return;
+    saveTkaRoomDraft(
+      {
+        studentId: activeTkaRoomStudent.id,
+        paketName: activeExamPaket,
+        mapelName: activeExamMapel,
+        currentQuestionIdx,
+        studentAnswers,
+        raguChecks,
+        examTimerSeconds: latestTkaRoomRef.current.examTimerSeconds,
+        activeExamDurationSeconds,
+        runningQuestionOrder: buildQuestionOrderSnapshot(tkaRunningQuestions),
+        isActiveSession: true,
+        updatedAt: new Date().toISOString(),
+      },
+      { immediateSync: true }
+    );
+  }, [
+    subType,
+    activeExamPaket,
+    activeExamMapel,
+    isExamCompleted,
+    activeTkaRoomStudent?.id,
+    currentQuestionIdx,
+    studentAnswers,
+    raguChecks,
+    tkaRunningQuestions,
+  ]);
+
+  // Auto-save timer TKA tiap detik (localStorage cepat, cloud sync periodik)
+  useEffect(() => {
+    if (
+      subType !== 'tes-tka-siswa' ||
+      !activeExamPaket ||
+      isExamCompleted ||
+      !activeTkaRoomStudent?.id ||
+      examTimerSeconds <= 0
+    ) {
+      return;
+    }
+    saveTkaRoomDraft(
+      {
+        studentId: activeTkaRoomStudent.id,
+        paketName: activeExamPaket,
+        mapelName: activeExamMapel,
+        currentQuestionIdx,
+        studentAnswers,
+        raguChecks,
+        examTimerSeconds,
+        activeExamDurationSeconds,
+        runningQuestionOrder: buildQuestionOrderSnapshot(tkaRunningQuestions),
+        isActiveSession: true,
+        updatedAt: new Date().toISOString(),
+      },
+      { immediateSync: false }
+    );
+  }, [examTimerSeconds]);
+
+  // Flush draft TKA saat logout / unmount / tutup browser
+  useEffect(() => {
+    const flushTkaDraft = () => {
+      const snap = latestTkaRoomRef.current;
+      if (!snap.activeExamPaket || snap.isExamCompleted || !snap.studentId) return;
+      saveTkaRoomDraft(
+        {
+          studentId: snap.studentId,
+          paketName: snap.activeExamPaket,
+          mapelName: snap.activeExamMapel,
+          currentQuestionIdx: snap.currentQuestionIdx,
+          studentAnswers: snap.studentAnswers,
+          raguChecks: snap.raguChecks,
+          examTimerSeconds: snap.examTimerSeconds,
+          activeExamDurationSeconds: snap.activeExamDurationSeconds,
+          runningQuestionOrder: buildQuestionOrderSnapshot(snap.tkaRunningQuestions),
+          isActiveSession: true,
+          updatedAt: new Date().toISOString(),
+        },
+        { immediateSync: true }
+      );
+    };
+
+    window.addEventListener('beforeunload', flushTkaDraft);
+    window.addEventListener('pagehide', flushTkaDraft);
+    return () => {
+      flushTkaDraft();
+      window.removeEventListener('beforeunload', flushTkaDraft);
+      window.removeEventListener('pagehide', flushTkaDraft);
+    };
+  }, []);
+
+  // Auto-resume otomatis saat masuk kembali ke ruang tes TKA siswa
+  useEffect(() => {
+    if (subType !== 'tes-tka-siswa') {
+      autoResumedTkaRef.current = '';
+      return;
+    }
+    if (activeExamPaket || isExamCompleted || !activeTkaRoomStudent?.id) return;
+    if (autoResumedTkaRef.current === activeTkaRoomStudent.id) return;
+
+    const draft = getLastActiveTkaRoomDraft(activeTkaRoomStudent.id);
+    if (!draft || draft.examTimerSeconds <= 0) return;
+
+    autoResumedTkaRef.current = activeTkaRoomStudent.id;
+    resumeFromTkaDraft(draft);
+  }, [subType, activeExamPaket, isExamCompleted, activeTkaRoomStudent?.id, tkaQuestions]);
 
   // Question Form State matching reference UI Image 1
   const [formPaket, setFormPaket] = useState<TKAJenis>('Simulasi 1');
@@ -4667,7 +4873,7 @@ export const TKATabs: React.FC<Props> = ({
         const activeQuestion = displayExamQuestions[currentQuestionIdx] || displayExamQuestions[0];
 
         // Start Exam Handler
-        const handleStartExam = (paketName: string, mapelName?: string | null) => {
+        const handleStartExam = (paketName: string, mapelName?: string | null, forceFresh: boolean = false) => {
           const targetMapel = mapelName && mapelName !== 'all' ? mapelName : null;
           const questions = getMatchingTkaQuestions(paketName, targetMapel);
           if (questions.length === 0) {
@@ -4676,6 +4882,19 @@ export const TKATabs: React.FC<Props> = ({
               'error'
             );
             return;
+          }
+
+          if (!forceFresh && currentStudent?.id) {
+            const existingDraft = getTkaRoomDraft(currentStudent.id, paketName, targetMapel);
+            if (existingDraft && existingDraft.examTimerSeconds > 0) {
+              resumeFromTkaDraft(existingDraft);
+              return;
+            }
+          }
+
+          if (forceFresh && currentStudent?.id) {
+            clearTkaRoomDraft(currentStudent.id, paketName, targetMapel);
+            setTkaDraftRevision((v) => v + 1);
           }
 
           const durasiMenit = getTKADurationMinutes(tkaDurations, paketName, targetMapel);
@@ -4689,6 +4908,7 @@ export const TKATabs: React.FC<Props> = ({
           setExamTimerSeconds(durasiMenit * 60);
           setIsExamCompleted(false);
           setLastExamResult(null);
+          setTkaResumedNotice(null);
 
           let list = [...questions];
 
@@ -4708,8 +4928,27 @@ export const TKATabs: React.FC<Props> = ({
           }
           setTkaRunningQuestions(list);
 
+          if (currentStudent?.id) {
+            saveTkaRoomDraft(
+              {
+                studentId: currentStudent.id,
+                paketName,
+                mapelName: targetMapel,
+                currentQuestionIdx: 0,
+                studentAnswers: {},
+                raguChecks: {},
+                examTimerSeconds: durasiMenit * 60,
+                activeExamDurationSeconds: durasiMenit * 60,
+                runningQuestionOrder: buildQuestionOrderSnapshot(list),
+                isActiveSession: true,
+                updatedAt: new Date().toISOString(),
+              },
+              { immediateSync: true }
+            );
+          }
+
           showToast(
-            `Ujian ${paketName}${targetMapel ? ` (${targetMapel})` : ''} dimulai! [${list.length} Soal • ${durasiMenit} Menit]`,
+            `Ujian ${paketName}${targetMapel ? ` (${targetMapel})` : ''} dimulai! Jawaban tersimpan otomatis.`,
             'success'
           );
         };
@@ -4823,6 +5062,11 @@ export const TKATabs: React.FC<Props> = ({
           setConfirmFinishTkaExam(false);
           setLastExamResult(newSubmission);
           setIsExamCompleted(true);
+          setTkaResumedNotice(null);
+          if (currentStudent?.id && activeExamPaket) {
+            clearTkaRoomDraft(currentStudent.id, activeExamPaket, activeExamMapel);
+            setTkaDraftRevision((v) => v + 1);
+          }
           showToast(`Selamat! Ujian TKA selesai dengan skor: ${finalTotalScore} (Predikat ${predikat})`, 'success');
         };
         handleFinishTkaExamRef.current = handleFinishExam;
@@ -4842,16 +5086,21 @@ export const TKATabs: React.FC<Props> = ({
                     📝
                   </div>
                   <div>
-                    <h2 className="font-display font-black text-sm text-slate-800">
-                      {activeExamPaket}{activeExamMapel ? ` • ${activeExamMapel}` : ''} • CBT Tes Kemampuan Akademik
-                    </h2>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="font-display font-black text-sm text-slate-800">
+                        {activeExamPaket}{activeExamMapel ? ` • ${activeExamMapel}` : ''} • CBT Tes Kemampuan Akademik
+                      </h2>
+                      <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                        ✓ Tersimpan Otomatis ({answeredCount}/{totalQ})
+                      </span>
+                    </div>
                     <p className="text-[11px] text-slate-500">
                       Siswa: <strong className="text-purple-700">{currentStudent.nama}</strong> ({currentStudent.kelas}) • NISN: {currentStudent.nisn}
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2.5">
                   {/* Timer Badge */}
                   <div
                     className={`px-4 py-2 rounded-2xl flex items-center gap-2 border font-mono font-black text-sm ${
@@ -4863,6 +5112,43 @@ export const TKATabs: React.FC<Props> = ({
                     <Clock className="w-4 h-4" />
                     <span>Sisa Waktu: {formatTimer(examTimerSeconds)}</span>
                   </div>
+
+                  {/* Simpan & Jeda */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (currentStudent?.id && activeExamPaket) {
+                        saveTkaRoomDraft(
+                          {
+                            studentId: currentStudent.id,
+                            paketName: activeExamPaket,
+                            mapelName: activeExamMapel,
+                            currentQuestionIdx,
+                            studentAnswers,
+                            raguChecks,
+                            examTimerSeconds,
+                            activeExamDurationSeconds,
+                            runningQuestionOrder: buildQuestionOrderSnapshot(tkaRunningQuestions),
+                            isActiveSession: false,
+                            updatedAt: new Date().toISOString(),
+                          },
+                          { immediateSync: true }
+                        );
+                        setTkaDraftRevision((v) => v + 1);
+                      }
+                      setActiveExamPaket(null);
+                      setActiveExamMapel(null);
+                      setTkaResumedNotice(null);
+                      showToast(
+                        `Jawaban & posisi Soal #${currentQuestionIdx + 1} tersimpan otomatis.`,
+                        'success'
+                      );
+                    }}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-display font-bold px-3.5 py-2 rounded-2xl text-xs flex items-center gap-1.5 cursor-pointer transition"
+                  >
+                    <PauseCircle className="w-4 h-4 text-purple-600" />
+                    <span>Simpan &amp; Jeda</span>
+                  </button>
 
                   {/* Kumpulkan Ujian Button (Inline Confirm) */}
                   {confirmFinishTkaExam ? (
@@ -4894,6 +5180,19 @@ export const TKATabs: React.FC<Props> = ({
                   )}
                 </div>
               </div>
+
+              {tkaResumedNotice && (
+                <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center justify-between gap-3">
+                  <span>✓ {tkaResumedNotice}</span>
+                  <button
+                    type="button"
+                    onClick={() => setTkaResumedNotice(null)}
+                    className="text-emerald-700 hover:text-emerald-950 font-black px-2 py-0.5 rounded-lg cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
 
               {/* CBT Main Layout: 2 Columns */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
@@ -5484,34 +5783,64 @@ export const TKATabs: React.FC<Props> = ({
                         </div>
 
                         <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
-                          {existingSub ? (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => setSelectedHasilStudent(existingSub)}
-                                className="flex-1 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1"
-                              >
-                                <Eye className="w-3.5 h-3.5" /> Lihat Rapor
-                              </button>
+                          {(() => {
+                            void tkaDraftRevision;
+                            const pausedDraft = currentStudent?.id
+                              ? getTkaRoomDraft(currentStudent.id, paketName, selectedMapel)
+                              : null;
+                            if (pausedDraft && pausedDraft.examTimerSeconds > 0 && qCount > 0) {
+                              return (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartExam(paketName, selectedMapel, true)}
+                                    className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-display font-bold text-xs transition cursor-pointer flex items-center justify-center gap-1"
+                                    title="Mulai ulang dari soal pertama"
+                                  >
+                                    <RotateCcw className="w-3.5 h-3.5" /> Ulang
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => resumeFromTkaDraft(pausedDraft)}
+                                    className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
+                                  >
+                                    <Play className="w-4 h-4" /> Lanjutkan Soal #{pausedDraft.currentQuestionIdx + 1}
+                                  </button>
+                                </>
+                              );
+                            }
+                            if (existingSub) {
+                              return (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedHasilStudent(existingSub)}
+                                    className="flex-1 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" /> Lihat Rapor
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={qCount === 0}
+                                    onClick={() => handleStartExam(paketName, selectedMapel)}
+                                    className="flex-1 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:bg-slate-300 text-white font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1 shadow-xs"
+                                  >
+                                    <Play className="w-3.5 h-3.5" /> Kerjakan Ulang
+                                  </button>
+                                </>
+                              );
+                            }
+                            return (
                               <button
                                 type="button"
                                 disabled={qCount === 0}
                                 onClick={() => handleStartExam(paketName, selectedMapel)}
-                                className="flex-1 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:bg-slate-300 text-white font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1 shadow-xs"
+                                className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:bg-slate-300 text-white font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
                               >
-                                <Play className="w-3.5 h-3.5" /> Kerjakan Ulang
+                                <Play className="w-4 h-4" /> Mulai Tes TKA Sekarang
                               </button>
-                            </>
-                          ) : (
-                            <button
-                              type="button"
-                              disabled={qCount === 0}
-                              onClick={() => handleStartExam(paketName, selectedMapel)}
-                              className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:bg-slate-300 text-white font-display font-black text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
-                            >
-                              <Play className="w-4 h-4" /> Mulai Tes TKA Sekarang
-                            </button>
-                          )}
+                            );
+                          })()}
                         </div>
                       </div>
                     );
