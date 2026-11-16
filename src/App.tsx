@@ -107,14 +107,21 @@ import {
   subscribeToTkaQuestionsCollection,
   saveTkaQuestionsBatchToFirestore,
 } from './utils/tkaFirestore';
+import {
+  subscribeToTeachersCollection,
+  saveTeachersToFirestoreBatch,
+  replaceTeachersInFirestore,
+  sortTeachersAlphabetically,
+} from './utils/teacherFirestore';
 import { getLocalTodayStr } from './utils/dateUtils';
 
 export default function App() {
   // Database States
   const [profile, setProfile] = useState<SchoolProfile>(getStoredProfile());
-  const [teachers, setTeachers] = useState<Teacher[]>(getStoredTeachers());
+  const [teachers, setTeachers] = useState<Teacher[]>(() => sortTeachersAlphabetically(getStoredTeachers()));
   const [students, setStudents] = useState<Student[]>(() => sortStudentsAlphabetically(getStoredStudents()));
   const studentsCollectionLoadedRef = React.useRef(false);
+  const teachersCollectionLoadedRef = React.useRef(false);
   const attendanceCollectionLoadedRef = React.useRef(false);
   const kaldikDocLoadedRef = React.useRef(false);
   const tkaQuestionsCollectionLoadedRef = React.useRef(false);
@@ -212,9 +219,10 @@ export default function App() {
           setProfile(cloudData.profile);
           saveStoredProfile(cloudData.profile);
         }
-        if (cloudData.teachers) {
-          setTeachers(cloudData.teachers);
-          saveStoredTeachers(cloudData.teachers);
+        if (cloudData.teachers && !teachersCollectionLoadedRef.current) {
+          const sortedCloudTeachers = sortTeachersAlphabetically(cloudData.teachers);
+          setTeachers(sortedCloudTeachers);
+          saveStoredTeachers(sortedCloudTeachers);
         }
         if (cloudData.students && !studentsCollectionLoadedRef.current) {
           const sortedCloudStudents = sortStudentsAlphabetically(cloudData.students);
@@ -356,6 +364,39 @@ export default function App() {
       }
     });
 
+    // Realtime listener langsung untuk koleksi 'teachers' di Firestore (single source of truth hingga 60 guru/pegawai)
+    const unsubTeachers = subscribeToTeachersCollection(async (firestoreTeachers) => {
+      const alreadySeeded = localStorage.getItem('sekolahku_teachers_seeded') === 'true';
+
+      if (firestoreTeachers.length > 0) {
+        teachersCollectionLoadedRef.current = true;
+        localStorage.setItem('sekolahku_teachers_seeded', 'true');
+        setTeachers(firestoreTeachers);
+        saveStoredTeachers(firestoreTeachers);
+      } else if (!teachersCollectionLoadedRef.current && !alreadySeeded) {
+        teachersCollectionLoadedRef.current = true;
+        localStorage.setItem('sekolahku_teachers_seeded', 'true');
+        let seedSource = getStoredTeachers();
+        try {
+          const legacyCloud = await pullAllDataFromCloud();
+          if (legacyCloud?.teachers && legacyCloud.teachers.length > 0) {
+            seedSource = legacyCloud.teachers;
+          }
+        } catch {
+          // Fallback to local teachers
+        }
+        if (seedSource.length > 0) {
+          saveTeachersToFirestoreBatch(seedSource).catch((err) =>
+            console.warn('Initial teachers seed warning:', err)
+          );
+        }
+      } else {
+        teachersCollectionLoadedRef.current = true;
+        setTeachers([]);
+        saveStoredTeachers([]);
+      }
+    });
+
     // Realtime listener langsung untuk koleksi 'attendance' di Firestore (single source of truth)
     const unsubAttendance = subscribeToAttendanceCollection(
       (firestoreAttendance) => {
@@ -435,6 +476,7 @@ export default function App() {
     return () => {
       unsubscribe();
       unsubStudents();
+      unsubTeachers();
       unsubAttendance();
       unsubKaldik();
       unsubTkaQuestions();
@@ -548,11 +590,14 @@ export default function App() {
     pushAllDataToCloud({ profile: newProfile }, activeUser?.name || 'admin');
   };
 
-  // Sync teachers update with cloud
+  // Sync teachers update directly to dedicated Firestore /teachers collection (supports up to 60 GTK)
   const handleSaveTeachers = (newTeachers: Teacher[]) => {
-    setTeachers(newTeachers);
-    saveStoredTeachers(newTeachers);
-    pushAllDataToCloud({ teachers: newTeachers }, activeUser?.name || 'admin');
+    const sorted = sortTeachersAlphabetically(newTeachers);
+    setTeachers(sorted);
+    saveStoredTeachers(sorted);
+    replaceTeachersInFirestore(sorted).catch((e) =>
+      console.warn('replaceTeachersInFirestore sync warning:', e)
+    );
   };
 
   // Sync students update with cloud (instantly syncs deletions and additions across laptop & tablet)
@@ -689,14 +734,16 @@ export default function App() {
   // Refresh seluruh React state secara langsung setelah restore realtime tanpa reload paksa
   const handleRefreshStateAfterRestore = () => {
     studentsCollectionLoadedRef.current = true;
+    teachersCollectionLoadedRef.current = true;
     attendanceCollectionLoadedRef.current = true;
     kaldikDocLoadedRef.current = true;
     tkaQuestionsCollectionLoadedRef.current = true;
     localStorage.setItem('sekolahku_students_seeded', 'true');
+    localStorage.setItem('sekolahku_teachers_seeded', 'true');
     localStorage.setItem('sekolahku_attendance_seeded', 'true');
     localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
     setProfile(getStoredProfile());
-    setTeachers(getStoredTeachers());
+    setTeachers(sortTeachersAlphabetically(getStoredTeachers()));
     setStudents(sortStudentsAlphabetically(getStoredStudents()));
     setSubjects(getStoredSubjectsForClass(activeClassRef.current));
     setKaldikDays(getStoredKaldik());

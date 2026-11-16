@@ -49,6 +49,10 @@ import {
   replaceTkaQuestionsInFirestore,
   fetchTkaQuestionsFromFirestore,
 } from './tkaFirestore';
+import {
+  replaceTeachersInFirestore,
+  fetchTeachersFromFirestore,
+} from './teacherFirestore';
 
 export interface CloudSyncPayload {
   version: number;
@@ -124,6 +128,7 @@ const SESSION_ONLY_KEYS = new Set([
   LAST_SNAPSHOT_REV_KEY,
   LAST_PUSHED_VERSION_KEY,
   'sekolahku_students_seeded',
+  'sekolahku_teachers_seeded',
   'sekolahku_attendance_seeded',
   'sekolahku_tka_questions_seeded',
 ]);
@@ -275,6 +280,7 @@ export function applyBackupMapToLocalStorage(
 function buildSizeSafePrimaryPayload(basePayload: Record<string, any>): Record<string, any> {
   const cleanPayload: Record<string, any> = { ...basePayload };
   delete cleanPayload.students;
+  delete cleanPayload.teachers;
   delete cleanPayload.attendance;
   delete cleanPayload.localStorageSnapshot;
 
@@ -284,7 +290,6 @@ function buildSizeSafePrimaryPayload(basePayload: Record<string, any>): Record<s
     'reportNotes',
     'subjectsByClass',
     'subjects',
-    'teachers',
     'profile',
     'kaldikDays',
   ];
@@ -323,6 +328,7 @@ export async function pushAllDataToCloud(
       {
         ...safeBody,
         students: deleteField(),
+        teachers: deleteField(),
         attendance: deleteField(),
         localStorageSnapshot: deleteField(),
         serverTime: serverTimestamp(),
@@ -535,6 +541,7 @@ async function pushSnapshotAndPrimaryDocs(
     {
       ...primaryPayload,
       students: deleteField(),
+      teachers: deleteField(),
       attendance: deleteField(),
       localStorageSnapshot: deleteField(),
       serverTime: serverTimestamp(),
@@ -635,6 +642,12 @@ export async function restoreBackupJsonToCloudRealtime(
     : getStoredStudents();
   await replaceStudentsInFirestore(restoredStudents, username);
 
+  // 2b. Ganti penuh koleksi 'teachers' di Firestore (maksimal 60 guru/pegawai)
+  const restoredTeachers: Teacher[] = Array.isArray(parsed.sekolahku_teachers)
+    ? parsed.sekolahku_teachers
+    : getStoredTeachers();
+  await replaceTeachersInFirestore(restoredTeachers);
+
   // 3. Ganti penuh koleksi 'attendance' di Firestore (hapus absensi usang + tulis absensi cadangan)
   const rawAttendance = parsed.sekolahku_attendance_records;
   let attendanceList: AttendanceRecordItem[] = [];
@@ -700,6 +713,7 @@ export async function pullBackupFromCloudRealtime(): Promise<{
     backupSnap,
     primaryCloud,
     firestoreStudents,
+    firestoreTeachers,
     firestoreAttendance,
     firestoreKaldik,
     firestoreTkaQuestions,
@@ -707,6 +721,7 @@ export async function pullBackupFromCloudRealtime(): Promise<{
     getDoc(doc(db, BACKUP_DOC_PATH, BACKUP_DOC_ID)),
     pullAllDataFromCloud(),
     fetchStudentsFromFirestore(),
+    fetchTeachersFromFirestore(),
     fetchAttendanceFromFirestore(),
     fetchKaldikFromFirestore(),
     fetchTkaQuestionsFromFirestore(),
@@ -784,6 +799,10 @@ export async function pullBackupFromCloudRealtime(): Promise<{
     if (firestoreStudents.length > 0) {
       saveStoredStudents(firestoreStudents);
       localStorage.setItem('sekolahku_students_seeded', 'true');
+    }
+    if (firestoreTeachers.length > 0) {
+      localStorage.setItem('sekolahku_teachers', JSON.stringify(firestoreTeachers));
+      localStorage.setItem('sekolahku_teachers_seeded', 'true');
     }
     if (Object.keys(firestoreAttendance).length > 0) {
       saveStoredAttendance(firestoreAttendance);

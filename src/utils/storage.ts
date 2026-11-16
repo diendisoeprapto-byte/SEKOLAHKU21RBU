@@ -86,7 +86,11 @@ export const getStoredTeachers = (): Teacher[] => {
 };
 
 export const saveStoredTeachers = (teachers: Teacher[]) => {
-  localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(teachers));
+  try {
+    localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(teachers));
+  } catch (err) {
+    console.warn('Gagal menyimpan cache lokal guru/pegawai (kuota penuh):', err);
+  }
 };
 
 export const getStoredStudents = (): Student[] => {

@@ -22,6 +22,7 @@ import {
   parseImportTeachersXLSX,
   generateAccountUsername,
 } from '../../utils/excel';
+import { MAX_TEACHERS } from '../../utils/teacherFirestore';
 
 type TeacherSortOption =
   | 'nama-asc'
@@ -70,11 +71,21 @@ export const GuruTab: React.FC<Props> = ({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('123');
   const [fotoUrl, setFotoUrl] = useState('https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150');
+  const [deletingTeacher, setDeletingTeacher] = useState<Teacher | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const isAtMaxCapacity = teachers.length >= MAX_TEACHERS;
 
   const handleImportTeachers = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const remainingSlots = Math.max(0, MAX_TEACHERS - teachers.length);
+    if (remainingSlots === 0) {
+      showToast(`Kuota maksimal ${MAX_TEACHERS} guru & pegawai sudah penuh! Hapus beberapa data terlebih dahulu.`, 'error');
+      if (e.target) e.target.value = '';
+      return;
+    }
 
     try {
       const { newTeachers, count } = await parseImportTeachersXLSX(file, teachers);
@@ -82,8 +93,16 @@ export const GuruTab: React.FC<Props> = ({
         showToast('Tidak ada data guru yang valid di dalam file Excel!', 'error');
         return;
       }
-      onSaveTeachers([...teachers, ...newTeachers]);
-      showToast(`Berhasil mengimpor ${count} data guru! Akun login (username & password otomatis) siap digunakan.`, 'success');
+      const allowedImport = newTeachers.slice(0, remainingSlots);
+      onSaveTeachers([...teachers, ...allowedImport]);
+      if (newTeachers.length > remainingSlots) {
+        showToast(
+          `Berhasil mengimpor ${allowedImport.length} dari ${count} data karena batas maksimal ${MAX_TEACHERS} guru & pegawai telah tercapai.`,
+          'success'
+        );
+      } else {
+        showToast(`Berhasil mengimpor ${allowedImport.length} data guru & pegawai! Akun login otomatis siap digunakan.`, 'success');
+      }
     } catch (err: any) {
       showToast(`Gagal membaca file Excel: ${err?.message || 'Format data tidak valid'}`, 'error');
     } finally {
@@ -93,16 +112,44 @@ export const GuruTab: React.FC<Props> = ({
     }
   };
 
+  // Kompres foto sebelum disimpan agar maksimal 60 guru & pegawai tetap ringan di Firestore & cache lokal
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setFotoUrl(reader.result as string);
-        showToast('Foto guru berhasil dimuat!', 'success');
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const rawDataUrl = reader.result as string;
+      const img = new Image();
+      img.onload = () => {
+        const MAX_SIZE = 240;
+        let w = img.width;
+        let h = img.height;
+        if (w > h && w > MAX_SIZE) {
+          h = Math.round((h * MAX_SIZE) / w);
+          w = MAX_SIZE;
+        } else if (h >= w && h > MAX_SIZE) {
+          w = Math.round((w * MAX_SIZE) / h);
+          h = MAX_SIZE;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, w);
+        canvas.height = Math.max(1, h);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          setFotoUrl(canvas.toDataURL('image/jpeg', 0.78));
+        } else {
+          setFotoUrl(rawDataUrl);
+        }
+        showToast('Foto guru/pegawai berhasil dimuat!', 'success');
       };
-      reader.readAsDataURL(file);
-    }
+      img.onerror = () => {
+        setFotoUrl(rawDataUrl);
+        showToast('Foto guru/pegawai berhasil dimuat!', 'success');
+      };
+      img.src = rawDataUrl;
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleEdit = (t: Teacher) => {
@@ -132,16 +179,25 @@ export const GuruTab: React.FC<Props> = ({
     setPenugasan('Kelas 6A');
     setUsername('');
     setPassword('123');
+    setFotoUrl('https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150');
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!nama.trim()) {
-      showToast('Harap isi nama guru!', 'error');
+      showToast('Harap isi nama guru/pegawai!', 'error');
       return;
     }
 
-    const finalUsername = username.trim() || generateAccountUsername(nama, nip);
+    if (!editId && teachers.length >= MAX_TEACHERS) {
+      showToast(`Kuota maksimal ${MAX_TEACHERS} guru & pegawai sudah penuh!`, 'error');
+      return;
+    }
+
+    const existingUsernames = new Set(
+      teachers.filter((t) => t.id !== editId).map((t) => (t.username || '').toLowerCase())
+    );
+    const finalUsername = username.trim() || generateAccountUsername(nama, nip, existingUsernames);
     const finalPassword = password.trim() || '123';
 
     if (editId) {
@@ -164,10 +220,10 @@ export const GuruTab: React.FC<Props> = ({
           : t
       );
       onSaveTeachers(updated);
-      showToast(`Data guru ${nama} berhasil diperbarui!`, 'success');
+      showToast(`Data guru/pegawai ${nama} berhasil diperbarui!`, 'success');
     } else {
       const newTeacher: Teacher = {
-        id: `t_${Date.now()}`,
+        id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         nama,
         statusPegawai,
         nip,
@@ -181,16 +237,19 @@ export const GuruTab: React.FC<Props> = ({
         fotoUrl,
       };
       onSaveTeachers([...teachers, newTeacher]);
-      showToast(`Guru ${nama} berhasil ditambahkan! Akun: ${finalUsername}`, 'success');
+      showToast(`Guru/pegawai ${nama} berhasil ditambahkan! (${teachers.length + 1}/${MAX_TEACHERS})`, 'success');
     }
     handleReset();
   };
 
-  const handleDelete = (id: string, name: string) => {
-    if (confirm(`Yakin ingin menghapus guru ${name}?`)) {
-      onSaveTeachers(teachers.filter((t) => t.id !== id));
-      showToast(`Guru ${name} berhasil dihapus`, 'success');
+  const handleConfirmDelete = () => {
+    if (!deletingTeacher) return;
+    onSaveTeachers(teachers.filter((t) => t.id !== deletingTeacher.id));
+    showToast(`${deletingTeacher.nama} berhasil dihapus`, 'success');
+    if (editId === deletingTeacher.id) {
+      handleReset();
     }
+    setDeletingTeacher(null);
   };
 
   const filteredAndSortedTeachers = useMemo(() => {
@@ -281,15 +340,28 @@ export const GuruTab: React.FC<Props> = ({
       <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
           <div>
-            <span className="text-xs font-extrabold uppercase bg-rose-100 text-rose-700 px-3 py-1 rounded-full">
-              Kepegawaian SDN Rawa Badak Utara 21
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-extrabold uppercase bg-rose-100 text-rose-700 px-3 py-1 rounded-full">
+                Kepegawaian SDN Rawa Badak Utara 21
+              </span>
+              <span
+                className={`text-xs font-extrabold px-3 py-1 rounded-full border ${
+                  isAtMaxCapacity
+                    ? 'bg-rose-50 text-rose-800 border-rose-300'
+                    : teachers.length >= 50
+                      ? 'bg-amber-50 text-amber-800 border-amber-300'
+                      : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                }`}
+              >
+                Kapasitas: {teachers.length} / {MAX_TEACHERS} Guru &amp; Pegawai
+              </span>
+            </div>
             <h2 className="text-xl font-display font-black text-slate-800 mt-1">
-              Manajemen Data, Akun Login & Foto Guru
+              Manajemen Data, Akun Login &amp; Foto Guru
             </h2>
             <p className="text-xs text-slate-500">
-              Dilengkapi Nama, NIP/NIPPPK, TTL, TMT Pertama, Status Pernikahan, Penugasan (Wali Kelas, Guru Mapel, Tendik),
-              serta Akun Login Otomatis.
+              Mendukung hingga maksimal {MAX_TEACHERS} guru &amp; pegawai beserta Nama, NIP/NIPPPK, TTL, TMT Pertama,
+              Status Pernikahan, Penugasan, dan Akun Login Otomatis.
             </p>
           </div>
 
@@ -486,20 +558,32 @@ export const GuruTab: React.FC<Props> = ({
             />
           </div>
 
-          <div className="sm:col-span-2 lg:col-span-6 flex items-center justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={handleReset}
-              className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold cursor-pointer"
-            >
-              Reset Form
-            </button>
-            <button
-              type="submit"
-              className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer"
-            >
-              <Plus className="w-4 h-4" /> {editId ? 'Perbarui Data Pegawai' : 'Simpan Data Pegawai'}
-            </button>
+          <div className="sm:col-span-2 lg:col-span-6 flex flex-wrap items-center justify-between gap-2 pt-2">
+            {!editId && isAtMaxCapacity ? (
+              <span className="text-xs font-bold text-rose-700">
+                Batas maksimal {MAX_TEACHERS} guru &amp; pegawai telah tercapai. Hapus atau edit data yang ada.
+              </span>
+            ) : (
+              <span className="text-[11px] font-semibold text-slate-500">
+                Sisa kuota input: <strong>{Math.max(0, MAX_TEACHERS - teachers.length)}</strong> dari {MAX_TEACHERS} orang
+              </span>
+            )}
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                type="button"
+                onClick={handleReset}
+                className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold cursor-pointer"
+              >
+                Reset Form
+              </button>
+              <button
+                type="submit"
+                disabled={!editId && isAtMaxCapacity}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-display font-extrabold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> {editId ? 'Perbarui Data Pegawai' : 'Simpan Data Pegawai'}
+              </button>
+            </div>
           </div>
         </form>
 
@@ -808,8 +892,9 @@ export const GuruTab: React.FC<Props> = ({
                             <Edit className="w-4 h-4" />
                           </button>
                           <button
-                            onClick={() => handleDelete(t.id, t.nama)}
-                            className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50"
+                            type="button"
+                            onClick={() => setDeletingTeacher(t)}
+                            className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 cursor-pointer"
                             title="Hapus Data"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -824,6 +909,36 @@ export const GuruTab: React.FC<Props> = ({
           </table>
         </div>
       </div>
+
+      {/* Modal Konfirmasi Hapus Guru/Pegawai */}
+      {deletingTeacher && (
+        <div className="fixed inset-0 z-[950] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <h3 className="font-display font-black text-base text-slate-900">
+              Hapus Data Guru / Pegawai?
+            </h3>
+            <p className="text-xs text-slate-600">
+              Apakah Anda yakin ingin menghapus <strong>{deletingTeacher.nama}</strong> ({deletingTeacher.penugasan})? Data yang dihapus akan tersinkron ke semua perangkat.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingTeacher(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-extrabold cursor-pointer"
+              >
+                Ya, Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };
