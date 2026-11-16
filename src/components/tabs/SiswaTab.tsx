@@ -1344,7 +1344,7 @@ export const SiswaTab: React.FC<Props> = ({
           {filteredStudents.map((s) => (
             <div
               key={s.id}
-              className="bg-white rounded-3xl p-5 shadow-md border-2 border-slate-200 relative overflow-hidden flex flex-col justify-between"
+              className="bg-white rounded-3xl p-5 shadow-md border-2 border-slate-200 relative overflow-hidden flex flex-col justify-between break-inside-avoid"
             >
               {/* Card Header with 2 Logos */}
               <div className="flex items-center justify-between pb-3 border-b-2 border-rose-500">
@@ -1388,6 +1388,26 @@ export const SiswaTab: React.FC<Props> = ({
                   <div className="text-[11px] text-slate-500">
                     Agama: <strong>{s.agama}</strong>
                   </div>
+                </div>
+              </div>
+
+              {/* Akses Login Siswa (User & Password) */}
+              <div className="mb-3 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-2 gap-2 text-[11px]">
+                <div className="min-w-0">
+                  <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500 block">
+                    User
+                  </span>
+                  <span className="font-mono font-bold text-slate-900 truncate block" title={s.username}>
+                    {s.username || '-'}
+                  </span>
+                </div>
+                <div className="min-w-0 border-l border-slate-200 pl-2.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500 block">
+                    Password
+                  </span>
+                  <span className="font-mono font-bold text-rose-700 truncate block" title={s.password}>
+                    {s.password || '-'}
+                  </span>
                 </div>
               </div>
 
