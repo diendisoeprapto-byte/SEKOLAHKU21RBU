@@ -20,7 +20,16 @@ import {
   SwitchCamera,
   Volume2,
 } from 'lucide-react';
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+import { Html5Qrcode } from 'html5-qrcode';
+import {
+  DeviceCameraInfo,
+  enumerateDeviceCameras,
+  formatCameraErrorIndonesian,
+  pickPreferredCameraId,
+  scanBarcodeFromImageFile,
+  startHtml5QrScanner,
+  stopHtml5QrScanner,
+} from '../../utils/cameraScanner';
 import { Student, KaldikDay } from '../../types';
 import { AttendanceRecordItem } from '../../utils/storage';
 import { formatTanggalIndo, getLocalTimeStr, parseLocalDate } from '../../utils/dateUtils';
@@ -43,10 +52,7 @@ interface Props {
   onOpenZoom: (url: string, title: string) => void;
 }
 
-interface CameraDevice {
-  id: string;
-  label: string;
-}
+type CameraDevice = DeviceCameraInfo;
 
 export const AbsensiTab: React.FC<Props> = ({
   students,
@@ -105,28 +111,30 @@ export const AbsensiTab: React.FC<Props> = ({
     return () => clearInterval(interval);
   }, []);
 
-  // Enumerate cameras on mount
-  useEffect(() => {
-    Html5Qrcode.getCameras()
-      .then((devices) => {
-        if (devices && devices.length > 0) {
-          const cams = devices.map((d) => ({
-            id: d.id,
-            label: d.label || `Kamera ${d.id.slice(0, 5)}`,
-          }));
-          setAvailableCameras(cams);
-          // Prefer back/environment camera if available
-          const backCam = cams.find((c) =>
-            c.label.toLowerCase().includes('back') ||
-            c.label.toLowerCase().includes('belakang') ||
-            c.label.toLowerCase().includes('environment')
-          );
-          setSelectedCameraId(backCam ? backCam.id : cams[0].id);
-        }
-      })
-      .catch((err) => {
-        console.warn('Gagal membaca daftar kamera perangkat:', err);
+  const refreshAvailableCameras = async (preferExistingId?: string) => {
+    const cams = await enumerateDeviceCameras();
+    setAvailableCameras(cams);
+    if (cams.length > 0) {
+      setSelectedCameraId((prev) => {
+        const candidate = preferExistingId || prev;
+        if (candidate && cams.some((c) => c.id === candidate)) return candidate;
+        return pickPreferredCameraId(cams);
       });
+    }
+    return cams;
+  };
+
+  // Enumerate cameras on mount and sync when USB/external cameras connect or disconnect
+  useEffect(() => {
+    refreshAvailableCameras();
+    const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    const handleDeviceChange = () => {
+      refreshAvailableCameras();
+    };
+    mediaDevices?.addEventListener?.('devicechange', handleDeviceChange);
+    return () => {
+      mediaDevices?.removeEventListener?.('devicechange', handleDeviceChange);
+    };
   }, []);
 
   // Play auditory tone
@@ -221,40 +229,26 @@ export const AbsensiTab: React.FC<Props> = ({
     }
   };
 
-  // Parse detected barcode string and match student
+  // Parse detected barcode string and match student (supports Barcode ID, NISN, and KTP Student Card NIS/NISN)
   const handleBarcodeDetected = (rawCode: string) => {
     if (!rawCode) return;
     const clean = rawCode.trim().toLowerCase().replace(/^[\r\n\s]+|[\r\n\s]+$/g, '');
     if (!clean) return;
 
-    // Search in current class first, then in whole school
-    const studentInClass = filteredStudents.find((s) => {
-      const bId = s.barcodeId.toLowerCase();
-      const nId = s.nisn.toLowerCase();
-      const sId = s.id.toLowerCase();
+    const matchesStudent = (s: Student) => {
+      const bId = (s.barcodeId || '').trim().toLowerCase();
+      const nId = (s.nisn || '').trim().toLowerCase();
+      const sId = (s.id || '').trim().toLowerCase();
       return (
-        bId === clean ||
-        nId === clean ||
-        sId === clean ||
-        clean.includes(bId) ||
-        clean.includes(nId)
+        (Boolean(bId) && (bId === clean || clean.includes(bId))) ||
+        (Boolean(nId) && (nId === clean || clean.includes(nId))) ||
+        (Boolean(sId) && sId === clean)
       );
-    });
+    };
 
+    // Search in current class first, then in whole school
     const studentAnywhere =
-      studentInClass ||
-      students.find((s) => {
-        const bId = s.barcodeId.toLowerCase();
-        const nId = s.nisn.toLowerCase();
-        const sId = s.id.toLowerCase();
-        return (
-          bId === clean ||
-          nId === clean ||
-          sId === clean ||
-          clean.includes(bId) ||
-          clean.includes(nId)
-        );
-      });
+      filteredStudents.find(matchesStudent) || students.find(matchesStudent);
 
     if (studentAnywhere) {
       recordAttendance(studentAnywhere, 'H');
@@ -264,57 +258,19 @@ export const AbsensiTab: React.FC<Props> = ({
     }
   };
 
-  // Start Camera scanning using Html5Qrcode
+  const barcodeDetectedRef = useRef(handleBarcodeDetected);
+  barcodeDetectedRef.current = handleBarcodeDetected;
+
+  // Start Camera scanning using synced device camera helper
   const startCameraScanner = async (cameraId?: string) => {
     setIsInitializingCamera(true);
     try {
-      // If already running, stop first
-      if (html5QrCodeRef.current) {
-        try {
-          if (html5QrCodeRef.current.isScanning) {
-            await html5QrCodeRef.current.stop();
-          }
-          await html5QrCodeRef.current.clear();
-        } catch (e) {
-          console.warn('Error clearing previous instance:', e);
-        }
-      }
-
-      const qrInstance = new Html5Qrcode('html5qr-code-full-region', {
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.QR_CODE,
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.EAN_8,
-          Html5QrcodeSupportedFormats.UPC_A,
-          Html5QrcodeSupportedFormats.UPC_E,
-        ],
-        verbose: false,
-      });
-
-      html5QrCodeRef.current = qrInstance;
-
-      const cameraSource = cameraId
-        ? { deviceId: { exact: cameraId } }
-        : { facingMode: 'environment' };
-
-      const scanConfig = {
-        fps: 20,
-        qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
-          // Optimized wide rectangular box for Code-128 linear barcodes
-          const width = Math.floor(Math.min(viewfinderWidth * 0.92, 360));
-          const height = Math.floor(Math.min(viewfinderHeight * 0.65, 180));
-          return { width, height };
-        },
-        aspectRatio: 1.5,
-      };
-
-      await qrInstance.start(
-        cameraSource,
-        scanConfig,
-        (decodedText: string) => {
-          // Debounce same barcode within 2.5 seconds to prevent spamming
+      const result = await startHtml5QrScanner({
+        elementId: 'html5qr-code-full-region',
+        preferredCameraId: cameraId || selectedCameraId || undefined,
+        existingScanner: html5QrCodeRef.current,
+        fps: 18,
+        onSuccess: (decodedText: string) => {
           const now = Date.now();
           if (
             lastScannedRef.current.code === decodedText &&
@@ -323,23 +279,23 @@ export const AbsensiTab: React.FC<Props> = ({
             return;
           }
           lastScannedRef.current = { code: decodedText, time: now };
-          handleBarcodeDetected(decodedText);
+          barcodeDetectedRef.current(decodedText);
         },
-        () => {
-          // Frame parse error ignored
-        }
-      );
+      });
 
+      html5QrCodeRef.current = result.scanner;
+      if (result.cameras.length > 0) {
+        setAvailableCameras(result.cameras);
+      }
+      if (result.activeCameraId) {
+        setSelectedCameraId(result.activeCameraId);
+      }
       setCameraActive(true);
       showToast('Kamera pemindai barcode aktif! Arahkan barcode ke layar.', 'success');
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Camera startup error:', err);
       setCameraActive(false);
-      showToast(
-        'Gagal mengakses kamera: ' +
-          (err?.message || 'Pastikan izin kamera diaktifkan di browser'),
-        'error'
-      );
+      showToast(`Gagal mengakses kamera: ${formatCameraErrorIndonesian(err)}`, 'error');
     } finally {
       setIsInitializingCamera(false);
     }
@@ -347,16 +303,8 @@ export const AbsensiTab: React.FC<Props> = ({
 
   // Stop camera scanning
   const stopCameraScanner = async () => {
-    if (html5QrCodeRef.current) {
-      try {
-        if (html5QrCodeRef.current.isScanning) {
-          await html5QrCodeRef.current.stop();
-        }
-        await html5QrCodeRef.current.clear();
-      } catch (e) {
-        console.warn('Error stopping scanner:', e);
-      }
-    }
+    await stopHtml5QrScanner(html5QrCodeRef.current);
+    html5QrCodeRef.current = null;
     setCameraActive(false);
   };
 
@@ -368,7 +316,7 @@ export const AbsensiTab: React.FC<Props> = ({
     }
   };
 
-  // Switch camera device
+  // Switch camera device smoothly while active
   const handleCameraChange = (cameraId: string) => {
     setSelectedCameraId(cameraId);
     if (cameraActive) {
@@ -383,21 +331,9 @@ export const AbsensiTab: React.FC<Props> = ({
 
     setIsScanningFile(true);
     try {
-      const tempScanner = new Html5Qrcode('temp-barcode-reader-helper', {
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.QR_CODE,
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.UPC_A,
-        ],
-        verbose: false,
-      });
-
-      const decodedText = await tempScanner.scanFile(file, false);
-      tempScanner.clear();
-      handleBarcodeDetected(decodedText);
-    } catch (err) {
+      const decodedText = await scanBarcodeFromImageFile('temp-barcode-reader-helper', file);
+      barcodeDetectedRef.current(decodedText);
+    } catch {
       playBeep('error');
       showToast('Tidak ditemukan barcode yang terbaca pada foto ini.', 'error');
     } finally {
@@ -445,15 +381,8 @@ export const AbsensiTab: React.FC<Props> = ({
   // Clean up scanner on unmount
   useEffect(() => {
     return () => {
-      if (html5QrCodeRef.current) {
-        try {
-          if (html5QrCodeRef.current.isScanning) {
-            html5QrCodeRef.current.stop().then(() => html5QrCodeRef.current?.clear());
-          }
-        } catch (e) {
-          // ignore cleanup errors
-        }
-      }
+      stopHtml5QrScanner(html5QrCodeRef.current);
+      html5QrCodeRef.current = null;
     };
   }, []);
 
@@ -693,15 +622,15 @@ export const AbsensiTab: React.FC<Props> = ({
               </button>
             </div>
 
-            {/* Camera device selection dropdown if multiple cameras exist */}
-            {availableCameras.length > 1 && (
+            {/* Camera device selection & refresh control */}
+            {availableCameras.length > 0 && (
               <div className="flex items-center gap-2 px-1 text-xs">
-                <SwitchCamera className="w-3.5 h-3.5 text-slate-500" />
-                <span className="text-[11px] font-bold text-slate-600">Pilih Kamera:</span>
+                <SwitchCamera className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                <span className="text-[11px] font-bold text-slate-600 shrink-0">Kamera:</span>
                 <select
                   value={selectedCameraId}
                   onChange={(e) => handleCameraChange(e.target.value)}
-                  className="flex-1 text-[11px] py-1 px-2 rounded-lg border border-slate-300 bg-white font-medium text-slate-700"
+                  className="flex-1 min-w-0 text-[11px] py-1 px-2 rounded-lg border border-slate-300 bg-white font-medium text-slate-700"
                 >
                   {availableCameras.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -709,16 +638,26 @@ export const AbsensiTab: React.FC<Props> = ({
                     </option>
                   ))}
                 </select>
+                <button
+                  type="button"
+                  onClick={() => refreshAvailableCameras(selectedCameraId)}
+                  className="p-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-600 cursor-pointer shrink-0"
+                  title="Sinkronkan ulang daftar kamera perangkat"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
           </div>
 
           {/* Camera Viewport Container */}
           <div className="relative rounded-3xl overflow-hidden bg-slate-950 min-h-[250px] border-4 border-emerald-400 shadow-inner flex flex-col items-center justify-center text-white">
-            {/* Html5Qrcode target DOM element */}
+            {/* Html5Qrcode target DOM element — kept mounted & visible while initializing/active so dimensions measure properly */}
             <div
               id="html5qr-code-full-region"
-              className={`w-full h-full min-h-[250px] ${cameraActive ? 'block' : 'hidden'}`}
+              className={`w-full h-full min-h-[250px] ${
+                cameraActive || isInitializingCamera ? 'block' : 'hidden'
+              }`}
             />
 
             {/* Laser scanning beam overlay when camera is running */}
@@ -736,7 +675,7 @@ export const AbsensiTab: React.FC<Props> = ({
             )}
 
             {/* Inactive Camera State with Instructions */}
-            {!cameraActive && (
+            {!cameraActive && !isInitializingCamera && (
               <div className="relative z-10 text-center p-6 space-y-3">
                 <div className="w-14 h-14 rounded-2xl bg-white/10 mx-auto flex items-center justify-center text-2xl text-emerald-400 border border-white/10 shadow-lg">
                   <QrCode className="w-7 h-7" />

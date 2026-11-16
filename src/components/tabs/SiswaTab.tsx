@@ -1331,13 +1331,23 @@ export const SiswaTab: React.FC<Props> = ({
           <h3 className="font-display font-extrabold text-lg text-slate-800 flex items-center gap-2">
             <QrCode className="w-5 h-5 text-rose-600" /> Kartu Barcode Absensi Siswa ({activeClass})
           </h3>
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="bg-amber-400 hover:bg-amber-500 text-slate-900 font-display font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
-          >
-            <Printer className="w-4 h-4" /> Cetak Kartu Barcode
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href={`/kartu-pelajar.html?sekolah=${encodeURIComponent(profile.name)}&tahun=${encodeURIComponent(activeYear)}&kelas=${encodeURIComponent(activeClass)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-sky-600 hover:bg-sky-700 text-white font-display font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5"
+            >
+              <Printer className="w-4 h-4" /> Cetak Kartu Pelajar (KTP 85,6×53,98mm)
+            </a>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="bg-amber-400 hover:bg-amber-500 text-slate-900 font-display font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
+            >
+              <Printer className="w-4 h-4" /> Cetak Kartu Barcode
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -1414,6 +1424,14 @@ export const SiswaTab: React.FC<Props> = ({
               {/* Barcode Canvas */}
               <div className="pt-2 border-t border-slate-100 flex flex-col items-center justify-center bg-white rounded-2xl p-2">
                 <canvas id={`barcode_canvas_${s.id}`} className="max-w-full h-auto"></canvas>
+                <a
+                  href={`/kartu-pelajar.html?sekolah=${encodeURIComponent(profile.name)}&nama=${encodeURIComponent(s.nama)}&nisn=${encodeURIComponent(s.nisn || s.barcodeId)}&kelas=${encodeURIComponent(s.kelas)}&tahun=${encodeURIComponent(activeYear)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="print:hidden mt-1.5 text-[11px] font-bold text-sky-700 hover:text-sky-900 hover:underline flex items-center gap-1"
+                >
+                  <Printer className="w-3 h-3" /> Cetak Ukuran KTP (85,6 × 53,98 mm)
+                </a>
               </div>
             </div>
           ))}

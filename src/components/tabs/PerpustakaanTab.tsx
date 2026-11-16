@@ -27,6 +27,8 @@ import {
   UserCheck,
   AlertTriangle,
   Clock,
+  SwitchCamera,
+  RefreshCw,
 } from 'lucide-react';
 import {
   collection,
@@ -43,7 +45,14 @@ import {
   query,
   orderBy,
 } from 'firebase/firestore';
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+import { Html5Qrcode } from 'html5-qrcode';
+import {
+  enumerateDeviceCameras,
+  formatCameraErrorIndonesian,
+  pickPreferredCameraId,
+  startHtml5QrScanner,
+  stopHtml5QrScanner,
+} from '../../utils/cameraScanner';
 import {
   ActiveUser,
   LogLiterasiItem,
@@ -418,54 +427,43 @@ export const PerpustakaanTab: React.FC<Props> = ({
     }
   }, [subTab, activeBorrowStudent]);
 
-  // Enumerate cameras when on Sirkulasi tab or Checkout Modal open (Staff only)
+  const refreshDeviceCameras = async (preferId?: string) => {
+    const list = await enumerateDeviceCameras();
+    setCameras(list);
+    if (list.length > 0) {
+      setSelectedCamId((prev) => {
+        const candidate = preferId || prev;
+        if (candidate && list.some((c) => c.id === candidate)) return candidate;
+        return pickPreferredCameraId(list);
+      });
+    }
+    return list;
+  };
+
+  // Enumerate cameras when on Sirkulasi tab or Checkout Modal open (Staff only) + sync on devicechange
   useEffect(() => {
     if (!isStaff || (subTab !== 'sirkulasi' && !isCheckoutModalOpen)) return;
-    Html5Qrcode.getCameras()
-      .then((devices) => {
-        if (devices && devices.length > 0) {
-          const list = devices.map((d) => ({
-            id: d.id,
-            label: d.label || `Kamera ${d.id.slice(0, 5)}`,
-          }));
-          setCameras(list);
-          const back = list.find((c) => /back|belakang|environment/i.test(c.label));
-          setSelectedCamId(back ? back.id : list[0].id);
-        }
-      })
-      .catch(() => {
-        // Ignore camera enumeration denial until user requests camera
-      });
+    refreshDeviceCameras();
+    const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    const onDeviceChange = () => {
+      refreshDeviceCameras();
+    };
+    mediaDevices?.addEventListener?.('devicechange', onDeviceChange);
+    return () => {
+      mediaDevices?.removeEventListener?.('devicechange', onDeviceChange);
+    };
   }, [isStaff, subTab, isCheckoutModalOpen]);
 
   // Cleanup camera on tab switch or unmount
   const stopCameraScanner = async () => {
-    if (qrScannerRef.current) {
-      try {
-        if (qrScannerRef.current.isScanning) {
-          await qrScannerRef.current.stop();
-        }
-        await qrScannerRef.current.clear();
-      } catch {
-        // Safe cleanup
-      }
-      qrScannerRef.current = null;
-    }
+    await stopHtml5QrScanner(qrScannerRef.current);
+    qrScannerRef.current = null;
     setCameraActive(false);
   };
 
   const stopCheckoutCamera = async () => {
-    if (checkoutQrRef.current) {
-      try {
-        if (checkoutQrRef.current.isScanning) {
-          await checkoutQrRef.current.stop();
-        }
-        await checkoutQrRef.current.clear();
-      } catch {
-        // Safe cleanup
-      }
-      checkoutQrRef.current = null;
-    }
+    await stopHtml5QrScanner(checkoutQrRef.current);
+    checkoutQrRef.current = null;
     setCheckoutCamActive(false);
   };
 
@@ -489,15 +487,17 @@ export const PerpustakaanTab: React.FC<Props> = ({
     };
   }, [isCheckoutModalOpen]);
 
-  // Resolve scanned barcode string -> Student
+  // Resolve scanned barcode string -> Student (supports Barcode ID, NISN, and KTP card NIS/NISN)
   const handleResolveBarcodeStudent = (rawCode: string) => {
     const cleaned = rawCode.trim();
     if (!cleaned) return;
+    const q = cleaned.toLowerCase();
     const found = students.find(
       (s) =>
-        s.barcodeId.toLowerCase() === cleaned.toLowerCase() ||
-        s.nisn.toLowerCase() === cleaned.toLowerCase() ||
-        s.nama.toLowerCase() === cleaned.toLowerCase()
+        (s.barcodeId && s.barcodeId.trim().toLowerCase() === q) ||
+        (s.nisn && s.nisn.trim().toLowerCase() === q) ||
+        (s.id && s.id.trim().toLowerCase() === q) ||
+        (s.nama && s.nama.trim().toLowerCase() === q)
     );
     if (found) {
       setSelectedBorrowStudentId(found.id);
@@ -507,6 +507,9 @@ export const PerpustakaanTab: React.FC<Props> = ({
       showToast(`Kode kartu "${cleaned}" tidak ditemukan pada data siswa.`, 'error');
     }
   };
+
+  const resolveBarcodeStudentRef = useRef(handleResolveBarcodeStudent);
+  resolveBarcodeStudentRef.current = handleResolveBarcodeStudent;
 
   // Hardware USB barcode scanner listener when Sirkulasi tab is open
   useEffect(() => {
@@ -527,7 +530,7 @@ export const PerpustakaanTab: React.FC<Props> = ({
         const scanned = keyBufferRef.current.buf.trim();
         keyBufferRef.current.buf = '';
         if (scanned.length >= 5) {
-          handleResolveBarcodeStudent(scanned);
+          resolveBarcodeStudentRef.current(scanned);
         }
       } else if (e.key.length === 1) {
         keyBufferRef.current.buf += e.key;
@@ -538,35 +541,36 @@ export const PerpustakaanTab: React.FC<Props> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isStaff, subTab, students]);
 
-  const startCameraScanner = async () => {
-    if (cameraActive || isStartingCam) return;
+  const startCameraScanner = async (overrideCamId?: string) => {
+    if (isStartingCam) return;
     setIsStartingCam(true);
     try {
-      const scanner = new Html5Qrcode('perpustakaan-barcode-reader', {
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.QR_CODE,
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.CODE_39,
-        ],
-        verbose: false,
-      });
-      qrScannerRef.current = scanner;
-      const camTarget = selectedCamId || { facingMode: 'environment' };
-      await scanner.start(
-        camTarget,
-        { fps: 10, qrbox: { width: 240, height: 120 } },
-        (decodedText) => {
-          handleResolveBarcodeStudent(decodedText);
+      const result = await startHtml5QrScanner({
+        elementId: 'perpustakaan-barcode-reader',
+        preferredCameraId: overrideCamId || selectedCamId || undefined,
+        existingScanner: qrScannerRef.current,
+        fps: 16,
+        onSuccess: (decodedText) => {
+          resolveBarcodeStudentRef.current(decodedText);
           stopCameraScanner();
         },
-        () => {}
-      );
+      });
+      qrScannerRef.current = result.scanner;
+      if (result.cameras.length > 0) setCameras(result.cameras);
+      if (result.activeCameraId) setSelectedCamId(result.activeCameraId);
       setCameraActive(true);
-    } catch (err: any) {
-      showToast(`Kamera gagal dibuka: ${err?.message || 'Periksa izin kamera browser'}`, 'error');
+    } catch (err: unknown) {
+      setCameraActive(false);
+      showToast(`Kamera gagal dibuka: ${formatCameraErrorIndonesian(err)}`, 'error');
     } finally {
       setIsStartingCam(false);
+    }
+  };
+
+  const handleSwitchSirkulasiCam = (camId: string) => {
+    setSelectedCamId(camId);
+    if (cameraActive) {
+      startCameraScanner(camId);
     }
   };
 
@@ -1020,11 +1024,13 @@ export const PerpustakaanTab: React.FC<Props> = ({
     const cleaned = rawCode.trim();
     if (!cleaned) return;
 
+    const q = cleaned.toLowerCase();
     const matched = students.find(
       (s) =>
-        s.barcodeId.toLowerCase() === cleaned.toLowerCase() ||
-        s.nisn.toLowerCase() === cleaned.toLowerCase() ||
-        s.nama.toLowerCase() === cleaned.toLowerCase()
+        (s.barcodeId && s.barcodeId.trim().toLowerCase() === q) ||
+        (s.nisn && s.nisn.trim().toLowerCase() === q) ||
+        (s.id && s.id.trim().toLowerCase() === q) ||
+        (s.nama && s.nama.trim().toLowerCase() === q)
     );
 
     if (!matched) {
@@ -1061,6 +1067,9 @@ export const PerpustakaanTab: React.FC<Props> = ({
       showToast(`Kartu terdeteksi: ${matched.nama} (${matched.kelas})`, 'success');
     }
   };
+
+  const checkoutBarcodeRef = useRef(handleCheckoutBarcodeScan);
+  checkoutBarcodeRef.current = handleCheckoutBarcodeScan;
 
   const handleConfirmManualCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1099,35 +1108,36 @@ export const PerpustakaanTab: React.FC<Props> = ({
     }
   };
 
-  const startCheckoutCamera = async () => {
-    if (checkoutCamActive || isStartingCheckoutCam) return;
+  const startCheckoutCamera = async (overrideCamId?: string) => {
+    if (isStartingCheckoutCam) return;
     setIsStartingCheckoutCam(true);
     try {
-      const scanner = new Html5Qrcode('book-checkout-barcode-reader', {
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.QR_CODE,
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.CODE_39,
-        ],
-        verbose: false,
-      });
-      checkoutQrRef.current = scanner;
-      const camTarget = selectedCamId || { facingMode: 'environment' };
-      await scanner.start(
-        camTarget,
-        { fps: 10, qrbox: { width: 240, height: 120 } },
-        (decodedText) => {
+      const result = await startHtml5QrScanner({
+        elementId: 'book-checkout-barcode-reader',
+        preferredCameraId: overrideCamId || selectedCamId || undefined,
+        existingScanner: checkoutQrRef.current,
+        fps: 16,
+        onSuccess: (decodedText) => {
           stopCheckoutCamera();
-          handleCheckoutBarcodeScan(decodedText);
+          checkoutBarcodeRef.current(decodedText);
         },
-        () => {}
-      );
+      });
+      checkoutQrRef.current = result.scanner;
+      if (result.cameras.length > 0) setCameras(result.cameras);
+      if (result.activeCameraId) setSelectedCamId(result.activeCameraId);
       setCheckoutCamActive(true);
-    } catch (err: any) {
-      showToast(`Kamera gagal dibuka: ${err?.message || 'Periksa izin kamera browser'}`, 'error');
+    } catch (err: unknown) {
+      setCheckoutCamActive(false);
+      showToast(`Kamera gagal dibuka: ${formatCameraErrorIndonesian(err)}`, 'error');
     } finally {
       setIsStartingCheckoutCam(false);
+    }
+  };
+
+  const handleSwitchCheckoutCam = (camId: string) => {
+    setSelectedCamId(camId);
+    if (checkoutCamActive) {
+      startCheckoutCamera(camId);
     }
   };
 
@@ -1878,46 +1888,67 @@ export const PerpustakaanTab: React.FC<Props> = ({
                     </div>
                   </div>
 
+                  {/* Camera device selector (always available even while active for live switching) */}
+                  {cameras.length > 0 && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <SwitchCamera className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                      <select
+                        value={selectedCamId}
+                        onChange={(e) => handleSwitchSirkulasiCam(e.target.value)}
+                        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-700"
+                      >
+                        {cameras.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => refreshDeviceCameras(selectedCamId)}
+                        className="p-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 cursor-pointer shrink-0"
+                        title="Sinkronkan daftar kamera perangkat"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
                   {/* Camera Region */}
-                  <div className="rounded-2xl overflow-hidden bg-slate-900 border border-slate-200 relative min-h-[200px] flex flex-col items-center justify-center">
-                    <div id="perpustakaan-barcode-reader" className="w-full" />
-                    {!cameraActive && (
+                  <div className="rounded-2xl overflow-hidden bg-slate-900 border border-slate-200 relative min-h-[210px] flex flex-col items-center justify-center">
+                    <div
+                      id="perpustakaan-barcode-reader"
+                      className={`w-full ${cameraActive || isStartingCam ? 'block' : 'hidden'}`}
+                    />
+                    {!cameraActive && !isStartingCam && (
                       <div className="p-5 text-center space-y-3 text-white">
                         <Camera className="w-8 h-8 mx-auto text-sky-400" />
                         <p className="text-xs text-slate-300">
                           Arahkan kamera ke barcode di Kartu Absensi Siswa, atau gunakan scanner USB / pilih manual.
                         </p>
-                        {cameras.length > 1 && (
-                          <select
-                            value={selectedCamId}
-                            onChange={(e) => setSelectedCamId(e.target.value)}
-                            className="w-full max-w-xs px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white"
-                          >
-                            {cameras.map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {c.label}
-                              </option>
-                            ))}
-                          </select>
-                        )}
                         <div>
                           <button
                             type="button"
                             disabled={isStartingCam}
-                            onClick={startCameraScanner}
+                            onClick={() => startCameraScanner()}
                             className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-display font-extrabold text-xs inline-flex items-center gap-2 cursor-pointer"
                           >
                             <Camera className="w-4 h-4" />
-                            <span>{isStartingCam ? 'Menghidupkan...' : 'Buka Kamera Scanner'}</span>
+                            <span>Buka Kamera Scanner</span>
                           </button>
                         </div>
+                      </div>
+                    )}
+                    {isStartingCam && (
+                      <div className="p-4 text-center text-xs text-sky-300 font-bold">
+                        Menghubungkan kamera perangkat...
                       </div>
                     )}
                     {cameraActive && (
                       <button
                         type="button"
                         onClick={stopCameraScanner}
-                        className="absolute bottom-3 right-3 px-3 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-bold flex items-center gap-1.5 shadow-md cursor-pointer"
+                        className="absolute bottom-3 right-3 z-20 px-3 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-bold flex items-center gap-1.5 shadow-md cursor-pointer"
                       >
                         <VideoOff className="w-3.5 h-3.5" /> Matikan Kamera
                       </button>
@@ -2755,47 +2786,68 @@ export const PerpustakaanTab: React.FC<Props> = ({
 
             {/* Camera & Barcode Scan Interface */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-              <div className="md:col-span-5 rounded-2xl overflow-hidden bg-slate-900 border border-slate-200 relative min-h-[180px] flex flex-col items-center justify-center">
-                <div id="book-checkout-barcode-reader" className="w-full" />
-                {!checkoutCamActive && (
-                  <div className="p-4 text-center space-y-2.5 text-white">
-                    <QrCode className="w-8 h-8 mx-auto text-sky-400" />
-                    <p className="text-[11px] text-slate-300">
-                      Scan barcode Kartu Absensi / Perpustakaan siswa via kamera atau USB scanner.
-                    </p>
-                    {cameras.length > 1 && (
-                      <select
-                        value={selectedCamId}
-                        onChange={(e) => setSelectedCamId(e.target.value)}
-                        className="w-full px-2.5 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-[11px] text-white"
-                      >
-                        {cameras.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.label}
-                          </option>
-                        ))}
-                      </select>
-                    )}
+              <div className="md:col-span-5 space-y-2">
+                {cameras.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <SwitchCamera className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <select
+                      value={selectedCamId}
+                      onChange={(e) => handleSwitchCheckoutCam(e.target.value)}
+                      className="flex-1 min-w-0 px-2 py-1 rounded-xl bg-slate-50 border border-slate-200 text-[11px] font-medium text-slate-700"
+                    >
+                      {cameras.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
                     <button
                       type="button"
-                      disabled={isStartingCheckoutCam}
-                      onClick={startCheckoutCamera}
-                      className="px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-display font-extrabold text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                      onClick={() => refreshDeviceCameras(selectedCamId)}
+                      className="p-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 cursor-pointer shrink-0"
+                      title="Sinkronkan daftar kamera perangkat"
                     >
-                      <Camera className="w-3.5 h-3.5" />
-                      <span>{isStartingCheckoutCam ? 'Membuka Kamera...' : 'Scan via Kamera'}</span>
+                      <RefreshCw className="w-3 h-3" />
                     </button>
                   </div>
                 )}
-                {checkoutCamActive && (
-                  <button
-                    type="button"
-                    onClick={stopCheckoutCamera}
-                    className="absolute bottom-2.5 right-2.5 px-3 py-1.5 rounded-xl bg-rose-600 text-white text-[11px] font-bold flex items-center gap-1 shadow-md cursor-pointer"
-                  >
-                    <VideoOff className="w-3.5 h-3.5" /> Tutup Kamera
-                  </button>
-                )}
+                <div className="rounded-2xl overflow-hidden bg-slate-900 border border-slate-200 relative min-h-[190px] flex flex-col items-center justify-center">
+                  <div
+                    id="book-checkout-barcode-reader"
+                    className={`w-full ${checkoutCamActive || isStartingCheckoutCam ? 'block' : 'hidden'}`}
+                  />
+                  {!checkoutCamActive && !isStartingCheckoutCam && (
+                    <div className="p-4 text-center space-y-2.5 text-white">
+                      <QrCode className="w-8 h-8 mx-auto text-sky-400" />
+                      <p className="text-[11px] text-slate-300">
+                        Scan barcode Kartu Absensi / Perpustakaan siswa via kamera atau USB scanner.
+                      </p>
+                      <button
+                        type="button"
+                        disabled={isStartingCheckoutCam}
+                        onClick={() => startCheckoutCamera()}
+                        className="px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-display font-extrabold text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                        <span>Scan via Kamera</span>
+                      </button>
+                    </div>
+                  )}
+                  {isStartingCheckoutCam && (
+                    <div className="p-4 text-center text-[11px] text-sky-300 font-bold">
+                      Menghubungkan kamera perangkat...
+                    </div>
+                  )}
+                  {checkoutCamActive && (
+                    <button
+                      type="button"
+                      onClick={stopCheckoutCamera}
+                      className="absolute bottom-2.5 right-2.5 z-20 px-3 py-1.5 rounded-xl bg-rose-600 text-white text-[11px] font-bold flex items-center gap-1 shadow-md cursor-pointer"
+                    >
+                      <VideoOff className="w-3.5 h-3.5" /> Tutup Kamera
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Input / USB Scanner / Manual Checkout Details */}
