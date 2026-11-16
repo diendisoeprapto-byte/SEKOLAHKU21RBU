@@ -2287,7 +2287,7 @@ export const StudentDashboard: React.FC<Props> = ({
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 max-h-44 overflow-y-auto p-0.5">
               {activeExamSoalList.map((item, idx) => {
                 const ansVal = answers[item.id];
                 const isAnswered =

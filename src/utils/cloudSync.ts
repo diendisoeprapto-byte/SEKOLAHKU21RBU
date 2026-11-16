@@ -236,7 +236,10 @@ export function collectPersistentLocalBackup(options?: {
     if (!key || !key.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(key)) continue;
     if (
       options?.excludeLargeCollections &&
-      (key === 'sekolahku_students' || key === 'sekolahku_attendance_records')
+      (key === 'sekolahku_students' ||
+        key === 'sekolahku_attendance_records' ||
+        key === 'sekolahku_cbt_exams' ||
+        key === 'sekolahku_tka_questions')
     ) {
       continue;
     }

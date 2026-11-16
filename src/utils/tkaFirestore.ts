@@ -103,16 +103,17 @@ export async function deleteTkaQuestionFromFirestore(questionId: string): Promis
  * Menyimpan daftar soal TKA dalam batch ke koleksi 'tka_questions' di Firestore.
  */
 export async function saveTkaQuestionsBatchToFirestore(
-  questions: TKAQuestion[]
+  questions: TKAQuestion[],
+  startOrderIndex: number = 0
 ): Promise<boolean> {
   try {
     if (questions && questions.length > 0) {
-      const CHUNK_SIZE = 25;
+      const CHUNK_SIZE = 20;
       for (let i = 0; i < questions.length; i += CHUNK_SIZE) {
         const chunk = questions.slice(i, i + CHUNK_SIZE);
         const batch = writeBatch(db);
         chunk.forEach((q, offset) => {
-          const orderIndex = i + offset;
+          const orderIndex = startOrderIndex + i + offset;
           const questionId = sanitizeQuestionId(q.id, orderIndex);
           const docRef = doc(db, TKA_QUESTIONS_COLLECTION, questionId);
           const cleanQuestion = stripUndefinedDeep({

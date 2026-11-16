@@ -32,6 +32,18 @@ const STORAGE_KEYS = {
   ADMIN_PASSWORD: 'sekolahku_admin_password',
 };
 
+export const MAX_QUESTIONS_PER_PACKAGE = 50;
+
+const safeSetLocalStorage = (key: string, serialized: string): boolean => {
+  try {
+    localStorage.setItem(key, serialized);
+    return true;
+  } catch (err) {
+    console.warn(`Penyimpanan lokal penuh untuk ${key}, data tetap dilanjutkan ke Firestore:`, err);
+    return false;
+  }
+};
+
 let storageMutationHook: ((key: string) => void) | null = null;
 let suppressStorageMutationHook = false;
 
@@ -341,12 +353,13 @@ export const getStoredCBTExams = (): CBTExam[] => {
   }
 };
 
-export const saveStoredCBTExams = (exams: CBTExam[]) => {
-  localStorage.setItem(STORAGE_KEYS.CBT_EXAMS, JSON.stringify(exams));
+export const saveStoredCBTExams = (exams: CBTExam[]): boolean => {
+  const ok = safeSetLocalStorage(STORAGE_KEYS.CBT_EXAMS, JSON.stringify(exams));
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
   }
   notifyStorageMutation(STORAGE_KEYS.CBT_EXAMS);
+  return ok;
 };
 
 export const getStoredCBTActivePackages = (): Record<string, boolean> => {
@@ -676,12 +689,13 @@ export const getStoredTKAQuestions = (): TKAQuestion[] => {
   }
 };
 
-export const saveStoredTKAQuestions = (questions: TKAQuestion[]) => {
-  localStorage.setItem(STORAGE_KEYS.TKA_QUESTIONS, JSON.stringify(questions));
+export const saveStoredTKAQuestions = (questions: TKAQuestion[]): boolean => {
+  const ok = safeSetLocalStorage(STORAGE_KEYS.TKA_QUESTIONS, JSON.stringify(questions));
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
   }
   notifyStorageMutation(STORAGE_KEYS.TKA_QUESTIONS);
+  return ok;
 };
 
 export const getStoredTKADurations = (): Record<string, number> => {

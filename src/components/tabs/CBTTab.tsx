@@ -47,6 +47,7 @@ import {
   getStoredSubjectsForClass,
   saveStoredSubjectsForClass,
   notifyStorageMutation,
+  MAX_QUESTIONS_PER_PACKAGE,
 } from '../../utils/storage';
 import { getLocalTodayStr } from '../../utils/dateUtils';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
@@ -55,6 +56,7 @@ import { pushAllDataToCloud, syncAllLocalToCloud } from '../../utils/cloudSync';
 import { saveCbtExamToFirestore, saveCbtExamsBatchToFirestore } from '../../utils/cbtFirestore';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx } from '../../utils/docxImporter';
+import { compressQuestionImage } from '../../utils/imageUtils';
 import { QuestionContent } from '../QuestionContent';
 import {
   PosisiGambar,
@@ -636,42 +638,48 @@ export const CBTTab: React.FC<Props> = ({
     showToast('Pecahan otomatis dikonversi ke kata PUEBI / EYD V!', 'success');
   };
 
-  // Handle image upload 1
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle image upload 1 (compressed for 50-question package safety)
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setGambarUrl(reader.result as string);
-        showToast('Gambar 1 soal berhasil diunggah!', 'success');
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    try {
+      const compressed = await compressQuestionImage(file, { maxWidth: 960, maxHeight: 720, quality: 0.78 });
+      setGambarUrl(compressed);
+      showToast('Gambar 1 soal berhasil diunggah & dioptimalkan!', 'success');
+    } catch {
+      showToast('Gagal memproses gambar 1 soal.', 'error');
+    } finally {
+      e.target.value = '';
     }
   };
 
   // Handle image upload 2 (side-by-side)
-  const handleImageUpload2 = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload2 = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setGambarUrl2(reader.result as string);
-        showToast('Gambar 2 soal berhasil diunggah!', 'success');
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    try {
+      const compressed = await compressQuestionImage(file, { maxWidth: 960, maxHeight: 720, quality: 0.78 });
+      setGambarUrl2(compressed);
+      showToast('Gambar 2 soal berhasil diunggah & dioptimalkan!', 'success');
+    } catch {
+      showToast('Gagal memproses gambar 2 soal.', 'error');
+    } finally {
+      e.target.value = '';
     }
   };
 
   // Handle option image upload
-  const handleOptionImageUpload = (key: 'A' | 'B' | 'C' | 'D', e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleOptionImageUpload = async (key: 'A' | 'B' | 'C' | 'D', e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setOpsiGambar((prev) => ({ ...prev, [key]: reader.result as string }));
-        showToast(`Gambar untuk Opsi ${key} berhasil diunggah!`, 'success');
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    try {
+      const compressed = await compressQuestionImage(file, { maxWidth: 640, maxHeight: 480, quality: 0.78 });
+      setOpsiGambar((prev) => ({ ...prev, [key]: compressed }));
+      showToast(`Gambar untuk Opsi ${key} berhasil diunggah!`, 'success');
+    } catch {
+      showToast(`Gagal memproses gambar untuk Opsi ${key}.`, 'error');
+    } finally {
+      e.target.value = '';
     }
   };
 
@@ -683,11 +691,19 @@ export const CBTTab: React.FC<Props> = ({
     });
   };
 
-  // Save or update question in Bank Soal
-  const handleSaveQuestion = (e: React.FormEvent) => {
+  // Save or update question in Bank Soal (up to 50 questions per package)
+  const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!pertanyaan.trim()) {
       showToast('Harap masukkan butir pertanyaan soal!', 'error');
+      return;
+    }
+
+    if (!editingQuestionId && activeExam.soalList.length >= MAX_QUESTIONS_PER_PACKAGE) {
+      showToast(
+        `Paket ${selectedPaket} • ${selectedMapel} (${selectedSubPaket}) sudah mencapai batas maksimal ${MAX_QUESTIONS_PER_PACKAGE} soal.`,
+        'error'
+      );
       return;
     }
 
@@ -734,16 +750,15 @@ export const CBTTab: React.FC<Props> = ({
       kelas: targetKelas,
     };
 
+    const isEditing = Boolean(editingQuestionId);
     let updatedQuestions: CBTQuestion[];
-    if (editingQuestionId) {
+    if (isEditing) {
       updatedQuestions = activeExam.soalList.map((q) =>
         q.id === editingQuestionId ? questionData : q
       );
-      showToast('Soal berhasil diperbarui di Bank Soal!', 'success');
       setEditingQuestionId(null);
     } else {
       updatedQuestions = [...activeExam.soalList, questionData];
-      showToast(`Soal disimpan ke ${selectedPaket} • ${selectedMapel} (${selectedSubPaket})!`, 'success');
     }
 
     const updatedExam: CBTExam = {
@@ -761,10 +776,22 @@ export const CBTTab: React.FC<Props> = ({
     const newExams = upsertExamInList(exams, updatedExam);
     setExams(newExams);
     saveStoredCBTExams(newExams);
-    saveCbtExamToFirestore(updatedExam).catch(() => {});
-
-    // Reset fields to blank
     handleResetForm();
+
+    const cloudOk = await saveCbtExamToFirestore(updatedExam);
+    if (!cloudOk) {
+      showToast('Soal tersimpan di browser, tetapi gagal sinkron ke cloud Firestore. Coba simpan ulang saat koneksi stabil.', 'error');
+      return;
+    }
+
+    if (isEditing) {
+      showToast(`Soal berhasil diperbarui (${updatedQuestions.length}/${MAX_QUESTIONS_PER_PACKAGE} soal)!`, 'success');
+    } else {
+      showToast(
+        `Soal #${updatedQuestions.length}/${MAX_QUESTIONS_PER_PACKAGE} disimpan ke ${selectedPaket} • ${selectedMapel} (${selectedSubPaket})!`,
+        'success'
+      );
+    }
   };
 
   const handleResetForm = () => {
@@ -844,13 +871,22 @@ export const CBTTab: React.FC<Props> = ({
     if (!file) return;
 
     try {
+      const remainingSlots = Math.max(0, MAX_QUESTIONS_PER_PACKAGE - activeExam.soalList.length);
+      if (remainingSlots <= 0) {
+        showToast(
+          `Paket ${selectedPaket} • ${selectedMapel} (${selectedSubPaket}) sudah penuh (${MAX_QUESTIONS_PER_PACKAGE}/${MAX_QUESTIONS_PER_PACKAGE} soal).`,
+          'error'
+        );
+        return;
+      }
+
       const res = await parseQuestionsFromDocx(file);
       if (!res.success || res.questions.length === 0) {
         showToast(res.error || 'Tidak ditemukan butir soal di dalam berkas Word (.docx)', 'error');
         return;
       }
 
-      const importedWithMeta = res.questions.map((q, idx) => ({
+      const importedWithMeta = res.questions.slice(0, remainingSlots).map((q, idx) => ({
         ...q,
         id: `soal_docx_${Date.now()}_${idx + 1}`,
         cpId: currentCp.id,
@@ -871,15 +907,31 @@ export const CBTTab: React.FC<Props> = ({
         subPaket: selectedSubPaket,
         durasiMenit: examDurationMinutes || activeExam.durasiMenit || 60,
         aktif: exams.some((e) => e.id === activeExam.id) ? Boolean(activeExam.aktif) : false,
-        soalList: [...importedWithMeta, ...activeExam.soalList],
+        soalList: [...activeExam.soalList, ...importedWithMeta],
       };
 
       const newExams = upsertExamInList(exams, updatedExam);
       setExams(newExams);
       saveStoredCBTExams(newExams);
-      saveCbtExamToFirestore(updatedExam).catch(() => {});
+      const cloudOk = await saveCbtExamToFirestore(updatedExam);
 
-      showToast(`Berhasil mengimpor ${res.count} soal ke ${selectedPaket} • ${selectedMapel} (${selectedSubPaket})!`, 'success');
+      const skippedCount = res.questions.length - importedWithMeta.length;
+      if (!cloudOk) {
+        showToast(
+          `Berhasil mengimpor ${importedWithMeta.length} soal secara lokal, tetapi gagal sinkron ke cloud.`,
+          'error'
+        );
+      } else if (skippedCount > 0) {
+        showToast(
+          `Berhasil mengimpor ${importedWithMeta.length} soal (mencapai batas ${MAX_QUESTIONS_PER_PACKAGE} soal/paket; ${skippedCount} soal berlebih dilewati).`,
+          'success'
+        );
+      } else {
+        showToast(
+          `Berhasil mengimpor ${importedWithMeta.length} soal (${updatedExam.soalList.length}/${MAX_QUESTIONS_PER_PACKAGE}) ke ${selectedPaket} • ${selectedMapel} (${selectedSubPaket})!`,
+          'success'
+        );
+      }
     } catch (err: any) {
       showToast(`Gagal membaca berkas docx: ${err?.message || 'Format tidak sesuai'}`, 'error');
     } finally {
@@ -1221,6 +1273,17 @@ export const CBTTab: React.FC<Props> = ({
                 </span>
                 <span className="px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs">
                   {selectedSubPaket}
+                </span>
+                <span
+                  className={`px-2.5 py-0.5 rounded-lg font-mono font-black text-xs border ${
+                    activeExam.soalList.length >= MAX_QUESTIONS_PER_PACKAGE
+                      ? 'bg-rose-100 text-rose-800 border-rose-300'
+                      : activeExam.soalList.length >= 40
+                      ? 'bg-amber-100 text-amber-800 border-amber-300'
+                      : 'bg-sky-100 text-sky-800 border-sky-200'
+                  }`}
+                >
+                  {activeExam.soalList.length} / {MAX_QUESTIONS_PER_PACKAGE} Soal
                 </span>
                 {editingQuestionId && (
                   <span className="px-2.5 py-0.5 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-[11px] animate-pulse">
@@ -2015,7 +2078,7 @@ export const CBTTab: React.FC<Props> = ({
                             }`}
                           />
                           <span>
-                            {exPaket} • {ex.mapel} ({exSub}) [{ex.kelas}] — {ex.soalList.length} Soal (
+                            {exPaket} • {ex.mapel} ({exSub}) [{ex.kelas}] — {ex.soalList.length}/{MAX_QUESTIONS_PER_PACKAGE} Soal (
                             {ex.aktif ? 'Aktif' : 'Nonaktif'})
                           </span>
                         </button>
@@ -2026,13 +2089,27 @@ export const CBTTab: React.FC<Props> = ({
               )}
 
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-4 rounded-3xl border border-slate-200">
-                <div>
+                <div className="space-y-1.5 flex-1">
                   <h3 className="font-display font-black text-base text-slate-900 flex items-center gap-2">
                     <Layers className="w-5 h-5 text-emerald-600" /> Daftar Soal: {selectedPaket} • {selectedMapel} ({selectedSubPaket})
                   </h3>
                   <p className="text-xs text-slate-600">
-                    Kelas: <strong>{targetKelas}</strong> • Total: <strong>{activeExam.soalList.length} Butir Soal</strong> • Total Bobot: <strong>{totalPoints} Poin</strong>
+                    Kelas: <strong>{targetKelas}</strong> • Tersimpan: <strong>{activeExam.soalList.length} / {MAX_QUESTIONS_PER_PACKAGE} Butir Soal</strong> • Total Bobot: <strong>{totalPoints} Poin</strong>
                   </p>
+                  <div className="w-full max-w-md h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-300 ${
+                        activeExam.soalList.length >= MAX_QUESTIONS_PER_PACKAGE
+                          ? 'bg-rose-500'
+                          : activeExam.soalList.length >= 40
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500'
+                      }`}
+                      style={{
+                        width: `${Math.min(100, Math.round((activeExam.soalList.length / MAX_QUESTIONS_PER_PACKAGE) * 100))}%`,
+                      }}
+                    />
+                  </div>
                 </div>
 
                 {/* Filter controls */}
@@ -2618,7 +2695,7 @@ export const CBTTab: React.FC<Props> = ({
                       <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-slate-200 inline-block"></span> Belum</span>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-1.5 max-h-44 overflow-y-auto p-0.5">
                     {currentExamQuestions.map((qItem, idx) => {
                       const ansVal = studentAnswers[qItem.id];
                       const isAns =

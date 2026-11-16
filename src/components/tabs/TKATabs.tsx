@@ -66,6 +66,7 @@ import {
   TKAMapelScoreKey,
   normalizeTkaMapelKey,
   extractBaseTkaPaket,
+  MAX_QUESTIONS_PER_PACKAGE,
 } from '../../utils/storage';
 import { getLocalTodayStr } from '../../utils/dateUtils';
 import { collectPersistentLocalBackup, pushAllDataToCloud, syncAllLocalToCloud } from '../../utils/cloudSync';
@@ -80,6 +81,7 @@ import {
 } from '../../utils/tkaFirestore';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxImporter';
+import { compressQuestionImage } from '../../utils/imageUtils';
 import { QuestionContent } from '../QuestionContent';
 import {
   PosisiGambar,
@@ -158,6 +160,7 @@ export const TKATabs: React.FC<Props> = ({
   const [filterJenisTka, setFilterJenisTka] = useState<string>('all');
   const [filterMapelTka, setFilterMapelTka] = useState<string>('all');
   const [editingTkaQuestionId, setEditingTkaQuestionId] = useState<string | null>(null);
+  const [confirmDeleteTkaQId, setConfirmDeleteTkaQId] = useState<string | null>(null);
   const docxTkaInputRef = useRef<HTMLInputElement | null>(null);
 
   // 4. Analisis TKA State (Multi-Select Mata Pelajaran)
@@ -867,40 +870,45 @@ export const TKATabs: React.FC<Props> = ({
     showToast('Pecahan berhasil diubah ke format teks sesuai EYD V!', 'success');
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setFormGambarUrl(reader.result as string);
-        showToast('Gambar 1 soal berhasil dimuat!', 'success');
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    try {
+      const compressed = await compressQuestionImage(file, { maxWidth: 960, maxHeight: 720, quality: 0.78 });
+      setFormGambarUrl(compressed);
+      showToast('Gambar 1 soal berhasil dimuat & dioptimalkan!', 'success');
+    } catch {
+      showToast('Gagal memproses gambar 1 soal.', 'error');
+    } finally {
+      e.target.value = '';
     }
   };
 
-  const handleImageUpload2 = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload2 = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setFormGambarUrl2(reader.result as string);
-        showToast('Gambar 2 soal berhasil dimuat!', 'success');
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    try {
+      const compressed = await compressQuestionImage(file, { maxWidth: 960, maxHeight: 720, quality: 0.78 });
+      setFormGambarUrl2(compressed);
+      showToast('Gambar 2 soal berhasil dimuat & dioptimalkan!', 'success');
+    } catch {
+      showToast('Gagal memproses gambar 2 soal.', 'error');
+    } finally {
+      e.target.value = '';
     }
   };
 
-  const handleOptionImageUpload = (key: string, file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
+  const handleOptionImageUpload = async (key: string, file: File) => {
+    try {
+      const compressed = await compressQuestionImage(file, { maxWidth: 640, maxHeight: 480, quality: 0.78 });
       setFormOpsiGambar((prev) => ({
         ...prev,
-        [key]: reader.result as string,
+        [key]: compressed,
       }));
       showToast(`Gambar untuk opsi ${key} berhasil ditambahkan!`, 'success');
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      showToast(`Gagal memproses gambar untuk opsi ${key}.`, 'error');
+    }
   };
 
   const handleRemoveOptionImage = (key: string) => {
@@ -979,11 +987,23 @@ export const TKATabs: React.FC<Props> = ({
     showToast(`Mode edit aktif untuk butir soal #${q.id}. Perbarui data lalu klik 'Simpan Perubahan'.`, 'success');
   };
 
-  // Submit or update TKA question
-  const handleSaveTkaQuestion = (e: React.FormEvent) => {
+  // Submit or update TKA question (up to 50 questions per paket + mapel)
+  const handleSaveTkaQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formPertanyaan.trim()) {
       showToast('Harap tuliskan pertanyaan butir soal!', 'error');
+      return;
+    }
+
+    const currentBucketCount = tkaQuestions.filter(
+      (q) => q.jenisTka === formPaket && q.mapel === formMapel
+    ).length;
+
+    if (!editingTkaQuestionId && currentBucketCount >= MAX_QUESTIONS_PER_PACKAGE) {
+      showToast(
+        `Paket ${formPaket} • ${formMapel} sudah mencapai batas maksimal ${MAX_QUESTIONS_PER_PACKAGE} soal.`,
+        'error'
+      );
       return;
     }
 
@@ -1056,12 +1076,17 @@ export const TKATabs: React.FC<Props> = ({
       const editedItem = editedIdx >= 0 ? updated[editedIdx] : undefined;
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
-      if (editedItem) {
-        saveSingleTkaQuestionToFirestore(editedItem, editedIdx);
-      }
       handleSaveTkaDuration(formPaket, formMapel, formDurasiMenit, true);
-      showToast('Perubahan butir soal TKA & waktu pengerjaan berhasil diperbarui!', 'success');
       handleResetForm();
+
+      const cloudOk = editedItem
+        ? await saveSingleTkaQuestionToFirestore(editedItem, editedIdx)
+        : true;
+      if (!cloudOk) {
+        showToast('Perubahan tersimpan lokal, tetapi gagal sinkron ke cloud Firestore.', 'error');
+        return;
+      }
+      showToast('Perubahan butir soal TKA & waktu pengerjaan berhasil diperbarui!', 'success');
     } else {
       const newQuestion: TKAQuestion = {
         id: `tka_q_${Date.now()}`,
@@ -1082,47 +1107,87 @@ export const TKATabs: React.FC<Props> = ({
         pembahasan: `Level: ${formKesukaran} (${formKognitif}). Target: ${formTargetKelas}. CP: ${activeCp?.judulCp || '-'}. TP: ${activeTp?.judulTp || '-'}`,
       };
 
-      // Append at end so first question created is #1
       const updated = [...tkaQuestions, newQuestion];
+      const nextBucketCount = updated.filter(
+        (q) => q.jenisTka === formPaket && q.mapel === formMapel
+      ).length;
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
-      saveSingleTkaQuestionToFirestore(newQuestion, updated.length - 1);
       handleSaveTkaDuration(formPaket, formMapel, formDurasiMenit, true);
-
-      showToast(`Soal berhasil disimpan ke Bank Soal ${formPaket} (Waktu: ${formDurasiMenit} Menit)!`, 'success');
       handleResetForm();
+
+      const cloudOk = await saveSingleTkaQuestionToFirestore(newQuestion, updated.length - 1);
+      if (!cloudOk) {
+        showToast('Soal tersimpan lokal, tetapi gagal sinkron ke cloud Firestore.', 'error');
+        return;
+      }
+
+      showToast(
+        `Soal #${nextBucketCount}/${MAX_QUESTIONS_PER_PACKAGE} berhasil disimpan ke ${formPaket} • ${formMapel} (Waktu: ${formDurasiMenit} Menit)!`,
+        'success'
+      );
     }
   };
 
   const handleDeleteTkaQuestion = (id: string) => {
-    if (confirm('Hapus butir soal TKA ini?')) {
-      const updated = tkaQuestions.filter((q) => q.id !== id);
-      setTkaQuestions(updated);
-      saveStoredTKAQuestions(updated);
-      deleteTkaQuestionFromFirestore(id);
-      if (editingTkaQuestionId === id) {
-        handleResetForm();
-      }
-      showToast('Soal TKA berhasil dihapus', 'success');
+    const updated = tkaQuestions.filter((q) => q.id !== id);
+    setTkaQuestions(updated);
+    saveStoredTKAQuestions(updated);
+    deleteTkaQuestionFromFirestore(id).catch(() => {});
+    if (editingTkaQuestionId === id) {
+      handleResetForm();
     }
+    setConfirmDeleteTkaQId(null);
+    showToast('Soal TKA berhasil dihapus', 'success');
   };
 
   const handleImportDocxTka = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
+      const existingCount = tkaQuestions.filter(
+        (q) => q.jenisTka === formPaket && q.mapel === formMapel
+      ).length;
+      const remainingSlots = Math.max(0, MAX_QUESTIONS_PER_PACKAGE - existingCount);
+      if (remainingSlots <= 0) {
+        showToast(
+          `Paket ${formPaket} • ${formMapel} sudah mencapai batas maksimal ${MAX_QUESTIONS_PER_PACKAGE} soal.`,
+          'error'
+        );
+        return;
+      }
+
       showToast('Membaca berkas DOCX soal TKA...', 'success');
       const res = await parseQuestionsFromDocx(file);
       if (!res.success || res.questions.length === 0) {
         showToast(res.error || 'Gagal membaca butir soal dari berkas Word (.docx)', 'error');
         return;
       }
-      const converted = convertToTkaQuestions(res.questions, formMapel, formPaket);
-      const updated = [...converted, ...tkaQuestions];
+      const convertedAll = convertToTkaQuestions(res.questions, formMapel, formPaket);
+      const accepted = convertedAll.slice(0, remainingSlots);
+      const startIndex = tkaQuestions.length;
+      const updated = [...tkaQuestions, ...accepted];
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
-      saveTkaQuestionsBatchToFirestore(updated);
-      showToast(`Berhasil mengimpor ${converted.length} soal TKA dari berkas Word (${file.name})!`, 'success');
+
+      const cloudOk = await saveTkaQuestionsBatchToFirestore(accepted, startIndex);
+      const skippedCount = convertedAll.length - accepted.length;
+      if (!cloudOk) {
+        showToast(
+          `Berhasil mengimpor ${accepted.length} soal secara lokal, tetapi gagal sinkron ke cloud.`,
+          'error'
+        );
+      } else if (skippedCount > 0) {
+        showToast(
+          `Berhasil mengimpor ${accepted.length} soal TKA (mencapai batas ${MAX_QUESTIONS_PER_PACKAGE} soal/paket; ${skippedCount} soal berlebih dilewati).`,
+          'success'
+        );
+      } else {
+        showToast(
+          `Berhasil mengimpor ${accepted.length} soal TKA (${existingCount + accepted.length}/${MAX_QUESTIONS_PER_PACKAGE}) ke ${formPaket} • ${formMapel}!`,
+          'success'
+        );
+      }
     } catch (err: any) {
       showToast('Gagal memproses berkas DOCX: ' + (err?.message || ''), 'error');
     } finally {
@@ -1202,24 +1267,31 @@ export const TKATabs: React.FC<Props> = ({
     showToast('Tujuan Pembelajaran (TP) TKA berhasil ditambahkan!', 'success');
   };
 
-  // Import Soal TKA Excel
+  // Import Soal TKA Excel (mendukung hingga 50 soal per paket & mapel)
   const handleImportTkaQuestions = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       try {
         const bstr = evt.target?.result;
         const wb = XLSX.read(bstr, { type: 'binary' });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const data: any[] = XLSX.utils.sheet_to_json(ws);
 
+        const bucketCounts = new Map<string, number>();
+        tkaQuestions.forEach((q) => {
+          const bk = `${q.jenisTka}__${q.mapel}`;
+          bucketCounts.set(bk, (bucketCounts.get(bk) || 0) + 1);
+        });
+
         const importedQuestions: TKAQuestion[] = [];
+        let skippedOverLimit = 0;
 
         data.forEach((row, idx) => {
-          const jenis = (row['Jenis TKA'] || row['jenisTka'] || 'Simulasi 1') as TKAJenis;
-          const mapel = row['Mata Pelajaran'] || row['mapel'] || 'Bahasa Indonesia';
+          const jenis = (row['Jenis TKA'] || row['jenisTka'] || formPaket) as TKAJenis;
+          const mapel = row['Mata Pelajaran'] || row['mapel'] || formMapel;
           const tipe = (row['Tipe Soal'] || row['tipe'] || 'isian') as any;
           const judulRaw = String(row['Judul Teks'] || row['Judul'] || row['judulTeks'] || '').trim();
           const pertanyaan = row['Pertanyaan'] || row['pertanyaan'];
@@ -1235,6 +1307,14 @@ export const TKATabs: React.FC<Props> = ({
             : 'bawah_judul';
 
           if (pertanyaan && kunci) {
+            const bk = `${jenis}__${mapel}`;
+            const curCount = bucketCounts.get(bk) || 0;
+            if (curCount >= MAX_QUESTIONS_PER_PACKAGE) {
+              skippedOverLimit++;
+              return;
+            }
+            bucketCounts.set(bk, curCount + 1);
+
             let opsiParsed: string[] | undefined = undefined;
             if (opsiRaw && typeof opsiRaw === 'string') {
               opsiParsed = opsiRaw.split(',').map((o: string) => o.trim());
@@ -1259,17 +1339,37 @@ export const TKATabs: React.FC<Props> = ({
         });
 
         if (importedQuestions.length > 0) {
-          const updated = [...importedQuestions, ...tkaQuestions];
+          const startIndex = tkaQuestions.length;
+          const updated = [...tkaQuestions, ...importedQuestions];
           setTkaQuestions(updated);
           saveStoredTKAQuestions(updated);
-          saveTkaQuestionsBatchToFirestore(updated);
-          showToast(`Berhasil mengimpor ${importedQuestions.length} butir soal TKA!`, 'success');
+          const cloudOk = await saveTkaQuestionsBatchToFirestore(importedQuestions, startIndex);
+          if (!cloudOk) {
+            showToast(
+              `Berhasil mengimpor ${importedQuestions.length} butir soal secara lokal, tetapi gagal sinkron ke cloud.`,
+              'error'
+            );
+          } else if (skippedOverLimit > 0) {
+            showToast(
+              `Berhasil mengimpor ${importedQuestions.length} soal TKA! (${skippedOverLimit} soal dilewati karena paket telah mencapai batas ${MAX_QUESTIONS_PER_PACKAGE} soal).`,
+              'success'
+            );
+          } else {
+            showToast(`Berhasil mengimpor ${importedQuestions.length} butir soal TKA!`, 'success');
+          }
+        } else if (skippedOverLimit > 0) {
+          showToast(
+            `Tidak ada soal ditambahkan karena paket tujuan sudah mencapai batas maksimal ${MAX_QUESTIONS_PER_PACKAGE} soal.`,
+            'error'
+          );
         } else {
           showToast('Tidak ada baris soal yang valid ditemukan dalam file.', 'error');
         }
       } catch (err) {
         console.error('Import error:', err);
         showToast('Gagal mengimpor file. Pastikan format kolom sesuai.', 'error');
+      } finally {
+        e.target.value = '';
       }
     };
     reader.readAsBinaryString(file);
@@ -1378,6 +1478,11 @@ export const TKATabs: React.FC<Props> = ({
     if (filterMapelTka !== 'all' && q.mapel !== filterMapelTka) return false;
     return true;
   });
+
+  const activeFormBucketCount = useMemo(
+    () => tkaQuestions.filter((q) => q.jenisTka === formPaket && q.mapel === formMapel).length,
+    [tkaQuestions, formPaket, formMapel]
+  );
 
   const curSimQ = simulationQuestions[simQuestionIdx];
 
@@ -2115,7 +2220,7 @@ export const TKATabs: React.FC<Props> = ({
               </div>
 
               {/* Navigator */}
-              <div className="flex flex-wrap gap-2 bg-white p-3 rounded-2xl border border-slate-200">
+              <div className="flex flex-wrap gap-2 bg-white p-3 rounded-2xl border border-slate-200 max-h-44 overflow-y-auto">
                 {simulationQuestions.map((q, idx) => {
                   const isAnswered = simAnswers[q.id] !== undefined && simAnswers[q.id] !== '';
                   const isCurrent = idx === simQuestionIdx;
@@ -2369,6 +2474,49 @@ export const TKATabs: React.FC<Props> = ({
 
           {/* ================= EXACT REFERENCE FORM: IMAGE 1 ================= */}
           <div className="bg-white p-6 sm:p-7 rounded-3xl border border-slate-200 shadow-sm space-y-5">
+            {/* Capacity Banner (50 Soal per Paket & Mapel) */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-bold text-slate-700">Kapasitas Paket Aktif:</span>
+                <span className="px-2.5 py-0.5 rounded-lg bg-rose-100 text-rose-800 font-black">
+                  {formPaket}
+                </span>
+                <span className="px-2.5 py-0.5 rounded-lg bg-indigo-100 text-indigo-800 font-black">
+                  {formMapel}
+                </span>
+                <span
+                  className={`px-2.5 py-0.5 rounded-lg font-mono font-black border ${
+                    activeFormBucketCount >= MAX_QUESTIONS_PER_PACKAGE
+                      ? 'bg-rose-100 text-rose-800 border-rose-300'
+                      : activeFormBucketCount >= 40
+                      ? 'bg-amber-100 text-amber-800 border-amber-300'
+                      : 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                  }`}
+                >
+                  {activeFormBucketCount} / {MAX_QUESTIONS_PER_PACKAGE} Soal
+                </span>
+              </div>
+              <div className="flex items-center gap-3 w-full sm:w-56">
+                <div className="flex-1 h-2 bg-slate-200 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      activeFormBucketCount >= MAX_QUESTIONS_PER_PACKAGE
+                        ? 'bg-rose-500'
+                        : activeFormBucketCount >= 40
+                        ? 'bg-amber-500'
+                        : 'bg-emerald-500'
+                    }`}
+                    style={{
+                      width: `${Math.min(100, Math.round((activeFormBucketCount / MAX_QUESTIONS_PER_PACKAGE) * 100))}%`,
+                    }}
+                  />
+                </div>
+                <span className="text-[11px] font-bold text-slate-500 shrink-0">
+                  Sisa {Math.max(0, MAX_QUESTIONS_PER_PACKAGE - activeFormBucketCount)}
+                </span>
+              </div>
+            </div>
+
             {/* Row 1: Top Selectors */}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-12 gap-3.5">
               {/* Paket / Jenis Ulangan with red rounded border */}
@@ -3041,7 +3189,12 @@ export const TKATabs: React.FC<Props> = ({
                 </select>
 
                 <span className="text-xs font-bold bg-amber-50 text-amber-900 px-3 py-1.5 rounded-xl border border-amber-200">
-                  Total: <strong>{filteredTkaQuestions.length} Soal</strong>
+                  Total:{' '}
+                  <strong>
+                    {filterJenisTka !== 'all' && filterMapelTka !== 'all'
+                      ? `${filteredTkaQuestions.length} / ${MAX_QUESTIONS_PER_PACKAGE} Soal`
+                      : `${filteredTkaQuestions.length} Soal`}
+                  </strong>
                 </span>
                 {filterJenisTka !== 'all' && (
                   <>
@@ -3115,14 +3268,33 @@ export const TKATabs: React.FC<Props> = ({
                       >
                         <Edit3 className="w-4 h-4" />
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteTkaQuestion(q.id)}
-                        className="text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 transition cursor-pointer"
-                        title="Hapus Butir Soal"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {confirmDeleteTkaQId === q.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTkaQuestion(q.id)}
+                            className="px-2 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-black cursor-pointer"
+                          >
+                            Hapus
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteTkaQId(null)}
+                            className="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] font-bold cursor-pointer"
+                          >
+                            Batal
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteTkaQId(q.id)}
+                          className="text-rose-500 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 transition cursor-pointer"
+                          title="Hapus Butir Soal"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
 
