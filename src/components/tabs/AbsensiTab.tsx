@@ -85,6 +85,7 @@ export const AbsensiTab: React.FC<Props> = ({
     student: Student;
     time: string;
     status: 'H' | 'S' | 'I' | 'A';
+    alreadyPresent?: boolean;
   } | null>(null);
 
   const [manualCode, setManualCode] = useState('');
@@ -138,12 +139,12 @@ export const AbsensiTab: React.FC<Props> = ({
   }, []);
 
   // Play auditory tone
-  const playBeep = (type: 'success' | 'error' = 'success') => {
+  const playBeep = (type: 'success' | 'error' | 'duplicate' = 'success') => {
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioContextClass) return;
       const audioCtx = new AudioContextClass();
-      
+
       if (type === 'success') {
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
@@ -156,6 +157,18 @@ export const AbsensiTab: React.FC<Props> = ({
         gain.connect(audioCtx.destination);
         osc.start();
         osc.stop(audioCtx.currentTime + 0.22);
+      } else if (type === 'duplicate') {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(660, audioCtx.currentTime);
+        osc.frequency.setValueAtTime(520, audioCtx.currentTime + 0.14);
+        gain.gain.setValueAtTime(0.28, audioCtx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.3);
       } else {
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
@@ -175,9 +188,61 @@ export const AbsensiTab: React.FC<Props> = ({
   };
 
   // Record student attendance permanently to state, localStorage, and Firestore 'attendance' collection
-  const recordAttendance = async (student: Student, status: 'H' | 'S' | 'I' | 'A' = 'H') => {
-    const timeStr = getLocalTimeStr(new Date(), true);
+  const recordAttendance = async (
+    student: Student,
+    status: 'H' | 'S' | 'I' | 'A' = 'H',
+    options?: { skipIfAlreadyRecorded?: boolean }
+  ) => {
     const key = `${activeDate}_${student.id}`;
+    const existingRec = attendanceRecords[key];
+
+    if (options?.skipIfAlreadyRecorded && existingRec) {
+      const existingLabel =
+        existingRec.status === 'H'
+          ? 'HADIR'
+          : existingRec.status === 'S'
+          ? 'SAKIT'
+          : existingRec.status === 'I'
+          ? 'IZIN'
+          : 'ALFA';
+      const existingTime = existingRec.time || '--:--';
+
+      setLastScannedStudent(
+        `${student.nama} (${student.barcodeId}) - SUDAH ${existingLabel}`
+      );
+      setLastScannedTime(existingTime);
+      setScannedSuccessItem({
+        student,
+        time: existingTime,
+        status: existingRec.status,
+        alreadyPresent: true,
+      });
+      playBeep('duplicate');
+      try {
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(
+            existingRec.status === 'H'
+              ? 'Anak ini sudah hadir'
+              : `Anak ini sudah tercatat ${existingLabel.toLowerCase()}`
+          );
+          utterance.lang = 'id-ID';
+          utterance.rate = 1.05;
+          window.speechSynthesis.speak(utterance);
+        }
+      } catch {
+        // Abaikan jika SpeechSynthesis tidak tersedia
+      }
+      showToast(
+        existingRec.status === 'H'
+          ? `Anak ini sudah hadir! ${student.nama} telah absen pukul ${existingTime} (waktu tidak ditimpa).`
+          : `Anak ini sudah absen (${existingLabel}) pukul ${existingTime} — data tidak ditimpa.`,
+        'error'
+      );
+      return;
+    }
+
+    const timeStr = getLocalTimeStr(new Date(), true);
     const newRecord: AttendanceRecordItem = {
       id: key,
       studentId: student.id,
@@ -195,6 +260,7 @@ export const AbsensiTab: React.FC<Props> = ({
       student,
       time: timeStr,
       status,
+      alreadyPresent: false,
     });
     playBeep('success');
 
@@ -251,7 +317,7 @@ export const AbsensiTab: React.FC<Props> = ({
       filteredStudents.find(matchesStudent) || students.find(matchesStudent);
 
     if (studentAnywhere) {
-      recordAttendance(studentAnywhere, 'H');
+      recordAttendance(studentAnywhere, 'H', { skipIfAlreadyRecorded: true });
     } else {
       playBeep('error');
       showToast(`Barcode "${rawCode}" tidak cocok dengan data siswa manapun!`, 'error');
@@ -365,7 +431,7 @@ export const AbsensiTab: React.FC<Props> = ({
         if (keyBufferRef.current.buffer.length >= 3) {
           const scanned = keyBufferRef.current.buffer;
           keyBufferRef.current.buffer = '';
-          handleBarcodeDetected(scanned);
+          barcodeDetectedRef.current(scanned);
         }
       } else if (e.key.length === 1) {
         keyBufferRef.current.buffer += e.key;
@@ -407,7 +473,7 @@ export const AbsensiTab: React.FC<Props> = ({
       );
 
     if (student) {
-      recordAttendance(student, 'H');
+      recordAttendance(student, 'H', { skipIfAlreadyRecorded: true });
       setManualCode('');
     } else {
       playBeep('error');
@@ -430,13 +496,17 @@ export const AbsensiTab: React.FC<Props> = ({
     setIsBatchSaving(true);
     try {
       const timeStr = getLocalTimeStr(new Date(), false);
-      const batchRecords: AttendanceRecordItem[] = filteredStudents.map((s) => ({
-        id: `${activeDate}_${s.id}`,
-        studentId: s.id,
-        date: activeDate,
-        status: 'H',
-        time: timeStr,
-      }));
+      const batchRecords: AttendanceRecordItem[] = filteredStudents.map((s) => {
+        const key = `${activeDate}_${s.id}`;
+        const existing = attendanceRecords[key];
+        return {
+          id: key,
+          studentId: s.id,
+          date: activeDate,
+          status: 'H',
+          time: existing?.status === 'H' && existing.time ? existing.time : timeStr,
+        };
+      });
 
       await onSaveBatchAttendance(batchRecords);
       showToast(
@@ -710,60 +780,126 @@ export const AbsensiTab: React.FC<Props> = ({
             )}
           </div>
 
-          {/* NOTIFIKASI CEKLIS SUKSES SCAN BARCODE (Real-time Checklist Notification) */}
-          {scannedSuccessItem && (
-            <div className="p-4 rounded-3xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-xl border-2 border-emerald-300 animate-in fade-in zoom-in-95 duration-200">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-3.5">
-                  <div className="relative">
-                    <img
-                      src={scannedSuccessItem.student.fotoUrl}
-                      alt={scannedSuccessItem.student.nama}
-                      onClick={() =>
-                        onOpenZoom(
-                          scannedSuccessItem.student.fotoUrl,
-                          scannedSuccessItem.student.nama
-                        )
-                      }
-                      className="w-14 h-14 rounded-2xl object-cover border-2 border-white shadow-md cursor-zoom-in"
-                    />
-                    <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-white text-emerald-600 flex items-center justify-center shadow-md">
-                      <CheckCircle2 className="w-5 h-5 fill-emerald-600 text-white" />
+          {/* NOTIFIKASI CEKLIS SUKSES / SUDAH HADIR SCAN BARCODE */}
+          {scannedSuccessItem && (() => {
+            const isDuplicate = Boolean(scannedSuccessItem.alreadyPresent);
+            const statusText =
+              scannedSuccessItem.status === 'H'
+                ? 'HADIR (H)'
+                : scannedSuccessItem.status === 'S'
+                ? 'SAKIT (S)'
+                : scannedSuccessItem.status === 'I'
+                ? 'IZIN (I)'
+                : 'ALFA (A)';
+            return (
+              <div
+                className={`p-4 rounded-3xl text-white shadow-xl border-2 animate-in fade-in zoom-in-95 duration-200 ${
+                  isDuplicate
+                    ? 'bg-gradient-to-r from-amber-500 to-orange-500 border-amber-200'
+                    : 'bg-gradient-to-r from-emerald-600 to-teal-600 border-emerald-300'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3.5">
+                    <div className="relative">
+                      <img
+                        src={scannedSuccessItem.student.fotoUrl}
+                        alt={scannedSuccessItem.student.nama}
+                        onClick={() =>
+                          onOpenZoom(
+                            scannedSuccessItem.student.fotoUrl,
+                            scannedSuccessItem.student.nama
+                          )
+                        }
+                        className="w-14 h-14 rounded-2xl object-cover border-2 border-white shadow-md cursor-zoom-in"
+                      />
+                      <div
+                        className={`absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-white flex items-center justify-center shadow-md ${
+                          isDuplicate ? 'text-amber-600' : 'text-emerald-600'
+                        }`}
+                      >
+                        {isDuplicate ? (
+                          <AlertTriangle className="w-4 h-4 text-amber-600" />
+                        ) : (
+                          <CheckCircle2 className="w-5 h-5 fill-emerald-600 text-white" />
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <span
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-white/20 tracking-wider ${
+                          isDuplicate ? 'text-amber-50' : 'text-emerald-100'
+                        }`}
+                      >
+                        {isDuplicate ? (
+                          <>
+                            <AlertTriangle className="w-3.5 h-3.5" /> Sudah Absen Hari Ini • Tidak Ditimpa
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Presensi Berhasil Tercatat
+                          </>
+                        )}
+                      </span>
+                      <h4 className="font-display font-black text-base text-white mt-0.5">
+                        {scannedSuccessItem.student.nama}
+                      </h4>
+                      <div
+                        className={`text-[11px] font-mono font-bold ${
+                          isDuplicate ? 'text-amber-50' : 'text-emerald-100'
+                        }`}
+                      >
+                        {scannedSuccessItem.student.barcodeId} • Kelas: {scannedSuccessItem.student.kelas} • NISN: {scannedSuccessItem.student.nisn}
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-white/20 text-emerald-100 tracking-wider">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Presensi Berhasil Tercatat
-                    </span>
-                    <h4 className="font-display font-black text-base text-white mt-0.5">
-                      {scannedSuccessItem.student.nama}
-                    </h4>
-                    <div className="text-[11px] text-emerald-100 font-mono font-bold">
-                      {scannedSuccessItem.student.barcodeId} • Kelas: {scannedSuccessItem.student.kelas} • NISN: {scannedSuccessItem.student.nisn}
-                    </div>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setScannedSuccessItem(null)}
+                    className="p-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white transition cursor-pointer"
+                    title="Tutup Notifikasi"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setScannedSuccessItem(null)}
-                  className="p-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white transition cursor-pointer"
-                  title="Tutup Notifikasi"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
 
-              <div className="mt-3 pt-2.5 border-t border-emerald-400/40 flex items-center justify-between text-xs font-bold">
-                <span className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-200 animate-ping" />
-                  Status: <strong>HADIR (H)</strong>
-                </span>
-                <span className="font-mono bg-emerald-900/60 px-3 py-1 rounded-xl text-emerald-100 border border-emerald-400/30">
-                  Waktu: {scannedSuccessItem.time}
-                </span>
+                {isDuplicate && (
+                  <div className="mt-2.5 px-3 py-2 rounded-2xl bg-black/20 border border-white/25 text-xs font-extrabold text-white flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-200" />
+                    <span>
+                      {scannedSuccessItem.status === 'H'
+                        ? `Anak ini sudah hadir! Waktu scan awal (${scannedSuccessItem.time}) tetap dipertahankan.`
+                        : `Anak ini sudah tercatat ${statusText} hari ini pukul ${scannedSuccessItem.time}. Data tidak ditimpa.`}
+                    </span>
+                  </div>
+                )}
+
+                <div
+                  className={`mt-3 pt-2.5 border-t flex items-center justify-between text-xs font-bold ${
+                    isDuplicate ? 'border-amber-200/40' : 'border-emerald-400/40'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span
+                      className={`w-2.5 h-2.5 rounded-full ${
+                        isDuplicate ? 'bg-amber-200' : 'bg-emerald-200 animate-ping'
+                      }`}
+                    />
+                    Status: <strong>{statusText}</strong>
+                  </span>
+                  <span
+                    className={`font-mono px-3 py-1 rounded-xl border ${
+                      isDuplicate
+                        ? 'bg-amber-900/50 text-amber-50 border-amber-200/30'
+                        : 'bg-emerald-900/60 text-emerald-100 border-emerald-400/30'
+                    }`}
+                  >
+                    {isDuplicate ? `Waktu Awal: ${scannedSuccessItem.time}` : `Waktu: ${scannedSuccessItem.time}`}
+                  </span>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Status Scan Terakhir Barcode */}
           <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-2 text-xs">
@@ -819,7 +955,7 @@ export const AbsensiTab: React.FC<Props> = ({
                   <button
                     key={s.id}
                     type="button"
-                    onClick={() => recordAttendance(s, 'H')}
+                    onClick={() => recordAttendance(s, 'H', { skipIfAlreadyRecorded: true })}
                     className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
                       isHadir
                         ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
@@ -902,7 +1038,7 @@ export const AbsensiTab: React.FC<Props> = ({
                 setSelectedStudentDropdown(e.target.value);
                 const s = students.find((st) => st.id === e.target.value);
                 if (s) {
-                  recordAttendance(s, 'H');
+                  recordAttendance(s, 'H', { skipIfAlreadyRecorded: true });
                   setSelectedStudentDropdown('');
                 }
               }}
@@ -948,7 +1084,9 @@ export const AbsensiTab: React.FC<Props> = ({
                         key={s.id}
                         className={`transition-colors ${
                           isJustScanned
-                            ? 'bg-emerald-50 ring-2 ring-emerald-400'
+                            ? scannedSuccessItem?.alreadyPresent
+                              ? 'bg-amber-50 ring-2 ring-amber-400'
+                              : 'bg-emerald-50 ring-2 ring-emerald-400'
                             : 'hover:bg-slate-50'
                         }`}
                       >
