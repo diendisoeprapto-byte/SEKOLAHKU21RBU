@@ -33,6 +33,7 @@ import {
   saveActiveFilters,
   saveStoredReportNotes,
   saveStoredTKADurations,
+  saveStoredCBTDurations,
   saveStoredCBTActivePackages,
   saveStoredTKAActivePackages,
   getStoredCBTExams,
@@ -300,6 +301,9 @@ export default function App() {
         if (cloudData.tkaDurations && typeof cloudData.tkaDurations === 'object') {
           saveStoredTKADurations(cloudData.tkaDurations);
         }
+        if (cloudData.cbtDurations && typeof cloudData.cbtDurations === 'object') {
+          saveStoredCBTDurations(cloudData.cbtDurations);
+        }
         if (cloudData.cbtActivePackages && typeof cloudData.cbtActivePackages === 'object') {
           saveStoredCBTActivePackages(cloudData.cbtActivePackages);
         }
@@ -333,6 +337,7 @@ export default function App() {
       if (!isLocalEcho) {
         window.dispatchEvent(new Event('sekolahku-cloud-sync-updated'));
         window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
+        window.dispatchEvent(new Event('sekolahku-cbt-durations-updated'));
         window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
         window.dispatchEvent(new Event('sekolahku-tka-active-updated'));
         window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));

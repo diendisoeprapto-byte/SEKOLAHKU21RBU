@@ -15,6 +15,7 @@ const STORAGE_KEYS = {
   AS_COUNT: 'sekolahku_assessment_counts', // subject/class -> number of AS columns
   NOTES: 'sekolahku_report_notes',
   CBT_EXAMS: 'sekolahku_cbt_exams',
+  CBT_DURATIONS: 'sekolahku_cbt_durations',
   CBT_ACTIVE_PACKAGES: 'sekolahku_cbt_active_packages',
   CBT_RESULTS: 'sekolahku_cbt_results',
   TKA_CP_TP: 'sekolahku_tka_cp_tp',
@@ -364,6 +365,50 @@ export const saveStoredCBTActivePackages = (activeMap: Record<string, boolean>) 
     window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
   }
   notifyStorageMutation(STORAGE_KEYS.CBT_ACTIVE_PACKAGES);
+};
+
+export const getStoredCBTDurations = (): Record<string, number> => {
+  const data = localStorage.getItem(STORAGE_KEYS.CBT_DURATIONS);
+  if (!data) return {};
+  try {
+    const parsed = JSON.parse(data);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveStoredCBTDurations = (durations: Record<string, number>) => {
+  localStorage.setItem(STORAGE_KEYS.CBT_DURATIONS, JSON.stringify(durations));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-cbt-durations-updated'));
+    window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
+  }
+  notifyStorageMutation(STORAGE_KEYS.CBT_DURATIONS);
+};
+
+export const getCBTDurationKey = (paket: string, mapel?: string | null): string => {
+  return mapel && mapel !== 'all' ? `${paket}__${mapel}` : `${paket}__ALL`;
+};
+
+export const getCBTDurationMinutes = (
+  durations: Record<string, number>,
+  options: { examId?: string; paket?: string; mapel?: string | null; fallback?: number }
+): number => {
+  const { examId, paket, mapel, fallback } = options;
+  if (examId && typeof durations[examId] === 'number' && durations[examId] > 0) {
+    return durations[examId];
+  }
+  if (paket && mapel && mapel !== 'all') {
+    const exact = durations[`${paket}__${mapel}`];
+    if (typeof exact === 'number' && exact > 0) return exact;
+  }
+  if (paket) {
+    const pkgAll = durations[`${paket}__ALL`];
+    if (typeof pkgAll === 'number' && pkgAll > 0) return pkgAll;
+  }
+  if (typeof fallback === 'number' && fallback > 0) return fallback;
+  return 60;
 };
 
 export const getStoredCBTResults = (): CBTExamResult[] => {

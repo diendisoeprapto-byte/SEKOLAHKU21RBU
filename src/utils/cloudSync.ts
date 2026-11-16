@@ -28,6 +28,7 @@ import {
   getStoredReportNotes,
   getStoredTKADurations,
   saveStoredTKADurations,
+  getStoredCBTDurations,
   getStoredTKAActivePackages,
   getStoredCBTActivePackages,
   getStoredCBTExams,
@@ -96,6 +97,7 @@ export interface CloudSyncPayload {
   tkaAcakSoal?: boolean;
   tkaAcakJawaban?: boolean;
   tkaDurations?: Record<string, number>;
+  cbtDurations?: Record<string, number>;
   cbtActivePackages?: Record<string, boolean>;
   tkaActivePackages?: Record<string, boolean>;
   localStorageSnapshot?: Record<string, any>;
@@ -144,6 +146,7 @@ function dispatchCloudSyncEvents() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-cloud-sync-updated'));
     window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
+    window.dispatchEvent(new Event('sekolahku-cbt-durations-updated'));
     window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
     window.dispatchEvent(new Event('sekolahku-tka-active-updated'));
     window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
@@ -635,6 +638,7 @@ async function pushSnapshotAndPrimaryDocs(
   const kaldikDays = getStoredKaldik();
   const reportNotes = getStoredReportNotes();
   const tkaDurations = getStoredTKADurations();
+  const cbtDurations = getStoredCBTDurations();
   const cbtActivePackages = getStoredCBTActivePackages();
   const tkaActivePackages = getStoredTKAActivePackages();
 
@@ -690,6 +694,7 @@ async function pushSnapshotAndPrimaryDocs(
     tkaAcakSoal,
     tkaAcakJawaban,
     tkaDurations,
+    cbtDurations,
     cbtActivePackages,
     tkaActivePackages,
     snapshotChunkCount,

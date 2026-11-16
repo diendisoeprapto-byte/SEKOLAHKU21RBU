@@ -33,6 +33,10 @@ import { Subject, CBTExam, CBTQuestion, Student, ActiveUser, isSiswaInklusi } fr
 import {
   getStoredCBTExams,
   saveStoredCBTExams,
+  getStoredCBTDurations,
+  saveStoredCBTDurations,
+  getCBTDurationKey,
+  getCBTDurationMinutes,
   getStoredCBTActivePackages,
   saveStoredCBTActivePackages,
   getStoredCBTResults,
@@ -44,7 +48,9 @@ import {
   saveStoredSubjectsForClass,
   notifyStorageMutation,
 } from '../../utils/storage';
-import { pushAllDataToCloud } from '../../utils/cloudSync';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../../utils/firebase';
+import { pushAllDataToCloud, syncAllLocalToCloud } from '../../utils/cloudSync';
 import { saveCbtExamToFirestore, saveCbtExamsBatchToFirestore } from '../../utils/cbtFirestore';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx } from '../../utils/docxImporter';
@@ -73,6 +79,9 @@ export const CBTTab: React.FC<Props> = ({
   showToast,
 }) => {
   const [exams, setExams] = useState<CBTExam[]>(getStoredCBTExams());
+  const [cbtDurations, setCbtDurations] = useState<Record<string, number>>(() =>
+    getStoredCBTDurations()
+  );
   const [cbtActivePackages, setCbtActivePackages] = useState<Record<string, boolean>>(() =>
     getStoredCBTActivePackages()
   );
@@ -81,17 +90,32 @@ export const CBTTab: React.FC<Props> = ({
   const [studentAnswers, setStudentAnswers] = useState<Record<string, any>>({});
   const [timeLeft, setTimeLeft] = useState(3600); // 60 mins
   const [examResult, setExamResult] = useState<{ score: number; total: number } | null>(null);
+  const [timeUpModal, setTimeUpModal] = useState<{
+    isOpen: boolean;
+    status: 'submitting' | 'done';
+    examTitle: string;
+    answeredCount: number;
+    totalQuestions: number;
+    score: number | null;
+    cloudSaved: boolean;
+  } | null>(null);
+  const isSubmittingExamRef = useRef<boolean>(false);
+  const handleSubmitExamRef = useRef<(isTimeOut?: boolean) => void>(() => {});
 
   useEffect(() => {
     const syncExams = () => {
       setExams(getStoredCBTExams());
+      setCbtDurations(getStoredCBTDurations());
       setCbtActivePackages(getStoredCBTActivePackages());
     };
+    const syncDurations = () => setCbtDurations(getStoredCBTDurations());
     window.addEventListener('sekolahku-cbt-exams-updated', syncExams);
+    window.addEventListener('sekolahku-cbt-durations-updated', syncDurations);
     window.addEventListener('sekolahku-cloud-sync-updated', syncExams);
     window.addEventListener('storage', syncExams);
     return () => {
       window.removeEventListener('sekolahku-cbt-exams-updated', syncExams);
+      window.removeEventListener('sekolahku-cbt-durations-updated', syncDurations);
       window.removeEventListener('sekolahku-cloud-sync-updated', syncExams);
       window.removeEventListener('storage', syncExams);
     };
@@ -134,7 +158,22 @@ export const CBTTab: React.FC<Props> = ({
   const [selectedPaket, setSelectedPaket] = useState<string>('Sumatif 1 (AS 1)');
   const [subPaketList, setSubPaketList] = useState<string[]>(['Paket 1', 'Paket 2', 'Paket 3']);
   const [selectedSubPaket, setSelectedSubPaket] = useState<string>('Paket 1');
-  const [examDurationMinutes, setExamDurationMinutes] = useState<number>(60);
+  const [examDurationMinutes, setExamDurationMinutes] = useState<number>(() =>
+    getCBTDurationMinutes(getStoredCBTDurations(), {
+      paket: 'Sumatif 1 (AS 1)',
+      mapel: 'Pendidikan Agama Islam',
+      fallback: 60,
+    })
+  );
+  const [durPanelPaket, setDurPanelPaket] = useState<string>('Sumatif 1 (AS 1)');
+  const [durPanelMapel, setDurPanelMapel] = useState<string>('all');
+  const [durPanelMinutes, setDurPanelMinutes] = useState<number>(() =>
+    getCBTDurationMinutes(getStoredCBTDurations(), {
+      paket: 'Sumatif 1 (AS 1)',
+      mapel: 'all',
+      fallback: 60,
+    })
+  );
   const [isAddUHOpen, setIsAddUHOpen] = useState(false);
   const [newUHName, setNewUHName] = useState('');
 
@@ -330,10 +369,29 @@ export const CBTTab: React.FC<Props> = ({
 
   useEffect(() => {
     const found = exams.find((e) => e.id === activeExam.id);
-    if (found && found.durasiMenit && found.durasiMenit !== examDurationMinutes) {
-      setExamDurationMinutes(found.durasiMenit);
-    }
-  }, [activeExam.id]);
+    const resolved = getCBTDurationMinutes(cbtDurations, {
+      examId: activeExam.id,
+      paket: selectedPaket,
+      mapel: selectedMapel,
+      fallback: found?.durasiMenit || 60,
+    });
+    setExamDurationMinutes(resolved);
+  }, [activeExam.id, selectedPaket, selectedMapel, cbtDurations, exams]);
+
+  useEffect(() => {
+    const matchedSaved = exams.find(
+      (ex) =>
+        inferPaketFromExam(ex) === durPanelPaket &&
+        (durPanelMapel === 'all' || ex.mapel === durPanelMapel)
+    );
+    setDurPanelMinutes(
+      getCBTDurationMinutes(cbtDurations, {
+        paket: durPanelPaket,
+        mapel: durPanelMapel,
+        fallback: matchedSaved?.durasiMenit || 60,
+      })
+    );
+  }, [cbtDurations, durPanelPaket, durPanelMapel, exams]);
 
   // Daftar semua bucket ujian yang sudah terisi minimal 1 soal
   const savedExamBuckets = useMemo(() => {
@@ -341,10 +399,34 @@ export const CBTTab: React.FC<Props> = ({
   }, [exams]);
 
   const SAMPLE_CBT_DEFAULTS_META = [
-    { id: 'cbt_ipas_as1', label: 'Sumatif 1 (AS 1) • IPAS (Contoh Bawaan)' },
-    { id: 'cbt_mtk_as2', label: 'Sumatif 2 (AS 2) • Matematika (Contoh Bawaan)' },
-    { id: 'cbt_asts_indo', label: 'ASTS • Bahasa Indonesia (Contoh Bawaan)' },
-    { id: 'cbt_asas_pancasila', label: 'ASAS • Pendidikan Pancasila (Contoh Bawaan)' },
+    {
+      id: 'cbt_ipas_as1',
+      paket: 'Sumatif 1 (AS 1)',
+      mapel: 'Ilmu Pengetahuan Alam dan Sosial (IPAS)',
+      defaultDurasi: 60,
+      label: 'Sumatif 1 (AS 1) • IPAS (Contoh Bawaan)',
+    },
+    {
+      id: 'cbt_mtk_as2',
+      paket: 'Sumatif 2 (AS 2)',
+      mapel: 'Matematika',
+      defaultDurasi: 60,
+      label: 'Sumatif 2 (AS 2) • Matematika (Contoh Bawaan)',
+    },
+    {
+      id: 'cbt_asts_indo',
+      paket: 'ASTS (Sumatif Tengah Semester)',
+      mapel: 'Bahasa Indonesia',
+      defaultDurasi: 90,
+      label: 'ASTS • Bahasa Indonesia (Contoh Bawaan)',
+    },
+    {
+      id: 'cbt_asas_pancasila',
+      paket: 'ASAS (Sumatif Akhir Semester)',
+      mapel: 'Pendidikan Pancasila',
+      defaultDurasi: 90,
+      label: 'ASAS • Pendidikan Pancasila (Contoh Bawaan)',
+    },
   ];
 
   const syncCbtActivationToCloud = (nextActiveMap: Record<string, boolean>) => {
@@ -354,6 +436,66 @@ export const CBTTab: React.FC<Props> = ({
       },
       activeUser?.name || 'admin'
     );
+  };
+
+  const handleSaveCbtDuration = (
+    paket: string,
+    mapel: string | null,
+    minutes: number,
+    silent: boolean = false,
+    explicitExamId?: string
+  ) => {
+    const safeMins = Math.max(1, Math.min(300, Math.round(Number(minutes) || 60)));
+    const nextDurations: Record<string, number> = { ...cbtDurations };
+
+    if (explicitExamId) {
+      nextDurations[explicitExamId] = safeMins;
+    } else {
+      nextDurations[getCBTDurationKey(paket, mapel)] = safeMins;
+      SAMPLE_CBT_DEFAULTS_META.forEach((smp) => {
+        if (smp.paket === paket && (!mapel || mapel === 'all' || smp.mapel === mapel)) {
+          nextDurations[smp.id] = safeMins;
+        }
+      });
+    }
+
+    const updatedMatchingExams: CBTExam[] = [];
+    const newExams = exams.map((ex) => {
+      const matchesById = explicitExamId && ex.id === explicitExamId;
+      const matchesByPaket =
+        !explicitExamId &&
+        inferPaketFromExam(ex) === paket &&
+        (!mapel || mapel === 'all' || ex.mapel === mapel);
+      if (matchesById || matchesByPaket) {
+        nextDurations[ex.id] = safeMins;
+        const updated = { ...ex, durasiMenit: safeMins };
+        updatedMatchingExams.push(updated);
+        return updated;
+      }
+      return ex;
+    });
+
+    if (updatedMatchingExams.length > 0) {
+      setExams(newExams);
+      saveStoredCBTExams(newExams);
+      saveCbtExamsBatchToFirestore(updatedMatchingExams).catch(() => {});
+    }
+
+    setCbtDurations(nextDurations);
+    saveStoredCBTDurations(nextDurations);
+    pushAllDataToCloud(
+      {
+        cbtDurations: nextDurations,
+      },
+      activeUser?.name || 'admin'
+    );
+
+    if (!silent) {
+      showToast(
+        `Waktu pengerjaan CBT ${paket}${mapel && mapel !== 'all' ? ` (${mapel})` : ' (Semua Mapel)'} diatur menjadi ${safeMins} menit!`,
+        'success'
+      );
+    }
   };
 
   const handleToggleExamActive = (targetExam: CBTExam, forceNext?: boolean) => {
@@ -444,20 +586,22 @@ export const CBTTab: React.FC<Props> = ({
   const currentTp = currentCp?.tpList.find((t) => t.id === selectedTpId) || currentCp?.tpList[0];
 
   useEffect(() => {
-    let timer: any;
-    if (isExamRunning && timeLeft > 0) {
-      timer = setInterval(() => {
-        setTimeLeft((prev) => {
-          if (prev <= 1) {
-            clearInterval(timer);
-            handleSubmitExam(true);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
+    if (!isExamRunning) return;
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
     return () => clearInterval(timer);
+  }, [isExamRunning]);
+
+  useEffect(() => {
+    if (isExamRunning && timeLeft <= 0 && !isSubmittingExamRef.current) {
+      handleSubmitExamRef.current(true);
+    }
   }, [isExamRunning, timeLeft]);
 
   // Convert fractions helper: 1/3 -> satu pertiga
@@ -752,10 +896,17 @@ export const CBTTab: React.FC<Props> = ({
 
   // CBT Exam Runner with Acak Soal and Acak Jawaban
   const startExam = () => {
+    isSubmittingExamRef.current = false;
+    setTimeUpModal(null);
     setIsExamRunning(true);
     setExamResult(null);
     setStudentAnswers({});
-    const duration = examDurationMinutes || activeExam?.durasiMenit || 60;
+    const duration = getCBTDurationMinutes(cbtDurations, {
+      examId: activeExam?.id,
+      paket: selectedPaket,
+      mapel: selectedMapel,
+      fallback: examDurationMinutes || activeExam?.durasiMenit || 60,
+    });
     setTimeLeft(duration * 60);
     setCurrentQuestionIndex(0);
 
@@ -792,13 +943,20 @@ export const CBTTab: React.FC<Props> = ({
     }));
   };
 
-  const handleSubmitExam = (isTimeOut: boolean = false) => {
-    if (!activeExam) return;
+  const handleSubmitExam = async (isTimeOut: boolean = false) => {
+    if (!activeExam || isSubmittingExamRef.current) return;
+    isSubmittingExamRef.current = true;
+
+    const evaluatedQuestions =
+      runningExamQuestions.length > 0 ? runningExamQuestions : activeExam.soalList;
+    const answeredCount = Object.values(studentAnswers).filter(
+      (v) => v !== undefined && v !== null && v !== '' && (!Array.isArray(v) || v.length > 0)
+    ).length;
 
     let totalScore = 0;
     let maxScore = 0;
 
-    activeExam.soalList.forEach((q) => {
+    evaluatedQuestions.forEach((q) => {
       maxScore += q.bobot;
       const ans = studentAnswers[q.id];
       const evalRes = evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot);
@@ -806,8 +964,22 @@ export const CBTTab: React.FC<Props> = ({
     });
 
     const finalGrade = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 100;
-    setExamResult({ score: finalGrade, total: 100 });
-    setIsExamRunning(false);
+
+    if (isTimeOut) {
+      setTimeUpModal({
+        isOpen: true,
+        status: 'submitting',
+        examTitle: activeExam.judul,
+        answeredCount,
+        totalQuestions: evaluatedQuestions.length,
+        score: null,
+        cloudSaved: false,
+      });
+      showToast(
+        'Waktu ujian CBT telah berakhir! Jawaban sedang dikirim otomatis ke database sebelum sesi ditutup...',
+        'error'
+      );
+    }
 
     const results = getStoredCBTResults();
     results.push({
@@ -822,6 +994,8 @@ export const CBTTab: React.FC<Props> = ({
     saveStoredCBTResults(results);
 
     // Synchronize to Penilaian, Remedial, Leger, and Analisis Soal
+    let assessKeyWritten = '';
+    let assessPayloadWritten: Record<string, any> | null = null;
     try {
       const filters = getActiveFilters();
       const targetSubjects = getStoredSubjectsForClass(activeClass);
@@ -907,23 +1081,70 @@ export const CBTTab: React.FC<Props> = ({
       });
 
       saveStoredAssessments(assessKey, existingAssessments);
+      assessKeyWritten = assessKey;
+      assessPayloadWritten = existingAssessments;
     } catch (err) {
       console.warn('Sync to assessment error:', err);
     }
+
+    // Kirim langsung ke database Firestore sebelum sesi ujian ditutup
+    let cloudSaved = false;
+    try {
+      const dbTasks: Promise<any>[] = [syncAllLocalToCloud(activeUser.name || 'siswa')];
+      if (assessKeyWritten && assessPayloadWritten) {
+        dbTasks.push(
+          setDoc(
+            doc(db, 'assessments', assessKeyWritten.replace(/\//g, '_')),
+            {
+              assessKey: assessKeyWritten,
+              data: assessPayloadWritten,
+              updatedAt: new Date().toISOString(),
+              updatedBy: activeUser.name || 'siswa',
+              serverTime: serverTimestamp(),
+            },
+            { merge: true }
+          )
+        );
+      }
+      const resSync = await Promise.race([
+        Promise.allSettled(dbTasks),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+      ]);
+      cloudSaved = Array.isArray(resSync) && resSync.some((r) => r.status === 'fulfilled' && r.value !== false);
+    } catch (dbErr) {
+      console.warn('Immediate CBT database flush warning:', dbErr);
+    }
+
+    setExamResult({ score: finalGrade, total: 100 });
+    setIsExamRunning(false);
+    isSubmittingExamRef.current = false;
 
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }
 
     if (isTimeOut) {
+      setTimeUpModal((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'done',
+              score: finalGrade,
+              cloudSaved,
+            }
+          : null
+      );
       showToast(
-        `Waktu Ujian Telah Habis! Nilai Anda: ${finalGrade}. Jawaban telah otomatis tersimpan & terkirim ke sistem.`,
-        'error'
+        cloudSaved
+          ? `Waktu Ujian Telah Habis! Nilai Anda: ${finalGrade}. Jawaban otomatis terkirim ke database.`
+          : `Waktu Ujian Telah Habis! Nilai Anda: ${finalGrade}. Jawaban tersimpan & masuk antrean sinkronisasi.`,
+        'success'
       );
     } else {
       showToast(`Ujian Selesai! Nilai Anda: ${finalGrade} (Tersinkron ke Penilaian & Leger)`, 'success');
     }
   };
+  handleSubmitExamRef.current = handleSubmitExam;
 
   const currentExamQuestions = runningExamQuestions.length > 0 ? runningExamQuestions : activeExam?.soalList || [];
   const currentQ = currentExamQuestions[currentQuestionIndex];
@@ -1126,31 +1347,55 @@ export const CBTTab: React.FC<Props> = ({
                 {/* 3b. Setting Timer Durasi Ujian */}
                 <div>
                   <label className="block text-[11px] font-extrabold text-slate-700 mb-1">
-                    ⏱ Timer Ujian (Auto-Submit)
+                    ⏱ Timer Ujian (Menit • Auto-Submit)
                   </label>
-                  <select
-                    value={examDurationMinutes}
-                    onChange={(e) => {
-                      const mins = Number(e.target.value);
-                      setExamDurationMinutes(mins);
-                      if (exams.some((ex) => ex.id === activeExam.id)) {
-                        const updatedExamObj = { ...activeExam, durasiMenit: mins };
-                        const updated = upsertExamInList(exams, updatedExamObj);
-                        setExams(updated);
-                        saveStoredCBTExams(updated);
-                        saveCbtExamToFirestore(updatedExamObj).catch(() => {});
-                      }
-                    }}
-                    className="w-full px-3 py-2 rounded-2xl border-2 border-amber-400 bg-amber-50/60 text-xs font-black text-amber-950 outline-none shadow-xs"
-                    title="Setting waktu ujian: Ketika hitungan mundur timer habis, jawaban siswa otomatis tersimpan dan terkirim ke sistem."
-                  >
-                    <option value={15}>15 Menit</option>
-                    <option value={30}>30 Menit</option>
-                    <option value={45}>45 Menit</option>
-                    <option value={60}>60 Menit</option>
-                    <option value={90}>90 Menit</option>
-                    <option value={120}>120 Menit</option>
-                  </select>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      max={300}
+                      value={examDurationMinutes || ''}
+                      onChange={(e) => setExamDurationMinutes(Number(e.target.value))}
+                      onBlur={() => {
+                        const clamped = Math.max(1, Math.min(300, Math.round(Number(examDurationMinutes) || 60)));
+                        setExamDurationMinutes(clamped);
+                        handleSaveCbtDuration(
+                          selectedPaket,
+                          selectedMapel,
+                          clamped,
+                          false,
+                          exams.some((ex) => ex.id === activeExam.id) ? activeExam.id : undefined
+                        );
+                      }}
+                      className="w-20 px-2.5 py-2 rounded-2xl border-2 border-amber-400 bg-amber-50/60 text-xs font-black text-center text-amber-950 outline-none shadow-xs"
+                      title="Ketik durasi waktu ujian CBT (1-300 menit). Otomatis auto-submit saat waktu habis."
+                    />
+                    <select
+                      value={[15, 30, 45, 60, 90, 120].includes(examDurationMinutes) ? examDurationMinutes : ''}
+                      onChange={(e) => {
+                        if (!e.target.value) return;
+                        const mins = Number(e.target.value);
+                        setExamDurationMinutes(mins);
+                        handleSaveCbtDuration(
+                          selectedPaket,
+                          selectedMapel,
+                          mins,
+                          false,
+                          exams.some((ex) => ex.id === activeExam.id) ? activeExam.id : undefined
+                        );
+                      }}
+                      className="flex-1 px-2.5 py-2 rounded-2xl border-2 border-amber-400 bg-amber-50/60 text-xs font-black text-amber-950 outline-none shadow-xs cursor-pointer"
+                      title="Pilih durasi cepat ujian CBT"
+                    >
+                      <option value="">Kustom ({examDurationMinutes || 60}m)</option>
+                      <option value={15}>15 Menit</option>
+                      <option value={30}>30 Menit</option>
+                      <option value={45}>45 Menit</option>
+                      <option value={60}>60 Menit</option>
+                      <option value={90}>90 Menit</option>
+                      <option value={120}>120 Menit</option>
+                    </select>
+                  </div>
                 </div>
 
                 {/* 4. Pilih TP yang Diukur (Blue border matching Image 1) */}
@@ -1442,9 +1687,9 @@ export const CBTTab: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* Right: Menu Point Nilai (Kanan Soal) (Green box matching Image 1) */}
-                <div className="lg:col-span-3">
-                  <div className="p-4 rounded-3xl border-2 border-emerald-400 bg-emerald-50/40 text-center space-y-1 h-[128px] flex flex-col justify-center">
+                {/* Right: Menu Point Nilai & Waktu Pengerjaan CBT */}
+                <div className="lg:col-span-3 space-y-2.5">
+                  <div className="p-3 rounded-3xl border-2 border-emerald-400 bg-emerald-50/40 text-center space-y-1 flex flex-col justify-center">
                     <span className="text-xs font-display font-black text-emerald-900 flex items-center justify-center gap-1">
                       ⭐ Menu Point Nilai (Kanan Soal)
                     </span>
@@ -1455,11 +1700,66 @@ export const CBTTab: React.FC<Props> = ({
                         max={100}
                         value={bobotPoin}
                         onChange={(e) => setBobotPoin(Number(e.target.value))}
-                        className="w-20 text-center text-2xl font-display font-black text-emerald-950 bg-white rounded-xl border-2 border-emerald-500 py-1"
+                        className="w-20 text-center text-xl font-display font-black text-emerald-950 bg-white rounded-xl border-2 border-emerald-500 py-1"
                       />
-                      <span className="text-sm font-display font-extrabold text-emerald-900">Poin</span>
+                      <span className="text-xs font-display font-extrabold text-emerald-900">Poin</span>
                     </div>
                     <p className="text-[10px] text-emerald-700">Bobot skor soal ini saat dianalisis</p>
+                  </div>
+
+                  {/* Waktu Pengerjaan Soal CBT (Auto-Submit) */}
+                  <div className="p-3 rounded-3xl border-2 border-amber-400 bg-amber-50/50 text-center space-y-1.5">
+                    <div className="text-xs font-display font-black text-amber-900 flex items-center justify-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-amber-600" /> Waktu Pengerjaan CBT
+                    </div>
+                    <div className="flex items-center justify-center gap-1.5">
+                      <input
+                        type="number"
+                        min={1}
+                        max={300}
+                        value={examDurationMinutes || ''}
+                        onChange={(e) => setExamDurationMinutes(Number(e.target.value))}
+                        onBlur={() => {
+                          const clamped = Math.max(1, Math.min(300, Math.round(Number(examDurationMinutes) || 60)));
+                          setExamDurationMinutes(clamped);
+                          handleSaveCbtDuration(
+                            selectedPaket,
+                            selectedMapel,
+                            clamped,
+                            false,
+                            exams.some((ex) => ex.id === activeExam.id) ? activeExam.id : undefined
+                          );
+                        }}
+                        className="w-20 text-center text-lg font-display font-black text-slate-900 border-2 border-amber-500 rounded-xl py-1 bg-white outline-none"
+                        title="Setting waktu pengerjaan ujian CBT (dalam menit). Otomatis auto-submit saat waktu habis."
+                      />
+                      <span className="text-xs font-bold text-slate-700">Mnt</span>
+                    </div>
+                    <div className="flex flex-wrap justify-center gap-1">
+                      {[30, 45, 60, 90].map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => {
+                            setExamDurationMinutes(m);
+                            handleSaveCbtDuration(
+                              selectedPaket,
+                              selectedMapel,
+                              m,
+                              false,
+                              exams.some((ex) => ex.id === activeExam.id) ? activeExam.id : undefined
+                            );
+                          }}
+                          className={`px-1.5 py-0.5 rounded-md text-[10px] font-black border cursor-pointer transition ${
+                            examDurationMinutes === m
+                              ? 'bg-amber-600 text-white border-amber-700'
+                              : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-100'
+                          }`}
+                        >
+                          {m}m
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2021,6 +2321,12 @@ export const CBTTab: React.FC<Props> = ({
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {SAMPLE_CBT_DEFAULTS_META.map((smp) => {
                         const isSampleOn = Boolean(cbtActivePackages[smp.id]);
+                        const sampleMins = getCBTDurationMinutes(cbtDurations, {
+                          examId: smp.id,
+                          paket: smp.paket,
+                          mapel: smp.mapel,
+                          fallback: smp.defaultDurasi,
+                        });
                         return (
                           <div
                             key={smp.id}
@@ -2030,7 +2336,10 @@ export const CBTTab: React.FC<Props> = ({
                                 : 'bg-white/80 border-slate-200'
                             }`}
                           >
-                            <span className="font-semibold text-slate-700 truncate">{smp.label}</span>
+                            <div className="min-w-0">
+                              <span className="font-semibold text-slate-700 truncate block">{smp.label}</span>
+                              <span className="text-[10px] font-bold text-amber-700">⏱ {sampleMins} Menit</span>
+                            </div>
                             <button
                               type="button"
                               onClick={() => handleToggleSampleCbtActive(smp.id, smp.label)}
@@ -2046,6 +2355,111 @@ export const CBTTab: React.FC<Props> = ({
                         );
                       })}
                     </div>
+                  </div>
+                </div>
+
+                {/* Setting Waktu Pengerjaan Ujian CBT (Auto-Submit) */}
+                <div className="p-5 rounded-3xl bg-gradient-to-r from-rose-50 via-white to-amber-50 border-2 border-rose-300 shadow-xs space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-md shadow-rose-500/20 shrink-0">
+                        <Clock className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex items-center gap-2">
+                          Pengaturan Waktu Pengerjaan Ujian CBT
+                          <span className="text-[10px] font-extrabold uppercase bg-rose-100 text-rose-900 px-2 py-0.5 rounded-full">
+                            Auto-Submit Timer
+                          </span>
+                        </h4>
+                        <p className="text-[11px] text-slate-500">
+                          Atur batas waktu pengerjaan per jenis asesmen dan mata pelajaran CBT (tersinkron otomatis ke ruang ujian siswa).
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end pt-1">
+                    <div className="sm:col-span-4">
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Paket / Asesmen CBT</label>
+                      <select
+                        value={durPanelPaket}
+                        onChange={(e) => setDurPanelPaket(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none focus:border-rose-500"
+                      >
+                        {paketList.map((p) => (
+                          <option key={p} value={p}>
+                            {p}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-4">
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Mata Pelajaran</label>
+                      <select
+                        value={durPanelMapel}
+                        onChange={(e) => setDurPanelMapel(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none focus:border-rose-500"
+                      >
+                        <option value="all">Semua Mapel (Paket Ini)</option>
+                        <option value="Pendidikan Agama Islam">Pendidikan Agama Islam</option>
+                        <option value="Pendidikan Pancasila">Pendidikan Pancasila</option>
+                        <option value="Bahasa Indonesia">Bahasa Indonesia</option>
+                        <option value="Matematika">Matematika</option>
+                        <option value="Ilmu Pengetahuan Alam dan Sosial (IPAS)">IPAS</option>
+                        <option value="Seni Rupa">Seni Rupa</option>
+                        <option value="Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)">PJOK</option>
+                        <option value="Bahasa Inggris">Bahasa Inggris</option>
+                        <option value="Muatan Lokal (PLBJ)">Muatan Lokal (PLBJ)</option>
+                        <option value="Koding dan Kecerdasan Artifisial (KKA)">
+                          Koding &amp; Kecerdasan Artifisial (KKA)
+                        </option>
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Durasi (Menit)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={300}
+                        value={durPanelMinutes || ''}
+                        onChange={(e) => setDurPanelMinutes(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-xl border-2 border-amber-400 bg-white text-xs font-black text-center text-slate-900 outline-none focus:border-rose-500"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <button
+                        type="button"
+                        onClick={() => handleSaveCbtDuration(durPanelPaket, durPanelMapel, durPanelMinutes)}
+                        className="w-full py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs shadow-xs cursor-pointer transition"
+                      >
+                        Simpan Waktu
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                    <span className="text-[11px] font-bold text-slate-500 mr-1">Pilihan Cepat:</span>
+                    {[15, 30, 45, 60, 90, 120].map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => {
+                          setDurPanelMinutes(m);
+                          handleSaveCbtDuration(durPanelPaket, durPanelMapel, m);
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer transition ${
+                          durPanelMinutes === m
+                            ? 'bg-rose-600 text-white border-rose-700'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-rose-50'
+                        }`}
+                      >
+                        {m} Menit
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -2122,7 +2536,16 @@ export const CBTTab: React.FC<Props> = ({
                       {activeExam.judul} ({targetKelas})
                     </h3>
                     <p className="text-xs text-slate-600">
-                      Total Soal: <strong>{activeExam.soalList.length} Butir</strong> • Durasi: <strong>{activeExam.durasiMenit} Menit</strong>
+                      Total Soal: <strong>{activeExam.soalList.length} Butir</strong> • Durasi:{' '}
+                      <strong>
+                        {getCBTDurationMinutes(cbtDurations, {
+                          examId: activeExam.id,
+                          paket: selectedPaket,
+                          mapel: selectedMapel,
+                          fallback: examDurationMinutes || activeExam.durasiMenit,
+                        })}{' '}
+                        Menit
+                      </strong>
                     </p>
                   </div>
 
@@ -2157,9 +2580,18 @@ export const CBTTab: React.FC<Props> = ({
                   </div>
 
                   <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1.5 bg-rose-50 text-rose-700 px-3.5 py-1.5 rounded-xl border border-rose-200 text-xs font-mono font-black">
-                      <Clock className="w-4 h-4 animate-spin" />
-                      <span>{Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}</span>
+                    <div
+                      className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl border text-xs font-mono font-black ${
+                        timeLeft <= 300
+                          ? 'bg-rose-600 text-white border-rose-700 animate-pulse'
+                          : 'bg-rose-50 text-rose-700 border-rose-200'
+                      }`}
+                    >
+                      <Clock className="w-4 h-4" />
+                      <span>
+                        Sisa Waktu: {String(Math.floor(timeLeft / 60)).padStart(2, '0')}:
+                        {String(timeLeft % 60).padStart(2, '0')}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -2491,6 +2923,88 @@ export const CBTTab: React.FC<Props> = ({
                 Simpan TP
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL SEDERHANA: NOTIFIKASI WAKTU UJIAN CBT BERAKHIR */}
+      {timeUpModal?.isOpen && (
+        <div className="fixed inset-0 z-[1050] bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white max-w-md w-full rounded-[2rem] p-6 sm:p-7 shadow-2xl border-2 border-rose-200 text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div
+              className={`w-16 h-16 rounded-2xl mx-auto flex items-center justify-center shadow-lg ${
+                timeUpModal.status === 'submitting'
+                  ? 'bg-amber-500 text-white shadow-amber-500/30'
+                  : 'bg-emerald-600 text-white shadow-emerald-600/25'
+              }`}
+            >
+              {timeUpModal.status === 'submitting' ? (
+                <Clock className="w-8 h-8 animate-pulse" />
+              ) : (
+                <CheckCircle className="w-8 h-8" />
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <span
+                className={`inline-block text-[10px] font-black uppercase px-3 py-1 rounded-full ${
+                  timeUpModal.status === 'submitting'
+                    ? 'bg-amber-100 text-amber-900'
+                    : 'bg-emerald-100 text-emerald-900'
+                }`}
+              >
+                {timeUpModal.status === 'submitting'
+                  ? 'Waktu Ujian CBT Berakhir'
+                  : 'Pengiriman Otomatis Selesai'}
+              </span>
+              <h3 className="font-display font-black text-lg sm:text-xl text-slate-900">
+                {timeUpModal.status === 'submitting'
+                  ? 'Mengirim Jawaban ke Database...'
+                  : 'Jawaban Berhasil Dikirim & Sesi Ditutup'}
+              </h3>
+              <p className="text-xs font-bold text-slate-500">{timeUpModal.examTitle}</p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs text-slate-700 space-y-1.5">
+              {timeUpModal.status === 'submitting' ? (
+                <p className="leading-relaxed">
+                  Durasi ujian CBT telah habis. Sistem sedang mengirimkan{' '}
+                  <strong>
+                    {timeUpModal.answeredCount} dari {timeUpModal.totalQuestions}
+                  </strong>{' '}
+                  jawaban ke database secara otomatis sebelum sesi ditutup...
+                </p>
+              ) : (
+                <>
+                  <p className="leading-relaxed">
+                    {timeUpModal.cloudSaved
+                      ? 'Seluruh jawaban telah otomatis terkirim dan tersimpan aman ke database sekolah.'
+                      : 'Seluruh jawaban telah tersimpan di sistem sekolah dan masuk antrean sinkronisasi database.'}
+                  </p>
+                  <div className="flex items-center justify-center gap-4 pt-1 font-display font-black text-slate-900">
+                    <span>
+                      Terjawab: {timeUpModal.answeredCount}/{timeUpModal.totalQuestions} Soal
+                    </span>
+                    <span className="text-emerald-700">Nilai Akhir: {timeUpModal.score ?? 0}/100</span>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {timeUpModal.status === 'submitting' ? (
+              <div className="flex items-center justify-center gap-2 text-xs font-bold text-amber-700 py-1">
+                <span className="w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin inline-block" />
+                <span>Mohon tunggu sebentar...</span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setTimeUpModal(null)}
+                className="w-full py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs sm:text-sm shadow-md transition cursor-pointer"
+              >
+                Tutup &amp; Lihat Hasil Ujian
+              </button>
+            )}
           </div>
         </div>
       )}

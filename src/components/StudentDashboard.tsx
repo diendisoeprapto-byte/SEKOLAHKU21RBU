@@ -31,7 +31,7 @@ import {
   Save,
   Trash2,
 } from 'lucide-react';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../utils/firebase';
 import {
   ActiveUser,
@@ -47,6 +47,8 @@ import {
 } from '../types';
 import {
   getStoredCBTExams,
+  getStoredCBTDurations,
+  getCBTDurationMinutes,
   getStoredCBTActivePackages,
   getStoredCBTResults,
   saveStoredCBTResults,
@@ -63,6 +65,7 @@ import {
   CLASSES_LIST,
 } from '../utils/storage';
 import { upsertTkaSubmission } from '../utils/tkaFirestore';
+import { syncAllLocalToCloud } from '../utils/cloudSync';
 import {
   StudentExamDraft,
   buildQuestionOrderSnapshot,
@@ -129,6 +132,7 @@ export const StudentDashboard: React.FC<Props> = ({
   });
 
   const [cbtExamsState, setCbtExamsState] = useState<CBTExam[]>(() => getStoredCBTExams());
+  const [cbtDurations, setCbtDurations] = useState<Record<string, number>>(() => getStoredCBTDurations());
   const [cbtActivePackages, setCbtActivePackages] = useState<Record<string, boolean>>(() =>
     getStoredCBTActivePackages()
   );
@@ -141,8 +145,10 @@ export const StudentDashboard: React.FC<Props> = ({
   useEffect(() => {
     const syncCbt = () => {
       setCbtExamsState(getStoredCBTExams());
+      setCbtDurations(getStoredCBTDurations());
       setCbtActivePackages(getStoredCBTActivePackages());
     };
+    const syncCbtDurations = () => setCbtDurations(getStoredCBTDurations());
     const syncDurations = () => setTkaDurations(getStoredTKADurations());
     const syncTkaActive = () => setTkaActivePackages(getStoredTKAActivePackages());
     const syncTkaQuestions = () => setTkaQuestionsState(getStoredTKAQuestions());
@@ -153,6 +159,7 @@ export const StudentDashboard: React.FC<Props> = ({
       syncTkaQuestions();
     };
     window.addEventListener('sekolahku-cbt-exams-updated', syncCbt);
+    window.addEventListener('sekolahku-cbt-durations-updated', syncCbtDurations);
     window.addEventListener('sekolahku-tka-durations-updated', syncDurations);
     window.addEventListener('sekolahku-tka-active-updated', syncTkaActive);
     window.addEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
@@ -160,6 +167,7 @@ export const StudentDashboard: React.FC<Props> = ({
     window.addEventListener('storage', syncCloudAll);
     return () => {
       window.removeEventListener('sekolahku-cbt-exams-updated', syncCbt);
+      window.removeEventListener('sekolahku-cbt-durations-updated', syncCbtDurations);
       window.removeEventListener('sekolahku-tka-durations-updated', syncDurations);
       window.removeEventListener('sekolahku-tka-active-updated', syncTkaActive);
       window.removeEventListener('sekolahku-tka-questions-updated', syncTkaQuestions);
@@ -170,6 +178,7 @@ export const StudentDashboard: React.FC<Props> = ({
 
   useEffect(() => {
     setCbtExamsState(getStoredCBTExams());
+    setCbtDurations(getStoredCBTDurations());
     setCbtActivePackages(getStoredCBTActivePackages());
     setTkaDurations(getStoredTKADurations());
     setTkaActivePackages(getStoredTKAActivePackages());
@@ -201,8 +210,19 @@ export const StudentDashboard: React.FC<Props> = ({
   const [examResult, setExamResult] = useState<{ score: number; maxScore: number } | null>(null);
   const [resumedNotice, setResumedNotice] = useState<string | null>(null);
   const [draftRevisionTick, setDraftRevisionTick] = useState<number>(0);
+  const [timeUpModal, setTimeUpModal] = useState<{
+    isOpen: boolean;
+    status: 'submitting' | 'done';
+    examTitle: string;
+    category: 'cbt' | 'tka';
+    answeredCount: number;
+    totalQuestions: number;
+    score: number | null;
+    cloudSaved: boolean;
+  } | null>(null);
 
   const autoResumedModeRef = useRef<string>('');
+  const isSubmittingExamRef = useRef<boolean>(false);
   const handleFinishExamRef = useRef<(isAutoSubmit?: boolean) => void>(() => {});
   const latestExamStateRef = useRef<{
     studentId: string;
@@ -391,12 +411,19 @@ export const StudentDashboard: React.FC<Props> = ({
           ? ex.aktif
           : cbtActivePackages[ex.id] === true;
 
+      const resolvedDuration = getCBTDurationMinutes(cbtDurations, {
+        examId: ex.id,
+        paket: paketName,
+        mapel: ex.mapel,
+        fallback: ex.durasiMenit || 60,
+      });
+
       dynamicTeacherAll.push({
         id: ex.id,
         category: 'cbt',
         mapel: ex.mapel,
         judul: `${paketName} - ${ex.mapel} (${subPaket})`,
-        durasiMenit: ex.durasiMenit || 60,
+        durasiMenit: resolvedDuration,
         paketName,
         subPaket,
         kelas: ex.kelas,
@@ -610,15 +637,24 @@ export const StudentDashboard: React.FC<Props> = ({
           (d.subPaket || 'Paket 1') === (sample.subPaket || 'Paket 1')
       );
       if (!alreadyHasSameBucket) {
-        catalogAll.push(sample);
+        const sampleItem: ExamOptionItem = {
+          ...sample,
+          durasiMenit: getCBTDurationMinutes(cbtDurations, {
+            examId: sample.id,
+            paket: sample.paketName,
+            mapel: sample.mapel,
+            fallback: sample.durasiMenit,
+          }),
+        };
+        catalogAll.push(sampleItem);
         if (cbtActivePackages[sample.id] === true) {
-          activeOnly.push(sample);
+          activeOnly.push(sampleItem);
         }
       }
     });
 
     return { allCbtExamsCatalog: catalogAll, cbtExamList: activeOnly };
-  }, [cbtExamsState, cbtActivePackages, currentStudent?.kelas, activeClass]);
+  }, [cbtExamsState, cbtDurations, cbtActivePackages, currentStudent?.kelas, activeClass]);
 
   // Daftar Ujian TKA (Dinamis dikelompokkan per Jenis TKA + Mata Pelajaran dari Bank Soal TKA Guru)
   const { allTkaExamsCatalog, tkaExamList } = useMemo(() => {
@@ -943,6 +979,8 @@ export const StudentDashboard: React.FC<Props> = ({
     const safeTimeLeft = draft.timeLeft > 0 ? draft.timeLeft : examObj.durasiMenit * 60;
     const answeredCount = countAnsweredQuestions(safeAnswers);
 
+    isSubmittingExamRef.current = false;
+    setTimeUpModal(null);
     setViewMode(examObj.category);
     setSelectedPaketFilter(draft.selectedPaketFilter || examObj.paketName);
     setSelectedMapelFilter(draft.selectedMapelFilter || examObj.mapel);
@@ -1083,20 +1121,23 @@ export const StudentDashboard: React.FC<Props> = ({
 
   // Timer interval saat ujian berlangsung
   useEffect(() => {
-    let timer: any;
-    if (isExamRunning && timeLeft > 0) {
-      timer = setInterval(() => {
-        setTimeLeft((prev) => {
-          if (prev <= 1) {
-            clearInterval(timer);
-            handleFinishExamRef.current(true); // Auto-submit ketika waktu habis!
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
+    if (!isExamRunning) return;
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
     return () => clearInterval(timer);
+  }, [isExamRunning]);
+
+  // Saat durasi ujian berakhir, tampilkan modal/toast dan kirim jawaban ke database sebelum sesi ditutup
+  useEffect(() => {
+    if (isExamRunning && timeLeft <= 0 && !isSubmittingExamRef.current) {
+      handleFinishExamRef.current(true);
+    }
   }, [isExamRunning, timeLeft]);
 
   // Handler mulai ujian (mengunci dropdown dan memunculkan soal)
@@ -1149,6 +1190,8 @@ export const StudentDashboard: React.FC<Props> = ({
     }
 
     const initialSeconds = currentExam.durasiMenit * 60;
+    isSubmittingExamRef.current = false;
+    setTimeUpModal(null);
     setRunningExamSnapshot(currentExam);
     setRunningSoalList(preparedList);
     setTimeLeft(initialSeconds);
@@ -1185,11 +1228,13 @@ export const StudentDashboard: React.FC<Props> = ({
   };
 
   // Handler submit ujian (manual atau auto-submit ketika timer 0)
-  const handleFinishExam = (isAutoSubmit: boolean = false) => {
+  const handleFinishExam = async (isAutoSubmit: boolean = false) => {
     const finishedExam = activeExamObj;
-    if (!finishedExam) return;
+    if (!finishedExam || isSubmittingExamRef.current) return;
+    isSubmittingExamRef.current = true;
 
     const evaluatedQuestions = activeExamSoalList.length > 0 ? activeExamSoalList : finishedExam.soalList;
+    const answeredCount = countAnsweredQuestions(answers);
     let earned = 0;
     let max = 0;
 
@@ -1201,13 +1246,22 @@ export const StudentDashboard: React.FC<Props> = ({
     });
 
     const finalGrade = max > 0 ? Math.round((earned / max) * 100) : 100;
-    setRunningExamSnapshot(finishedExam);
-    setExamResult({ score: finalGrade, maxScore: 100 });
-    setIsExamRunning(false);
-    setResumedNotice(null);
-    if (currentStudent?.id) {
-      clearStudentExamDraft(currentStudent.id, finishedExam.id);
-      setDraftRevisionTick((t) => t + 1);
+
+    if (isAutoSubmit) {
+      setTimeUpModal({
+        isOpen: true,
+        status: 'submitting',
+        examTitle: finishedExam.judul,
+        category: finishedExam.category,
+        answeredCount,
+        totalQuestions: evaluatedQuestions.length,
+        score: null,
+        cloudSaved: false,
+      });
+      showToast(
+        'Waktu ujian telah berakhir! Jawaban Anda sedang dikirim otomatis ke database sebelum sesi ditutup...',
+        'error'
+      );
     }
 
     // Rekam ke CBT Results di storage (beserta metadata ujian untuk Statistik Performa)
@@ -1246,7 +1300,9 @@ export const StudentDashboard: React.FC<Props> = ({
       }
     }
 
-    // Sinkronisasi ke asesmen siswa secara otomatis
+    // Sinkronisasi ke asesmen siswa secara otomatis & langsung kirim ke Firestore sebelum sesi ditutup
+    let assessKeyWritten = '';
+    let assessPayloadWritten: Record<string, any> | null = null;
     try {
       const filters = getActiveFilters();
       const targetClass = currentStudent?.kelas || activeClass;
@@ -1299,14 +1355,68 @@ export const StudentDashboard: React.FC<Props> = ({
         }
       }
       saveStoredAssessments(assessKey, existing);
+      assessKeyWritten = assessKey;
+      assessPayloadWritten = existing;
     } catch (e) {
       console.warn('Sync assessment error:', e);
     }
 
+    // Kirim langsung ke database Firestore (koleksi assessments + snapshot cloud penuh) sebelum sesi ujian ditutup
+    let cloudSaved = false;
+    try {
+      const dbTasks: Promise<any>[] = [syncAllLocalToCloud(currentStudent.nama || 'siswa')];
+      if (assessKeyWritten && assessPayloadWritten) {
+        dbTasks.push(
+          setDoc(
+            doc(db, 'assessments', assessKeyWritten.replace(/\//g, '_')),
+            {
+              assessKey: assessKeyWritten,
+              data: assessPayloadWritten,
+              updatedAt: new Date().toISOString(),
+              updatedBy: currentStudent.nama || 'siswa',
+              serverTime: serverTimestamp(),
+            },
+            { merge: true }
+          )
+        );
+      }
+      const results = await Promise.race([
+        Promise.allSettled(dbTasks),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+      ]);
+      cloudSaved = Array.isArray(results) && results.some((r) => r.status === 'fulfilled' && r.value !== false);
+    } catch (dbErr) {
+      console.warn('Immediate database flush warning:', dbErr);
+    }
+
+    // Bersihkan draft & tutup sesi ujian aktif setelah pengiriman ke database selesai
+    if (currentStudent?.id) {
+      clearStudentExamDraft(currentStudent.id, finishedExam.id);
+      setDraftRevisionTick((t) => t + 1);
+    }
+
+    setRunningExamSnapshot(finishedExam);
+    setExamResult({ score: finalGrade, maxScore: 100 });
+    setIsExamRunning(false);
+    setResumedNotice(null);
+    isSubmittingExamRef.current = false;
+
     if (isAutoSubmit) {
+      setTimeUpModal((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'done',
+              score: finalGrade,
+              cloudSaved,
+            }
+          : null
+      );
       showToast(
-        `Waktu telah habis! Jawaban Anda otomatis terkirim. Nilai Anda: ${finalGrade}`,
-        'error'
+        cloudSaved
+          ? `Waktu ujian habis! Jawaban otomatis terkirim ke database. Nilai Anda: ${finalGrade}`
+          : `Waktu ujian habis! Jawaban tersimpan & masuk antrean sinkronisasi database. Nilai Anda: ${finalGrade}`,
+        'success'
       );
     } else {
       showToast(
@@ -2859,6 +2969,88 @@ export const StudentDashboard: React.FC<Props> = ({
           </div>
         )}
       </div>
+
+      {/* MODAL SEDERHANA: NOTIFIKASI WAKTU UJIAN BERAKHIR & AUTO-SUBMIT KE DATABASE */}
+      {timeUpModal?.isOpen && (
+        <div className="fixed inset-0 z-[1050] bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white max-w-md w-full rounded-[2rem] p-6 sm:p-7 shadow-2xl border-2 border-rose-200 text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div
+              className={`w-16 h-16 rounded-2xl mx-auto flex items-center justify-center shadow-lg ${
+                timeUpModal.status === 'submitting'
+                  ? 'bg-amber-500 text-white shadow-amber-500/30'
+                  : 'bg-emerald-600 text-white shadow-emerald-600/25'
+              }`}
+            >
+              {timeUpModal.status === 'submitting' ? (
+                <Clock className="w-8 h-8 animate-pulse" />
+              ) : (
+                <CheckCircle2 className="w-8 h-8" />
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <span
+                className={`inline-block text-[10px] font-black uppercase px-3 py-1 rounded-full ${
+                  timeUpModal.status === 'submitting'
+                    ? 'bg-amber-100 text-amber-900'
+                    : 'bg-emerald-100 text-emerald-900'
+                }`}
+              >
+                {timeUpModal.status === 'submitting'
+                  ? `Waktu Ujian ${timeUpModal.category === 'tka' ? 'TKA' : 'CBT'} Berakhir`
+                  : 'Pengiriman Otomatis Selesai'}
+              </span>
+              <h3 className="font-display font-black text-lg sm:text-xl text-slate-900">
+                {timeUpModal.status === 'submitting'
+                  ? 'Mengirim Jawaban ke Database...'
+                  : 'Jawaban Berhasil Dikirim & Sesi Ditutup'}
+              </h3>
+              <p className="text-xs font-bold text-slate-500">{timeUpModal.examTitle}</p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs text-slate-700 space-y-1.5">
+              {timeUpModal.status === 'submitting' ? (
+                <p className="leading-relaxed">
+                  Durasi pengerjaan ujian telah habis. Sistem sedang menyimpan dan mengirimkan{' '}
+                  <strong>
+                    {timeUpModal.answeredCount} dari {timeUpModal.totalQuestions}
+                  </strong>{' '}
+                  jawaban Anda secara otomatis ke database sekolah sebelum sesi ditutup...
+                </p>
+              ) : (
+                <>
+                  <p className="leading-relaxed">
+                    {timeUpModal.cloudSaved
+                      ? 'Seluruh jawaban Anda telah otomatis terkirim dan tersimpan aman di database sekolah sebelum sesi ujian ditutup.'
+                      : 'Seluruh jawaban Anda telah tersimpan di sistem sekolah dan masuk antrean sinkronisasi database.'}
+                  </p>
+                  <div className="flex items-center justify-center gap-4 pt-1 font-display font-black text-slate-900">
+                    <span>
+                      Terjawab: {timeUpModal.answeredCount}/{timeUpModal.totalQuestions} Soal
+                    </span>
+                    <span className="text-emerald-700">Nilai Akhir: {timeUpModal.score ?? 0}/100</span>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {timeUpModal.status === 'submitting' ? (
+              <div className="flex items-center justify-center gap-2 text-xs font-bold text-amber-700 py-1">
+                <span className="w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin inline-block" />
+                <span>Mohon tunggu sebentar, jangan tutup halaman...</span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setTimeUpModal(null)}
+                className="w-full py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs sm:text-sm shadow-md transition cursor-pointer"
+              >
+                Tutup &amp; Lihat Hasil Ujian
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 };
