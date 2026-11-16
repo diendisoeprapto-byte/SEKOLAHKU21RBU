@@ -1279,6 +1279,7 @@ export const StudentDashboard: React.FC<Props> = ({
       judul: finishedExam.judul,
       paketName: finishedExam.paketName,
       tanggal: getLocalTodayStr(),
+      recordedAt: Date.now(),
     });
     saveStoredCBTResults(storedRes);
 

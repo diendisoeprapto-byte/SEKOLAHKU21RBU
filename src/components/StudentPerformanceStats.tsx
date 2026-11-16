@@ -143,9 +143,11 @@ export const StudentPerformanceStats: React.FC<Props> = ({
     refreshResults();
     window.addEventListener('sekolahku-exam-results-updated', refreshResults);
     window.addEventListener('sekolahku-cloud-sync-updated', refreshResults);
+    window.addEventListener('storage', refreshResults);
     return () => {
       window.removeEventListener('sekolahku-exam-results-updated', refreshResults);
       window.removeEventListener('sekolahku-cloud-sync-updated', refreshResults);
+      window.removeEventListener('storage', refreshResults);
     };
   }, [student?.id]);
 

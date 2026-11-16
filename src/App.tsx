@@ -42,6 +42,12 @@ import {
   saveStoredTKAQuestions,
   getStoredTKASubmissions,
   saveStoredTKASubmissions,
+  saveStoredCBTResults,
+  saveStoredTKAResults,
+  getStoredExamResultsResetMeta,
+  saveStoredExamResultsResetMeta,
+  mergeExamResultsResetMeta,
+  filterExamResultsByResetMeta,
   registerStorageMutationHook,
   runWithoutStorageSync,
   AttendanceRecordItem,
@@ -310,6 +316,33 @@ export default function App() {
         if (cloudData.tkaActivePackages && typeof cloudData.tkaActivePackages === 'object') {
           saveStoredTKAActivePackages(cloudData.tkaActivePackages);
         }
+        if (cloudData.examResultsResetMeta && typeof cloudData.examResultsResetMeta === 'object') {
+          const mergedMeta = mergeExamResultsResetMeta(
+            getStoredExamResultsResetMeta(),
+            cloudData.examResultsResetMeta
+          );
+          saveStoredExamResultsResetMeta(mergedMeta);
+          try {
+            const rawCbt = localStorage.getItem('sekolahku_cbt_results');
+            if (rawCbt) {
+              const parsedCbt = JSON.parse(rawCbt);
+              if (Array.isArray(parsedCbt)) {
+                saveStoredCBTResults(
+                  filterExamResultsByResetMeta(parsedCbt, undefined, mergedMeta)
+                );
+              }
+            }
+            const rawTka = localStorage.getItem('sekolahku_tka_results');
+            if (rawTka) {
+              const parsedTka = JSON.parse(rawTka);
+              if (Array.isArray(parsedTka)) {
+                saveStoredTKAResults(
+                  filterExamResultsByResetMeta(parsedTka, 'tka', mergedMeta)
+                );
+              }
+            }
+          } catch {}
+        }
       });
 
       if (didMutateFromRemote && !tkaQuestionsCollectionLoadedRef.current) {
@@ -336,6 +369,7 @@ export default function App() {
 
       if (!isLocalEcho) {
         window.dispatchEvent(new Event('sekolahku-cloud-sync-updated'));
+        window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
         window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
         window.dispatchEvent(new Event('sekolahku-cbt-durations-updated'));
         window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
@@ -529,6 +563,7 @@ export default function App() {
     const unsubTkaSubmissions = subscribeToTkaSubmissionsCollection(
       (firestoreSubs) => {
         const alreadySeeded = localStorage.getItem('sekolahku_tka_submissions_seeded') === 'true';
+        const resetMeta = getStoredExamResultsResetMeta();
 
         if (firestoreSubs.length > 0) {
           tkaSubmissionsCollectionLoadedRef.current = true;
@@ -536,7 +571,12 @@ export default function App() {
           runWithoutStorageSync(() => {
             saveStoredTKASubmissions(firestoreSubs);
           });
-        } else if (!tkaSubmissionsCollectionLoadedRef.current && !alreadySeeded) {
+        } else if (
+          !tkaSubmissionsCollectionLoadedRef.current &&
+          !alreadySeeded &&
+          !resetMeta.tkaClearedAt &&
+          activeUserRef.current?.role !== 'siswa'
+        ) {
           const localSubs = getStoredTKASubmissions();
           if (localSubs.length > 0) {
             tkaSubmissionsCollectionLoadedRef.current = true;
@@ -544,9 +584,12 @@ export default function App() {
             saveTkaSubmissionsBatchToFirestore(localSubs).catch((err) =>
               console.warn('Initial TKA submissions seed warning:', err)
             );
+          } else {
+            tkaSubmissionsCollectionLoadedRef.current = true;
           }
         } else {
           tkaSubmissionsCollectionLoadedRef.current = true;
+          localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
           runWithoutStorageSync(() => {
             saveStoredTKASubmissions([]);
           });
@@ -1273,6 +1316,7 @@ export default function App() {
                   activeClass={activeClass}
                   activeYear={activeYear}
                   activeSemester={activeSemester}
+                  showToast={showToast}
                 />
               )}
 

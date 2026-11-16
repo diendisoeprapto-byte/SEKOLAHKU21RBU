@@ -60,16 +60,15 @@ import {
   saveStoredTKAResults,
   getStoredTKASubmissions,
   saveStoredTKASubmissions,
-  clearStoredTKASubmissions,
-  getStoredCBTResults,
-  saveStoredCBTResults,
+  clearTKAResultsFromStorage,
   notifyStorageMutation,
   TKASubmissionItem,
   TKAMapelScoreKey,
   normalizeTkaMapelKey,
   extractBaseTkaPaket,
 } from '../../utils/storage';
-import { collectPersistentLocalBackup, pushAllDataToCloud } from '../../utils/cloudSync';
+import { getLocalTodayStr } from '../../utils/dateUtils';
+import { collectPersistentLocalBackup, pushAllDataToCloud, syncAllLocalToCloud } from '../../utils/cloudSync';
 import {
   saveSingleTkaQuestionToFirestore,
   deleteTkaQuestionFromFirestore,
@@ -773,26 +772,9 @@ export const TKATabs: React.FC<Props> = ({
   const executeClearTkaData = (scope: 'paket' | 'all') => {
     const targetPaket = clearTkaModalContext?.targetPaket || 'all';
     if (scope === 'paket' && targetPaket !== 'all') {
-      const baseTarget = extractBaseTkaPaket(targetPaket);
-      const remaining = tkaSubmissions.filter((s) => {
-        const subBase = s.paketDasar || extractBaseTkaPaket(s.paket);
-        return subBase !== baseTarget && s.paket !== targetPaket;
-      });
-      saveStoredTKASubmissions(remaining);
+      const remaining = clearTKAResultsFromStorage({ scope: 'paket', targetPaket });
       deleteTkaSubmissionsByPaketInFirestore(targetPaket).catch(() => {});
-
-      const existingCbtRes = getStoredCBTResults();
-      const filteredCbtRes = existingCbtRes.filter(
-        (r) =>
-          !(
-            r.category === 'tka' &&
-            (extractBaseTkaPaket(r.paketName || r.judul || '') === baseTarget ||
-              r.paketName === targetPaket)
-          )
-      );
-      if (filteredCbtRes.length !== existingCbtRes.length) {
-        saveStoredCBTResults(filteredCbtRes);
-      }
+      syncAllLocalToCloud(activeUser.name || 'admin').catch(() => {});
 
       setTkaSubmissions(remaining);
       setClearTkaModalContext(null);
@@ -800,15 +782,9 @@ export const TKATabs: React.FC<Props> = ({
       return;
     }
 
-    clearStoredTKASubmissions();
+    clearTKAResultsFromStorage({ scope: 'all' });
     clearTkaSubmissionsInFirestore().catch(() => {});
-    saveStoredTKAResults([]);
-
-    const existingCbtRes = getStoredCBTResults();
-    const filteredCbtRes = existingCbtRes.filter((r) => r.category !== 'tka');
-    if (filteredCbtRes.length !== existingCbtRes.length) {
-      saveStoredCBTResults(filteredCbtRes);
-    }
+    syncAllLocalToCloud(activeUser.name || 'admin').catch(() => {});
 
     setTkaSubmissions([]);
     setClearTkaModalContext(null);
@@ -1374,6 +1350,7 @@ export const TKATabs: React.FC<Props> = ({
     setIsSimulationRunning(false);
 
     // Save to TKA results
+    const simMapelName = simulationQuestions[0]?.mapel || 'TKA Terpadu';
     const results = getStoredTKAResults();
     results.push({
       examId: `tka_${simJenis.replace(/\s+/g, '_')}`,
@@ -1383,6 +1360,12 @@ export const TKATabs: React.FC<Props> = ({
       nilai: finalPct,
       waktuSelesai: new Date().toLocaleTimeString(),
       jawabanSiswa: simAnswers,
+      category: 'tka',
+      mapel: simMapelName,
+      judul: `${simJenis} - ${simMapelName}`,
+      paketName: simJenis,
+      tanggal: getLocalTodayStr(),
+      recordedAt: Date.now(),
     });
     saveStoredTKAResults(results);
 

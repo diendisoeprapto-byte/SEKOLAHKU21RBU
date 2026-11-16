@@ -1,4 +1,4 @@
-import { SchoolProfile, Teacher, Student, Subject, KaldikDay, AssessmentData, CBTExam, CBTExamResult, ActiveUser, StudentReportNotes, TKACpTp, TKAQuestion } from '../types';
+import { SchoolProfile, Teacher, Student, Subject, KaldikDay, AssessmentData, CBTExam, CBTExamResult, ExamResultsResetMeta, ActiveUser, StudentReportNotes, TKACpTp, TKAQuestion } from '../types';
 import { DEFAULT_SCHOOL_PROFILE, DEFAULT_TEACHERS, DEFAULT_STUDENTS, DEFAULT_SUBJECTS, DEFAULT_KALDIK_HOLIDAYS, DEFAULT_CBT_EXAM, DEFAULT_TKA_CP_TP, DEFAULT_TKA_QUESTIONS } from '../data/defaultData';
 import { getDefaultSubjectsForGrade, getGradeNumberFromClass } from '../data/classCurriculumData';
 import { getLocalTodayStr } from './dateUtils';
@@ -24,6 +24,7 @@ const STORAGE_KEYS = {
   TKA_ACTIVE_PACKAGES: 'sekolahku_tka_active_packages',
   TKA_RESULTS: 'sekolahku_tka_results',
   TKA_SUBMISSIONS: 'sekolahku_tka_submissions',
+  EXAM_RESET_META: 'sekolahku_exam_results_reset_meta',
   ACTIVE_USER: 'sekolahku_active_user',
   ACTIVE_YEAR: 'sekolahku_active_year',
   ACTIVE_SEMESTER: 'sekolahku_active_semester',
@@ -411,11 +412,217 @@ export const getCBTDurationMinutes = (
   return 60;
 };
 
+export const isTkaResultEntry = (res?: Partial<CBTExamResult> | null): boolean => {
+  if (!res) return false;
+  if (res.category === 'tka') return true;
+  if (res.category === 'cbt') return false;
+  return String(res.examId || '').toLowerCase().startsWith('tka_');
+};
+
+const toSlugToken = (val?: string): string =>
+  String(val || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const hasSlugToken = (haystackSlug: string, needleSlug: string): boolean => {
+  if (!haystackSlug || !needleSlug) return false;
+  return (
+    haystackSlug === needleSlug ||
+    haystackSlug.startsWith(`${needleSlug}_`) ||
+    haystackSlug.endsWith(`_${needleSlug}`) ||
+    haystackSlug.includes(`_${needleSlug}_`)
+  );
+};
+
+export const doesExamResultMatchTarget = (
+  res: CBTExamResult,
+  targetPaket: string,
+  targetMapel?: string
+): boolean => {
+  if (targetMapel && targetMapel !== 'all') {
+    const mTarget = targetMapel.trim().toLowerCase();
+    const resMapel = (res.mapel || '').trim().toLowerCase();
+    const resJudul = (res.judul || '').trim().toLowerCase();
+    const resExamSlug = toSlugToken(res.examId);
+    const targetMapelSlug = toSlugToken(targetMapel);
+    const mapelMatched =
+      (resMapel && (resMapel === mTarget || resMapel.includes(mTarget) || mTarget.includes(resMapel))) ||
+      (resJudul && resJudul.includes(mTarget)) ||
+      hasSlugToken(resExamSlug, targetMapelSlug);
+    if (!mapelMatched) return false;
+  }
+
+  if (!targetPaket || targetPaket === 'all') return true;
+
+  const targetLower = targetPaket.trim().toLowerCase();
+  const baseTarget = extractBaseTkaPaket(targetPaket).toLowerCase();
+  const baseTargetSlug = toSlugToken(baseTarget);
+  const fullTargetSlug = toSlugToken(targetPaket);
+
+  const candidates = [res.paketName || '', res.judul || '']
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  for (const cand of candidates) {
+    const candLower = cand.toLowerCase();
+    const candBase = extractBaseTkaPaket(cand).toLowerCase();
+    if (
+      candLower === targetLower ||
+      candLower === baseTarget ||
+      candBase === baseTarget ||
+      candLower.startsWith(`${baseTarget} -`) ||
+      candLower.startsWith(`${targetLower} -`)
+    ) {
+      return true;
+    }
+    const candSlug = toSlugToken(cand);
+    if (hasSlugToken(candSlug, baseTargetSlug) || hasSlugToken(candSlug, fullTargetSlug)) {
+      return true;
+    }
+  }
+
+  const examSlug = toSlugToken(res.examId);
+  if (hasSlugToken(examSlug, baseTargetSlug) || hasSlugToken(examSlug, fullTargetSlug)) {
+    return true;
+  }
+
+  // Fallback untuk alias ASAS / ASTS (mis. "Asesmen Sumatif Akhir Semester (ASAS)" vs "ASAS ...")
+  if (targetLower.includes('asas') && (toSlugToken(res.paketName).includes('asas') || toSlugToken(res.judul).includes('asas') || hasSlugToken(examSlug, 'asas'))) {
+    return true;
+  }
+  if (targetLower.includes('asts') && (toSlugToken(res.paketName).includes('asts') || toSlugToken(res.judul).includes('asts') || hasSlugToken(examSlug, 'asts'))) {
+    return true;
+  }
+
+  return false;
+};
+
+export const getStoredExamResultsResetMeta = (): ExamResultsResetMeta => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.EXAM_RESET_META);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveStoredExamResultsResetMeta = (meta: ExamResultsResetMeta) => {
+  localStorage.setItem(STORAGE_KEYS.EXAM_RESET_META, JSON.stringify(meta || {}));
+  notifyStorageMutation(STORAGE_KEYS.EXAM_RESET_META);
+};
+
+export const mergeExamResultsResetMeta = (
+  a?: ExamResultsResetMeta,
+  b?: ExamResultsResetMeta
+): ExamResultsResetMeta => {
+  const merged: ExamResultsResetMeta = {};
+  const cbtTs = Math.max(Number(a?.cbtClearedAt || 0), Number(b?.cbtClearedAt || 0));
+  if (cbtTs > 0) merged.cbtClearedAt = cbtTs;
+  const tkaTs = Math.max(Number(a?.tkaClearedAt || 0), Number(b?.tkaClearedAt || 0));
+  if (tkaTs > 0) merged.tkaClearedAt = tkaTs;
+
+  const paketMap: Record<string, number> = {};
+  [a?.paketClearedAt, b?.paketClearedAt].forEach((src) => {
+    if (!src || typeof src !== 'object') return;
+    Object.entries(src).forEach(([k, v]) => {
+      const ts = Number(v || 0);
+      if (ts > 0) {
+        paketMap[k] = Math.max(paketMap[k] || 0, ts);
+      }
+    });
+  });
+  if (Object.keys(paketMap).length > 0) {
+    merged.paketClearedAt = paketMap;
+  }
+  return merged;
+};
+
+export const markExamResultsResetMeta = (update: {
+  clearAllCbt?: boolean;
+  clearAllTka?: boolean;
+  paketKeys?: Array<{ category: 'cbt' | 'tka'; paket: string; mapel?: string }>;
+  timestamp?: number;
+}): ExamResultsResetMeta => {
+  const now = update.timestamp || Date.now();
+  const prev = getStoredExamResultsResetMeta();
+  const next: ExamResultsResetMeta = {
+    ...prev,
+    paketClearedAt: { ...(prev.paketClearedAt || {}) },
+  };
+  if (update.clearAllCbt) {
+    next.cbtClearedAt = Math.max(Number(next.cbtClearedAt || 0), now);
+  }
+  if (update.clearAllTka) {
+    next.tkaClearedAt = Math.max(Number(next.tkaClearedAt || 0), now);
+  }
+  if (update.paketKeys && update.paketKeys.length > 0) {
+    update.paketKeys.forEach(({ category, paket, mapel }) => {
+      const base = extractBaseTkaPaket(paket);
+      const key = `${category}::${base}::${mapel && mapel !== 'all' ? mapel : 'ALL'}`;
+      next.paketClearedAt![key] = Math.max(Number(next.paketClearedAt![key] || 0), now);
+    });
+  }
+  if (Object.keys(next.paketClearedAt || {}).length === 0) {
+    delete next.paketClearedAt;
+  }
+  saveStoredExamResultsResetMeta(next);
+  return next;
+};
+
+export const filterExamResultsByResetMeta = (
+  results: CBTExamResult[],
+  categoryHint?: 'cbt' | 'tka',
+  metaOverride?: ExamResultsResetMeta
+): CBTExamResult[] => {
+  const list = Array.isArray(results) ? results : [];
+  const meta = metaOverride || getStoredExamResultsResetMeta();
+  const cbtClearedAt = Number(meta.cbtClearedAt || 0);
+  const tkaClearedAt = Number(meta.tkaClearedAt || 0);
+  const paketEntries = Object.entries(meta.paketClearedAt || {});
+
+  if (!cbtClearedAt && !tkaClearedAt && paketEntries.length === 0) {
+    return list;
+  }
+
+  return list.filter((res) => {
+    if (!res || typeof res !== 'object') return false;
+    const isTka = categoryHint === 'tka' || isTkaResultEntry(res);
+    const ts =
+      typeof res.recordedAt === 'number' && Number.isFinite(res.recordedAt) ? res.recordedAt : 0;
+
+    if (isTka && tkaClearedAt > 0 && ts <= tkaClearedAt) {
+      return false;
+    }
+    if (!isTka && cbtClearedAt > 0 && ts <= cbtClearedAt) {
+      return false;
+    }
+
+    for (const [key, clearedTs] of paketEntries) {
+      const clearTime = Number(clearedTs || 0);
+      if (clearTime <= 0 || ts > clearTime) continue;
+      const parts = key.split('::');
+      const cat = parts[0] as 'cbt' | 'tka';
+      const pkt = parts[1] || '';
+      const mapelPart = parts[2] && parts[2] !== 'ALL' ? parts[2] : undefined;
+      if ((cat === 'tka') !== isTka) continue;
+      if (doesExamResultMatchTarget(res, pkt, mapelPart)) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+};
+
 export const getStoredCBTResults = (): CBTExamResult[] => {
   const data = localStorage.getItem(STORAGE_KEYS.CBT_RESULTS);
   if (!data) return [];
   try {
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    return filterExamResultsByResetMeta(Array.isArray(parsed) ? parsed : []);
   } catch {
     return [];
   }
@@ -559,7 +766,8 @@ export const getStoredTKAResults = (): CBTExamResult[] => {
   const data = localStorage.getItem(STORAGE_KEYS.TKA_RESULTS);
   if (!data) return [];
   try {
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    return filterExamResultsByResetMeta(Array.isArray(parsed) ? parsed : [], 'tka');
   } catch {
     return [];
   }
@@ -645,6 +853,94 @@ export const clearStoredTKASubmissions = () => {
     window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
   }
   notifyStorageMutation(STORAGE_KEYS.TKA_SUBMISSIONS);
+};
+
+export const clearTKAResultsFromStorage = (options?: {
+  scope?: 'paket' | 'all';
+  targetPaket?: string;
+}): TKASubmissionItem[] => {
+  const scope = options?.scope || 'all';
+  const targetPaket = options?.targetPaket || 'all';
+  const now = Date.now();
+
+  if (scope === 'paket' && targetPaket && targetPaket !== 'all') {
+    const baseTarget = extractBaseTkaPaket(targetPaket);
+    markExamResultsResetMeta({
+      paketKeys: [{ category: 'tka', paket: baseTarget }],
+      timestamp: now,
+    });
+
+    const remainingSubs = getStoredTKASubmissions().filter((s) => {
+      const subBase = s.paketDasar || extractBaseTkaPaket(s.paket);
+      return subBase !== baseTarget && s.paket !== targetPaket;
+    });
+    saveStoredTKASubmissions(remainingSubs);
+
+    const remainingTkaRes = getStoredTKAResults().filter(
+      (r) => !doesExamResultMatchTarget(r, targetPaket)
+    );
+    saveStoredTKAResults(remainingTkaRes);
+
+    const remainingCbtRes = getStoredCBTResults().filter(
+      (r) => !(isTkaResultEntry(r) && doesExamResultMatchTarget(r, targetPaket))
+    );
+    saveStoredCBTResults(remainingCbtRes);
+    return remainingSubs;
+  }
+
+  markExamResultsResetMeta({ clearAllTka: true, timestamp: now });
+  clearStoredTKASubmissions();
+  saveStoredTKAResults([]);
+
+  const remainingCbtRes = getStoredCBTResults().filter((r) => !isTkaResultEntry(r));
+  saveStoredCBTResults(remainingCbtRes);
+  return [];
+};
+
+export const clearCBTResultsFromStorage = (options?: {
+  scope?: 'paket' | 'all';
+  targetPaket?: string;
+  targetMapel?: string;
+  studentIds?: string[];
+}): CBTExamResult[] => {
+  const scope = options?.scope || 'all';
+  const targetPaket = options?.targetPaket || 'all';
+  const targetMapel = options?.targetMapel;
+  const studentIdSet =
+    options?.studentIds && options.studentIds.length > 0 ? new Set(options.studentIds) : null;
+  const now = Date.now();
+
+  if (scope === 'paket' && targetPaket && targetPaket !== 'all') {
+    if (!studentIdSet) {
+      markExamResultsResetMeta({
+        paketKeys: [{ category: 'cbt', paket: targetPaket, mapel: targetMapel }],
+        timestamp: now,
+      });
+    }
+    const existing = getStoredCBTResults();
+    const remaining = existing.filter((r) => {
+      if (isTkaResultEntry(r)) return true;
+      if (studentIdSet && !studentIdSet.has(r.studentId)) return true;
+      return !doesExamResultMatchTarget(r, targetPaket, targetMapel);
+    });
+    saveStoredCBTResults(remaining);
+    return remaining;
+  }
+
+  if (!studentIdSet && (!targetMapel || targetMapel === 'all')) {
+    markExamResultsResetMeta({ clearAllCbt: true, timestamp: now });
+  }
+  const existing = getStoredCBTResults();
+  const remaining = existing.filter((r) => {
+    if (isTkaResultEntry(r)) return true;
+    if (studentIdSet && !studentIdSet.has(r.studentId)) return true;
+    if (targetMapel && targetMapel !== 'all') {
+      return !doesExamResultMatchTarget(r, 'all', targetMapel);
+    }
+    return false;
+  });
+  saveStoredCBTResults(remaining);
+  return remaining;
 };
 
 export const getStoredActiveUser = (): ActiveUser => {

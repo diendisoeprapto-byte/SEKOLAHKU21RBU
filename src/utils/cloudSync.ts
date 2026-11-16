@@ -14,6 +14,7 @@ import {
   Subject,
   KaldikDay,
   StudentReportNotes,
+  ExamResultsResetMeta,
 } from '../types';
 import {
   getStoredProfile,
@@ -35,6 +36,9 @@ import {
   saveStoredCBTExams,
   getStoredTKAQuestions,
   saveStoredTKAQuestions,
+  getStoredExamResultsResetMeta,
+  mergeExamResultsResetMeta,
+  filterExamResultsByResetMeta,
   runWithoutStorageSync,
   AttendanceRecordItem,
 } from './storage';
@@ -100,6 +104,7 @@ export interface CloudSyncPayload {
   cbtDurations?: Record<string, number>;
   cbtActivePackages?: Record<string, boolean>;
   tkaActivePackages?: Record<string, boolean>;
+  examResultsResetMeta?: ExamResultsResetMeta;
   localStorageSnapshot?: Record<string, any>;
 }
 
@@ -145,6 +150,7 @@ const SESSION_ONLY_KEYS = new Set([
 function dispatchCloudSyncEvents() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-cloud-sync-updated'));
+    window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
     window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
     window.dispatchEvent(new Event('sekolahku-cbt-durations-updated'));
     window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
@@ -345,9 +351,47 @@ export function applyBackupMapToLocalStorage(
     const tkaQuestionsSeeded = localStorage.getItem('sekolahku_tka_questions_seeded') === 'true';
     const cbtExamsSeeded = localStorage.getItem('sekolahku_cbt_exams_seeded') === 'true';
 
+    // Gabungkan & terapkan reset metadata TERLEBIH DAHULU sebelum memproses array hasil ujian
+    const incomingResetMeta =
+      dataMap.sekolahku_exam_results_reset_meta &&
+      typeof dataMap.sekolahku_exam_results_reset_meta === 'object' &&
+      !Array.isArray(dataMap.sekolahku_exam_results_reset_meta)
+        ? (dataMap.sekolahku_exam_results_reset_meta as ExamResultsResetMeta)
+        : undefined;
+    const effectiveResetMeta = isPartialRealtimeSync
+      ? mergeExamResultsResetMeta(getStoredExamResultsResetMeta(), incomingResetMeta)
+      : incomingResetMeta || {};
+    if (Object.keys(effectiveResetMeta).length > 0) {
+      localStorage.setItem('sekolahku_exam_results_reset_meta', JSON.stringify(effectiveResetMeta));
+      // Pangkas langsung hasil lokal lama yang sudah di-reset dari perangkat lain
+      try {
+        const rawLocalCbt = localStorage.getItem('sekolahku_cbt_results');
+        if (rawLocalCbt) {
+          const parsedCbt = JSON.parse(rawLocalCbt);
+          if (Array.isArray(parsedCbt)) {
+            localStorage.setItem(
+              'sekolahku_cbt_results',
+              JSON.stringify(filterExamResultsByResetMeta(parsedCbt, undefined, effectiveResetMeta))
+            );
+          }
+        }
+        const rawLocalTka = localStorage.getItem('sekolahku_tka_results');
+        if (rawLocalTka) {
+          const parsedTka = JSON.parse(rawLocalTka);
+          if (Array.isArray(parsedTka)) {
+            localStorage.setItem(
+              'sekolahku_tka_results',
+              JSON.stringify(filterExamResultsByResetMeta(parsedTka, 'tka', effectiveResetMeta))
+            );
+          }
+        }
+      } catch {}
+    }
+
     let count = 0;
     Object.keys(dataMap).forEach((key) => {
       if (!key.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(key)) return;
+      if (key === 'sekolahku_exam_results_reset_meta' && isPartialRealtimeSync) return;
       const val = dataMap[key];
       if (val === undefined || val === null) return;
 
@@ -381,7 +425,8 @@ export function applyBackupMapToLocalStorage(
           return;
         }
 
-        // Gabungkan hasil ujian CBT & TKA agar submit bersamaan tidak saling menimpa
+        // Gabungkan hasil ujian CBT & TKA agar submit bersamaan tidak saling menimpa,
+        // namun tetap mematuhi stempel waktu pengosongan data (effectiveResetMeta)
         if (
           (key === 'sekolahku_cbt_results' || key === 'sekolahku_tka_results') &&
           Array.isArray(val)
@@ -391,7 +436,10 @@ export function applyBackupMapToLocalStorage(
             const rawLocal = localStorage.getItem(key);
             if (rawLocal) localArr = JSON.parse(rawLocal) || [];
           } catch {}
-          const mergedArr = mergeExamResultsArrays(localArr, val);
+          const catHint = key === 'sekolahku_tka_results' ? 'tka' : undefined;
+          const cleanLocal = filterExamResultsByResetMeta(localArr, catHint, effectiveResetMeta);
+          const cleanIncoming = filterExamResultsByResetMeta(val, catHint, effectiveResetMeta);
+          const mergedArr = mergeExamResultsArrays(cleanLocal, cleanIncoming);
           localStorage.setItem(key, JSON.stringify(mergedArr));
           count++;
           return;
@@ -641,6 +689,7 @@ async function pushSnapshotAndPrimaryDocs(
   const cbtDurations = getStoredCBTDurations();
   const cbtActivePackages = getStoredCBTActivePackages();
   const tkaActivePackages = getStoredTKAActivePackages();
+  const examResultsResetMeta = getStoredExamResultsResetMeta();
 
   let ekskulList: any = [];
   try {
@@ -697,6 +746,7 @@ async function pushSnapshotAndPrimaryDocs(
     cbtDurations,
     cbtActivePackages,
     tkaActivePackages,
+    examResultsResetMeta,
     snapshotChunkCount,
     snapshotRevision: revision,
     ...(options?.restoreVersion ? { restoreVersion: options.restoreVersion } : {}),

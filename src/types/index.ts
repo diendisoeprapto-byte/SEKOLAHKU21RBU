@@ -247,6 +247,13 @@ export interface CBTExamResult {
   judul?: string;
   paketName?: string;
   tanggal?: string;
+  recordedAt?: number;
+}
+
+export interface ExamResultsResetMeta {
+  cbtClearedAt?: number;
+  tkaClearedAt?: number;
+  paketClearedAt?: Record<string, number>;
 }
 
 export interface ActiveUser {

@@ -15,11 +15,20 @@ import {
   Users,
   ShieldCheck,
   UserCheck,
+  Trash2,
+  X,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { CBTExam, CBTQuestion, Student, isSiswaInklusi } from '../../types';
 import { DEFAULT_CBT_EXAM, MAPEL_LIST } from '../../data/defaultData';
-import { getStoredStudents, getStoredAssessments, getStoredCBTResults } from '../../utils/storage';
+import {
+  getStoredStudents,
+  getStoredAssessments,
+  getStoredCBTResults,
+  clearCBTResultsFromStorage,
+  isTkaResultEntry,
+} from '../../utils/storage';
+import { syncAllLocalToCloud } from '../../utils/cloudSync';
 
 export const PAKET_SOAL_LIST = [
   'Sumatif 1 (AS 1)',
@@ -58,6 +67,7 @@ interface Props {
   activeClass?: string;
   activeYear?: string;
   activeSemester?: string;
+  showToast?: (msg: string, type?: 'success' | 'error') => void;
 }
 
 export const AnalisisSoalTab: React.FC<Props> = ({
@@ -65,11 +75,57 @@ export const AnalisisSoalTab: React.FC<Props> = ({
   activeClass: propActiveClass,
   activeYear = '2026/2027',
   activeSemester = 'Ganjil',
+  showToast,
 }) => {
   const [selectedMapel, setSelectedMapel] = useState<string>('Ilmu Pengetahuan Alam dan Sosial (IPAS)');
   const [selectedPaket, setSelectedPaket] = useState<string>('Asesmen Sumatif Akhir Semester (ASAS)');
   const [selectedClass, setSelectedClass] = useState<string>(propActiveClass || 'Kelas 6A');
   const [activeChartTab, setActiveChartTab] = useState<'kesukaran' | 'pembeda' | 'ketuntasan'>('kesukaran');
+  const [isClearModalOpen, setIsClearModalOpen] = useState<boolean>(false);
+  const [cbtResultCount, setCbtResultCount] = useState<number>(
+    () => getStoredCBTResults().filter((r) => !isTkaResultEntry(r)).length
+  );
+
+  React.useEffect(() => {
+    const refreshCount = () => {
+      setCbtResultCount(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)).length);
+    };
+    window.addEventListener('sekolahku-exam-results-updated', refreshCount);
+    window.addEventListener('sekolahku-cloud-sync-updated', refreshCount);
+    window.addEventListener('storage', refreshCount);
+    return () => {
+      window.removeEventListener('sekolahku-exam-results-updated', refreshCount);
+      window.removeEventListener('sekolahku-cloud-sync-updated', refreshCount);
+      window.removeEventListener('storage', refreshCount);
+    };
+  }, []);
+
+  const executeClearCbtData = (scope: 'paket' | 'all') => {
+    if (scope === 'paket') {
+      clearCBTResultsFromStorage({
+        scope: 'paket',
+        targetPaket: selectedPaket,
+        targetMapel: selectedMapel,
+      });
+      syncAllLocalToCloud('admin').catch(() => {});
+      setCbtResultCount(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)).length);
+      setIsClearModalOpen(false);
+      showToast?.(
+        `Data hasil CBT "${selectedPaket}" (${selectedMapel}) berhasil dikosongkan & status performa siswa direset!`,
+        'success'
+      );
+      return;
+    }
+
+    clearCBTResultsFromStorage({ scope: 'all' });
+    syncAllLocalToCloud('admin').catch(() => {});
+    setCbtResultCount(0);
+    setIsClearModalOpen(false);
+    showToast?.(
+      'Seluruh data hasil & analisis CBT berhasil dikosongkan dan status performa siswa direset!',
+      'success'
+    );
+  };
 
   // Generate dynamic questions tailored to the selected subject and packet
   const questionsData = useMemo(() => {
@@ -318,6 +374,14 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsClearModalOpen(true)}
+              className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-display font-black px-3.5 py-2 rounded-xl text-xs border border-rose-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+              title="Kosongkan data hasil CBT siswa dan reset statistik performa"
+            >
+              <Trash2 className="w-4 h-4 text-rose-600" /> Kosongkan Data{cbtResultCount > 0 ? ` (${cbtResultCount})` : ''}
+            </button>
             <button
               type="button"
               onClick={handleExportExcel}
@@ -880,6 +944,67 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           </div>
         </div>
       </div>
+
+      {isClearModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-display font-black text-base text-slate-900 flex items-center gap-2">
+                  <Trash2 className="w-5 h-5 text-rose-600" /> Kosongkan Data Hasil CBT
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Pilih cakupan data hasil ujian CBT siswa yang ingin dikosongkan.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsClearModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-full cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1.5 leading-relaxed">
+              <p className="font-bold">
+                Tindakan ini akan mengosongkan riwayat skor CBT dan mereset Statistik Performa Siswa (termasuk sinkronisasi Cloud Firestore).
+              </p>
+              <p className="text-[11px] text-rose-700">
+                Bank Soal CBT tidak akan ikut terhapus, hanya data nilai hasil pengerjaan CBT siswa.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => executeClearCbtData('paket')}
+                className="w-full px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-display font-black cursor-pointer shadow-xs transition flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Kosongkan "{selectedPaket}" ({selectedMapel}) Saja</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => executeClearCbtData('all')}
+                className="w-full px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-display font-black cursor-pointer shadow-sm transition flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Kosongkan Semua Data Hasil CBT</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsClearModalOpen(false)}
+                className="w-full px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer transition"
+              >
+                Batal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };

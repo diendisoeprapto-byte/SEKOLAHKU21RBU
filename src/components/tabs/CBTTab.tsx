@@ -48,6 +48,7 @@ import {
   saveStoredSubjectsForClass,
   notifyStorageMutation,
 } from '../../utils/storage';
+import { getLocalTodayStr } from '../../utils/dateUtils';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../utils/firebase';
 import { pushAllDataToCloud, syncAllLocalToCloud } from '../../utils/cloudSync';
@@ -990,6 +991,12 @@ export const CBTTab: React.FC<Props> = ({
       nilai: finalGrade,
       waktuSelesai: new Date().toLocaleTimeString(),
       jawabanSiswa: studentAnswers,
+      category: 'cbt',
+      mapel: selectedMapel,
+      judul: activeExam.judul,
+      paketName: selectedPaket,
+      tanggal: getLocalTodayStr(),
+      recordedAt: Date.now(),
     });
     saveStoredCBTResults(results);
 

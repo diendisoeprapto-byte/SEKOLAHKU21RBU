@@ -31,7 +31,9 @@ import {
   setAssessmentCount,
   getStoredAssessments,
   saveStoredAssessments,
+  clearCBTResultsFromStorage,
 } from '../../utils/storage';
+import { syncAllLocalToCloud } from '../../utils/cloudSync';
 
 interface Props {
   subjects: Subject[];
@@ -204,6 +206,12 @@ export const PenilaianTab: React.FC<Props> = ({
     });
     setGrades(cleared);
     saveStoredAssessments(assessmentKey, cleared);
+    clearCBTResultsFromStorage({
+      scope: 'all',
+      targetMapel: selectedSubject?.name,
+      studentIds: currentClassStudents.map((s) => s.id),
+    });
+    syncAllLocalToCloud('admin').catch(() => {});
     showToast(`Seluruh nilai ${selectedSubject?.name} (${activeClass}) berhasil dihapus / dikosongkan!`, 'success');
     setIsDeleteModalOpen(false);
   };
