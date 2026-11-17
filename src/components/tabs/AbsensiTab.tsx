@@ -81,6 +81,7 @@ export const AbsensiTab: React.FC<Props> = ({
   
   const [lastScannedStudent, setLastScannedStudent] = useState<string>('Siap menerima scan barcode siswa...');
   const [lastScannedTime, setLastScannedTime] = useState<string>('--:--');
+  const [lastScannedStatus, setLastScannedStatus] = useState<'H' | 'S' | 'I' | 'A' | null>(null);
   const [scannedSuccessItem, setScannedSuccessItem] = useState<{
     student: Student;
     time: string;
@@ -204,13 +205,14 @@ export const AbsensiTab: React.FC<Props> = ({
           ? 'SAKIT'
           : existingRec.status === 'I'
           ? 'IZIN'
-          : 'ALFA';
+          : 'ALPA';
       const existingTime = existingRec.time || '--:--';
 
       setLastScannedStudent(
         `${student.nama} (${student.barcodeId}) - SUDAH ${existingLabel}`
       );
       setLastScannedTime(existingTime);
+      setLastScannedStatus(existingRec.status);
       setScannedSuccessItem({
         student,
         time: existingTime,
@@ -252,10 +254,11 @@ export const AbsensiTab: React.FC<Props> = ({
     };
 
     const statusLabel =
-      status === 'H' ? 'HADIR' : status === 'S' ? 'SAKIT' : status === 'I' ? 'IZIN' : 'ALFA';
+      status === 'H' ? 'HADIR' : status === 'S' ? 'SAKIT' : status === 'I' ? 'IZIN' : 'ALPA';
 
     setLastScannedStudent(`${student.nama} (${student.barcodeId}) - ${statusLabel}`);
     setLastScannedTime(timeStr.slice(0, 5));
+    setLastScannedStatus(status);
     setScannedSuccessItem({
       student,
       time: timeStr,
@@ -780,24 +783,83 @@ export const AbsensiTab: React.FC<Props> = ({
             )}
           </div>
 
-          {/* NOTIFIKASI CEKLIS SUKSES / SUDAH HADIR SCAN BARCODE */}
+          {/* NOTIFIKASI HASIL SCAN SESUAI WARNA STATUS (Hijau=Hadir, Biru=Sakit, Kuning=Izin, Merah=Alpa) */}
           {scannedSuccessItem && (() => {
             const isDuplicate = Boolean(scannedSuccessItem.alreadyPresent);
-            const statusText =
-              scannedSuccessItem.status === 'H'
-                ? 'HADIR (H)'
-                : scannedSuccessItem.status === 'S'
-                ? 'SAKIT (S)'
-                : scannedSuccessItem.status === 'I'
-                ? 'IZIN (I)'
-                : 'ALFA (A)';
+            const statusThemeMap: Record<
+              'H' | 'S' | 'I' | 'A',
+              {
+                statusText: string;
+                cardCls: string;
+                badgeCls: string;
+                iconWrapCls: string;
+                subTextCls: string;
+                closeBtnCls: string;
+                dupBoxCls: string;
+                dupIconCls: string;
+                footerBorderCls: string;
+                dotCls: string;
+                timePillCls: string;
+              }
+            > = {
+              H: {
+                statusText: 'HADIR (H)',
+                cardCls: 'bg-gradient-to-r from-emerald-600 to-green-600 border-emerald-300 text-white',
+                badgeCls: 'bg-white/20 text-emerald-50',
+                iconWrapCls: 'bg-white text-emerald-600',
+                subTextCls: 'text-emerald-100',
+                closeBtnCls: 'bg-white/20 hover:bg-white/30 text-white',
+                dupBoxCls: 'bg-black/20 border-white/25 text-white',
+                dupIconCls: 'text-emerald-200',
+                footerBorderCls: 'border-emerald-300/40',
+                dotCls: 'bg-emerald-200',
+                timePillCls: 'bg-emerald-950/50 text-emerald-100 border-emerald-300/30',
+              },
+              S: {
+                statusText: 'SAKIT (S)',
+                cardCls: 'bg-gradient-to-r from-blue-600 to-sky-600 border-blue-300 text-white',
+                badgeCls: 'bg-white/20 text-blue-50',
+                iconWrapCls: 'bg-white text-blue-600',
+                subTextCls: 'text-blue-100',
+                closeBtnCls: 'bg-white/20 hover:bg-white/30 text-white',
+                dupBoxCls: 'bg-black/20 border-white/25 text-white',
+                dupIconCls: 'text-blue-200',
+                footerBorderCls: 'border-blue-300/40',
+                dotCls: 'bg-blue-200',
+                timePillCls: 'bg-blue-950/50 text-blue-100 border-blue-300/30',
+              },
+              I: {
+                statusText: 'IZIN (I)',
+                cardCls: 'bg-gradient-to-r from-yellow-400 to-amber-400 border-yellow-200 text-slate-900',
+                badgeCls: 'bg-yellow-950/15 text-yellow-950',
+                iconWrapCls: 'bg-white text-yellow-600',
+                subTextCls: 'text-yellow-950/80',
+                closeBtnCls: 'bg-yellow-950/15 hover:bg-yellow-950/25 text-yellow-950',
+                dupBoxCls: 'bg-yellow-950/15 border-yellow-950/20 text-yellow-950',
+                dupIconCls: 'text-yellow-900',
+                footerBorderCls: 'border-yellow-900/20',
+                dotCls: 'bg-yellow-900',
+                timePillCls: 'bg-yellow-950 text-yellow-100 border-yellow-800',
+              },
+              A: {
+                statusText: 'ALPA (A)',
+                cardCls: 'bg-gradient-to-r from-red-600 to-rose-600 border-red-300 text-white',
+                badgeCls: 'bg-white/20 text-red-50',
+                iconWrapCls: 'bg-white text-red-600',
+                subTextCls: 'text-red-100',
+                closeBtnCls: 'bg-white/20 hover:bg-white/30 text-white',
+                dupBoxCls: 'bg-black/20 border-white/25 text-white',
+                dupIconCls: 'text-red-200',
+                footerBorderCls: 'border-red-300/40',
+                dotCls: 'bg-red-200',
+                timePillCls: 'bg-red-950/50 text-red-100 border-red-300/30',
+              },
+            };
+            const theme = statusThemeMap[scannedSuccessItem.status];
+
             return (
               <div
-                className={`p-4 rounded-3xl text-white shadow-xl border-2 animate-in fade-in zoom-in-95 duration-200 ${
-                  isDuplicate
-                    ? 'bg-gradient-to-r from-amber-500 to-orange-500 border-amber-200'
-                    : 'bg-gradient-to-r from-emerald-600 to-teal-600 border-emerald-300'
-                }`}
+                className={`p-4 rounded-3xl shadow-xl border-2 animate-in fade-in zoom-in-95 duration-200 ${theme.cardCls}`}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3.5">
@@ -814,22 +876,18 @@ export const AbsensiTab: React.FC<Props> = ({
                         className="w-14 h-14 rounded-2xl object-cover border-2 border-white shadow-md cursor-zoom-in"
                       />
                       <div
-                        className={`absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-white flex items-center justify-center shadow-md ${
-                          isDuplicate ? 'text-amber-600' : 'text-emerald-600'
-                        }`}
+                        className={`absolute -bottom-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center shadow-md ${theme.iconWrapCls}`}
                       >
                         {isDuplicate ? (
-                          <AlertTriangle className="w-4 h-4 text-amber-600" />
+                          <AlertTriangle className="w-4 h-4" />
                         ) : (
-                          <CheckCircle2 className="w-5 h-5 fill-emerald-600 text-white" />
+                          <CheckCircle2 className="w-4 h-4" />
                         )}
                       </div>
                     </div>
                     <div>
                       <span
-                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-white/20 tracking-wider ${
-                          isDuplicate ? 'text-amber-50' : 'text-emerald-100'
-                        }`}
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${theme.badgeCls}`}
                       >
                         {isDuplicate ? (
                           <>
@@ -841,14 +899,10 @@ export const AbsensiTab: React.FC<Props> = ({
                           </>
                         )}
                       </span>
-                      <h4 className="font-display font-black text-base text-white mt-0.5">
+                      <h4 className="font-display font-black text-base mt-0.5">
                         {scannedSuccessItem.student.nama}
                       </h4>
-                      <div
-                        className={`text-[11px] font-mono font-bold ${
-                          isDuplicate ? 'text-amber-50' : 'text-emerald-100'
-                        }`}
-                      >
+                      <div className={`text-[11px] font-mono font-bold ${theme.subTextCls}`}>
                         {scannedSuccessItem.student.barcodeId} • Kelas: {scannedSuccessItem.student.kelas} • NISN: {scannedSuccessItem.student.nisn}
                       </div>
                     </div>
@@ -856,7 +910,7 @@ export const AbsensiTab: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={() => setScannedSuccessItem(null)}
-                    className="p-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white transition cursor-pointer"
+                    className={`p-1.5 rounded-xl transition cursor-pointer ${theme.closeBtnCls}`}
                     title="Tutup Notifikasi"
                   >
                     <X className="w-4 h-4" />
@@ -864,36 +918,30 @@ export const AbsensiTab: React.FC<Props> = ({
                 </div>
 
                 {isDuplicate && (
-                  <div className="mt-2.5 px-3 py-2 rounded-2xl bg-black/20 border border-white/25 text-xs font-extrabold text-white flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-200" />
+                  <div
+                    className={`mt-2.5 px-3 py-2 rounded-2xl border text-xs font-extrabold flex items-center gap-2 ${theme.dupBoxCls}`}
+                  >
+                    <AlertTriangle className={`w-4 h-4 shrink-0 ${theme.dupIconCls}`} />
                     <span>
                       {scannedSuccessItem.status === 'H'
                         ? `Anak ini sudah hadir! Waktu scan awal (${scannedSuccessItem.time}) tetap dipertahankan.`
-                        : `Anak ini sudah tercatat ${statusText} hari ini pukul ${scannedSuccessItem.time}. Data tidak ditimpa.`}
+                        : `Anak ini sudah tercatat ${theme.statusText} hari ini pukul ${scannedSuccessItem.time}. Data tidak ditimpa.`}
                     </span>
                   </div>
                 )}
 
                 <div
-                  className={`mt-3 pt-2.5 border-t flex items-center justify-between text-xs font-bold ${
-                    isDuplicate ? 'border-amber-200/40' : 'border-emerald-400/40'
-                  }`}
+                  className={`mt-3 pt-2.5 border-t flex items-center justify-between text-xs font-bold ${theme.footerBorderCls}`}
                 >
                   <span className="flex items-center gap-2">
                     <span
-                      className={`w-2.5 h-2.5 rounded-full ${
-                        isDuplicate ? 'bg-amber-200' : 'bg-emerald-200 animate-ping'
+                      className={`w-2.5 h-2.5 rounded-full ${theme.dotCls} ${
+                        isDuplicate ? '' : 'animate-ping'
                       }`}
                     />
-                    Status: <strong>{statusText}</strong>
+                    Status: <strong>{theme.statusText}</strong>
                   </span>
-                  <span
-                    className={`font-mono px-3 py-1 rounded-xl border ${
-                      isDuplicate
-                        ? 'bg-amber-900/50 text-amber-50 border-amber-200/30'
-                        : 'bg-emerald-900/60 text-emerald-100 border-emerald-400/30'
-                    }`}
-                  >
+                  <span className={`font-mono px-3 py-1 rounded-xl border ${theme.timePillCls}`}>
                     {isDuplicate ? `Waktu Awal: ${scannedSuccessItem.time}` : `Waktu: ${scannedSuccessItem.time}`}
                   </span>
                 </div>
@@ -901,25 +949,63 @@ export const AbsensiTab: React.FC<Props> = ({
             );
           })()}
 
-          {/* Status Scan Terakhir Barcode */}
-          <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-2 text-xs">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
-                <CheckCheck className="w-4 h-4" />
-              </div>
-              <div className="min-w-0">
-                <div className="text-[10px] font-extrabold uppercase text-emerald-800">
-                  Status Scan Terakhir
+          {/* Status Scan Terakhir Barcode (Mengikuti Warna Status) */}
+          {(() => {
+            const lastTheme =
+              lastScannedStatus === 'S'
+                ? {
+                    box: 'bg-blue-50 border-blue-200',
+                    icon: 'bg-blue-600 text-white',
+                    title: 'text-blue-800',
+                    time: 'border-blue-200 text-blue-800',
+                  }
+                : lastScannedStatus === 'I'
+                ? {
+                    box: 'bg-yellow-50 border-yellow-300',
+                    icon: 'bg-yellow-500 text-slate-950',
+                    title: 'text-yellow-900',
+                    time: 'border-yellow-300 text-yellow-900',
+                  }
+                : lastScannedStatus === 'A'
+                ? {
+                    box: 'bg-red-50 border-red-200',
+                    icon: 'bg-red-600 text-white',
+                    title: 'text-red-800',
+                    time: 'border-red-200 text-red-800',
+                  }
+                : {
+                    box: 'bg-emerald-50 border-emerald-200',
+                    icon: 'bg-emerald-600 text-white',
+                    title: 'text-emerald-800',
+                    time: 'border-emerald-200 text-emerald-800',
+                  };
+            return (
+              <div
+                className={`p-3.5 rounded-2xl border flex items-center justify-between gap-2 text-xs transition-colors ${lastTheme.box}`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div
+                    className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${lastTheme.icon}`}
+                  >
+                    <CheckCheck className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className={`text-[10px] font-extrabold uppercase ${lastTheme.title}`}>
+                      Status Scan Terakhir
+                    </div>
+                    <div className="font-display font-black text-slate-800 truncate">
+                      {lastScannedStudent}
+                    </div>
+                  </div>
                 </div>
-                <div className="font-display font-black text-slate-800 truncate">
-                  {lastScannedStudent}
-                </div>
+                <span
+                  className={`font-mono font-bold text-xs bg-white px-2.5 py-1.5 rounded-xl border shrink-0 ${lastTheme.time}`}
+                >
+                  {lastScannedTime}
+                </span>
               </div>
-            </div>
-            <span className="font-mono font-bold text-xs bg-white px-2.5 py-1.5 rounded-xl border border-emerald-200 text-emerald-800 shrink-0">
-              {lastScannedTime}
-            </span>
-          </div>
+            );
+          })()}
 
           {/* Manual Input (USB Scanner & Text Input) */}
           <form onSubmit={handleManualScan} className="flex gap-2">
@@ -950,19 +1036,34 @@ export const AbsensiTab: React.FC<Props> = ({
             <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1">
               {filteredStudents.map((s) => {
                 const rec = attendanceRecords[`${activeDate}_${s.id}`];
-                const isHadir = rec?.status === 'H';
+                const chipCls =
+                  rec?.status === 'H'
+                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                    : rec?.status === 'S'
+                    ? 'bg-blue-100 text-blue-800 border-blue-300'
+                    : rec?.status === 'I'
+                    ? 'bg-yellow-100 text-yellow-900 border-yellow-300'
+                    : rec?.status === 'A'
+                    ? 'bg-red-100 text-red-800 border-red-300'
+                    : 'bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 border-slate-200 text-slate-700';
+                const chipIcon =
+                  rec?.status === 'H'
+                    ? '✓'
+                    : rec?.status === 'S'
+                    ? 'S'
+                    : rec?.status === 'I'
+                    ? 'I'
+                    : rec?.status === 'A'
+                    ? 'A'
+                    : '+';
                 return (
                   <button
                     key={s.id}
                     type="button"
                     onClick={() => recordAttendance(s, 'H', { skipIfAlreadyRecorded: true })}
-                    className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
-                      isHadir
-                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                        : 'bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 border-slate-200 text-slate-700'
-                    }`}
+                    className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${chipCls}`}
                   >
-                    <span>{isHadir ? '✓' : '+'}</span>
+                    <span>{chipIcon}</span>
                     <span>{s.nama.split(' ')[0]}</span>
                   </button>
                 );
@@ -1008,17 +1109,17 @@ export const AbsensiTab: React.FC<Props> = ({
               <div className="text-[10px] font-extrabold text-emerald-700 uppercase">Hadir (H)</div>
               <div className="text-base font-display font-black text-emerald-900">{dailySummary.hadir}</div>
             </div>
-            <div className="p-2 rounded-2xl bg-sky-50 border border-sky-200">
-              <div className="text-[10px] font-extrabold text-sky-700 uppercase">Sakit (S)</div>
-              <div className="text-base font-display font-black text-sky-900">{dailySummary.sakit}</div>
+            <div className="p-2 rounded-2xl bg-blue-50 border border-blue-200">
+              <div className="text-[10px] font-extrabold text-blue-700 uppercase">Sakit (S)</div>
+              <div className="text-base font-display font-black text-blue-900">{dailySummary.sakit}</div>
             </div>
-            <div className="p-2 rounded-2xl bg-amber-50 border border-amber-200">
-              <div className="text-[10px] font-extrabold text-amber-700 uppercase">Izin (I)</div>
-              <div className="text-base font-display font-black text-amber-900">{dailySummary.izin}</div>
+            <div className="p-2 rounded-2xl bg-yellow-50 border border-yellow-300">
+              <div className="text-[10px] font-extrabold text-yellow-800 uppercase">Izin (I)</div>
+              <div className="text-base font-display font-black text-yellow-900">{dailySummary.izin}</div>
             </div>
-            <div className="p-2 rounded-2xl bg-rose-50 border border-rose-200">
-              <div className="text-[10px] font-extrabold text-rose-700 uppercase">Alfa (A)</div>
-              <div className="text-base font-display font-black text-rose-900">{dailySummary.alfa}</div>
+            <div className="p-2 rounded-2xl bg-red-50 border border-red-200">
+              <div className="text-[10px] font-extrabold text-red-700 uppercase">Alpa (A)</div>
+              <div className="text-base font-display font-black text-red-900">{dailySummary.alfa}</div>
             </div>
             <div className="p-2 rounded-2xl bg-slate-50 border border-slate-200">
               <div className="text-[10px] font-extrabold text-slate-500 uppercase">Belum</div>
@@ -1079,16 +1180,20 @@ export const AbsensiTab: React.FC<Props> = ({
                     const time = rec ? rec.time : '--:--';
                     const isJustScanned = scannedSuccessItem?.student.id === s.id;
 
+                    const rowHighlightCls = isJustScanned
+                      ? scannedSuccessItem?.status === 'H'
+                        ? 'bg-emerald-50 ring-2 ring-emerald-500'
+                        : scannedSuccessItem?.status === 'S'
+                        ? 'bg-blue-50 ring-2 ring-blue-500'
+                        : scannedSuccessItem?.status === 'I'
+                        ? 'bg-yellow-50 ring-2 ring-yellow-400'
+                        : 'bg-red-50 ring-2 ring-red-500'
+                      : 'hover:bg-slate-50';
+
                     return (
                       <tr
                         key={s.id}
-                        className={`transition-colors ${
-                          isJustScanned
-                            ? scannedSuccessItem?.alreadyPresent
-                              ? 'bg-amber-50 ring-2 ring-amber-400'
-                              : 'bg-emerald-50 ring-2 ring-emerald-400'
-                            : 'hover:bg-slate-50'
-                        }`}
+                        className={`transition-colors ${rowHighlightCls}`}
                       >
                         <td className="p-3 font-mono font-bold text-rose-700">{s.barcodeId}</td>
                         <td className="p-3">
@@ -1116,11 +1221,11 @@ export const AbsensiTab: React.FC<Props> = ({
                               status === 'H'
                                 ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                                 : status === 'S'
-                                ? 'bg-sky-100 text-sky-800 border border-sky-300'
+                                ? 'bg-blue-100 text-blue-800 border border-blue-300'
                                 : status === 'I'
-                                ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                ? 'bg-yellow-100 text-yellow-900 border border-yellow-400'
                                 : status === 'A'
-                                ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                ? 'bg-red-100 text-red-800 border border-red-300'
                                 : 'bg-slate-100 text-slate-500 border border-slate-200'
                             }`}
                           >
@@ -1131,7 +1236,7 @@ export const AbsensiTab: React.FC<Props> = ({
                               : status === 'I'
                               ? 'Izin'
                               : status === 'A'
-                              ? 'Alfa'
+                              ? 'Alpa'
                               : 'Belum Presensi'}
                           </span>
                         </td>
@@ -1141,11 +1246,11 @@ export const AbsensiTab: React.FC<Props> = ({
                               <button
                                 type="button"
                                 onClick={() => handleStatusChange(s.id, 'H')}
-                                title="Tandai Hadir"
+                                title="Tandai Hadir (Hijau)"
                                 className={`px-2.5 py-1.5 transition cursor-pointer ${
                                   status === 'H'
                                     ? 'bg-emerald-600 text-white'
-                                    : 'bg-white hover:bg-slate-100 text-slate-700'
+                                    : 'bg-white hover:bg-emerald-50 text-slate-700'
                                 }`}
                               >
                                 H
@@ -1153,11 +1258,11 @@ export const AbsensiTab: React.FC<Props> = ({
                               <button
                                 type="button"
                                 onClick={() => handleStatusChange(s.id, 'S')}
-                                title="Tandai Sakit"
+                                title="Tandai Sakit (Biru)"
                                 className={`px-2.5 py-1.5 border-l border-slate-200 transition cursor-pointer ${
                                   status === 'S'
-                                    ? 'bg-sky-600 text-white'
-                                    : 'bg-white hover:bg-slate-100 text-slate-700'
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-white hover:bg-blue-50 text-slate-700'
                                 }`}
                               >
                                 S
@@ -1165,11 +1270,11 @@ export const AbsensiTab: React.FC<Props> = ({
                               <button
                                 type="button"
                                 onClick={() => handleStatusChange(s.id, 'I')}
-                                title="Tandai Izin"
+                                title="Tandai Izin (Kuning)"
                                 className={`px-2.5 py-1.5 border-l border-slate-200 transition cursor-pointer ${
                                   status === 'I'
-                                    ? 'bg-amber-500 text-white'
-                                    : 'bg-white hover:bg-slate-100 text-slate-700'
+                                    ? 'bg-yellow-400 text-slate-950'
+                                    : 'bg-white hover:bg-yellow-50 text-slate-700'
                                 }`}
                               >
                                 I
@@ -1177,11 +1282,11 @@ export const AbsensiTab: React.FC<Props> = ({
                               <button
                                 type="button"
                                 onClick={() => handleStatusChange(s.id, 'A')}
-                                title="Tandai Alfa"
+                                title="Tandai Alpa (Merah)"
                                 className={`px-2.5 py-1.5 border-l border-slate-200 transition cursor-pointer ${
                                   status === 'A'
-                                    ? 'bg-rose-600 text-white'
-                                    : 'bg-white hover:bg-slate-100 text-slate-700'
+                                    ? 'bg-red-600 text-white'
+                                    : 'bg-white hover:bg-red-50 text-slate-700'
                                 }`}
                               >
                                 A
