@@ -738,7 +738,9 @@ export const SiswaTab: React.FC<Props> = ({
                 className="bg-transparent text-xs font-black text-slate-800 focus:outline-hidden cursor-pointer"
               >
                 <option value="SEMUA">Semua Kelas ({students.length} Siswa)</option>
-                {CLASSES_LIST.map((c) => (
+                {Object.keys(classStudentCounts)
+                  .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+                  .map((c) => (
                   <option key={c} value={c}>
                     {c} ({classStudentCounts[c] || 0} Siswa)
                   </option>

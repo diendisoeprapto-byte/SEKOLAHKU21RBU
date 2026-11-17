@@ -42,7 +42,9 @@ import {
   saveStoredTKAQuestions,
   getStoredTKASubmissions,
   saveStoredTKASubmissions,
+  getStoredCBTResults,
   saveStoredCBTResults,
+  getStoredTKAResults,
   saveStoredTKAResults,
   getStoredExamResultsResetMeta,
   saveStoredExamResultsResetMeta,
@@ -103,6 +105,7 @@ import {
   scheduleRealtimeModuleSync,
   subscribeToCloudChanges,
   syncAllLocalToCloud,
+  reconcileTkaFromCloudBackup,
   LAST_PUSHED_VERSION_KEY,
   LAST_RESTORE_VERSION_KEY,
   LAST_SNAPSHOT_REV_KEY,
@@ -125,6 +128,10 @@ import {
   saveTkaQuestionsBatchToFirestore,
   subscribeToTkaSubmissionsCollection,
   saveTkaSubmissionsBatchToFirestore,
+  getPendingTkaSubmissions,
+  mergeTkaSubmissionLists,
+  flushPendingTkaSubmissionsToFirestore,
+  reconcileAndSyncLocalTkaSubmissions,
 } from './utils/tkaFirestore';
 import {
   subscribeToCbtExamsCollection,
@@ -150,6 +157,7 @@ export default function App() {
   const tkaQuestionsCollectionLoadedRef = React.useRef(false);
   const tkaSubmissionsCollectionLoadedRef = React.useRef(false);
   const cbtExamsCollectionLoadedRef = React.useRef(false);
+  const adminTkaReconciledRef = React.useRef(false);
   const activeUserRef = React.useRef<ActiveUser | null>(null);
   const [restoreTick, setRestoreTick] = useState(0);
   const [activeExamStatus, setActiveExamStatus] = useState<ActiveExamHeaderStatus | null>(null);
@@ -351,23 +359,17 @@ export default function App() {
           );
           saveStoredExamResultsResetMeta(mergedMeta);
           try {
-            const rawCbt = localStorage.getItem('sekolahku_cbt_results');
-            if (rawCbt) {
-              const parsedCbt = JSON.parse(rawCbt);
-              if (Array.isArray(parsedCbt)) {
-                saveStoredCBTResults(
-                  filterExamResultsByResetMeta(parsedCbt, undefined, mergedMeta)
-                );
-              }
+            const localCbt = getStoredCBTResults();
+            if (localCbt.length > 0) {
+              saveStoredCBTResults(
+                filterExamResultsByResetMeta(localCbt, undefined, mergedMeta)
+              );
             }
-            const rawTka = localStorage.getItem('sekolahku_tka_results');
-            if (rawTka) {
-              const parsedTka = JSON.parse(rawTka);
-              if (Array.isArray(parsedTka)) {
-                saveStoredTKAResults(
-                  filterExamResultsByResetMeta(parsedTka, 'tka', mergedMeta)
-                );
-              }
+            const localTka = getStoredTKAResults();
+            if (localTka.length > 0) {
+              saveStoredTKAResults(
+                filterExamResultsByResetMeta(localTka, 'tka', mergedMeta)
+              );
             }
           } catch {}
         }
@@ -612,14 +614,24 @@ export default function App() {
         if (!isMounted) return;
         const alreadySeeded = localStorage.getItem('sekolahku_tka_submissions_seeded') === 'true';
         const resetMeta = getStoredExamResultsResetMeta();
+        const tkaClearedAt = Number(resetMeta?.tkaClearedAt || 0);
+        const validPending = getPendingTkaSubmissions().filter((item) => {
+          const ts = item.updatedAt ? Date.parse(item.updatedAt) : 0;
+          if (tkaClearedAt > 0 && (!Number.isFinite(ts) || ts <= tkaClearedAt)) return false;
+          return true;
+        });
+        const mergedSubs = mergeTkaSubmissionLists(firestoreSubs, validPending);
 
-        if (firestoreSubs.length > 0) {
+        if (mergedSubs.length > 0) {
           tkaSubmissionsCollectionLoadedRef.current = true;
           markLargeCollectionHydratedFromCloud('sekolahku_tka_submissions');
           safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
           runWithoutStorageSync(() => {
-            saveStoredTKASubmissions(firestoreSubs);
+            saveStoredTKASubmissions(mergedSubs);
           });
+          if (validPending.length > 0) {
+            flushPendingTkaSubmissionsToFirestore().catch(() => {});
+          }
         } else if (
           !tkaSubmissionsCollectionLoadedRef.current &&
           !alreadySeeded &&
@@ -689,8 +701,21 @@ export default function App() {
       }
     );
 
+    idbHydrationPromise.then(() => {
+      if (!isMounted) return;
+      flushPendingTkaSubmissionsToFirestore().catch(() => {});
+      reconcileAndSyncLocalTkaSubmissions().catch(() => {});
+    });
+
+    const handleOnlineSync = () => {
+      flushPendingTkaSubmissionsToFirestore().catch(() => {});
+      reconcileAndSyncLocalTkaSubmissions().catch(() => {});
+    };
+    window.addEventListener('online', handleOnlineSync);
+
     return () => {
       isMounted = false;
+      window.removeEventListener('online', handleOnlineSync);
       unsubscribe();
       unsubStudents();
       unsubTeachers();
@@ -728,7 +753,16 @@ export default function App() {
 
   useEffect(() => {
     activeUserRef.current = activeUser;
-  }, [activeUser]);
+    if (!activeUser) return;
+    flushPendingTkaSubmissionsToFirestore().catch(() => {});
+    if (students.length > 0) {
+      reconcileAndSyncLocalTkaSubmissions(students).catch(() => {});
+    }
+    if (activeUser.role !== 'siswa' && !adminTkaReconciledRef.current) {
+      adminTkaReconciledRef.current = true;
+      reconcileTkaFromCloudBackup().catch(() => {});
+    }
+  }, [activeUser, students]);
 
   // Filters State
   const [activeYear, setActiveYear] = useState<string>(initialFilters.year);

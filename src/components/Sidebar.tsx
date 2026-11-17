@@ -655,7 +655,7 @@ export const Sidebar: React.FC<Props> = ({
               </button>
               {openGroups.groupTka && (
                 <div className="p-2 space-y-1 bg-white/80 border-t border-purple-100">
-                  {(!searchQuery || 'siswa tka kelas 6a 6b tes kemampuan akademik'.includes(searchQuery)) && (
+                  {(!searchQuery || 'siswa tka kelas 6 6a 6b 6c 6d tes kemampuan akademik'.includes(searchQuery)) && (
                     <button
                       onClick={() => onSelectTab('siswa-tka')}
                       className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
@@ -665,7 +665,7 @@ export const Sidebar: React.FC<Props> = ({
                       }`}
                     >
                       <Users className="w-4 h-4" />
-                      <span>Siswa TKA (Kelas 6A & 6B)</span>
+                      <span>Siswa TKA (Kelas 6)</span>
                     </button>
                   )}
                   {(!searchQuery || 'cp dan tp tka capaian tujuan tka literasi numerasi sains ipas'.includes(searchQuery)) && (

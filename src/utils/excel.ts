@@ -79,7 +79,7 @@ export const normalizeClassName = (raw: any, defaultClass: string = 'Kelas 6A'):
     'Kelas 3A', 'Kelas 3B',
     'Kelas 4A', 'Kelas 4B',
     'Kelas 5A', 'Kelas 5B',
-    'Kelas 6A', 'Kelas 6B'
+    'Kelas 6A', 'Kelas 6B', 'Kelas 6C', 'Kelas 6D', 'Kelas 6E', 'Kelas 6F',
   ];
 
   if (validClasses.includes(str)) return str;
@@ -96,38 +96,34 @@ export const normalizeClassName = (raw: any, defaultClass: string = 'Kelas 6A'):
     'I': '1'
   };
 
-  const defaultGrade = defaultClass.replace(/[^1-6]/g, '') || '6';
   const defaultSection = defaultClass.toUpperCase().includes('B') ? 'B' : 'A';
 
   // Strip prefixes like "KELAS", "KLS", "ROMBEL", "ROMBONGAN BELAJAR"
   const cleaned = upper.replace(/^(KELAS|KLS|ROMBEL|ROMBONGAN BELAJAR|TINGKAT)\s*/i, '').trim();
 
-  // Pattern 1: Roman numeral with optional section, e.g. "VI A", "VI-A", "VIA", "VI"
-  const romanMatch = cleaned.match(/^(VI|V|IV|III|II|I)[\s\-_.]*([AB])?$/i);
+  // Pattern 1: Roman numeral with optional section, e.g. "VI A", "VI-C", "VID", "VI"
+  const romanMatch = cleaned.match(/^(VI|V|IV|III|II|I)[\s\-_.]*([A-F])?$/i);
   if (romanMatch) {
     const grade = romanMap[romanMatch[1].toUpperCase()];
     const section = (romanMatch[2] || defaultSection).toUpperCase();
-    const candidate = `Kelas ${grade}${section}`;
-    if (validClasses.includes(candidate)) return candidate;
+    return `Kelas ${grade}${section}`;
   }
 
-  // Pattern 2: Digits with optional section, e.g. "6A", "6 A", "6-A", "6.A", "6"
-  const digitMatch = cleaned.match(/^([1-6])[\s\-_.]*([AB])?$/i);
+  // Pattern 2: Digits with optional section, e.g. "6A", "6 C", "6-D", "6.B", "6"
+  const digitMatch = cleaned.match(/^([1-6])[\s\-_.]*([A-F])?$/i);
   if (digitMatch) {
     const grade = digitMatch[1];
     const section = (digitMatch[2] || defaultSection).toUpperCase();
-    const candidate = `Kelas ${grade}${section}`;
-    if (validClasses.includes(candidate)) return candidate;
+    return `Kelas ${grade}${section}`;
   }
 
   // Pattern 3: Any digit 1-6 found in string
   const anyDigit = upper.match(/[1-6]/);
-  const anySection = upper.match(/\b([AB])\b/) || upper.match(/([AB])$/);
+  const anySection = upper.match(/\b([A-F])\b/) || upper.match(/([A-F])$/);
   if (anyDigit) {
     const grade = anyDigit[0];
     const section = anySection ? anySection[1] : defaultSection;
-    const candidate = `Kelas ${grade}${section}`;
-    if (validClasses.includes(candidate)) return candidate;
+    return `Kelas ${grade}${section}`;
   }
 
   return defaultClass;

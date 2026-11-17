@@ -4,18 +4,27 @@ import {
   writeBatch,
   onSnapshot,
   getDocs,
+  getDoc,
   deleteDoc,
   setDoc,
   serverTimestamp,
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { TKAQuestion } from '../types';
+import { CBTExamResult, ExamResultsResetMeta, Student, TKAQuestion } from '../types';
 import {
   runWithoutStorageSync,
   saveStoredTKAQuestions,
   getStoredTKASubmissions,
   saveStoredTKASubmissions,
+  getStoredCBTResults,
+  getStoredTKAResults,
+  getStoredExamResultsResetMeta,
+  getStoredStudents,
+  filterExamResultsByResetMeta,
+  isTkaResultEntry,
+  normalizeTkaMapelKey,
   safeSetLocalStorage,
+  sanitizeSubmissionFotoUrl,
   TKASubmissionItem,
   TKAMapelScoreKey,
   extractBaseTkaPaket,
@@ -33,6 +42,9 @@ function sanitizeQuestionId(rawId?: string, fallbackIdx: number = 0): string {
 function stripUndefinedDeep<T>(value: T): T {
   if (Array.isArray(value)) {
     return value.map((item) => stripUndefinedDeep(item)) as unknown as T;
+  }
+  if (typeof value === 'number') {
+    return (Number.isFinite(value) ? value : 0) as unknown as T;
   }
   if (value && typeof value === 'object') {
     const out: Record<string, any> = {};
@@ -286,19 +298,214 @@ function makeSubmissionDocId(studentId: string, basePaket: string, fallbackId?: 
   return sanitizeQuestionId(fallbackId, 0);
 }
 
-export async function saveTkaSubmissionToFirestore(submission: TKASubmissionItem): Promise<boolean> {
+function estimateJsonBytes(obj: unknown): number {
+  const str = JSON.stringify(obj);
+  return typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(str).length : str.length * 2;
+}
+
+function sanitizeSubmissionForStorage(
+  submission: TKASubmissionItem,
+  fallbackId?: string
+): Record<string, any> {
+  const basePaket = submission.paketDasar || extractBaseTkaPaket(submission.paket);
+  const docId = makeSubmissionDocId(submission.studentId, basePaket, fallbackId || submission.id);
+
+  // Jangan gandakan base64 foto siswa berukuran besar ke setiap dokumen hasil TKA;
+  // UI Report TKA akan mengambil foto asli siswa secara dinamis dari koleksi students.
+  const safeFotoUrl = sanitizeSubmissionFotoUrl(submission.fotoUrl);
+
+  // Pastikan setiap entri jawaban tidak menyimpan payload tak wajar (> 10 KB/butir)
+  const rawAnswers = submission.answers && typeof submission.answers === 'object' ? submission.answers : {};
+  const safeAnswers: Record<string, any> = {};
+  Object.entries(rawAnswers).forEach(([qId, val]) => {
+    if (val === undefined) return;
+    if (typeof val === 'string' && val.length > 10_000) {
+      safeAnswers[qId] = val.slice(0, 10_000);
+    } else {
+      safeAnswers[qId] = val;
+    }
+  });
+
+  const candidate = stripUndefinedDeep({
+    ...submission,
+    id: docId,
+    fotoUrl: safeFotoUrl,
+    paket: basePaket,
+    paketDasar: basePaket,
+    answers: safeAnswers,
+    updatedAt: submission.updatedAt || new Date().toISOString(),
+  });
+
+  // Pengaman batas 1 MiB dokumen Firestore (target <= 800 KB)
+  if (estimateJsonBytes(candidate) > 800_000) {
+    candidate.answers = {};
+  }
+
+  return candidate;
+}
+
+const PENDING_TKA_SUBMISSIONS_KEY = 'sekolahku_pending_tka_submissions_v1';
+
+const ALL_TKA_MAPEL_KEYS: TKAMapelScoreKey[] = [
+  'Bahasa Indonesia',
+  'Matematika',
+  'IPAS',
+  'Bahasa Inggris',
+  'Koding dan Kecerdasan Artifisial (KKA)',
+];
+
+export function getPendingTkaSubmissions(): TKASubmissionItem[] {
   try {
-    const basePaket = submission.paketDasar || extractBaseTkaPaket(submission.paket);
-    const docId = makeSubmissionDocId(submission.studentId, basePaket, submission.id);
-    const cleanSub = stripUndefinedDeep({
-      ...submission,
-      id: docId,
-      paket: basePaket,
-      paketDasar: basePaket,
-      updatedAt: new Date().toISOString(),
-      serverTime: serverTimestamp(),
-    });
-    await setDoc(doc(db, TKA_SUBMISSIONS_COLLECTION, docId), cleanSub, { merge: true });
+    const raw = localStorage.getItem(PENDING_TKA_SUBMISSIONS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function enqueuePendingTkaSubmission(sub: TKASubmissionItem): void {
+  try {
+    const clean = sanitizeSubmissionForStorage(sub, sub.id) as TKASubmissionItem;
+    const current = getPendingTkaSubmissions().filter((item) => item.id !== clean.id);
+    safeSetLocalStorage(PENDING_TKA_SUBMISSIONS_KEY, JSON.stringify([clean, ...current]));
+  } catch {
+    // Ignore local pending queue storage errors
+  }
+}
+
+export function removePendingTkaSubmission(docId: string): void {
+  try {
+    const current = getPendingTkaSubmissions();
+    const filtered = current.filter((item) => item.id !== docId);
+    if (filtered.length === 0) {
+      localStorage.removeItem(PENDING_TKA_SUBMISSIONS_KEY);
+    } else if (filtered.length !== current.length) {
+      safeSetLocalStorage(PENDING_TKA_SUBMISSIONS_KEY, JSON.stringify(filtered));
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+export function clearPendingTkaSubmissions(): void {
+  try {
+    localStorage.removeItem(PENDING_TKA_SUBMISSIONS_KEY);
+  } catch {
+    // Ignore
+  }
+}
+
+export function mergeTwoTkaSubmissions(
+  older: TKASubmissionItem,
+  newer: TKASubmissionItem
+): TKASubmissionItem {
+  const basePaket = newer.paketDasar || extractBaseTkaPaket(newer.paket) || older.paketDasar || extractBaseTkaPaket(older.paket);
+  const olderCompleted: TKAMapelScoreKey[] = Array.isArray(older.completedMapels)
+    ? (older.completedMapels as TKAMapelScoreKey[])
+    : ALL_TKA_MAPEL_KEYS.filter((k) => Number(older.scoresPerMapel?.[k] || 0) > 0);
+  const newerCompleted: TKAMapelScoreKey[] = Array.isArray(newer.completedMapels)
+    ? (newer.completedMapels as TKAMapelScoreKey[])
+    : ALL_TKA_MAPEL_KEYS.filter((k) => Number(newer.scoresPerMapel?.[k] || 0) > 0);
+
+  const mergedCompleted = Array.from(new Set<TKAMapelScoreKey>([...olderCompleted, ...newerCompleted]));
+  const olderSet = new Set(olderCompleted);
+  const newerSet = new Set(newerCompleted);
+
+  const pickMapelScore = (key: TKAMapelScoreKey): number => {
+    const newerAttempted = newerSet.has(key);
+    const olderAttempted = olderSet.has(key);
+    const nVal = Number(newer.scoresPerMapel?.[key] ?? 0);
+    const oVal = Number(older.scoresPerMapel?.[key] ?? 0);
+    if (newerAttempted && (!olderAttempted || (newer.updatedAt || '') >= (older.updatedAt || ''))) {
+      return Number.isFinite(nVal) ? nVal : 0;
+    }
+    if (olderAttempted) {
+      return Number.isFinite(oVal) ? oVal : 0;
+    }
+    const fallback = nVal || oVal || 0;
+    return Number.isFinite(fallback) ? fallback : 0;
+  };
+
+  const mergedScores: TKASubmissionItem['scoresPerMapel'] = {
+    'Bahasa Indonesia': pickMapelScore('Bahasa Indonesia'),
+    'Matematika': pickMapelScore('Matematika'),
+    'IPAS': pickMapelScore('IPAS'),
+    'Bahasa Inggris': pickMapelScore('Bahasa Inggris'),
+    'Koding dan Kecerdasan Artifisial (KKA)': pickMapelScore('Koding dan Kecerdasan Artifisial (KKA)'),
+  };
+
+  const keysForAvg = mergedCompleted.length > 0 ? mergedCompleted : ALL_TKA_MAPEL_KEYS;
+  const sum = keysForAvg.reduce((acc, k) => acc + Number(mergedScores[k] || 0), 0);
+  const avgTotal = keysForAvg.length > 0 ? Math.round(sum / keysForAvg.length) : 0;
+  const predikat: 'A' | 'B' | 'C' | 'D' =
+    avgTotal >= 88 ? 'A' : avgTotal >= 78 ? 'B' : avgTotal >= 68 ? 'C' : 'D';
+  const status: 'Tuntas' | 'Remedial' = avgTotal >= 75 ? 'Tuntas' : 'Remedial';
+
+  return {
+    ...older,
+    ...newer,
+    id: makeSubmissionDocId(newer.studentId || older.studentId, basePaket, newer.id || older.id),
+    fotoUrl: sanitizeSubmissionFotoUrl(newer.fotoUrl || older.fotoUrl),
+    paket: basePaket,
+    paketDasar: basePaket,
+    completedMapels: mergedCompleted,
+    answers: {
+      ...(older.answers || {}),
+      ...(newer.answers || {}),
+    },
+    scoresPerMapel: mergedScores,
+    skorTotal: avgTotal,
+    predikat,
+    status,
+    updatedAt:
+      (newer.updatedAt || '') >= (older.updatedAt || '')
+        ? newer.updatedAt || new Date().toISOString()
+        : older.updatedAt || new Date().toISOString(),
+  };
+}
+
+export function mergeTkaSubmissionLists(
+  baseList: TKASubmissionItem[],
+  incomingList: TKASubmissionItem[]
+): TKASubmissionItem[] {
+  const map = new Map<string, TKASubmissionItem>();
+  const keyOf = (s: TKASubmissionItem) =>
+    makeSubmissionDocId(s.studentId, s.paketDasar || extractBaseTkaPaket(s.paket), s.id);
+
+  (Array.isArray(baseList) ? baseList : []).forEach((s) => {
+    const k = keyOf(s);
+    const prev = map.get(k);
+    map.set(k, prev ? mergeTwoTkaSubmissions(prev, s) : s);
+  });
+
+  (Array.isArray(incomingList) ? incomingList : []).forEach((s) => {
+    const k = keyOf(s);
+    const prev = map.get(k);
+    map.set(k, prev ? mergeTwoTkaSubmissions(prev, s) : s);
+  });
+
+  return Array.from(map.values()).sort((a, b) =>
+    (b.updatedAt || '').localeCompare(a.updatedAt || '')
+  );
+}
+
+export async function saveTkaSubmissionToFirestore(submission: TKASubmissionItem): Promise<boolean> {
+  const cleanBase = sanitizeSubmissionForStorage(submission);
+  const docId = cleanBase.id;
+  enqueuePendingTkaSubmission(cleanBase as TKASubmissionItem);
+  try {
+    await setDoc(
+      doc(db, TKA_SUBMISSIONS_COLLECTION, docId),
+      {
+        ...cleanBase,
+        updatedAt: cleanBase.updatedAt || new Date().toISOString(),
+        serverTime: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    removePendingTkaSubmission(docId);
     safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
     return true;
   } catch (error) {
@@ -307,30 +514,79 @@ export async function saveTkaSubmissionToFirestore(submission: TKASubmissionItem
   }
 }
 
+export async function flushPendingTkaSubmissionsToFirestore(): Promise<number> {
+  const pending = getPendingTkaSubmissions();
+  if (pending.length === 0) return 0;
+
+  let uploaded = 0;
+  for (const item of pending) {
+    try {
+      const basePaket = item.paketDasar || extractBaseTkaPaket(item.paket);
+      const docId = makeSubmissionDocId(item.studentId, basePaket, item.id);
+      let finalItem = item;
+      try {
+        const snap = await getDoc(doc(db, TKA_SUBMISSIONS_COLLECTION, docId));
+        if (snap.exists()) {
+          const remote = { ...(snap.data() as TKASubmissionItem), id: snap.id };
+          finalItem = mergeTwoTkaSubmissions(remote, item);
+        }
+      } catch {
+        // Proceed with local item if offline/read fails
+      }
+      const ok = await saveTkaSubmissionToFirestore(finalItem);
+      if (ok) uploaded++;
+    } catch {
+      // Keep remaining items in queue for next retry
+    }
+  }
+  return uploaded;
+}
+
 export async function saveTkaSubmissionsBatchToFirestore(
   submissions: TKASubmissionItem[]
 ): Promise<boolean> {
   try {
     if (!submissions || submissions.length === 0) return true;
-    const CHUNK_SIZE = 25;
-    for (let i = 0; i < submissions.length; i += CHUNK_SIZE) {
-      const chunk = submissions.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
-      chunk.forEach((sub, offset) => {
-        const basePaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
-        const docId = makeSubmissionDocId(sub.studentId, basePaket, sub.id || `sim_${i + offset}`);
-        const cleanSub = stripUndefinedDeep({
-          ...sub,
-          id: docId,
-          paket: basePaket,
-          paketDasar: basePaket,
-          updatedAt: new Date().toISOString(),
+    const MAX_DOCS_PER_BATCH = 40;
+    const MAX_BYTES_PER_BATCH = 2_500_000;
+    const nowIso = new Date().toISOString();
+
+    let batch = writeBatch(db);
+    let batchDocs = 0;
+    let batchBytes = 0;
+
+    for (let i = 0; i < submissions.length; i++) {
+      const sub = submissions[i];
+      const cleanSub = sanitizeSubmissionForStorage(sub, sub.id || `sim_${i}`);
+      const approxBytes = estimateJsonBytes(cleanSub) + 512;
+
+      if (
+        batchDocs > 0 &&
+        (batchDocs >= MAX_DOCS_PER_BATCH || batchBytes + approxBytes > MAX_BYTES_PER_BATCH)
+      ) {
+        await batch.commit();
+        batch = writeBatch(db);
+        batchDocs = 0;
+        batchBytes = 0;
+      }
+
+      batch.set(
+        doc(db, TKA_SUBMISSIONS_COLLECTION, cleanSub.id),
+        {
+          ...cleanSub,
+          updatedAt: nowIso,
           serverTime: serverTimestamp(),
-        });
-        batch.set(doc(db, TKA_SUBMISSIONS_COLLECTION, docId), cleanSub, { merge: true });
-      });
+        },
+        { merge: true }
+      );
+      batchDocs++;
+      batchBytes += approxBytes;
+    }
+
+    if (batchDocs > 0) {
       await batch.commit();
     }
+
     safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
     return true;
   } catch (error) {
@@ -339,8 +595,72 @@ export async function saveTkaSubmissionsBatchToFirestore(
   }
 }
 
+export async function fetchTkaSubmissionsFromFirestore(): Promise<TKASubmissionItem[]> {
+  try {
+    const snapshot = await getDocs(collection(db, TKA_SUBMISSIONS_COLLECTION));
+    const list: TKASubmissionItem[] = [];
+    snapshot.forEach((docSnap) => {
+      const raw = docSnap.data() as any;
+      const { serverTime: _st, ...rest } = raw || {};
+      list.push({
+        ...(rest as TKASubmissionItem),
+        id: docSnap.id,
+        fotoUrl: sanitizeSubmissionFotoUrl(rest?.fotoUrl),
+      });
+    });
+    list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+    return list;
+  } catch (error) {
+    console.error('Gagal mengambil hasil TKA dari Firestore:', error);
+    return [];
+  }
+}
+
+export async function replaceTkaSubmissionsInFirestore(
+  submissions: TKASubmissionItem[]
+): Promise<boolean> {
+  try {
+    const sanitized = (submissions || []).map((sub, idx) =>
+      sanitizeSubmissionForStorage(sub, sub.id || `rest_${idx}`) as TKASubmissionItem
+    );
+    const targetIds = new Set(sanitized.map((s) => s.id));
+
+    const existingSnap = await getDocs(collection(db, TKA_SUBMISSIONS_COLLECTION));
+    const staleIds: string[] = [];
+    existingSnap.forEach((d) => {
+      if (!targetIds.has(d.id)) {
+        staleIds.push(d.id);
+      }
+    });
+
+    if (staleIds.length > 0) {
+      const CHUNK_SIZE = 350;
+      for (let i = 0; i < staleIds.length; i += CHUNK_SIZE) {
+        const chunk = staleIds.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach((id) => batch.delete(doc(db, TKA_SUBMISSIONS_COLLECTION, id)));
+        await batch.commit();
+      }
+    }
+
+    if (sanitized.length > 0) {
+      await saveTkaSubmissionsBatchToFirestore(sanitized);
+    }
+
+    safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
+    runWithoutStorageSync(() => {
+      saveStoredTKASubmissions(sanitized);
+    });
+    return true;
+  } catch (error) {
+    console.error('Gagal mengganti koleksi tka_submissions di Firestore:', error);
+    return false;
+  }
+}
+
 export async function clearTkaSubmissionsInFirestore(): Promise<boolean> {
   try {
+    clearPendingTkaSubmissions();
     const snap = await getDocs(collection(db, TKA_SUBMISSIONS_COLLECTION));
     const ids: string[] = [];
     snap.forEach((d) => ids.push(d.id));
@@ -406,6 +726,7 @@ export function subscribeToTkaSubmissionsCollection(
           list.push({
             ...(rest as TKASubmissionItem),
             id: docSnap.id,
+            fotoUrl: sanitizeSubmissionFotoUrl(rest?.fotoUrl),
           });
         });
         list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
@@ -437,63 +758,53 @@ export interface UpsertTkaSubmissionParams {
   durasiMenitUsed: number;
 }
 
-/**
- * Menggabungkan & menyimpan hasil pengerjaan TKA siswa ke localStorage dan Firestore
- * sehingga langsung masuk ke Menu Analisis TKA maupun Report & Rekapitulasi Hasil TKA.
- */
-export function upsertTkaSubmission(params: UpsertTkaSubmissionParams): {
+function buildMergedTkaSubmissionState(
+  params: UpsertTkaSubmissionParams,
+  existingSubs: TKASubmissionItem[],
+  remoteSub?: TKASubmissionItem | null
+): {
   mergedSub: TKASubmissionItem;
   updatedList: TKASubmissionItem[];
 } {
   const { student, paketName, mapelScores, completedMapelKeys, questionAnswers, durasiMenitUsed } = params;
   const basePaket = extractBaseTkaPaket(paketName);
-  const existingSubs = getStoredTKASubmissions();
+  const stableStudentId = student.id || student.nisn || 'siswa_anon';
 
-  const prevSub = existingSubs.find(
+  const localPrev = existingSubs.find(
     (s) =>
-      s.studentId === student.id &&
+      (s.studentId === stableStudentId || (student.nisn && s.nisn === student.nisn)) &&
       (s.paket === basePaket || s.paketDasar === basePaket || extractBaseTkaPaket(s.paket) === basePaket)
   );
+
+  const prevSub =
+    localPrev && remoteSub
+      ? mergeTwoTkaSubmissions(remoteSub, localPrev)
+      : localPrev || remoteSub || undefined;
 
   const prevCompleted: TKAMapelScoreKey[] = Array.isArray(prevSub?.completedMapels)
     ? (prevSub!.completedMapels as TKAMapelScoreKey[])
     : prevSub?.scoresPerMapel
-    ? (
-        [
-          'Bahasa Indonesia',
-          'Matematika',
-          'IPAS',
-          'Bahasa Inggris',
-          'Koding dan Kecerdasan Artifisial (KKA)',
-        ] as TKAMapelScoreKey[]
-      ).filter((k) => Number(prevSub.scoresPerMapel?.[k] || 0) > 0)
+    ? ALL_TKA_MAPEL_KEYS.filter((k) => Number(prevSub.scoresPerMapel?.[k] || 0) > 0)
     : [];
 
   const mergedCompleted = Array.from(new Set<TKAMapelScoreKey>([...prevCompleted, ...completedMapelKeys]));
 
+  const pickVal = (key: TKAMapelScoreKey): number => {
+    const raw = mapelScores[key] ?? prevSub?.scoresPerMapel?.[key] ?? 0;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : 0;
+  };
+
   const updatedScores: TKASubmissionItem['scoresPerMapel'] = {
-    'Bahasa Indonesia':
-      mapelScores['Bahasa Indonesia'] ?? prevSub?.scoresPerMapel?.['Bahasa Indonesia'] ?? 0,
-    'Matematika': mapelScores['Matematika'] ?? prevSub?.scoresPerMapel?.['Matematika'] ?? 0,
-    'IPAS': mapelScores['IPAS'] ?? prevSub?.scoresPerMapel?.['IPAS'] ?? 0,
-    'Bahasa Inggris':
-      mapelScores['Bahasa Inggris'] ?? prevSub?.scoresPerMapel?.['Bahasa Inggris'] ?? 0,
-    'Koding dan Kecerdasan Artifisial (KKA)':
-      mapelScores['Koding dan Kecerdasan Artifisial (KKA)'] ??
-      prevSub?.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ??
-      0,
+    'Bahasa Indonesia': pickVal('Bahasa Indonesia'),
+    'Matematika': pickVal('Matematika'),
+    'IPAS': pickVal('IPAS'),
+    'Bahasa Inggris': pickVal('Bahasa Inggris'),
+    'Koding dan Kecerdasan Artifisial (KKA)': pickVal('Koding dan Kecerdasan Artifisial (KKA)'),
   };
 
   const keysForAvg: TKAMapelScoreKey[] =
-    mergedCompleted.length > 0
-      ? mergedCompleted
-      : [
-          'Bahasa Indonesia',
-          'Matematika',
-          'IPAS',
-          'Bahasa Inggris',
-          'Koding dan Kecerdasan Artifisial (KKA)',
-        ];
+    mergedCompleted.length > 0 ? mergedCompleted : ALL_TKA_MAPEL_KEYS;
 
   const sumScores = keysForAvg.reduce((acc, k) => acc + Number(updatedScores[k] || 0), 0);
   const avgTotal = keysForAvg.length > 0 ? Math.round(sumScores / keysForAvg.length) : 0;
@@ -502,14 +813,14 @@ export function upsertTkaSubmission(params: UpsertTkaSubmissionParams): {
     avgTotal >= 88 ? 'A' : avgTotal >= 78 ? 'B' : avgTotal >= 68 ? 'C' : 'D';
   const status: 'Tuntas' | 'Remedial' = avgTotal >= 75 ? 'Tuntas' : 'Remedial';
 
-  const docId = makeSubmissionDocId(student.id, basePaket);
+  const docId = makeSubmissionDocId(stableStudentId, basePaket);
   const mergedSub: TKASubmissionItem = {
     id: docId,
-    studentId: student.id,
+    studentId: stableStudentId,
     studentName: student.nama,
     nisn: student.nisn,
     kelas: student.kelas,
-    fotoUrl: student.fotoUrl,
+    fotoUrl: sanitizeSubmissionFotoUrl(student.fotoUrl),
     paket: basePaket,
     paketDasar: basePaket,
     completedMapels: mergedCompleted,
@@ -533,14 +844,225 @@ export function upsertTkaSubmission(params: UpsertTkaSubmissionParams): {
   const otherSubs = existingSubs.filter(
     (s) =>
       !(
-        s.studentId === student.id &&
-        (s.paket === basePaket || s.paketDasar === basePaket || extractBaseTkaPaket(s.paket) === basePaket)
+        s.id === docId ||
+        ((s.studentId === stableStudentId || (student.nisn && s.nisn === student.nisn)) &&
+          (s.paket === basePaket || s.paketDasar === basePaket || extractBaseTkaPaket(s.paket) === basePaket))
       )
   );
   const updatedList = [mergedSub, ...otherSubs];
-  saveStoredTKASubmissions(updatedList);
-  saveTkaSubmissionToFirestore(mergedSub).catch(() => {});
-
   return { mergedSub, updatedList };
+}
+
+/**
+ * Menggabungkan & menyimpan hasil pengerjaan TKA siswa ke localStorage/IDB dan Firestore
+ * sehingga langsung masuk ke Menu Analisis TKA maupun Report & Rekapitulasi Hasil TKA.
+ */
+export function upsertTkaSubmission(params: UpsertTkaSubmissionParams): {
+  mergedSub: TKASubmissionItem;
+  updatedList: TKASubmissionItem[];
+  syncPromise: Promise<boolean>;
+} {
+  const existingSubs = getStoredTKASubmissions();
+  const { mergedSub, updatedList } = buildMergedTkaSubmissionState(params, existingSubs);
+  enqueuePendingTkaSubmission(mergedSub);
+  saveStoredTKASubmissions(updatedList);
+  const syncPromise = saveTkaSubmissionToFirestore(mergedSub);
+  return { mergedSub, updatedList, syncPromise };
+}
+
+/**
+ * Versi async yang menarik data remote doc `tka_submissions/{docId}` lebih dulu bila tersedia
+ * lalu menunggu (`await`) penulisan ke Firestore selesai agar siswa tidak kehilangan hasil antar-mapel/perangkat.
+ */
+export async function upsertTkaSubmissionAsync(params: UpsertTkaSubmissionParams): Promise<{
+  mergedSub: TKASubmissionItem;
+  updatedList: TKASubmissionItem[];
+  cloudSaved: boolean;
+}> {
+  const basePaket = extractBaseTkaPaket(params.paketName);
+  const stableStudentId = params.student.id || params.student.nisn || 'siswa_anon';
+  const docId = makeSubmissionDocId(stableStudentId, basePaket);
+
+  let remoteSub: TKASubmissionItem | null = null;
+  try {
+    const snapPromise = getDoc(doc(db, TKA_SUBMISSIONS_COLLECTION, docId));
+    const snap = await Promise.race([
+      snapPromise,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    if (snap && snap.exists()) {
+      remoteSub = { ...(snap.data() as TKASubmissionItem), id: snap.id };
+    }
+  } catch {
+    // Tetap lanjutkan pakai data lokal jika getDoc offline/timeout
+  }
+
+  const existingSubs = getStoredTKASubmissions();
+  const { mergedSub, updatedList } = buildMergedTkaSubmissionState(params, existingSubs, remoteSub);
+  enqueuePendingTkaSubmission(mergedSub);
+  saveStoredTKASubmissions(updatedList);
+  const cloudSaved = await saveTkaSubmissionToFirestore(mergedSub);
+  return { mergedSub, updatedList, cloudSaved };
+}
+
+/**
+ * Merekonsiliasi hasil TKA yang tersimpan di `cbt_results` / `tka_results` (misalnya dari perangkat siswa)
+ * agar otomatis masuk ke `tka_submissions` apabila sebelumnya gagal terkirim atau belum tersinkron.
+ * Tetap mematuhi timestamp pengosongan data (`resetMeta`).
+ */
+export function reconcileTkaResultsToSubmissions(options: {
+  cbtResults: CBTExamResult[];
+  tkaResults?: CBTExamResult[];
+  existingSubmissions: TKASubmissionItem[];
+  students: Student[];
+  resetMeta?: ExamResultsResetMeta;
+}): {
+  mergedSubmissions: TKASubmissionItem[];
+  recoveredItems: TKASubmissionItem[];
+} {
+  const { cbtResults, tkaResults = [], existingSubmissions, students, resetMeta } = options;
+  const activeMeta = resetMeta || getStoredExamResultsResetMeta();
+
+  const rawCombined = [...(Array.isArray(cbtResults) ? cbtResults : []), ...(Array.isArray(tkaResults) ? tkaResults : [])];
+  const tkaOnly = rawCombined.filter((r) => isTkaResultEntry(r));
+  const validTkaResults = filterExamResultsByResetMeta(tkaOnly, 'tka', activeMeta);
+
+  if (validTkaResults.length === 0) {
+    return { mergedSubmissions: existingSubmissions, recoveredItems: [] };
+  }
+
+  const subMap = new Map<string, TKASubmissionItem>();
+  (Array.isArray(existingSubmissions) ? existingSubmissions : []).forEach((s) => {
+    const basePaket = s.paketDasar || extractBaseTkaPaket(s.paket);
+    const key = makeSubmissionDocId(s.studentId, basePaket, s.id);
+    subMap.set(key, s);
+  });
+
+  const recoveredMap = new Map<string, TKASubmissionItem>();
+
+  validTkaResults.forEach((res) => {
+    const matchedStudent = students.find(
+      (st) =>
+        (res.studentId && st.id === res.studentId) ||
+        (res.studentName && st.nama && st.nama.toLowerCase() === res.studentName.toLowerCase())
+    );
+    const sid = matchedStudent?.id || res.studentId;
+    if (!sid) return;
+
+    const rawPaket =
+      res.paketName ||
+      (res.judul && res.judul.includes(' - ') ? res.judul.split(' - ')[0].trim() : '') ||
+      'Simulasi 1';
+    const basePaket = extractBaseTkaPaket(rawPaket);
+    const docId = makeSubmissionDocId(sid, basePaket);
+    const mapelKey = normalizeTkaMapelKey(res.mapel || res.judul || 'Bahasa Indonesia');
+    const numericGrade = Number.isFinite(Number(res.nilai)) ? Math.round(Number(res.nilai)) : 0;
+
+    const existing = subMap.get(docId);
+    if (existing) {
+      const completed = Array.isArray(existing.completedMapels) ? existing.completedMapels : [];
+      if (completed.includes(mapelKey)) {
+        return;
+      }
+      // Mapel ini ada di hasil CBT siswa tapi belum masuk di completedMapels submission
+      const updatedCompleted = Array.from(new Set([...completed, mapelKey])) as TKAMapelScoreKey[];
+      const nextScores = {
+        'Bahasa Indonesia': existing.scoresPerMapel?.['Bahasa Indonesia'] ?? 0,
+        'Matematika': existing.scoresPerMapel?.['Matematika'] ?? 0,
+        'IPAS': existing.scoresPerMapel?.['IPAS'] ?? 0,
+        'Bahasa Inggris': existing.scoresPerMapel?.['Bahasa Inggris'] ?? 0,
+        'Koding dan Kecerdasan Artifisial (KKA)':
+          existing.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ?? 0,
+        [mapelKey]: numericGrade,
+      };
+      const avg = Math.round(
+        updatedCompleted.reduce((acc, k) => acc + Number(nextScores[k] || 0), 0) /
+          updatedCompleted.length
+      );
+      const updatedItem: TKASubmissionItem = {
+        ...existing,
+        completedMapels: updatedCompleted,
+        scoresPerMapel: nextScores,
+        answers: {
+          ...(existing.answers || {}),
+          ...(res.jawabanSiswa || {}),
+        },
+        skorTotal: avg,
+        predikat: avg >= 88 ? 'A' : avg >= 78 ? 'B' : avg >= 68 ? 'C' : 'D',
+        status: avg >= 75 ? 'Tuntas' : 'Remedial',
+        updatedAt: res.recordedAt ? new Date(res.recordedAt).toISOString() : new Date().toISOString(),
+      };
+      subMap.set(docId, updatedItem);
+      recoveredMap.set(docId, updatedItem);
+      return;
+    }
+
+    const newItem: TKASubmissionItem = {
+      id: docId,
+      studentId: sid,
+      studentName: matchedStudent?.nama || res.studentName || 'Siswa',
+      nisn: matchedStudent?.nisn || '',
+      kelas: matchedStudent?.kelas || 'Kelas 6A',
+      fotoUrl: sanitizeSubmissionFotoUrl(matchedStudent?.fotoUrl),
+      paket: basePaket,
+      paketDasar: basePaket,
+      completedMapels: [mapelKey],
+      answers: res.jawabanSiswa || {},
+      scoresPerMapel: {
+        'Bahasa Indonesia': mapelKey === 'Bahasa Indonesia' ? numericGrade : 0,
+        'Matematika': mapelKey === 'Matematika' ? numericGrade : 0,
+        'IPAS': mapelKey === 'IPAS' ? numericGrade : 0,
+        'Bahasa Inggris': mapelKey === 'Bahasa Inggris' ? numericGrade : 0,
+        'Koding dan Kecerdasan Artifisial (KKA)':
+          mapelKey === 'Koding dan Kecerdasan Artifisial (KKA)' ? numericGrade : 0,
+      },
+      skorTotal: numericGrade,
+      predikat: numericGrade >= 88 ? 'A' : numericGrade >= 78 ? 'B' : numericGrade >= 68 ? 'C' : 'D',
+      status: numericGrade >= 75 ? 'Tuntas' : 'Remedial',
+      tanggalUjian:
+        res.tanggal ||
+        new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }),
+      durasiPengerjaan: '45 Menit',
+      updatedAt: res.recordedAt ? new Date(res.recordedAt).toISOString() : new Date().toISOString(),
+    };
+    subMap.set(docId, newItem);
+    recoveredMap.set(docId, newItem);
+  });
+
+  const mergedSubmissions = Array.from(subMap.values()).sort((a, b) =>
+    (b.updatedAt || '').localeCompare(a.updatedAt || '')
+  );
+  return {
+    mergedSubmissions,
+    recoveredItems: Array.from(recoveredMap.values()),
+  };
+}
+
+export async function reconcileAndSyncLocalTkaSubmissions(
+  studentsOverride?: Student[]
+): Promise<TKASubmissionItem[]> {
+  try {
+    const cbtRes = getStoredCBTResults();
+    const tkaRes = getStoredTKAResults();
+    const existing = getStoredTKASubmissions();
+    const studentsList = studentsOverride && studentsOverride.length > 0 ? studentsOverride : getStoredStudents();
+    const { mergedSubmissions, recoveredItems } = reconcileTkaResultsToSubmissions({
+      cbtResults: cbtRes,
+      tkaResults: tkaRes,
+      existingSubmissions: existing,
+      students: studentsList,
+    });
+    if (recoveredItems.length === 0) return [];
+    recoveredItems.forEach((item) => enqueuePendingTkaSubmission(item));
+    runWithoutStorageSync(() => {
+      saveStoredTKASubmissions(mergedSubmissions);
+    });
+    await saveTkaSubmissionsBatchToFirestore(recoveredItems);
+    recoveredItems.forEach((item) => removePendingTkaSubmission(item.id));
+    return recoveredItems;
+  } catch (err) {
+    console.warn('Reconcile local TKA submissions warning:', err);
+    return [];
+  }
 }
 

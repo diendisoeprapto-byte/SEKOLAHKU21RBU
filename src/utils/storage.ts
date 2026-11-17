@@ -34,6 +34,23 @@ const STORAGE_KEYS = {
 };
 
 export const MAX_QUESTIONS_PER_PACKAGE = 50;
+export const DEFAULT_STUDENT_AVATAR_URL =
+  'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150';
+
+export const isKelas6Class = (kelas?: string): boolean => {
+  const k = String(kelas || '').trim().toUpperCase();
+  if (!k) return false;
+  return /^(KELAS\s*)?6(\s*[A-Z0-9-]+)?$/i.test(k) || /\bVI\s*[A-Z]?\b/.test(k);
+};
+
+export const sanitizeSubmissionFotoUrl = (fotoUrl?: string): string => {
+  const val = String(fotoUrl || '').trim();
+  if (!val) return '';
+  if (val.startsWith('data:image/') && val.length > 2000) {
+    return '';
+  }
+  return val;
+};
 
 const LARGE_COLLECTION_THRESHOLD_CHARS = 750_000;
 const LARGE_COLLECTION_KEYS = [
@@ -43,6 +60,8 @@ const LARGE_COLLECTION_KEYS = [
   STORAGE_KEYS.TEACHERS,
   STORAGE_KEYS.ATTENDANCE,
   STORAGE_KEYS.TKA_SUBMISSIONS,
+  STORAGE_KEYS.CBT_RESULTS,
+  STORAGE_KEYS.TKA_RESULTS,
 ] as const;
 
 const inMemoryLargeCache: Record<string, any> = {};
@@ -173,6 +192,13 @@ export const hydrateLargeCollectionsFromIDB = async (callbacks?: HydrateIDBCallb
       callbacks?.onAttendance?.(idbVal);
     } else if (key === STORAGE_KEYS.TKA_SUBMISSIONS && Array.isArray(idbVal)) {
       callbacks?.onTkaSubmissions?.(idbVal);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
+      }
+    } else if (
+      (key === STORAGE_KEYS.CBT_RESULTS || key === STORAGE_KEYS.TKA_RESULTS) &&
+      Array.isArray(idbVal)
+    ) {
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
       }
@@ -770,18 +796,12 @@ export const filterExamResultsByResetMeta = (
 };
 
 export const getStoredCBTResults = (): CBTExamResult[] => {
-  const data = localStorage.getItem(STORAGE_KEYS.CBT_RESULTS);
-  if (!data) return [];
-  try {
-    const parsed = JSON.parse(data);
-    return filterExamResultsByResetMeta(Array.isArray(parsed) ? parsed : []);
-  } catch {
-    return [];
-  }
+  const list = getHeavyCollection<CBTExamResult[]>(STORAGE_KEYS.CBT_RESULTS, [], []);
+  return filterExamResultsByResetMeta(Array.isArray(list) ? list : []);
 };
 
 export const saveStoredCBTResults = (results: CBTExamResult[]) => {
-  safeSetLocalStorage(STORAGE_KEYS.CBT_RESULTS, JSON.stringify(results));
+  saveHeavyCollection(STORAGE_KEYS.CBT_RESULTS, Array.isArray(results) ? results : []);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
   }
@@ -910,18 +930,12 @@ export const isTKAPackageActive = (
 };
 
 export const getStoredTKAResults = (): CBTExamResult[] => {
-  const data = localStorage.getItem(STORAGE_KEYS.TKA_RESULTS);
-  if (!data) return [];
-  try {
-    const parsed = JSON.parse(data);
-    return filterExamResultsByResetMeta(Array.isArray(parsed) ? parsed : [], 'tka');
-  } catch {
-    return [];
-  }
+  const list = getHeavyCollection<CBTExamResult[]>(STORAGE_KEYS.TKA_RESULTS, [], []);
+  return filterExamResultsByResetMeta(Array.isArray(list) ? list : [], 'tka');
 };
 
 export const saveStoredTKAResults = (results: CBTExamResult[]) => {
-  safeSetLocalStorage(STORAGE_KEYS.TKA_RESULTS, JSON.stringify(results));
+  saveHeavyCollection(STORAGE_KEYS.TKA_RESULTS, Array.isArray(results) ? results : []);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
   }
@@ -976,12 +990,22 @@ export interface TKASubmissionItem {
   updatedAt?: string;
 }
 
+export const sanitizeTkaSubmissionsList = (
+  submissions: TKASubmissionItem[]
+): TKASubmissionItem[] => {
+  return (Array.isArray(submissions) ? submissions : []).map((sub) => ({
+    ...sub,
+    fotoUrl: sanitizeSubmissionFotoUrl(sub.fotoUrl),
+  }));
+};
+
 export const getStoredTKASubmissions = (): TKASubmissionItem[] => {
-  return getHeavyCollection<TKASubmissionItem[]>(STORAGE_KEYS.TKA_SUBMISSIONS, [], []);
+  const list = getHeavyCollection<TKASubmissionItem[]>(STORAGE_KEYS.TKA_SUBMISSIONS, [], []);
+  return Array.isArray(list) ? list : [];
 };
 
 export const saveStoredTKASubmissions = (submissions: TKASubmissionItem[]) => {
-  saveHeavyCollection(STORAGE_KEYS.TKA_SUBMISSIONS, submissions);
+  saveHeavyCollection(STORAGE_KEYS.TKA_SUBMISSIONS, sanitizeTkaSubmissionsList(submissions));
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
   }
@@ -1164,6 +1188,8 @@ export const exportFullSystemJSON = () => {
   backupData[STORAGE_KEYS.TEACHERS] = getStoredTeachers();
   backupData[STORAGE_KEYS.ATTENDANCE] = getStoredAttendance();
   backupData[STORAGE_KEYS.TKA_SUBMISSIONS] = getStoredTKASubmissions();
+  backupData[STORAGE_KEYS.CBT_RESULTS] = getStoredCBTResults();
+  backupData[STORAGE_KEYS.TKA_RESULTS] = getStoredTKAResults();
 
   const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1200,6 +1226,10 @@ export const restoreFullSystemJSON = (jsonString: string) => {
         return;
       }
       if (key === STORAGE_KEYS.TKA_SUBMISSIONS && Array.isArray(data[key])) {
+        saveHeavyCollection(key, sanitizeTkaSubmissionsList(data[key]));
+        return;
+      }
+      if ((key === STORAGE_KEYS.CBT_RESULTS || key === STORAGE_KEYS.TKA_RESULTS) && Array.isArray(data[key])) {
         saveHeavyCollection(key, data[key]);
         return;
       }

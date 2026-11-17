@@ -64,7 +64,7 @@ import {
   getActiveFilters,
   CLASSES_LIST,
 } from '../utils/storage';
-import { upsertTkaSubmission } from '../utils/tkaFirestore';
+import { upsertTkaSubmissionAsync, reconcileAndSyncLocalTkaSubmissions } from '../utils/tkaFirestore';
 import { syncAllLocalToCloud } from '../utils/cloudSync';
 import {
   StudentExamDraft,
@@ -246,10 +246,19 @@ export const StudentDashboard: React.FC<Props> = ({
     isExamRunning: false,
   });
 
-  // Cari data siswa saat ini
+  // Cari data siswa saat ini (prioritaskan data siswa live dari Firestore agar ID, kelas, & NISN sinkron)
   const currentStudent = useMemo(() => {
-    if (activeUser.studentData) return activeUser.studentData;
-    return students.find((s) => s.username === activeUser.username || s.nama === activeUser.name) || students[0];
+    const ad = activeUser.studentData;
+    const uname = (activeUser.username || '').trim().toLowerCase();
+    const aname = (activeUser.name || '').trim().toLowerCase();
+    const liveMatch = students.find(
+      (s) =>
+        (ad?.id && s.id === ad.id) ||
+        (ad?.nisn && s.nisn === ad.nisn) ||
+        (uname && (s.username || '').trim().toLowerCase() === uname) ||
+        (aname && (s.nama || '').trim().toLowerCase() === aname)
+    );
+    return liveMatch || ad || students[0];
   }, [activeUser, students]);
 
   // State Form Input 7 Kebiasaan Siswa
@@ -1245,7 +1254,8 @@ export const StudentDashboard: React.FC<Props> = ({
       earned += evalRes.earnedScore;
     });
 
-    const finalGrade = max > 0 ? Math.round((earned / max) * 100) : 100;
+    const rawGrade = max > 0 ? Math.round((earned / max) * 100) : 100;
+    const finalGrade = Number.isFinite(rawGrade) ? rawGrade : 0;
 
     if (isAutoSubmit) {
       setTimeUpModal({
@@ -1270,7 +1280,7 @@ export const StudentDashboard: React.FC<Props> = ({
       examId: finishedExam.id,
       studentId: currentStudent.id,
       studentName: currentStudent.nama,
-      skor: earned,
+      skor: Number.isFinite(earned) ? earned : 0,
       nilai: finalGrade,
       waktuSelesai: new Date().toLocaleTimeString(),
       jawabanSiswa: answers,
@@ -1283,12 +1293,14 @@ export const StudentDashboard: React.FC<Props> = ({
     });
     saveStoredCBTResults(storedRes);
 
-    // Jika TKA, rekam & gabungkan ke TKA Submissions (localStorage + Firestore) agar langsung masuk Analisis & Rekap TKA
+    // Jika TKA, kirim & tunggu (await) penulisan langsung ke koleksi Firestore 'tka_submissions'
+    // agar Admin langsung melihat hasilnya secara real-time lintas perangkat.
+    let tkaCloudSaved = false;
     if (finishedExam.category === 'tka') {
       try {
         const normMapelKey = normalizeTkaMapelKey(finishedExam.mapel);
         const durationUsed = Math.max(1, finishedExam.durasiMenit - Math.floor(timeLeft / 60));
-        upsertTkaSubmission({
+        const tkaPromise = upsertTkaSubmissionAsync({
           student: currentStudent,
           paketName: finishedExam.paketName,
           mapelScores: { [normMapelKey]: finalGrade },
@@ -1296,6 +1308,11 @@ export const StudentDashboard: React.FC<Props> = ({
           questionAnswers: answers,
           durasiMenitUsed: durationUsed,
         });
+        const tkaRes = await Promise.race([
+          tkaPromise,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 12000)),
+        ]);
+        tkaCloudSaved = Boolean(tkaRes && tkaRes.cloudSaved);
       } catch (tkaErr) {
         console.warn('Sync TKA submission error:', tkaErr);
       }
@@ -1362,10 +1379,13 @@ export const StudentDashboard: React.FC<Props> = ({
       console.warn('Sync assessment error:', e);
     }
 
-    // Kirim langsung ke database Firestore (koleksi assessments + snapshot cloud penuh) sebelum sesi ujian ditutup
-    let cloudSaved = false;
+    // Kirim ke database Firestore (koleksi assessments + snapshot cloud penuh)
+    let cloudSaved = finishedExam.category === 'tka' ? tkaCloudSaved : false;
     try {
-      const dbTasks: Promise<any>[] = [syncAllLocalToCloud(currentStudent.nama || 'siswa')];
+      const dbTasks: Promise<any>[] = [];
+      if (finishedExam.category !== 'tka') {
+        dbTasks.push(syncAllLocalToCloud(currentStudent.nama || 'siswa'));
+      }
       if (assessKeyWritten && assessPayloadWritten) {
         dbTasks.push(
           setDoc(
@@ -1381,11 +1401,21 @@ export const StudentDashboard: React.FC<Props> = ({
           )
         );
       }
-      const results = await Promise.race([
-        Promise.allSettled(dbTasks),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
-      ]);
-      cloudSaved = Array.isArray(results) && results.some((r) => r.status === 'fulfilled' && r.value !== false);
+      if (dbTasks.length > 0) {
+        const results = await Promise.race([
+          Promise.allSettled(dbTasks),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+        ]);
+        if (finishedExam.category !== 'tka') {
+          cloudSaved =
+            Array.isArray(results) && results.some((r) => r.status === 'fulfilled' && r.value !== false);
+        }
+      }
+      if (finishedExam.category === 'tka') {
+        // Jalankan backup global & rekonsiliasi ringan di latar belakang agar tidak memperlambat UI siswa
+        syncAllLocalToCloud(currentStudent.nama || 'siswa').catch(() => {});
+        reconcileAndSyncLocalTkaSubmissions(students).catch(() => {});
+      }
     } catch (dbErr) {
       console.warn('Immediate database flush warning:', dbErr);
     }
@@ -1417,6 +1447,13 @@ export const StudentDashboard: React.FC<Props> = ({
         cloudSaved
           ? `Waktu ujian habis! Jawaban otomatis terkirim ke database. Nilai Anda: ${finalGrade}`
           : `Waktu ujian habis! Jawaban tersimpan & masuk antrean sinkronisasi database. Nilai Anda: ${finalGrade}`,
+        'success'
+      );
+    } else if (finishedExam.category === 'tka') {
+      showToast(
+        cloudSaved
+          ? `Selamat! Ujian TKA selesai & nilai (${finalGrade}) berhasil terkirim ke Admin!`
+          : `Ujian TKA selesai (Nilai: ${finalGrade}). Nilai tersimpan di perangkat & masuk antrean sinkronisasi ke Admin.`,
         'success'
       );
     } else {

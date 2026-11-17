@@ -67,9 +67,17 @@ import {
   normalizeTkaMapelKey,
   extractBaseTkaPaket,
   MAX_QUESTIONS_PER_PACKAGE,
+  isKelas6Class,
+  sanitizeSubmissionFotoUrl,
+  DEFAULT_STUDENT_AVATAR_URL,
 } from '../../utils/storage';
 import { getLocalTodayStr } from '../../utils/dateUtils';
-import { collectPersistentLocalBackup, pushAllDataToCloud, syncAllLocalToCloud } from '../../utils/cloudSync';
+import {
+  collectPersistentLocalBackup,
+  pushAllDataToCloud,
+  syncAllLocalToCloud,
+  reconcileTkaFromCloudBackup,
+} from '../../utils/cloudSync';
 import {
   saveSingleTkaQuestionToFirestore,
   deleteTkaQuestionFromFirestore,
@@ -77,7 +85,11 @@ import {
   saveTkaSubmissionsBatchToFirestore,
   clearTkaSubmissionsInFirestore,
   deleteTkaSubmissionsByPaketInFirestore,
-  upsertTkaSubmission,
+  upsertTkaSubmissionAsync,
+  fetchTkaSubmissionsFromFirestore,
+  flushPendingTkaSubmissionsToFirestore,
+  mergeTkaSubmissionLists,
+  getPendingTkaSubmissions,
 } from '../../utils/tkaFirestore';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxImporter';
@@ -115,9 +127,30 @@ export const TKATabs: React.FC<Props> = ({
   showToast,
   onOpenZoom,
 }) => {
-  // 1. Data Siswa TKA: Kelas 6A & Kelas 6B
-  const tkaStudents = students.filter((s) => s.kelas === 'Kelas 6A' || s.kelas === 'Kelas 6B');
-  const [classFilter, setClassFilter] = useState<'all' | 'Kelas 6A' | 'Kelas 6B'>('all');
+  // 1. Data Siswa TKA: Seluruh Kelas 6 (6A, 6B, 6C, 6D, dst.)
+  const tkaStudents = useMemo(
+    () => students.filter((s) => isKelas6Class(s.kelas)),
+    [students]
+  );
+  const availableTkaStudentClasses = useMemo(() => {
+    const set = new Set<string>(['Kelas 6A', 'Kelas 6B']);
+    tkaStudents.forEach((s) => {
+      if (s.kelas) set.add(s.kelas);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
+  }, [tkaStudents]);
+  const studentPhotoMap = useMemo(() => {
+    const map = new Map<string, string>();
+    students.forEach((s) => {
+      if (s.fotoUrl) {
+        if (s.id) map.set(s.id, s.fotoUrl);
+        if (s.nisn) map.set(s.nisn, s.fotoUrl);
+      }
+    });
+    return map;
+  }, [students]);
+
+  const [classFilter, setClassFilter] = useState<string>('all');
   const [searchStudent, setSearchStudent] = useState('');
 
   const displayTkaStudents = tkaStudents.filter((s) => {
@@ -175,13 +208,17 @@ export const TKATabs: React.FC<Props> = ({
   const [analisisPaketTka, setAnalisisPaketTka] = useState<string>('all');
   const [analisisChartTab, setAnalisisChartTab] = useState<'kesukaran' | 'ketuntasan' | 'pembeda'>('kesukaran');
 
-  // 5. Report & Hasil TKA State
+  // 5. Report & Hasil TKA State (mendukung 120+ siswa & multi-rombel)
   const [tkaSubmissions, setTkaSubmissions] = useState<TKASubmissionItem[]>(getStoredTKASubmissions());
-  const [rankingScope, setRankingScope] = useState<'semua' | 'Kelas 6A' | 'Kelas 6B'>('semua');
+  const [rankingScope, setRankingScope] = useState<string>('semua');
   const [hasilPaketTka, setHasilPaketTka] = useState<string>('all');
-  const [hasilKelasTka, setHasilKelasTka] = useState<'all' | 'Kelas 6A' | 'Kelas 6B'>('all');
+  const [hasilKelasTka, setHasilKelasTka] = useState<string>('all');
   const [hasilStatusTka, setHasilStatusTka] = useState<'all' | 'Tuntas' | 'Remedial'>('all');
   const [searchHasilTka, setSearchHasilTka] = useState('');
+  const [hasilRowsPerPage, setHasilRowsPerPage] = useState<'all' | 30 | 60 | 120>('all');
+  const [hasilPage, setHasilPage] = useState<number>(1);
+  const [isSeedingTka, setIsSeedingTka] = useState<boolean>(false);
+  const [isSyncingTkaCloud, setIsSyncingTkaCloud] = useState<boolean>(false);
   const [selectedHasilStudent, setSelectedHasilStudent] = useState<any | null>(null);
 
   // 6. Student Exam Room State (tes-tka-siswa)
@@ -247,6 +284,10 @@ export const TKATabs: React.FC<Props> = ({
   useEffect(() => {
     setDurPanelMinutes(getTKADurationMinutes(tkaDurations, durPanelPaket, durPanelMapel));
   }, [tkaDurations, durPanelPaket, durPanelMapel]);
+
+  useEffect(() => {
+    setHasilPage(1);
+  }, [hasilPaketTka, rankingScope, hasilKelasTka, hasilStatusTka, searchHasilTka, hasilRowsPerPage]);
 
   // Countdown timer for student TKA exam (with auto-submit)
   useEffect(() => {
@@ -792,74 +833,128 @@ export const TKATabs: React.FC<Props> = ({
     showToast('Seluruh data Analisis & Rekap Hasil TKA telah dikosongkan!', 'success');
   };
 
-  const handleSeedSimulatedSubmissions = () => {
-    const paketToSeed = hasilPaketTka && hasilPaketTka !== 'all' ? hasilPaketTka : 'Simulasi 1';
-    const seeded: TKASubmissionItem[] = tkaStudents.map((s) => {
-      const hashString = `${s.id}_${s.nisn}_${paketToSeed}`;
-      let h = 0;
-      for (let i = 0; i < hashString.length; i++) {
-        h = (h << 5) - h + hashString.charCodeAt(i);
-        h |= 0;
+  const handleRefreshTkaFromCloud = async () => {
+    if (isSyncingTkaCloud) return;
+    setIsSyncingTkaCloud(true);
+    try {
+      await flushPendingTkaSubmissionsToFirestore().catch(() => 0);
+      const rec = await reconcileTkaFromCloudBackup().catch(() => ({
+        recoveredCount: 0,
+        syncedCount: 0,
+      }));
+      const freshSubs = await fetchTkaSubmissionsFromFirestore();
+      const pendingSubs = getPendingTkaSubmissions();
+      const merged = mergeTkaSubmissionLists(freshSubs, pendingSubs);
+      saveStoredTKASubmissions(merged);
+      setTkaSubmissions(merged);
+      if (rec.recoveredCount > 0) {
+        showToast(
+          `Sinkronisasi berhasil! ${rec.recoveredCount} hasil ujian siswa dipulihkan & ${merged.length} data TKA dimuat.`,
+          'success'
+        );
+      } else {
+        showToast(
+          `Data TKA berhasil disegarkan dari Cloud (${merged.length} data peserta tersinkron).`,
+          'success'
+        );
       }
-      const base = Math.abs(h);
-      const skorIndo = 72 + (base % 26);
-      const skorMtk = 66 + ((base >> 2) % 32);
-      const skorIpas = 70 + ((base >> 4) % 28);
-      const skorInggris = 68 + ((base >> 6) % 30);
-      const skorKka = 74 + ((base >> 8) % 24);
-      const skorTotal = Math.round((skorIndo + skorMtk + skorIpas + skorInggris + skorKka) / 5);
+    } catch {
+      showToast('Gagal menyegarkan data TKA dari Cloud. Periksa koneksi internet Anda.', 'error');
+    } finally {
+      setIsSyncingTkaCloud(false);
+    }
+  };
 
-      const predikat: 'A' | 'B' | 'C' | 'D' =
-        skorTotal >= 88 ? 'A' : skorTotal >= 78 ? 'B' : skorTotal >= 68 ? 'C' : 'D';
-      const status: 'Tuntas' | 'Remedial' = skorTotal >= 75 ? 'Tuntas' : 'Remedial';
+  const handleSeedSimulatedSubmissions = async () => {
+    if (isSeedingTka) return;
+    if (tkaStudents.length === 0) {
+      showToast('Belum ada data peserta didik Kelas 6 di menu Data Siswa.', 'error');
+      return;
+    }
+    setIsSeedingTka(true);
+    try {
+      const paketToSeed = hasilPaketTka && hasilPaketTka !== 'all' ? hasilPaketTka : 'Simulasi 1';
+      const nowIso = new Date().toISOString();
+      const seeded: TKASubmissionItem[] = tkaStudents.map((s) => {
+        const hashString = `${s.id}_${s.nisn}_${paketToSeed}`;
+        let h = 0;
+        for (let i = 0; i < hashString.length; i++) {
+          h = (h << 5) - h + hashString.charCodeAt(i);
+          h |= 0;
+        }
+        const base = Math.abs(h);
+        const skorIndo = 72 + (base % 26);
+        const skorMtk = 66 + ((base >> 2) % 32);
+        const skorIpas = 70 + ((base >> 4) % 28);
+        const skorInggris = 68 + ((base >> 6) % 30);
+        const skorKka = 74 + ((base >> 8) % 24);
+        const skorTotal = Math.round((skorIndo + skorMtk + skorIpas + skorInggris + skorKka) / 5);
 
-      const answers: Record<string, any> = {};
-      tkaQuestions
-        .filter((q) => q.jenisTka === paketToSeed)
-        .forEach((q, qIdx) => {
-          const isCorrect = (base + qIdx * 7) % 100 < skorTotal;
-          answers[q.id] = isCorrect ? q.kunciJawaban : 'Jawaban lain';
-        });
+        const predikat: 'A' | 'B' | 'C' | 'D' =
+          skorTotal >= 88 ? 'A' : skorTotal >= 78 ? 'B' : skorTotal >= 68 ? 'C' : 'D';
+        const status: 'Tuntas' | 'Remedial' = skorTotal >= 75 ? 'Tuntas' : 'Remedial';
 
-      return {
-        id: `sub_${s.id}_${paketToSeed.replace(/\s+/g, '_')}`,
-        studentId: s.id,
-        studentName: s.nama,
-        nisn: s.nisn,
-        kelas: s.kelas,
-        fotoUrl: s.fotoUrl,
-        paket: paketToSeed,
-        paketDasar: paketToSeed,
-        completedMapels: [
-          'Bahasa Indonesia',
-          'Matematika',
-          'IPAS',
-          'Bahasa Inggris',
-          'Koding dan Kecerdasan Artifisial (KKA)',
-        ],
-        answers,
-        scoresPerMapel: {
-          'Bahasa Indonesia': skorIndo,
-          'Matematika': skorMtk,
-          'IPAS': skorIpas,
-          'Bahasa Inggris': skorInggris,
-          'Koding dan Kecerdasan Artifisial (KKA)': skorKka,
-        },
-        skorTotal,
-        predikat,
-        status,
-        tanggalUjian: '04 November 2026',
-        durasiPengerjaan: '45 Menit',
-        updatedAt: new Date().toISOString(),
-      };
-    });
+        const answers: Record<string, any> = {};
+        tkaQuestions
+          .filter((q) => q.jenisTka === paketToSeed)
+          .forEach((q, qIdx) => {
+            const isCorrect = (base + qIdx * 7) % 100 < skorTotal;
+            answers[q.id] = isCorrect ? q.kunciJawaban : 'Jawaban lain';
+          });
 
-    const otherExisting = tkaSubmissions.filter((s) => extractBaseTkaPaket(s.paket) !== paketToSeed);
-    const mergedAll = [...seeded, ...otherExisting];
-    saveStoredTKASubmissions(mergedAll);
-    saveTkaSubmissionsBatchToFirestore(seeded).catch(() => {});
-    setTkaSubmissions(mergedAll);
-    showToast(`Data simulasi pengerjaan siswa (${seeded.length} siswa) untuk ${paketToSeed} berhasil dimuat!`, 'success');
+        return {
+          id: `sub_${s.id}_${paketToSeed.replace(/\s+/g, '_')}`,
+          studentId: s.id,
+          studentName: s.nama,
+          nisn: s.nisn,
+          kelas: s.kelas,
+          fotoUrl: sanitizeSubmissionFotoUrl(s.fotoUrl),
+          paket: paketToSeed,
+          paketDasar: paketToSeed,
+          completedMapels: [
+            'Bahasa Indonesia',
+            'Matematika',
+            'IPAS',
+            'Bahasa Inggris',
+            'Koding dan Kecerdasan Artifisial (KKA)',
+          ],
+          answers,
+          scoresPerMapel: {
+            'Bahasa Indonesia': skorIndo,
+            'Matematika': skorMtk,
+            'IPAS': skorIpas,
+            'Bahasa Inggris': skorInggris,
+            'Koding dan Kecerdasan Artifisial (KKA)': skorKka,
+          },
+          skorTotal,
+          predikat,
+          status,
+          tanggalUjian: '04 November 2026',
+          durasiPengerjaan: '45 Menit',
+          updatedAt: nowIso,
+        };
+      });
+
+      const otherExisting = tkaSubmissions.filter((s) => extractBaseTkaPaket(s.paket) !== paketToSeed);
+      const mergedAll = [...seeded, ...otherExisting];
+      saveStoredTKASubmissions(mergedAll);
+      setTkaSubmissions(mergedAll);
+
+      const cloudOk = await saveTkaSubmissionsBatchToFirestore(seeded);
+      if (cloudOk) {
+        showToast(
+          `Data simulasi pengerjaan (${seeded.length} siswa) untuk ${paketToSeed} berhasil dimuat & tersinkron ke Cloud!`,
+          'success'
+        );
+      } else {
+        showToast(
+          `Data simulasi (${seeded.length} siswa) dimuat secara lokal, namun sinkronisasi Cloud terkendala jaringan.`,
+          'error'
+        );
+      }
+    } finally {
+      setIsSeedingTka(false);
+    }
   };
 
   const handleApplyFractionConvert = () => {
@@ -1521,10 +1616,10 @@ export const TKATabs: React.FC<Props> = ({
                 Menu TKA • Peserta Ujian Tingkat Akhir
               </span>
               <h2 className="text-xl font-display font-black text-slate-800 mt-1 flex items-center gap-2">
-                <Users className="w-5 h-5 text-amber-600" /> Data Siswa TKA (Otomatis dari Kelas 6A & 6B)
+                <Users className="w-5 h-5 text-amber-600" /> Data Siswa TKA (Otomatis Seluruh Rombel Kelas 6)
               </h2>
               <p className="text-xs text-slate-500">
-                Seluruh peserta didik Kelas 6A dan Kelas 6B SDN Rawa Badak Utara 21 otomatis terdaftar sebagai peserta Tes Kemampuan Akademik (TKA).
+                Seluruh peserta didik Kelas 6 ({availableTkaStudentClasses.join(', ')}) otomatis terdaftar sebagai peserta Tes Kemampuan Akademik (TKA).
               </p>
             </div>
 
@@ -1543,12 +1638,15 @@ export const TKATabs: React.FC<Props> = ({
               </div>
               <select
                 value={classFilter}
-                onChange={(e) => setClassFilter(e.target.value as any)}
+                onChange={(e) => setClassFilter(e.target.value)}
                 className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none"
               >
-                <option value="all">Semua Rombel (Kelas 6A & 6B)</option>
-                <option value="Kelas 6A">Hanya Kelas 6A</option>
-                <option value="Kelas 6B">Hanya Kelas 6B</option>
+                <option value="all">Semua Rombel Kelas 6 ({tkaStudents.length} Siswa)</option>
+                {availableTkaStudentClasses.map((cls) => (
+                  <option key={cls} value={cls}>
+                    Hanya {cls} ({tkaStudents.filter((s) => s.kelas === cls).length} Siswa)
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -2581,9 +2679,10 @@ export const TKATabs: React.FC<Props> = ({
                   onChange={(e) => setFormTargetKelas(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-medium text-slate-800 outline-none focus:border-rose-400"
                 >
-                  <option value="Kelas 6A">Kelas 6A</option>
-                  <option value="Kelas 6B">Kelas 6B</option>
-                  <option value="Gabungan Kelas 6">Gabungan TKA (6A & 6B)</option>
+                  {availableTkaStudentClasses.map((cls) => (
+                    <option key={cls} value={cls}>{cls}</option>
+                  ))}
+                  <option value="Gabungan Kelas 6">Gabungan TKA (Seluruh Kelas 6)</option>
                 </select>
               </div>
 
@@ -3946,6 +4045,16 @@ export const TKATabs: React.FC<Props> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
+                  disabled={isSyncingTkaCloud}
+                  onClick={handleRefreshTkaFromCloud}
+                  className="bg-sky-50 hover:bg-sky-100 disabled:opacity-60 text-sky-800 font-display font-black px-3.5 py-2 rounded-xl text-xs border border-sky-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                  title="Tarik & sinkronkan hasil pengerjaan TKA terbaru dari Cloud Firestore"
+                >
+                  <RefreshCw className={`w-4 h-4 text-sky-600 ${isSyncingTkaCloud ? 'animate-spin' : ''}`} />{' '}
+                  {isSyncingTkaCloud ? 'Menyinkronkan...' : 'Segarkan Cloud'}
+                </button>
+                <button
+                  type="button"
                   onClick={() => handleClearSubmissions('analisis', analisisPaketTka)}
                   className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-display font-black px-3.5 py-2 rounded-xl text-xs border border-rose-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
                   title="Kosongkan data analisis dan hasil TKA"
@@ -3954,11 +4063,13 @@ export const TKATabs: React.FC<Props> = ({
                 </button>
                 <button
                   type="button"
+                  disabled={isSeedingTka}
                   onClick={handleSeedSimulatedSubmissions}
-                  className="bg-purple-50 hover:bg-purple-100 text-purple-800 font-display font-black px-3.5 py-2 rounded-xl text-xs border border-purple-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
-                  title="Simulasikan pengerjaan siswa 6A & 6B"
+                  className="bg-purple-50 hover:bg-purple-100 disabled:opacity-60 text-purple-800 font-display font-black px-3.5 py-2 rounded-xl text-xs border border-purple-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                  title="Simulasikan pengerjaan seluruh siswa Kelas 6"
                 >
-                  <Sparkles className="w-4 h-4 text-purple-600" /> Simulasikan Siswa 6A &amp; 6B
+                  <Sparkles className="w-4 h-4 text-purple-600" />{' '}
+                  {isSeedingTka ? 'Memuat Simulasi...' : `Simulasikan Siswa (${tkaStudents.length})`}
                 </button>
                 <button
                   type="button"
@@ -3992,10 +4103,12 @@ export const TKATabs: React.FC<Props> = ({
                 </div>
                 <button
                   type="button"
+                  disabled={isSeedingTka}
                   onClick={handleSeedSimulatedSubmissions}
-                  className="bg-amber-600 hover:bg-amber-700 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition"
+                  className="bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition"
                 >
-                  <Sparkles className="w-4 h-4" /> Muat Simulasi Siswa 6A &amp; 6B
+                  <Sparkles className="w-4 h-4" />{' '}
+                  {isSeedingTka ? 'Memuat Simulasi...' : `Muat Simulasi (${tkaStudents.length} Siswa)`}
                 </button>
               </div>
             )}
@@ -4126,7 +4239,7 @@ export const TKATabs: React.FC<Props> = ({
               <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200">
                 <span className="text-xs font-bold text-emerald-800 uppercase">Rata-rata Ketuntasan</span>
                 <div className="text-2xl font-display font-black text-emerald-700 mt-1">{avgPct}%</div>
-                <span className="text-[11px] text-emerald-800">Siswa Kelas 6A & 6B</span>
+                <span className="text-[11px] text-emerald-800">Seluruh Siswa Kelas 6 ({tkaStudents.length} Siswa)</span>
               </div>
               <div className="p-4 rounded-2xl bg-sky-50 border border-sky-200">
                 <span className="text-xs font-bold text-sky-800 uppercase">Komposisi Kesukaran</span>
@@ -4456,7 +4569,7 @@ export const TKATabs: React.FC<Props> = ({
       {/* 5. MENU REPORT & HASIL TKA SISWA                               */}
       {/* ============================================================== */}
       {subType === 'hasil-tka' && (() => {
-        // Read directly from real student test submissions
+        // Read directly from real student test submissions & resolve photos cleanly from students list
         const recordsForPaket = tkaSubmissions
           .filter((sub) => {
             if (hasilPaketTka === 'all') return true;
@@ -4467,6 +4580,11 @@ export const TKATabs: React.FC<Props> = ({
             const completed = sub.completedMapels;
             const hasMapel = (key: TKAMapelScoreKey) =>
               !completed || completed.length === 0 || completed.includes(key);
+            const resolvedFoto =
+              sub.fotoUrl ||
+              studentPhotoMap.get(sub.studentId) ||
+              studentPhotoMap.get(sub.nisn) ||
+              DEFAULT_STUDENT_AVATAR_URL;
             return {
               ...sub,
               id: sub.id,
@@ -4474,7 +4592,7 @@ export const TKATabs: React.FC<Props> = ({
               nama: sub.studentName,
               nisn: sub.nisn,
               kelas: sub.kelas,
-              fotoUrl: sub.fotoUrl,
+              fotoUrl: resolvedFoto,
               paket: sub.paketDasar || extractBaseTkaPaket(sub.paket),
               completedMapels: completed,
               skorIndo: hasMapel('Bahasa Indonesia') ? (sub.scoresPerMapel?.['Bahasa Indonesia'] ?? 0) : null,
@@ -4492,14 +4610,25 @@ export const TKATabs: React.FC<Props> = ({
             };
           });
 
-        // Ranking Calculation according to selected scope (Semua, Kelas 6A, Kelas 6B)
+        const availableHasilClasses = Array.from(
+          new Set([
+            ...availableTkaStudentClasses,
+            ...recordsForPaket.map((r) => r.kelas).filter(Boolean),
+          ])
+        ).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
+
+        // Ranking Calculation according to selected scope (Semua Angkatan 6, atau per rombel dinamis)
         const rankedPool = recordsForPaket
-          .filter((r) => {
-            if (rankingScope === 'Kelas 6A') return r.kelas === 'Kelas 6A';
-            if (rankingScope === 'Kelas 6B') return r.kelas === 'Kelas 6B';
-            return true;
-          })
-          .sort((a, b) => b.skorTotal - a.skorTotal);
+          .filter((r) => (rankingScope === 'semua' ? true : r.kelas === rankingScope))
+          .sort((a, b) => {
+            if (b.skorTotal !== a.skorTotal) return b.skorTotal - a.skorTotal;
+            return (a.nama || '').localeCompare(b.nama || '', 'id');
+          });
+
+        const rankById = new Map<string, number>();
+        rankedPool.forEach((r, idx) => {
+          rankById.set(r.id, idx + 1);
+        });
 
         // Filter for table view
         const filteredRecords = rankedPool.filter((r) => {
@@ -4514,6 +4643,19 @@ export const TKATabs: React.FC<Props> = ({
           }
           return true;
         });
+
+        // Pagination / Full view (Default 'all' agar 120+ siswa tampil penuh sekaligus)
+        const totalFiltered = filteredRecords.length;
+        const totalPages =
+          hasilRowsPerPage === 'all' ? 1 : Math.max(1, Math.ceil(totalFiltered / hasilRowsPerPage));
+        const safePage = Math.min(Math.max(1, hasilPage), totalPages);
+        const visibleRecords =
+          hasilRowsPerPage === 'all'
+            ? filteredRecords
+            : filteredRecords.slice(
+                (safePage - 1) * hasilRowsPerPage,
+                safePage * hasilRowsPerPage
+              );
 
         // Top 10 Honors from the ranked pool (User requested ranking 1 - 10)
         const top10Students = rankedPool.slice(0, 10);
@@ -4545,10 +4687,10 @@ export const TKATabs: React.FC<Props> = ({
         const countC = rankedPool.filter((r) => r.predikat === 'C').length;
         const countD = rankedPool.filter((r) => r.predikat === 'D').length;
 
-        // Export to Excel
+        // Export to Excel (seluruh filteredRecords tanpa terpotong halaman)
         const handleExportExcel = () => {
           const exportData = filteredRecords.map((r, idx) => ({
-            'Peringkat': idx + 1,
+            'Peringkat': rankById.get(r.id) ?? idx + 1,
             'NISN': r.nisn,
             'Nama Siswa': r.nama,
             'Kelas': r.kelas,
@@ -4567,7 +4709,7 @@ export const TKATabs: React.FC<Props> = ({
           const wb = XLSX.utils.book_new();
           XLSX.utils.book_append_sheet(wb, ws, 'Hasil TKA');
           XLSX.writeFile(wb, `Report_Hasil_TKA_${hasilPaketTka.replace(/\s+/g, '_')}_SDN_RBU21.xlsx`);
-          showToast('Data Report Hasil TKA berhasil diekspor ke Excel!', 'success');
+          showToast(`Data Report Hasil TKA (${filteredRecords.length} siswa) berhasil diekspor ke Excel!`, 'success');
         };
 
         const handlePrint = () => {
@@ -4586,11 +4728,21 @@ export const TKATabs: React.FC<Props> = ({
                   <Award className="w-6 h-6 text-purple-600" /> Report &amp; Rekapitulasi Hasil Ujian TKA
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Terkoneksi langsung dengan ujian siswa. Dilengkapi pemeringkatan (Ranking 1 - 10), grafik komparasi mapel, serta cetak rapor hasil TKA.
+                  Terkoneksi langsung dengan ujian siswa (kapasitas 120+ siswa multi-rombel). Dilengkapi pemeringkatan (Ranking 1 - 10), grafik komparasi mapel, serta cetak rapor hasil TKA.
                 </p>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isSyncingTkaCloud}
+                  onClick={handleRefreshTkaFromCloud}
+                  className="bg-sky-50 hover:bg-sky-100 disabled:opacity-60 text-sky-800 font-display font-black px-3.5 py-2.5 rounded-xl text-xs border border-sky-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                  title="Tarik & pulihkan hasil pengerjaan TKA siswa terbaru dari Cloud Firestore"
+                >
+                  <RefreshCw className={`w-4 h-4 text-sky-600 ${isSyncingTkaCloud ? 'animate-spin' : ''}`} />{' '}
+                  {isSyncingTkaCloud ? 'Menyinkronkan...' : 'Segarkan Cloud'}
+                </button>
                 <button
                   type="button"
                   onClick={() => handleClearSubmissions('rekap', hasilPaketTka)}
@@ -4601,11 +4753,13 @@ export const TKATabs: React.FC<Props> = ({
                 </button>
                 <button
                   type="button"
+                  disabled={isSeedingTka}
                   onClick={handleSeedSimulatedSubmissions}
-                  className="bg-purple-50 hover:bg-purple-100 text-purple-800 font-display font-black px-3.5 py-2.5 rounded-xl text-xs border border-purple-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
-                  title="Simulasikan pengerjaan siswa Kelas 6A & 6B secara instan"
+                  className="bg-purple-50 hover:bg-purple-100 disabled:opacity-60 text-purple-800 font-display font-black px-3.5 py-2.5 rounded-xl text-xs border border-purple-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                  title="Simulasikan pengerjaan seluruh siswa Kelas 6 secara instan"
                 >
-                  <Sparkles className="w-4 h-4 text-purple-600" /> Simulasikan Siswa 6A &amp; 6B
+                  <Sparkles className="w-4 h-4 text-purple-600" />{' '}
+                  {isSeedingTka ? 'Memuat & Sinkron...' : `Simulasikan Siswa (${tkaStudents.length})`}
                 </button>
                 <button
                   type="button"
@@ -4638,17 +4792,28 @@ export const TKATabs: React.FC<Props> = ({
                     <p className="text-xs text-amber-800">
                       Belum ada pengerjaan siswa yang tersimpan untuk paket{' '}
                       <strong>"{hasilPaketTka === 'all' ? 'Semua Paket TKA' : hasilPaketTka}"</strong>.
-                      Siswa dapat mengerjakan melalui menu <strong>"Tes Kemampuan Akademik (TKA)"</strong>, atau Anda dapat mengeklik tombol simulasi di bawah untuk mengisinya secara instan untuk kelas 6A dan 6B.
+                      Siswa dapat mengerjakan melalui menu <strong>"Tes Kemampuan Akademik (TKA)"</strong>, atau Anda dapat mengeklik tombol simulasi di bawah untuk mengisinya secara instan untuk seluruh siswa Kelas 6 ({tkaStudents.length} siswa).
                     </p>
                   </div>
                 </div>
                 <div className="pt-2 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={handleSeedSimulatedSubmissions}
-                    className="bg-purple-600 hover:bg-purple-700 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    disabled={isSyncingTkaCloud}
+                    onClick={handleRefreshTkaFromCloud}
+                    className="bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
                   >
-                    <Sparkles className="w-4 h-4" /> Muat Simulasi Siswa Kelas 6A &amp; 6B
+                    <RefreshCw className={`w-4 h-4 ${isSyncingTkaCloud ? 'animate-spin' : ''}`} />{' '}
+                    {isSyncingTkaCloud ? 'Menyinkronkan Cloud...' : 'Segarkan / Sinkron dari Cloud'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSeedingTka}
+                    onClick={handleSeedSimulatedSubmissions}
+                    className="bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <Sparkles className="w-4 h-4" />{' '}
+                    {isSeedingTka ? 'Memuat Simulasi...' : `Muat Simulasi Siswa Kelas 6 (${tkaStudents.length} Siswa)`}
                   </button>
                 </div>
               </div>
@@ -4677,12 +4842,15 @@ export const TKATabs: React.FC<Props> = ({
                   <label className="block text-xs font-black text-slate-700 mb-1">Filter Rombel / Kelas:</label>
                   <select
                     value={hasilKelasTka}
-                    onChange={(e) => setHasilKelasTka(e.target.value as any)}
+                    onChange={(e) => setHasilKelasTka(e.target.value)}
                     className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-slate-50 focus:bg-white focus:border-purple-600 outline-none cursor-pointer"
                   >
-                    <option value="all">Semua Kelas (6A &amp; 6B)</option>
-                    <option value="Kelas 6A">Hanya Kelas 6A</option>
-                    <option value="Kelas 6B">Hanya Kelas 6B</option>
+                    <option value="all">Semua Rombel Kelas 6 ({availableHasilClasses.length} Kelas)</option>
+                    {availableHasilClasses.map((cls) => (
+                      <option key={cls} value={cls}>
+                        Hanya {cls}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -4716,9 +4884,9 @@ export const TKATabs: React.FC<Props> = ({
 
               {/* Ranking Scope Selector Buttons */}
               <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs font-black text-slate-700">Skup Pemeringkatan (Ranking):</span>
-                  <div className="inline-flex rounded-xl p-1 bg-slate-100 border border-slate-200">
+                  <div className="inline-flex flex-wrap rounded-xl p-1 bg-slate-100 border border-slate-200 gap-1">
                     <button
                       type="button"
                       onClick={() => setRankingScope('semua')}
@@ -4730,28 +4898,20 @@ export const TKATabs: React.FC<Props> = ({
                     >
                       <Trophy className="w-3.5 h-3.5" /> Semua Siswa (Angkatan 6)
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setRankingScope('Kelas 6A')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
-                        rankingScope === 'Kelas 6A'
-                          ? 'bg-purple-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <span>🥇</span> Ranking Kelas 6A Saja
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRankingScope('Kelas 6B')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
-                        rankingScope === 'Kelas 6B'
-                          ? 'bg-purple-600 text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <span>🥈</span> Ranking Kelas 6B Saja
-                    </button>
+                    {availableHasilClasses.map((cls, cIdx) => (
+                      <button
+                        key={cls}
+                        type="button"
+                        onClick={() => setRankingScope(cls)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
+                          rankingScope === cls
+                            ? 'bg-purple-600 text-white shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <span>{cIdx === 0 ? '🥇' : cIdx === 1 ? '🥈' : '🥉'}</span> Ranking {cls}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -4766,8 +4926,8 @@ export const TKATabs: React.FC<Props> = ({
               <div className="bg-gradient-to-br from-purple-50 to-white p-5 rounded-3xl border border-purple-200 shadow-xs space-y-1">
                 <span className="text-[11px] font-black uppercase text-purple-700">Total Peserta Ujian</span>
                 <div className="text-3xl font-display font-black text-purple-900">{totalPeserta} Siswa</div>
-                <p className="text-[11px] text-slate-500">
-                  {rankingScope === 'semua' ? 'Gabungan Kelas 6A & 6B' : `Khusus ${rankingScope}`}
+                <p className="text-[11px] text-slate-500 truncate">
+                  {rankingScope === 'semua' ? `Gabungan ${availableHasilClasses.join(', ')}` : `Khusus ${rankingScope}`}
                 </p>
               </div>
 
@@ -5081,9 +5241,27 @@ export const TKATabs: React.FC<Props> = ({
                 <h3 className="font-display font-black text-base text-slate-800 flex items-center gap-2">
                   <FileText className="w-4 h-4 text-purple-600" /> Rekapitulasi Nilai &amp; Pemeringkatan ({filteredRecords.length} Siswa)
                 </h3>
-                <span className="text-xs text-slate-500 font-bold">
-                  Skup Peringkat: <strong className="text-purple-700">{rankingScope === 'semua' ? 'Semua Siswa Angkatan 6' : rankingScope}</strong>
-                </span>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="no-print flex items-center gap-1.5 text-xs">
+                    <span className="text-slate-500 font-bold">Tampilan baris:</span>
+                    <select
+                      value={hasilRowsPerPage}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setHasilRowsPerPage(val === 'all' ? 'all' : (Number(val) as 30 | 60 | 120));
+                      }}
+                      className="px-2.5 py-1 rounded-xl border border-slate-300 bg-slate-50 text-xs font-extrabold text-slate-700 outline-none cursor-pointer"
+                    >
+                      <option value="all">Semua ({filteredRecords.length} Siswa)</option>
+                      <option value="30">30 / Halaman</option>
+                      <option value="60">60 / Halaman</option>
+                      <option value="120">120 / Halaman</option>
+                    </select>
+                  </div>
+                  <span className="text-xs text-slate-500 font-bold">
+                    Skup Peringkat: <strong className="text-purple-700">{rankingScope === 'semua' ? 'Semua Siswa Angkatan 6' : rankingScope}</strong>
+                  </span>
+                </div>
               </div>
 
               <div className="overflow-x-auto">
@@ -5105,19 +5283,22 @@ export const TKATabs: React.FC<Props> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredRecords.map((r, idx) => (
+                    {visibleRecords.map((r, idx) => {
+                      const trueRank = rankById.get(r.id) ?? idx + 1;
+                      return (
                       <tr key={r.id} className="hover:bg-purple-50/30 transition">
                         <td className="p-3 text-center font-mono font-black text-slate-600">
-                          {idx === 0 && <span className="inline-block px-2 py-0.5 rounded-full bg-amber-400 text-slate-900 text-xs font-black shadow-xs">#1</span>}
-                          {idx === 1 && <span className="inline-block px-2 py-0.5 rounded-full bg-slate-300 text-slate-900 text-xs font-black">#2</span>}
-                          {idx === 2 && <span className="inline-block px-2 py-0.5 rounded-full bg-orange-300 text-slate-900 text-xs font-black">#3</span>}
-                          {idx > 2 && <span className="font-bold">#{idx + 1}</span>}
+                          {trueRank === 1 && <span className="inline-block px-2 py-0.5 rounded-full bg-amber-400 text-slate-900 text-xs font-black shadow-xs">#1</span>}
+                          {trueRank === 2 && <span className="inline-block px-2 py-0.5 rounded-full bg-slate-300 text-slate-900 text-xs font-black">#2</span>}
+                          {trueRank === 3 && <span className="inline-block px-2 py-0.5 rounded-full bg-orange-300 text-slate-900 text-xs font-black">#3</span>}
+                          {trueRank > 3 && <span className="font-bold">#{trueRank}</span>}
                         </td>
                         <td className="p-3">
                           <div className="flex items-center gap-2.5">
                             <img
                               src={r.fotoUrl}
                               alt={r.nama}
+                              loading="lazy"
                               onClick={() => onOpenZoom(r.fotoUrl, r.nama)}
                               className="w-8 h-8 rounded-xl object-cover border border-slate-200 cursor-zoom-in"
                             />
@@ -5181,10 +5362,11 @@ export const TKATabs: React.FC<Props> = ({
                           </button>
                         </td>
                       </tr>
-                    ))}
-                    {filteredRecords.length === 0 && (
+                      );
+                    })}
+                    {visibleRecords.length === 0 && (
                       <tr>
-                        <td colSpan={11} className="p-8 text-center text-slate-400 italic">
+                        <td colSpan={12} className="p-8 text-center text-slate-400 italic">
                           Tidak ada data pengerjaan siswa yang sesuai dengan filter.
                         </td>
                       </tr>
@@ -5192,6 +5374,32 @@ export const TKATabs: React.FC<Props> = ({
                   </tbody>
                 </table>
               </div>
+
+              {hasilRowsPerPage !== 'all' && totalPages > 1 && (
+                <div className="no-print pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-500 font-bold">
+                    Halaman <strong>{safePage}</strong> dari <strong>{totalPages}</strong> ({totalFiltered} siswa)
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={safePage <= 1}
+                      onClick={() => setHasilPage((p) => Math.max(1, p - 1))}
+                      className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 font-bold text-slate-700 cursor-pointer"
+                    >
+                      Sebelumnya
+                    </button>
+                    <button
+                      type="button"
+                      disabled={safePage >= totalPages}
+                      onClick={() => setHasilPage((p) => Math.min(totalPages, p + 1))}
+                      className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 font-bold text-slate-700 cursor-pointer"
+                    >
+                      Berikutnya
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         );
@@ -5309,7 +5517,7 @@ export const TKATabs: React.FC<Props> = ({
         };
 
         // Submit & Grade Exam
-        const handleFinishExam = () => {
+        const handleFinishExam = async () => {
           let totalScoreEarned = 0;
           let totalMaxScore = 0;
 
@@ -5339,17 +5547,16 @@ export const TKATabs: React.FC<Props> = ({
           (Object.keys(subjectScores) as TKAMapelScoreKey[]).forEach((mKey) => {
             if (subjectScores[mKey].max > 0) {
               completedMapelKeys.push(mKey);
-              mapelScores[mKey] = Math.round(
-                (subjectScores[mKey].earned / subjectScores[mKey].max) * 100
-              );
+              const val = Math.round((subjectScores[mKey].earned / subjectScores[mKey].max) * 100);
+              mapelScores[mKey] = Number.isFinite(val) ? val : 0;
             }
           });
 
           if (completedMapelKeys.length === 0 && activeExamMapel) {
             const fallbackKey = normalizeTkaMapelKey(activeExamMapel);
             completedMapelKeys.push(fallbackKey);
-            mapelScores[fallbackKey] =
-              totalMaxScore > 0 ? Math.round((totalScoreEarned / totalMaxScore) * 100) : 0;
+            const fallbackVal = totalMaxScore > 0 ? Math.round((totalScoreEarned / totalMaxScore) * 100) : 0;
+            mapelScores[fallbackKey] = Number.isFinite(fallbackVal) ? fallbackVal : 0;
           }
 
           const durationUsedMinutes = Math.max(
@@ -5358,7 +5565,7 @@ export const TKATabs: React.FC<Props> = ({
           );
 
           const paketBase = activeExamPaket || 'Simulasi 1';
-          const { mergedSub, updatedList } = upsertTkaSubmission({
+          const { mergedSub, updatedList, cloudSaved } = await upsertTkaSubmissionAsync({
             student: currentStudent,
             paketName: paketBase,
             mapelScores,
@@ -5377,7 +5584,9 @@ export const TKATabs: React.FC<Props> = ({
             setTkaDraftRevision((v) => v + 1);
           }
           showToast(
-            `Selamat! Ujian TKA selesai dengan skor: ${mergedSub.skorTotal} (Predikat ${mergedSub.predikat}) — tersinkron ke Analisis & Rekap TKA.`,
+            cloudSaved
+              ? `Selamat! Ujian TKA selesai dengan skor: ${mergedSub.skorTotal} (Predikat ${mergedSub.predikat}) — tersinkron ke Admin & Rekap TKA.`
+              : `Ujian TKA selesai (Skor: ${mergedSub.skorTotal}). Nilai tersimpan & masuk antrean sinkronisasi ke Admin.`,
             'success'
           );
         };
