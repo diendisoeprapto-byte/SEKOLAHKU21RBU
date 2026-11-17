@@ -15,10 +15,12 @@ import {
   saveStoredTKAQuestions,
   getStoredTKASubmissions,
   saveStoredTKASubmissions,
+  safeSetLocalStorage,
   TKASubmissionItem,
   TKAMapelScoreKey,
   extractBaseTkaPaket,
 } from './storage';
+import { compressDataUrlImage } from './imageUtils';
 
 export const TKA_QUESTIONS_COLLECTION = 'tka_questions';
 export const TKA_SUBMISSIONS_COLLECTION = 'tka_submissions';
@@ -58,6 +60,45 @@ export function sortTkaQuestionsOrder(list: Array<TKAQuestion & { orderIndex?: n
     .map(({ orderIndex: _oi, updatedAt: _ua, serverTime: _st, ...q }: any) => q as TKAQuestion);
 }
 
+async function ensureTkaQuestionWithinFirestoreLimit(question: TKAQuestion): Promise<TKAQuestion> {
+  const SAFE_DOC_BYTES = 820_000;
+  const estimateBytes = (obj: unknown) => {
+    const str = JSON.stringify(obj);
+    return typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(str).length : str.length * 2;
+  };
+
+  if (estimateBytes(question) <= SAFE_DOC_BYTES) {
+    return question;
+  }
+
+  let candidate: TKAQuestion = { ...question };
+  const passes = [
+    { maxWidth: 720, maxHeight: 540, quality: 0.65 },
+    { maxWidth: 480, maxHeight: 360, quality: 0.5 },
+  ];
+
+  for (const opts of passes) {
+    if (candidate.gambarUrl) {
+      candidate.gambarUrl = await compressDataUrlImage(candidate.gambarUrl, opts);
+    }
+    if (candidate.gambarUrl2) {
+      candidate.gambarUrl2 = await compressDataUrlImage(candidate.gambarUrl2, opts);
+    }
+    if (candidate.opsiGambar && typeof candidate.opsiGambar === 'object') {
+      const nextOpsiGambar: Record<string, string> = {};
+      for (const [k, v] of Object.entries(candidate.opsiGambar)) {
+        nextOpsiGambar[k] = v ? await compressDataUrlImage(v, opts) : v;
+      }
+      candidate.opsiGambar = nextOpsiGambar;
+    }
+    if (estimateBytes(candidate) <= SAFE_DOC_BYTES) {
+      return candidate;
+    }
+  }
+
+  return candidate;
+}
+
 /**
  * Menyimpan satu butir soal TKA secara langsung dan real-time ke koleksi 'tka_questions' di Firestore.
  */
@@ -67,16 +108,17 @@ export async function saveSingleTkaQuestionToFirestore(
 ): Promise<boolean> {
   try {
     const questionId = sanitizeQuestionId(question.id);
+    const sizeSafeQuestion = await ensureTkaQuestionWithinFirestoreLimit(question);
     const docRef = doc(db, TKA_QUESTIONS_COLLECTION, questionId);
     const cleanQuestion = stripUndefinedDeep({
-      ...question,
+      ...sizeSafeQuestion,
       id: questionId,
       ...(typeof orderIndex === 'number' ? { orderIndex } : {}),
       updatedAt: new Date().toISOString(),
       serverTime: serverTimestamp(),
     });
     await setDoc(docRef, cleanQuestion, { merge: true });
-    localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+    safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
     return true;
   } catch (error) {
     console.error(`Gagal menyimpan soal TKA ${question.id} ke Firestore:`, error);
@@ -91,7 +133,7 @@ export async function deleteTkaQuestionFromFirestore(questionId: string): Promis
   try {
     const safeId = sanitizeQuestionId(questionId);
     await deleteDoc(doc(db, TKA_QUESTIONS_COLLECTION, safeId));
-    localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+    safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
     return true;
   } catch (error) {
     console.error(`Gagal menghapus soal TKA ${questionId} dari Firestore:`, error);
@@ -108,9 +150,12 @@ export async function saveTkaQuestionsBatchToFirestore(
 ): Promise<boolean> {
   try {
     if (questions && questions.length > 0) {
+      const sizeSafeQuestions = await Promise.all(
+        questions.map((q) => ensureTkaQuestionWithinFirestoreLimit(q))
+      );
       const CHUNK_SIZE = 20;
-      for (let i = 0; i < questions.length; i += CHUNK_SIZE) {
-        const chunk = questions.slice(i, i + CHUNK_SIZE);
+      for (let i = 0; i < sizeSafeQuestions.length; i += CHUNK_SIZE) {
+        const chunk = sizeSafeQuestions.slice(i, i + CHUNK_SIZE);
         const batch = writeBatch(db);
         chunk.forEach((q, offset) => {
           const orderIndex = startOrderIndex + i + offset;
@@ -128,7 +173,7 @@ export async function saveTkaQuestionsBatchToFirestore(
         await batch.commit();
       }
     }
-    localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+    safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
     return true;
   } catch (error) {
     console.error('Gagal menyimpan batch soal TKA ke Firestore:', error);
@@ -171,7 +216,7 @@ export async function replaceTkaQuestionsInFirestore(
       await saveTkaQuestionsBatchToFirestore(normalized);
     }
 
-    localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+    safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
     runWithoutStorageSync(() => {
       saveStoredTKAQuestions(normalized);
     });
@@ -254,7 +299,7 @@ export async function saveTkaSubmissionToFirestore(submission: TKASubmissionItem
       serverTime: serverTimestamp(),
     });
     await setDoc(doc(db, TKA_SUBMISSIONS_COLLECTION, docId), cleanSub, { merge: true });
-    localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+    safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
     return true;
   } catch (error) {
     console.error('Gagal menyimpan hasil TKA ke Firestore:', error);
@@ -286,7 +331,7 @@ export async function saveTkaSubmissionsBatchToFirestore(
       });
       await batch.commit();
     }
-    localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+    safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
     return true;
   } catch (error) {
     console.error('Gagal menyimpan batch hasil TKA ke Firestore:', error);
@@ -308,7 +353,7 @@ export async function clearTkaSubmissionsInFirestore(): Promise<boolean> {
         await batch.commit();
       }
     }
-    localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+    safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
     return true;
   } catch (error) {
     console.error('Gagal menghapus koleksi tka_submissions di Firestore:', error);
@@ -337,7 +382,7 @@ export async function deleteTkaSubmissionsByPaketInFirestore(paketName: string):
         await batch.commit();
       }
     }
-    localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+    safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
     return true;
   } catch (error) {
     console.error(`Gagal menghapus submission paket ${paketName} di Firestore:`, error);

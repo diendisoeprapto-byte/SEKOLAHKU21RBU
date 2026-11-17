@@ -730,7 +730,7 @@ export const CBTTab: React.FC<Props> = ({
     }
 
     const questionData: CBTQuestion = {
-      id: editingQuestionId || `soal_${Date.now()}`,
+      id: editingQuestionId || `soal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       cpId: currentCp.id,
       tpId: currentTp?.id || 'TP 1',
       tipe: selectedTipeSoal,
@@ -886,9 +886,11 @@ export const CBTTab: React.FC<Props> = ({
         return;
       }
 
+      const importSalt = Math.random().toString(36).slice(2, 6);
+      const importTs = Date.now();
       const importedWithMeta = res.questions.slice(0, remainingSlots).map((q, idx) => ({
         ...q,
-        id: `soal_docx_${Date.now()}_${idx + 1}`,
+        id: `soal_docx_${importTs}_${idx + 1}_${importSalt}`,
         cpId: currentCp.id,
         tpId: currentTp?.id || 'TP 1',
         pembahasan: q.pembahasan || `Impor Word (.docx) • ${selectedPaket} (${selectedSubPaket})`,

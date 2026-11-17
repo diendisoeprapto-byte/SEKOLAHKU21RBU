@@ -19,6 +19,7 @@ import {
 import {
   getStoredProfile,
   getStoredTeachers,
+  saveStoredTeachers,
   getStoredStudents,
   saveStoredStudents,
   getStoredSubjects,
@@ -36,10 +37,14 @@ import {
   saveStoredCBTExams,
   getStoredTKAQuestions,
   saveStoredTKAQuestions,
+  getStoredTKASubmissions,
+  saveStoredTKASubmissions,
   getStoredExamResultsResetMeta,
   mergeExamResultsResetMeta,
   filterExamResultsByResetMeta,
   runWithoutStorageSync,
+  safeSetLocalStorage,
+  safeRemoveLocalStorage,
   AttendanceRecordItem,
 } from './storage';
 import {
@@ -231,16 +236,21 @@ export function collectPersistentLocalBackup(options?: {
   excludeLargeCollections?: boolean;
 }): Record<string, any> {
   const backupData: Record<string, any> = {};
+  const largeKeys = new Set([
+    'sekolahku_students',
+    'sekolahku_teachers',
+    'sekolahku_attendance_records',
+    'sekolahku_cbt_exams',
+    'sekolahku_tka_questions',
+    'sekolahku_tka_submissions',
+  ]);
+
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (!key || !key.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(key)) continue;
-    if (
-      options?.excludeLargeCollections &&
-      (key === 'sekolahku_students' ||
-        key === 'sekolahku_attendance_records' ||
-        key === 'sekolahku_cbt_exams' ||
-        key === 'sekolahku_tka_questions')
-    ) {
+    if (!key || !key.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(key) || key.endsWith('_in_idb')) {
+      continue;
+    }
+    if (options?.excludeLargeCollections && largeKeys.has(key)) {
       continue;
     }
     const raw = localStorage.getItem(key);
@@ -251,6 +261,16 @@ export function collectPersistentLocalBackup(options?: {
       backupData[key] = raw;
     }
   }
+
+  if (!options?.excludeLargeCollections) {
+    backupData.sekolahku_students = getStoredStudents();
+    backupData.sekolahku_teachers = getStoredTeachers();
+    backupData.sekolahku_attendance_records = getStoredAttendance();
+    backupData.sekolahku_cbt_exams = getStoredCBTExams();
+    backupData.sekolahku_tka_questions = getStoredTKAQuestions();
+    backupData.sekolahku_tka_submissions = getStoredTKASubmissions();
+  }
+
   return backupData;
 }
 
@@ -340,13 +360,13 @@ export function applyBackupMapToLocalStorage(
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if (!k || !k.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(k)) continue;
+        if (!k || !k.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(k) || k.endsWith('_in_idb')) continue;
         if (k === 'sekolahku_admin_password' && dataMap[k] === undefined) continue;
         if (dataMap[k] === undefined) {
           keysToRemove.push(k);
         }
       }
-      keysToRemove.forEach((k) => localStorage.removeItem(k));
+      keysToRemove.forEach((k) => safeRemoveLocalStorage(k));
     }
 
     const isPartialRealtimeSync = !options?.replaceAllNonSession;
@@ -365,14 +385,14 @@ export function applyBackupMapToLocalStorage(
       ? mergeExamResultsResetMeta(getStoredExamResultsResetMeta(), incomingResetMeta)
       : incomingResetMeta || {};
     if (Object.keys(effectiveResetMeta).length > 0) {
-      localStorage.setItem('sekolahku_exam_results_reset_meta', JSON.stringify(effectiveResetMeta));
+      safeSetLocalStorage('sekolahku_exam_results_reset_meta', JSON.stringify(effectiveResetMeta));
       // Pangkas langsung hasil lokal lama yang sudah di-reset dari perangkat lain
       try {
         const rawLocalCbt = localStorage.getItem('sekolahku_cbt_results');
         if (rawLocalCbt) {
           const parsedCbt = JSON.parse(rawLocalCbt);
           if (Array.isArray(parsedCbt)) {
-            localStorage.setItem(
+            safeSetLocalStorage(
               'sekolahku_cbt_results',
               JSON.stringify(filterExamResultsByResetMeta(parsedCbt, undefined, effectiveResetMeta))
             );
@@ -382,7 +402,7 @@ export function applyBackupMapToLocalStorage(
         if (rawLocalTka) {
           const parsedTka = JSON.parse(rawLocalTka);
           if (Array.isArray(parsedTka)) {
-            localStorage.setItem(
+            safeSetLocalStorage(
               'sekolahku_tka_results',
               JSON.stringify(filterExamResultsByResetMeta(parsedTka, 'tka', effectiveResetMeta))
             );
@@ -393,7 +413,7 @@ export function applyBackupMapToLocalStorage(
 
     let count = 0;
     Object.keys(dataMap).forEach((key) => {
-      if (!key.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(key)) return;
+      if (!key.startsWith('sekolahku_') || SESSION_ONLY_KEYS.has(key) || key.endsWith('_in_idb')) return;
       if (key === 'sekolahku_exam_results_reset_meta' && isPartialRealtimeSync) return;
       const val = dataMap[key];
       if (val === undefined || val === null) return;
@@ -423,7 +443,7 @@ export function applyBackupMapToLocalStorage(
             nestedKey,
             options?.currentStudentId
           );
-          localStorage.setItem(key, JSON.stringify(merged));
+          safeSetLocalStorage(key, JSON.stringify(merged));
           count++;
           return;
         }
@@ -443,7 +463,7 @@ export function applyBackupMapToLocalStorage(
           const cleanLocal = filterExamResultsByResetMeta(localArr, catHint, effectiveResetMeta);
           const cleanIncoming = filterExamResultsByResetMeta(val, catHint, effectiveResetMeta);
           const mergedArr = mergeExamResultsArrays(cleanLocal, cleanIncoming);
-          localStorage.setItem(key, JSON.stringify(mergedArr));
+          safeSetLocalStorage(key, JSON.stringify(mergedArr));
           count++;
           return;
         }
@@ -474,16 +494,47 @@ export function applyBackupMapToLocalStorage(
               };
             }
           });
-          localStorage.setItem(key, JSON.stringify(mergedAssess));
+          safeSetLocalStorage(key, JSON.stringify(mergedAssess));
           count++;
           return;
         }
       }
 
+      if (key === 'sekolahku_tka_questions' && Array.isArray(val)) {
+        saveStoredTKAQuestions(val);
+        count++;
+        return;
+      }
+      if (key === 'sekolahku_cbt_exams' && Array.isArray(val)) {
+        saveStoredCBTExams(val);
+        count++;
+        return;
+      }
+      if (key === 'sekolahku_students' && Array.isArray(val)) {
+        saveStoredStudents(val);
+        count++;
+        return;
+      }
+      if (key === 'sekolahku_teachers' && Array.isArray(val)) {
+        saveStoredTeachers(val);
+        count++;
+        return;
+      }
+      if (key === 'sekolahku_attendance_records' && typeof val === 'object') {
+        saveStoredAttendance(val);
+        count++;
+        return;
+      }
+      if (key === 'sekolahku_tka_submissions' && Array.isArray(val)) {
+        saveStoredTKASubmissions(val);
+        count++;
+        return;
+      }
+
       if (typeof val === 'object') {
-        localStorage.setItem(key, JSON.stringify(val));
+        safeSetLocalStorage(key, JSON.stringify(val));
       } else {
-        localStorage.setItem(key, String(val));
+        safeSetLocalStorage(key, String(val));
       }
       count++;
     });
@@ -539,7 +590,7 @@ export async function pushAllDataToCloud(
       updatedBy: username,
     });
 
-    localStorage.setItem(LAST_PUSHED_VERSION_KEY, String(nextVersion));
+    safeSetLocalStorage(LAST_PUSHED_VERSION_KEY, String(nextVersion));
 
     await setDoc(
       docRef,
@@ -553,7 +604,7 @@ export async function pushAllDataToCloud(
       },
       { merge: true }
     );
-    localStorage.setItem('sekolahku_last_cloud_sync', new Date().toISOString());
+    safeSetLocalStorage('sekolahku_last_cloud_sync', new Date().toISOString());
     return true;
   } catch (error) {
     console.error('Gagal mengirim data ke cloud:', error);
@@ -570,7 +621,7 @@ export async function pullAllDataFromCloud(): Promise<CloudSyncPayload | null> {
     const snapshot = await getDoc(docRef);
     if (snapshot.exists()) {
       const data = snapshot.data() as CloudSyncPayload;
-      localStorage.setItem('sekolahku_last_cloud_sync', new Date().toISOString());
+      safeSetLocalStorage('sekolahku_last_cloud_sync', new Date().toISOString());
       return data;
     }
     return null;
@@ -726,10 +777,10 @@ async function pushSnapshotAndPrimaryDocs(
 
   const prevRev = Number(localStorage.getItem(LAST_SNAPSHOT_REV_KEY) || 0);
   const revision = Math.max(Date.now(), prevRev + 1);
-  localStorage.setItem(LAST_SNAPSHOT_REV_KEY, String(revision));
-  localStorage.setItem(LAST_PUSHED_VERSION_KEY, String(revision));
+  safeSetLocalStorage(LAST_SNAPSHOT_REV_KEY, String(revision));
+  safeSetLocalStorage(LAST_PUSHED_VERSION_KEY, String(revision));
   if (options?.restoreVersion) {
-    localStorage.setItem(LAST_RESTORE_VERSION_KEY, String(options.restoreVersion));
+    safeSetLocalStorage(LAST_RESTORE_VERSION_KEY, String(options.restoreVersion));
   }
 
   const primaryPayload = buildSizeSafePrimaryPayload({
@@ -771,7 +822,7 @@ async function pushSnapshotAndPrimaryDocs(
     { merge: true }
   );
 
-  localStorage.setItem('sekolahku_last_cloud_sync', new Date().toISOString());
+  safeSetLocalStorage('sekolahku_last_cloud_sync', new Date().toISOString());
   return revision;
 }
 
@@ -813,8 +864,8 @@ export function scheduleRealtimeModuleSync(username?: string) {
             return 'admin';
           }
         })();
-      const fullBackupMap = collectPersistentLocalBackup();
-      await writeCloudBackupDocs(fullBackupMap, actor);
+      const slimBackupMap = collectPersistentLocalBackup({ excludeLargeCollections: true });
+      await writeCloudBackupDocs(slimBackupMap, actor);
       await pushSnapshotAndPrimaryDocs(actor);
     } catch (err) {
       console.warn('Auto module realtime sync warning:', err);
@@ -992,30 +1043,30 @@ export async function pullBackupFromCloudRealtime(): Promise<{
       restoredKeysCount += applyBackupMapToLocalStorage(primaryCloud.localStorageSnapshot);
     }
     if (primaryCloud?.profile) {
-      localStorage.setItem('sekolahku_school_profile', JSON.stringify(primaryCloud.profile));
+      safeSetLocalStorage('sekolahku_school_profile', JSON.stringify(primaryCloud.profile));
       restoredKeysCount++;
     }
     if (primaryCloud?.teachers) {
-      localStorage.setItem('sekolahku_teachers', JSON.stringify(primaryCloud.teachers));
+      saveStoredTeachers(primaryCloud.teachers);
       restoredKeysCount++;
     }
     if (primaryCloud?.subjectsByClass) {
-      localStorage.setItem(
+      safeSetLocalStorage(
         'sekolahku_subjects_by_class',
         JSON.stringify(primaryCloud.subjectsByClass)
       );
       restoredKeysCount++;
     }
     if (primaryCloud?.reportNotes) {
-      localStorage.setItem('sekolahku_report_notes', JSON.stringify(primaryCloud.reportNotes));
+      safeSetLocalStorage('sekolahku_report_notes', JSON.stringify(primaryCloud.reportNotes));
       restoredKeysCount++;
     }
     if (primaryCloud?.ekskulList) {
-      localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(primaryCloud.ekskulList));
+      safeSetLocalStorage('sekolahku_ekskul_list', JSON.stringify(primaryCloud.ekskulList));
       restoredKeysCount++;
     }
     if (primaryCloud?.penilaianEkskul) {
-      localStorage.setItem(
+      safeSetLocalStorage(
         'sekolahku_penilaian_ekskul',
         JSON.stringify(primaryCloud.penilaianEkskul)
       );
@@ -1028,32 +1079,32 @@ export async function pullBackupFromCloudRealtime(): Promise<{
 
     if (firestoreStudents.length > 0) {
       saveStoredStudents(firestoreStudents);
-      localStorage.setItem('sekolahku_students_seeded', 'true');
+      safeSetLocalStorage('sekolahku_students_seeded', 'true');
     }
     if (firestoreTeachers.length > 0) {
-      localStorage.setItem('sekolahku_teachers', JSON.stringify(firestoreTeachers));
-      localStorage.setItem('sekolahku_teachers_seeded', 'true');
+      saveStoredTeachers(firestoreTeachers);
+      safeSetLocalStorage('sekolahku_teachers_seeded', 'true');
     }
     if (Object.keys(firestoreAttendance).length > 0) {
       saveStoredAttendance(firestoreAttendance);
-      localStorage.setItem('sekolahku_attendance_seeded', 'true');
+      safeSetLocalStorage('sekolahku_attendance_seeded', 'true');
     }
     if (firestoreKaldik && firestoreKaldik.length > 0) {
       saveStoredKaldik(firestoreKaldik);
     }
     if (firestoreTkaQuestions && firestoreTkaQuestions.length > 0) {
       saveStoredTKAQuestions(firestoreTkaQuestions);
-      localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+      safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
     }
     if (firestoreCbtExams && firestoreCbtExams.length > 0) {
       saveStoredCBTExams(firestoreCbtExams);
-      localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+      safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
     }
 
     const rev = primaryCloud?.snapshotRevision || primaryCloud?.restoreVersion || primaryCloud?.version;
     if (rev) {
-      localStorage.setItem(LAST_SNAPSHOT_REV_KEY, String(rev));
-      localStorage.setItem(LAST_PUSHED_VERSION_KEY, String(rev));
+      safeSetLocalStorage(LAST_SNAPSHOT_REV_KEY, String(rev));
+      safeSetLocalStorage(LAST_PUSHED_VERSION_KEY, String(rev));
     }
   });
 

@@ -552,18 +552,16 @@ export const TKATabs: React.FC<Props> = ({
   ) => {
     const safeMins = Math.max(1, Math.min(300, Math.round(Number(minutes) || 60)));
     const key = getTKADurationKey(paket, mapel);
-    setTkaDurations((prev) => {
-      const next = { ...prev, [key]: safeMins };
-      saveStoredTKADurations(next);
-      pushAllDataToCloud(
-        {
-          tkaDurations: next,
-          localStorageSnapshot: collectPersistentLocalBackup({ excludeLargeCollections: true }),
-        },
-        activeUser?.name || 'admin'
-      );
-      return next;
-    });
+    const next = { ...tkaDurations, [key]: safeMins };
+    setTkaDurations(next);
+    saveStoredTKADurations(next);
+    pushAllDataToCloud(
+      {
+        tkaDurations: next,
+        localStorageSnapshot: collectPersistentLocalBackup({ excludeLargeCollections: true }),
+      },
+      activeUser?.name || 'admin'
+    ).catch(() => {});
     if (!silent) {
       showToast(
         `Waktu pengerjaan ${paket}${mapel && mapel !== 'all' ? ` (${mapel})` : ' (Semua Mapel)'} diatur menjadi ${safeMins} menit!`,
@@ -1048,6 +1046,8 @@ export const TKATabs: React.FC<Props> = ({
     const autoEydPertanyaan = convertFractions(formPertanyaan);
     const cleanJudulTeks = formJudulTeks.trim() || undefined;
 
+    const existingSavedDuration = getTKADurationMinutes(tkaDurations, formPaket, formMapel);
+
     if (editingTkaQuestionId) {
       const updated = tkaQuestions.map((q) => {
         if (q.id === editingTkaQuestionId) {
@@ -1076,7 +1076,15 @@ export const TKATabs: React.FC<Props> = ({
       const editedItem = editedIdx >= 0 ? updated[editedIdx] : undefined;
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
-      handleSaveTkaDuration(formPaket, formMapel, formDurasiMenit, true);
+      if (existingSavedDuration !== formDurasiMenit) {
+        handleSaveTkaDuration(formPaket, formMapel, formDurasiMenit, true);
+      }
+      if (filterJenisTka !== 'all' && filterJenisTka !== formPaket) {
+        setFilterJenisTka(formPaket);
+      }
+      if (filterMapelTka !== 'all' && filterMapelTka !== formMapel) {
+        setFilterMapelTka(formMapel);
+      }
       handleResetForm();
 
       const cloudOk = editedItem
@@ -1089,7 +1097,7 @@ export const TKATabs: React.FC<Props> = ({
       showToast('Perubahan butir soal TKA & waktu pengerjaan berhasil diperbarui!', 'success');
     } else {
       const newQuestion: TKAQuestion = {
-        id: `tka_q_${Date.now()}`,
+        id: `tka_q_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         jenisTka: formPaket,
         mapel: formMapel,
         cpId: activeCp?.id || 'cp_tka_01',
@@ -1113,7 +1121,15 @@ export const TKATabs: React.FC<Props> = ({
       ).length;
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
-      handleSaveTkaDuration(formPaket, formMapel, formDurasiMenit, true);
+      if (existingSavedDuration !== formDurasiMenit) {
+        handleSaveTkaDuration(formPaket, formMapel, formDurasiMenit, true);
+      }
+      if (filterJenisTka !== 'all' && filterJenisTka !== formPaket) {
+        setFilterJenisTka(formPaket);
+      }
+      if (filterMapelTka !== 'all' && filterMapelTka !== formMapel) {
+        setFilterMapelTka(formMapel);
+      }
       handleResetForm();
 
       const cloudOk = await saveSingleTkaQuestionToFirestore(newQuestion, updated.length - 1);
@@ -1169,6 +1185,12 @@ export const TKATabs: React.FC<Props> = ({
       const updated = [...tkaQuestions, ...accepted];
       setTkaQuestions(updated);
       saveStoredTKAQuestions(updated);
+      if (filterJenisTka !== 'all' && filterJenisTka !== formPaket) {
+        setFilterJenisTka(formPaket);
+      }
+      if (filterMapelTka !== 'all' && filterMapelTka !== formMapel) {
+        setFilterMapelTka(formMapel);
+      }
 
       const cloudOk = await saveTkaQuestionsBatchToFirestore(accepted, startIndex);
       const skippedCount = convertedAll.length - accepted.length;
@@ -1321,7 +1343,7 @@ export const TKATabs: React.FC<Props> = ({
             }
 
             importedQuestions.push({
-              id: `tka_imp_${Date.now()}_${idx}`,
+              id: `tka_imp_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
               jenisTka: jenis,
               mapel,
               tipe,
@@ -1343,6 +1365,8 @@ export const TKATabs: React.FC<Props> = ({
           const updated = [...tkaQuestions, ...importedQuestions];
           setTkaQuestions(updated);
           saveStoredTKAQuestions(updated);
+          setFilterJenisTka('all');
+          setFilterMapelTka('all');
           const cloudOk = await saveTkaQuestionsBatchToFirestore(importedQuestions, startIndex);
           if (!cloudOk) {
             showToast(
@@ -3150,6 +3174,61 @@ export const TKATabs: React.FC<Props> = ({
 
           {/* ================= LIST OF CREATED TKA QUESTIONS (UNDERNEATH THE FORM) ================= */}
           <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+            {tkaPackageBuckets.length > 0 && (
+              <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200 space-y-2">
+                <span className="text-[11px] font-extrabold text-amber-900 uppercase tracking-wider block">
+                  Daftar Paket &amp; Mapel TKA Tersimpan (
+                  {tkaPackageBuckets.filter((b) => isTKAPackageActive(tkaActivePackages, b.jenisTka, b.mapel)).length} Aktif dari {tkaPackageBuckets.length} Paket):
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterJenisTka('all');
+                      setFilterMapelTka('all');
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer border inline-flex items-center gap-1.5 ${
+                      filterJenisTka === 'all' && filterMapelTka === 'all'
+                        ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-amber-300'
+                    }`}
+                  >
+                    <span>Semua Paket ({tkaQuestions.length} Soal)</span>
+                  </button>
+                  {tkaPackageBuckets.map((b) => {
+                    const isPkgOn = isTKAPackageActive(tkaActivePackages, b.jenisTka, b.mapel);
+                    const isCurrentFilter =
+                      filterJenisTka === b.jenisTka && filterMapelTka === b.mapel;
+                    return (
+                      <button
+                        key={`top_chip_${b.jenisTka}_${b.mapel}`}
+                        type="button"
+                        onClick={() => {
+                          setFilterJenisTka(b.jenisTka);
+                          setFilterMapelTka(b.mapel);
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer border inline-flex items-center gap-2 ${
+                          isCurrentFilter
+                            ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:border-amber-300'
+                        }`}
+                      >
+                        <span
+                          className={`w-2 h-2 rounded-full shrink-0 ${
+                            isPkgOn ? 'bg-emerald-400' : 'bg-slate-400'
+                          }`}
+                        />
+                        <span>
+                          {b.jenisTka} • {b.mapel} — {b.count}/{MAX_QUESTIONS_PER_PACKAGE} Soal (
+                          {isPkgOn ? 'Aktif' : 'Nonaktif'})
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-base font-display font-black text-slate-900 flex items-center gap-2">

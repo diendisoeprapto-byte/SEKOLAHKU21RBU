@@ -36,6 +36,8 @@ export async function parseQuestionsFromDocx(file: File): Promise<DocxParseResul
     }
 
     const questions: CBTQuestion[] = [];
+    const batchSalt = Math.random().toString(36).slice(2, 6);
+    let seqCounter = 0;
 
     // Pisahkan teks berdasarkan pola nomor soal: "1.", "1)", "Soal 1:", "No. 1"
     const splitRegex = /(?:^|\n)\s*(?:(?:Soal|No\.?)?\s*(\d+)[\.\)]\s*)/i;
@@ -46,15 +48,22 @@ export async function parseQuestionsFromDocx(file: File): Promise<DocxParseResul
         const num = parts[i];
         const content = parts[i + 1]?.trim() || '';
         if (!content) continue;
+        seqCounter += 1;
 
-        const q = parseSingleQuestionBlock(content, `q_docx_${Date.now()}_${num}`);
+        const q = parseSingleQuestionBlock(
+          content,
+          `q_docx_${Date.now()}_${seqCounter}_${num}_${batchSalt}`
+        );
         if (q) questions.push(q);
       }
     } else {
       // Alternatif: pemisahan baris ganda
       const blocks = rawText.split(/\n\s*\n/).filter((b) => b.trim().length > 10);
       blocks.forEach((block, idx) => {
-        const q = parseSingleQuestionBlock(block.trim(), `q_docx_${Date.now()}_${idx + 1}`);
+        const q = parseSingleQuestionBlock(
+          block.trim(),
+          `q_docx_${Date.now()}_${idx + 1}_${batchSalt}`
+        );
         if (q) questions.push(q);
       });
     }
@@ -176,9 +185,11 @@ export function convertToTkaQuestions(
   mapel: string,
   jenisTka: TKAJenis
 ): TKAQuestion[] {
+  const batchSalt = Math.random().toString(36).slice(2, 6);
+  const ts = Date.now();
   return questions.map((q, idx) => ({
     ...q,
-    id: `tka_docx_${Date.now()}_${idx + 1}`,
+    id: `tka_docx_${ts}_${idx + 1}_${batchSalt}`,
     mapel,
     jenisTka,
   }));

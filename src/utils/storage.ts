@@ -2,6 +2,7 @@ import { SchoolProfile, Teacher, Student, Subject, KaldikDay, AssessmentData, CB
 import { DEFAULT_SCHOOL_PROFILE, DEFAULT_TEACHERS, DEFAULT_STUDENTS, DEFAULT_SUBJECTS, DEFAULT_KALDIK_HOLIDAYS, DEFAULT_CBT_EXAM, DEFAULT_TKA_CP_TP, DEFAULT_TKA_QUESTIONS } from '../data/defaultData';
 import { getDefaultSubjectsForGrade, getGradeNumberFromClass } from '../data/classCurriculumData';
 import { getLocalTodayStr } from './dateUtils';
+import { idbGet, idbRemove, idbSet } from './idbStorage';
 
 const STORAGE_KEYS = {
   PROFILE: 'sekolahku_school_profile',
@@ -34,15 +35,171 @@ const STORAGE_KEYS = {
 
 export const MAX_QUESTIONS_PER_PACKAGE = 50;
 
-const safeSetLocalStorage = (key: string, serialized: string): boolean => {
+const LARGE_COLLECTION_THRESHOLD_CHARS = 750_000;
+const LARGE_COLLECTION_KEYS = [
+  STORAGE_KEYS.TKA_QUESTIONS,
+  STORAGE_KEYS.CBT_EXAMS,
+  STORAGE_KEYS.STUDENTS,
+  STORAGE_KEYS.TEACHERS,
+  STORAGE_KEYS.ATTENDANCE,
+  STORAGE_KEYS.TKA_SUBMISSIONS,
+] as const;
+
+const inMemoryLargeCache: Record<string, any> = {};
+const cloudHydratedLargeKeys = new Set<string>();
+
+export const safeSetLocalStorage = (key: string, serialized: string): boolean => {
   try {
     localStorage.setItem(key, serialized);
     return true;
   } catch (err) {
-    console.warn(`Penyimpanan lokal penuh untuk ${key}, data tetap dilanjutkan ke Firestore:`, err);
+    console.warn(`Penyimpanan lokal penuh untuk ${key}, data tetap dilanjutkan:`, err);
     return false;
   }
 };
+
+export const safeRemoveLocalStorage = (key: string): void => {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Ignore storage removal failures
+  }
+};
+
+const idbMarkerForKey = (key: string) => `${key}_in_idb`;
+
+const saveHeavyCollection = <T>(key: string, value: T): boolean => {
+  inMemoryLargeCache[key] = value;
+  void idbSet(key, value);
+
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized.length <= LARGE_COLLECTION_THRESHOLD_CHARS) {
+      const ok = safeSetLocalStorage(key, serialized);
+      if (ok) {
+        safeRemoveLocalStorage(idbMarkerForKey(key));
+        return true;
+      }
+    }
+    // Data besar (>750 KB) atau localStorage hampir penuh -> kosongkan key berat dari localStorage agar kuota lega
+    safeRemoveLocalStorage(key);
+    safeSetLocalStorage(idbMarkerForKey(key), 'true');
+  } catch (err) {
+    console.warn(`Gagal serialisasi cache lokal ${key}, disimpan di memori & IndexedDB:`, err);
+    safeRemoveLocalStorage(key);
+    safeSetLocalStorage(idbMarkerForKey(key), 'true');
+  }
+  return true;
+};
+
+const getHeavyCollection = <T>(key: string, fallback: T | (() => T), emptyIfOffloaded: T): T => {
+  if (Object.prototype.hasOwnProperty.call(inMemoryLargeCache, key)) {
+    return inMemoryLargeCache[key] as T;
+  }
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw !== null) {
+      const parsed = JSON.parse(raw) as T;
+      inMemoryLargeCache[key] = parsed;
+      return parsed;
+    }
+    if (localStorage.getItem(idbMarkerForKey(key)) === 'true') {
+      return emptyIfOffloaded;
+    }
+  } catch {
+    // Fallback to default below
+  }
+  return typeof fallback === 'function' ? (fallback as () => T)() : fallback;
+};
+
+export const markLargeCollectionHydratedFromCloud = (key: string) => {
+  cloudHydratedLargeKeys.add(key);
+};
+
+export const hasStoredTKAQuestionsLocal = (): boolean => {
+  return (
+    Object.prototype.hasOwnProperty.call(inMemoryLargeCache, STORAGE_KEYS.TKA_QUESTIONS) ||
+    localStorage.getItem(STORAGE_KEYS.TKA_QUESTIONS) !== null ||
+    localStorage.getItem(idbMarkerForKey(STORAGE_KEYS.TKA_QUESTIONS)) === 'true'
+  );
+};
+
+export const hasStoredCBTExamsLocal = (): boolean => {
+  return (
+    Object.prototype.hasOwnProperty.call(inMemoryLargeCache, STORAGE_KEYS.CBT_EXAMS) ||
+    localStorage.getItem(STORAGE_KEYS.CBT_EXAMS) !== null ||
+    localStorage.getItem(idbMarkerForKey(STORAGE_KEYS.CBT_EXAMS)) === 'true'
+  );
+};
+
+export interface HydrateIDBCallbacks {
+  onStudents?: (students: Student[]) => void;
+  onTeachers?: (teachers: Teacher[]) => void;
+  onAttendance?: (records: Record<string, AttendanceRecordItem>) => void;
+  onTkaQuestions?: (questions: TKAQuestion[]) => void;
+  onCbtExams?: (exams: CBTExam[]) => void;
+  onTkaSubmissions?: (subs: TKASubmissionItem[]) => void;
+}
+
+export const hydrateLargeCollectionsFromIDB = async (callbacks?: HydrateIDBCallbacks): Promise<void> => {
+  const results = await Promise.all(LARGE_COLLECTION_KEYS.map((key) => idbGet<any>(key)));
+
+  LARGE_COLLECTION_KEYS.forEach((key, idx) => {
+    const idbVal = results[idx];
+    if (idbVal === null || idbVal === undefined) return;
+    if (cloudHydratedLargeKeys.has(key)) return;
+
+    const isOffloaded = localStorage.getItem(idbMarkerForKey(key)) === 'true';
+    const hasMemory = Object.prototype.hasOwnProperty.call(inMemoryLargeCache, key);
+    if (hasMemory && !isOffloaded) return;
+
+    inMemoryLargeCache[key] = idbVal;
+
+    if (key === STORAGE_KEYS.TKA_QUESTIONS && Array.isArray(idbVal)) {
+      callbacks?.onTkaQuestions?.(idbVal);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
+      }
+    } else if (key === STORAGE_KEYS.CBT_EXAMS && Array.isArray(idbVal)) {
+      callbacks?.onCbtExams?.(idbVal);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
+      }
+    } else if (key === STORAGE_KEYS.STUDENTS && Array.isArray(idbVal)) {
+      callbacks?.onStudents?.(idbVal);
+    } else if (key === STORAGE_KEYS.TEACHERS && Array.isArray(idbVal)) {
+      callbacks?.onTeachers?.(idbVal);
+    } else if (key === STORAGE_KEYS.ATTENDANCE && idbVal && typeof idbVal === 'object') {
+      callbacks?.onAttendance?.(idbVal);
+    } else if (key === STORAGE_KEYS.TKA_SUBMISSIONS && Array.isArray(idbVal)) {
+      callbacks?.onTkaSubmissions?.(idbVal);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
+      }
+    }
+  });
+};
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (!e.key) return;
+    if (e.key.endsWith('_in_idb')) {
+      const baseKey = e.key.slice(0, -'_in_idb'.length);
+      delete inMemoryLargeCache[baseKey];
+      cloudHydratedLargeKeys.delete(baseKey);
+      void hydrateLargeCollectionsFromIDB();
+      return;
+    }
+    if ((LARGE_COLLECTION_KEYS as readonly string[]).includes(e.key)) {
+      delete inMemoryLargeCache[e.key];
+      if (e.key === STORAGE_KEYS.TKA_QUESTIONS) {
+        window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
+      } else if (e.key === STORAGE_KEYS.CBT_EXAMS) {
+        window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
+      }
+    }
+  });
+}
 
 let storageMutationHook: ((key: string) => void) | null = null;
 let suppressStorageMutationHook = false;
@@ -71,12 +228,12 @@ export const getStoredAdminPassword = (): string => {
 };
 
 export const saveStoredAdminPassword = (password: string) => {
-  localStorage.setItem(STORAGE_KEYS.ADMIN_PASSWORD, password);
+  safeSetLocalStorage(STORAGE_KEYS.ADMIN_PASSWORD, password);
   notifyStorageMutation(STORAGE_KEYS.ADMIN_PASSWORD);
 };
 
 export const resetStoredAdminPassword = () => {
-  localStorage.setItem(STORAGE_KEYS.ADMIN_PASSWORD, 'admin');
+  safeSetLocalStorage(STORAGE_KEYS.ADMIN_PASSWORD, 'admin');
   notifyStorageMutation(STORAGE_KEYS.ADMIN_PASSWORD);
 };
 
@@ -91,39 +248,23 @@ export const getStoredProfile = (): SchoolProfile => {
 };
 
 export const saveStoredProfile = (profile: SchoolProfile) => {
-  localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(profile));
+  safeSetLocalStorage(STORAGE_KEYS.PROFILE, JSON.stringify(profile));
 };
 
 export const getStoredTeachers = (): Teacher[] => {
-  const data = localStorage.getItem(STORAGE_KEYS.TEACHERS);
-  if (!data) return DEFAULT_TEACHERS;
-  try {
-    return JSON.parse(data);
-  } catch {
-    return DEFAULT_TEACHERS;
-  }
+  return getHeavyCollection<Teacher[]>(STORAGE_KEYS.TEACHERS, DEFAULT_TEACHERS, []);
 };
 
 export const saveStoredTeachers = (teachers: Teacher[]) => {
-  try {
-    localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(teachers));
-  } catch (err) {
-    console.warn('Gagal menyimpan cache lokal guru/pegawai (kuota penuh):', err);
-  }
+  saveHeavyCollection(STORAGE_KEYS.TEACHERS, teachers);
 };
 
 export const getStoredStudents = (): Student[] => {
-  const data = localStorage.getItem(STORAGE_KEYS.STUDENTS);
-  if (!data) return DEFAULT_STUDENTS;
-  try {
-    return JSON.parse(data);
-  } catch {
-    return DEFAULT_STUDENTS;
-  }
+  return getHeavyCollection<Student[]>(STORAGE_KEYS.STUDENTS, DEFAULT_STUDENTS, []);
 };
 
 export const saveStoredStudents = (students: Student[]) => {
-  localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
+  saveHeavyCollection(STORAGE_KEYS.STUDENTS, students);
 };
 
 export const getStoredSubjectsByClass = (): Record<string, Subject[]> => {
@@ -159,7 +300,7 @@ export const getStoredSubjectsForClass = (kelasName: string): Subject[] => {
         if (kkaDefault) {
           const updated = [...existing, kkaDefault];
           allByClass[targetClass] = updated;
-          localStorage.setItem(STORAGE_KEYS.SUBJECTS_BY_CLASS, JSON.stringify(allByClass));
+          safeSetLocalStorage(STORAGE_KEYS.SUBJECTS_BY_CLASS, JSON.stringify(allByClass));
           return updated;
         }
       }
@@ -168,7 +309,7 @@ export const getStoredSubjectsForClass = (kelasName: string): Subject[] => {
   }
   // Fallback to tailored default for this grade
   allByClass[targetClass] = defaultList;
-  localStorage.setItem(STORAGE_KEYS.SUBJECTS_BY_CLASS, JSON.stringify(allByClass));
+  safeSetLocalStorage(STORAGE_KEYS.SUBJECTS_BY_CLASS, JSON.stringify(allByClass));
   return defaultList;
 };
 
@@ -176,8 +317,8 @@ export const saveStoredSubjectsForClass = (kelasName: string, subjects: Subject[
   const targetClass = kelasName || 'Kelas 6A';
   const allByClass = getStoredSubjectsByClass();
   allByClass[targetClass] = subjects;
-  localStorage.setItem(STORAGE_KEYS.SUBJECTS_BY_CLASS, JSON.stringify(allByClass));
-  localStorage.setItem(STORAGE_KEYS.SUBJECTS, JSON.stringify(subjects));
+  safeSetLocalStorage(STORAGE_KEYS.SUBJECTS_BY_CLASS, JSON.stringify(allByClass));
+  safeSetLocalStorage(STORAGE_KEYS.SUBJECTS, JSON.stringify(subjects));
   notifyStorageMutation(STORAGE_KEYS.SUBJECTS_BY_CLASS);
 };
 
@@ -205,7 +346,7 @@ export const getStoredKaldik = (): KaldikDay[] => {
 };
 
 export const saveStoredKaldik = (days: KaldikDay[]) => {
-  localStorage.setItem(STORAGE_KEYS.KALDIK, JSON.stringify(days));
+  safeSetLocalStorage(STORAGE_KEYS.KALDIK, JSON.stringify(days));
 };
 
 export interface AttendanceRecordItem {
@@ -216,36 +357,35 @@ export interface AttendanceRecordItem {
   time: string;
 }
 
-export const getStoredAttendance = (): Record<string, AttendanceRecordItem> => {
-  const data = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
-  if (!data) {
-    if (localStorage.getItem('sekolahku_attendance_seeded') === 'true') {
-      return {};
-    }
-    // Generate initial sample attendance records for students today
-    const today = getLocalTodayStr();
-    const initial: Record<string, AttendanceRecordItem> = {};
-    DEFAULT_STUDENTS.forEach((s, idx) => {
-      const status = idx === 3 ? 'S' : idx === 5 ? 'I' : 'H';
-      initial[`${today}_${s.id}`] = {
-        id: `${today}_${s.id}`,
-        studentId: s.id,
-        date: today,
-        status,
-        time: '06:45',
-      };
-    });
-    return initial;
-  }
-  try {
-    return JSON.parse(data);
-  } catch {
+const buildInitialAttendance = (): Record<string, AttendanceRecordItem> => {
+  if (localStorage.getItem('sekolahku_attendance_seeded') === 'true') {
     return {};
   }
+  const today = getLocalTodayStr();
+  const initial: Record<string, AttendanceRecordItem> = {};
+  DEFAULT_STUDENTS.forEach((s, idx) => {
+    const status = idx === 3 ? 'S' : idx === 5 ? 'I' : 'H';
+    initial[`${today}_${s.id}`] = {
+      id: `${today}_${s.id}`,
+      studentId: s.id,
+      date: today,
+      status,
+      time: '06:45',
+    };
+  });
+  return initial;
+};
+
+export const getStoredAttendance = (): Record<string, AttendanceRecordItem> => {
+  return getHeavyCollection<Record<string, AttendanceRecordItem>>(
+    STORAGE_KEYS.ATTENDANCE,
+    buildInitialAttendance,
+    {}
+  );
 };
 
 export const saveStoredAttendance = (records: Record<string, AttendanceRecordItem>) => {
-  localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(records));
+  saveHeavyCollection(STORAGE_KEYS.ATTENDANCE, records);
 };
 
 // Assessment counts map: key is `${year}_${semester}_${kelas}_${subjectId}`, value is number of AS (default 4)
@@ -271,7 +411,7 @@ export const setAssessmentCount = (key: string, count: number) => {
     }
   }
   parsed[key] = Math.max(1, count);
-  localStorage.setItem(STORAGE_KEYS.AS_COUNT, JSON.stringify(parsed));
+  safeSetLocalStorage(STORAGE_KEYS.AS_COUNT, JSON.stringify(parsed));
   notifyStorageMutation(STORAGE_KEYS.AS_COUNT);
 };
 
@@ -309,7 +449,7 @@ export const getStoredAssessments = (key: string): AssessmentData => {
 
 export const saveStoredAssessments = (key: string, data: AssessmentData) => {
   const storageKey = `${STORAGE_KEYS.ASSESSMENTS}_${key}`;
-  localStorage.setItem(storageKey, JSON.stringify(data));
+  safeSetLocalStorage(storageKey, JSON.stringify(data));
   notifyStorageMutation(storageKey);
 };
 
@@ -344,22 +484,16 @@ export const getStoredReportNotes = (): Record<string, StudentReportNotes> => {
 };
 
 export const saveStoredReportNotes = (notes: Record<string, StudentReportNotes>) => {
-  localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(notes));
+  safeSetLocalStorage(STORAGE_KEYS.NOTES, JSON.stringify(notes));
   notifyStorageMutation(STORAGE_KEYS.NOTES);
 };
 
 export const getStoredCBTExams = (): CBTExam[] => {
-  const data = localStorage.getItem(STORAGE_KEYS.CBT_EXAMS);
-  if (!data) return [DEFAULT_CBT_EXAM];
-  try {
-    return JSON.parse(data);
-  } catch {
-    return [DEFAULT_CBT_EXAM];
-  }
+  return getHeavyCollection<CBTExam[]>(STORAGE_KEYS.CBT_EXAMS, () => [DEFAULT_CBT_EXAM], []);
 };
 
 export const saveStoredCBTExams = (exams: CBTExam[]): boolean => {
-  const ok = safeSetLocalStorage(STORAGE_KEYS.CBT_EXAMS, JSON.stringify(exams));
+  const ok = saveHeavyCollection(STORAGE_KEYS.CBT_EXAMS, exams);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
   }
@@ -379,7 +513,7 @@ export const getStoredCBTActivePackages = (): Record<string, boolean> => {
 };
 
 export const saveStoredCBTActivePackages = (activeMap: Record<string, boolean>) => {
-  localStorage.setItem(STORAGE_KEYS.CBT_ACTIVE_PACKAGES, JSON.stringify(activeMap));
+  safeSetLocalStorage(STORAGE_KEYS.CBT_ACTIVE_PACKAGES, JSON.stringify(activeMap));
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
   }
@@ -398,7 +532,7 @@ export const getStoredCBTDurations = (): Record<string, number> => {
 };
 
 export const saveStoredCBTDurations = (durations: Record<string, number>) => {
-  localStorage.setItem(STORAGE_KEYS.CBT_DURATIONS, JSON.stringify(durations));
+  safeSetLocalStorage(STORAGE_KEYS.CBT_DURATIONS, JSON.stringify(durations));
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-cbt-durations-updated'));
     window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
@@ -528,7 +662,7 @@ export const getStoredExamResultsResetMeta = (): ExamResultsResetMeta => {
 };
 
 export const saveStoredExamResultsResetMeta = (meta: ExamResultsResetMeta) => {
-  localStorage.setItem(STORAGE_KEYS.EXAM_RESET_META, JSON.stringify(meta || {}));
+  safeSetLocalStorage(STORAGE_KEYS.EXAM_RESET_META, JSON.stringify(meta || {}));
   notifyStorageMutation(STORAGE_KEYS.EXAM_RESET_META);
 };
 
@@ -647,7 +781,7 @@ export const getStoredCBTResults = (): CBTExamResult[] => {
 };
 
 export const saveStoredCBTResults = (results: CBTExamResult[]) => {
-  localStorage.setItem(STORAGE_KEYS.CBT_RESULTS, JSON.stringify(results));
+  safeSetLocalStorage(STORAGE_KEYS.CBT_RESULTS, JSON.stringify(results));
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
   }
@@ -667,7 +801,7 @@ export const getStoredTKACpTp = (): TKACpTp[] => {
         const kkaCp = DEFAULT_TKA_CP_TP.find((c) => c.id === 'cp_tka_05');
         if (kkaCp) {
           const merged = [...parsed, kkaCp];
-          localStorage.setItem(STORAGE_KEYS.TKA_CP_TP, JSON.stringify(merged));
+          safeSetLocalStorage(STORAGE_KEYS.TKA_CP_TP, JSON.stringify(merged));
           return merged;
         }
       }
@@ -680,22 +814,16 @@ export const getStoredTKACpTp = (): TKACpTp[] => {
 };
 
 export const saveStoredTKACpTp = (cpList: TKACpTp[]) => {
-  localStorage.setItem(STORAGE_KEYS.TKA_CP_TP, JSON.stringify(cpList));
+  safeSetLocalStorage(STORAGE_KEYS.TKA_CP_TP, JSON.stringify(cpList));
   notifyStorageMutation(STORAGE_KEYS.TKA_CP_TP);
 };
 
 export const getStoredTKAQuestions = (): TKAQuestion[] => {
-  const data = localStorage.getItem(STORAGE_KEYS.TKA_QUESTIONS);
-  if (!data) return DEFAULT_TKA_QUESTIONS;
-  try {
-    return JSON.parse(data);
-  } catch {
-    return DEFAULT_TKA_QUESTIONS;
-  }
+  return getHeavyCollection<TKAQuestion[]>(STORAGE_KEYS.TKA_QUESTIONS, DEFAULT_TKA_QUESTIONS, []);
 };
 
 export const saveStoredTKAQuestions = (questions: TKAQuestion[]): boolean => {
-  const ok = safeSetLocalStorage(STORAGE_KEYS.TKA_QUESTIONS, JSON.stringify(questions));
+  const ok = saveHeavyCollection(STORAGE_KEYS.TKA_QUESTIONS, questions);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
   }
@@ -715,7 +843,7 @@ export const getStoredTKADurations = (): Record<string, number> => {
 };
 
 export const saveStoredTKADurations = (durations: Record<string, number>) => {
-  localStorage.setItem(STORAGE_KEYS.TKA_DURATIONS, JSON.stringify(durations));
+  safeSetLocalStorage(STORAGE_KEYS.TKA_DURATIONS, JSON.stringify(durations));
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-tka-durations-updated'));
   }
@@ -760,7 +888,7 @@ export const getStoredTKAActivePackages = (): Record<string, boolean> => {
 };
 
 export const saveStoredTKAActivePackages = (activeMap: Record<string, boolean>) => {
-  localStorage.setItem(STORAGE_KEYS.TKA_ACTIVE_PACKAGES, JSON.stringify(activeMap));
+  safeSetLocalStorage(STORAGE_KEYS.TKA_ACTIVE_PACKAGES, JSON.stringify(activeMap));
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-tka-active-updated'));
   }
@@ -793,7 +921,7 @@ export const getStoredTKAResults = (): CBTExamResult[] => {
 };
 
 export const saveStoredTKAResults = (results: CBTExamResult[]) => {
-  localStorage.setItem(STORAGE_KEYS.TKA_RESULTS, JSON.stringify(results));
+  safeSetLocalStorage(STORAGE_KEYS.TKA_RESULTS, JSON.stringify(results));
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
   }
@@ -849,17 +977,11 @@ export interface TKASubmissionItem {
 }
 
 export const getStoredTKASubmissions = (): TKASubmissionItem[] => {
-  const data = localStorage.getItem(STORAGE_KEYS.TKA_SUBMISSIONS);
-  if (!data) return [];
-  try {
-    return JSON.parse(data);
-  } catch {
-    return [];
-  }
+  return getHeavyCollection<TKASubmissionItem[]>(STORAGE_KEYS.TKA_SUBMISSIONS, [], []);
 };
 
 export const saveStoredTKASubmissions = (submissions: TKASubmissionItem[]) => {
-  localStorage.setItem(STORAGE_KEYS.TKA_SUBMISSIONS, JSON.stringify(submissions));
+  saveHeavyCollection(STORAGE_KEYS.TKA_SUBMISSIONS, submissions);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
   }
@@ -867,7 +989,10 @@ export const saveStoredTKASubmissions = (submissions: TKASubmissionItem[]) => {
 };
 
 export const clearStoredTKASubmissions = () => {
-  localStorage.removeItem(STORAGE_KEYS.TKA_SUBMISSIONS);
+  inMemoryLargeCache[STORAGE_KEYS.TKA_SUBMISSIONS] = [];
+  void idbRemove(STORAGE_KEYS.TKA_SUBMISSIONS);
+  safeRemoveLocalStorage(STORAGE_KEYS.TKA_SUBMISSIONS);
+  safeRemoveLocalStorage(idbMarkerForKey(STORAGE_KEYS.TKA_SUBMISSIONS));
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
   }
@@ -987,7 +1112,7 @@ export const getStoredActiveUser = (): ActiveUser => {
 };
 
 export const saveStoredActiveUser = (user: ActiveUser) => {
-  localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, JSON.stringify(user));
+  safeSetLocalStorage(STORAGE_KEYS.ACTIVE_USER, JSON.stringify(user));
 };
 
 // 20 Academic Years: 2020/2021 to 2039/2040
@@ -1014,9 +1139,9 @@ export const getActiveFilters = () => {
 };
 
 export const saveActiveFilters = (year: string, semester: string, kelas: string) => {
-  localStorage.setItem(STORAGE_KEYS.ACTIVE_YEAR, year);
-  localStorage.setItem(STORAGE_KEYS.ACTIVE_SEMESTER, semester);
-  localStorage.setItem(STORAGE_KEYS.ACTIVE_CLASS, kelas);
+  safeSetLocalStorage(STORAGE_KEYS.ACTIVE_YEAR, year);
+  safeSetLocalStorage(STORAGE_KEYS.ACTIVE_SEMESTER, semester);
+  safeSetLocalStorage(STORAGE_KEYS.ACTIVE_CLASS, kelas);
 };
 
 // Backup and Restore
@@ -1024,7 +1149,7 @@ export const exportFullSystemJSON = () => {
   const backupData: Record<string, any> = {};
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key && key.startsWith('sekolahku_')) {
+    if (key && key.startsWith('sekolahku_') && !key.endsWith('_in_idb')) {
       try {
         backupData[key] = JSON.parse(localStorage.getItem(key) || 'null');
       } catch {
@@ -1032,6 +1157,14 @@ export const exportFullSystemJSON = () => {
       }
     }
   }
+  // Pastikan koleksi besar yang tersimpan di IndexedDB / memori ikut ter-ekspor utuh
+  backupData[STORAGE_KEYS.TKA_QUESTIONS] = getStoredTKAQuestions();
+  backupData[STORAGE_KEYS.CBT_EXAMS] = getStoredCBTExams();
+  backupData[STORAGE_KEYS.STUDENTS] = getStoredStudents();
+  backupData[STORAGE_KEYS.TEACHERS] = getStoredTeachers();
+  backupData[STORAGE_KEYS.ATTENDANCE] = getStoredAttendance();
+  backupData[STORAGE_KEYS.TKA_SUBMISSIONS] = getStoredTKASubmissions();
+
   const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1045,10 +1178,35 @@ export const restoreFullSystemJSON = (jsonString: string) => {
   try {
     const data = JSON.parse(jsonString);
     Object.keys(data).forEach((key) => {
+      if (key.endsWith('_in_idb')) return;
+      if (key === STORAGE_KEYS.TKA_QUESTIONS && Array.isArray(data[key])) {
+        saveHeavyCollection(key, data[key]);
+        return;
+      }
+      if (key === STORAGE_KEYS.CBT_EXAMS && Array.isArray(data[key])) {
+        saveHeavyCollection(key, data[key]);
+        return;
+      }
+      if (key === STORAGE_KEYS.STUDENTS && Array.isArray(data[key])) {
+        saveHeavyCollection(key, data[key]);
+        return;
+      }
+      if (key === STORAGE_KEYS.TEACHERS && Array.isArray(data[key])) {
+        saveHeavyCollection(key, data[key]);
+        return;
+      }
+      if (key === STORAGE_KEYS.ATTENDANCE && data[key] && typeof data[key] === 'object') {
+        saveHeavyCollection(key, data[key]);
+        return;
+      }
+      if (key === STORAGE_KEYS.TKA_SUBMISSIONS && Array.isArray(data[key])) {
+        saveHeavyCollection(key, data[key]);
+        return;
+      }
       if (typeof data[key] === 'object') {
-        localStorage.setItem(key, JSON.stringify(data[key]));
+        safeSetLocalStorage(key, JSON.stringify(data[key]));
       } else {
-        localStorage.setItem(key, String(data[key]));
+        safeSetLocalStorage(key, String(data[key]));
       }
     });
     return true;

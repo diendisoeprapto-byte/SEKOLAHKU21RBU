@@ -50,6 +50,11 @@ import {
   filterExamResultsByResetMeta,
   registerStorageMutationHook,
   runWithoutStorageSync,
+  safeSetLocalStorage,
+  hasStoredTKAQuestionsLocal,
+  hasStoredCBTExamsLocal,
+  hydrateLargeCollectionsFromIDB,
+  markLargeCollectionHydratedFromCloud,
   AttendanceRecordItem,
 } from './utils/storage';
 import { DEFAULT_SCHOOL_PROFILE, DEFAULT_TEACHERS, DEFAULT_STUDENTS, DEFAULT_SUBJECTS, DEFAULT_KALDIK_HOLIDAYS } from './data/defaultData';
@@ -181,13 +186,36 @@ export default function App() {
   useEffect(() => {
     testConnection();
 
-    // Sinkronkan perubahan modul apa pun (Penilaian, CBT, TKA, e-Rapor, Ekskul, Catatan) secara realtime ke cloud
+    let isMounted = true;
+    const idbHydrationPromise = hydrateLargeCollectionsFromIDB({
+      onStudents: (idbStudents) => {
+        if (!isMounted || studentsCollectionLoadedRef.current) return;
+        setStudents(sortStudentsAlphabetically(idbStudents));
+      },
+      onTeachers: (idbTeachers) => {
+        if (!isMounted || teachersCollectionLoadedRef.current) return;
+        setTeachers(sortTeachersAlphabetically(idbTeachers));
+      },
+      onAttendance: (idbAttendance) => {
+        if (!isMounted || attendanceCollectionLoadedRef.current) return;
+        setAttendanceRecords(idbAttendance);
+      },
+    });
+
+    // Sinkronkan perubahan modul non-koleksi (Penilaian, e-Rapor, Ekskul, Catatan, Durasi, Aktivasi) secara realtime ke cloud.
+    // Koleksi dedicated Firestore (tka_questions, cbt_exams, tka_submissions, students, teachers, attendance) sudah tersinkron langsung ke koleksinya.
     registerStorageMutationHook((storageKey) => {
+      if (
+        storageKey === 'sekolahku_tka_questions' ||
+        storageKey === 'sekolahku_cbt_exams' ||
+        storageKey === 'sekolahku_tka_submissions'
+      ) {
+        return;
+      }
       if (
         activeUserRef.current?.role === 'siswa' &&
         (storageKey === 'sekolahku_student_exam_drafts_v1' ||
-          storageKey === 'sekolahku_tka_exam_drafts_v1' ||
-          storageKey === 'sekolahku_tka_submissions')
+          storageKey === 'sekolahku_tka_exam_drafts_v1')
       ) {
         return;
       }
@@ -225,9 +253,9 @@ export default function App() {
                 replaceAllNonSession: isFullRestoreEvent,
                 currentStudentId: activeStudentId,
               });
-              localStorage.setItem(LAST_SNAPSHOT_REV_KEY, incomingSnapRev);
+              safeSetLocalStorage(LAST_SNAPSHOT_REV_KEY, incomingSnapRev);
               if (incomingRestoreVer) {
-                localStorage.setItem(LAST_RESTORE_VERSION_KEY, incomingRestoreVer);
+                safeSetLocalStorage(LAST_RESTORE_VERSION_KEY, incomingRestoreVer);
               }
             });
             didMutateFromRemote = true;
@@ -243,7 +271,7 @@ export default function App() {
             applyBackupMapToLocalStorage(cloudData.localStorageSnapshot, {
               currentStudentId: activeStudentId,
             });
-            localStorage.setItem(LAST_RESTORE_VERSION_KEY, incomingRestoreVer);
+            safeSetLocalStorage(LAST_RESTORE_VERSION_KEY, incomingRestoreVer);
           });
           didMutateFromRemote = true;
         }
@@ -266,7 +294,7 @@ export default function App() {
           saveStoredStudents(sortedCloudStudents);
         }
         if (cloudData.subjectsByClass) {
-          localStorage.setItem('sekolahku_subjects_by_class', JSON.stringify(cloudData.subjectsByClass));
+          safeSetLocalStorage('sekolahku_subjects_by_class', JSON.stringify(cloudData.subjectsByClass));
           const currentClassSubjects = getStoredSubjectsForClass(activeClassRef.current);
           setSubjects(currentClassSubjects);
         } else if (cloudData.subjects) {
@@ -284,25 +312,25 @@ export default function App() {
           saveStoredAttendance(cloudData.attendance);
         }
         if (cloudData.ekskulList) {
-          localStorage.setItem('sekolahku_ekskul_list', JSON.stringify(cloudData.ekskulList));
+          safeSetLocalStorage('sekolahku_ekskul_list', JSON.stringify(cloudData.ekskulList));
         }
         if (cloudData.penilaianEkskul) {
-          localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(cloudData.penilaianEkskul));
+          safeSetLocalStorage('sekolahku_penilaian_ekskul', JSON.stringify(cloudData.penilaianEkskul));
         }
         if (cloudData.reportNotes) {
           saveStoredReportNotes(cloudData.reportNotes);
         }
         if (typeof cloudData.cbtAcakSoal === 'boolean') {
-          localStorage.setItem('sekolahku_cbt_acak_soal', String(cloudData.cbtAcakSoal));
+          safeSetLocalStorage('sekolahku_cbt_acak_soal', String(cloudData.cbtAcakSoal));
         }
         if (typeof cloudData.cbtAcakJawaban === 'boolean') {
-          localStorage.setItem('sekolahku_cbt_acak_jawaban', String(cloudData.cbtAcakJawaban));
+          safeSetLocalStorage('sekolahku_cbt_acak_jawaban', String(cloudData.cbtAcakJawaban));
         }
         if (typeof cloudData.tkaAcakSoal === 'boolean') {
-          localStorage.setItem('sekolahku_tka_acak_soal', String(cloudData.tkaAcakSoal));
+          safeSetLocalStorage('sekolahku_tka_acak_soal', String(cloudData.tkaAcakSoal));
         }
         if (typeof cloudData.tkaAcakJawaban === 'boolean') {
-          localStorage.setItem('sekolahku_tka_acak_jawaban', String(cloudData.tkaAcakJawaban));
+          safeSetLocalStorage('sekolahku_tka_acak_jawaban', String(cloudData.tkaAcakJawaban));
         }
         if (cloudData.tkaDurations && typeof cloudData.tkaDurations === 'object') {
           saveStoredTKADurations(cloudData.tkaDurations);
@@ -347,9 +375,9 @@ export default function App() {
 
       if (didMutateFromRemote && !tkaQuestionsCollectionLoadedRef.current) {
         const pulledQuestions = getStoredTKAQuestions();
-        if (pulledQuestions.length > 0 && localStorage.getItem('sekolahku_tka_questions') !== null) {
+        if (pulledQuestions.length > 0 && hasStoredTKAQuestionsLocal()) {
           tkaQuestionsCollectionLoadedRef.current = true;
-          localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+          safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
           saveTkaQuestionsBatchToFirestore(pulledQuestions).catch((err) =>
             console.warn('Migrate snapshot TKA questions to collection warning:', err)
           );
@@ -358,9 +386,9 @@ export default function App() {
 
       if (didMutateFromRemote && !cbtExamsCollectionLoadedRef.current) {
         const pulledCbtExams = getStoredCBTExams();
-        if (pulledCbtExams.length > 0 && localStorage.getItem('sekolahku_cbt_exams') !== null) {
+        if (pulledCbtExams.length > 0 && hasStoredCBTExamsLocal()) {
           cbtExamsCollectionLoadedRef.current = true;
-          localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+          safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
           saveCbtExamsBatchToFirestore(pulledCbtExams).catch((err) =>
             console.warn('Migrate snapshot CBT exams to collection warning:', err)
           );
@@ -385,7 +413,9 @@ export default function App() {
     };
 
     // Pull initial cloud state if available
-    pullAllDataFromCloud().then((cloudData) => {
+    pullAllDataFromCloud().then(async (cloudData) => {
+      await idbHydrationPromise;
+      if (!isMounted) return;
       if (
         cloudData &&
         (cloudData.profile ||
@@ -402,15 +432,15 @@ export default function App() {
           const initialQ = getStoredTKAQuestions();
           if (initialQ.length > 0) {
             tkaQuestionsCollectionLoadedRef.current = true;
-            localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+            safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
             saveTkaQuestionsBatchToFirestore(initialQ).catch(() => {});
           }
         }
         if (!cbtExamsCollectionLoadedRef.current) {
           const initialCbt = getStoredCBTExams();
-          if (initialCbt.length > 0 && localStorage.getItem('sekolahku_cbt_exams') !== null) {
+          if (initialCbt.length > 0 && hasStoredCBTExamsLocal()) {
             cbtExamsCollectionLoadedRef.current = true;
-            localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+            safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
             saveCbtExamsBatchToFirestore(initialCbt).catch(() => {});
           }
         }
@@ -425,19 +455,22 @@ export default function App() {
     });
 
     // Realtime listener langsung untuk koleksi 'students' di Firestore (single source of truth)
-    const unsubStudents = subscribeToStudentsCollection((firestoreStudents) => {
+    const unsubStudents = subscribeToStudentsCollection(async (firestoreStudents) => {
+      await idbHydrationPromise;
+      if (!isMounted) return;
       const alreadySeeded = localStorage.getItem('sekolahku_students_seeded') === 'true';
 
       if (firestoreStudents.length > 0) {
         studentsCollectionLoadedRef.current = true;
-        localStorage.setItem('sekolahku_students_seeded', 'true');
+        markLargeCollectionHydratedFromCloud('sekolahku_students');
+        safeSetLocalStorage('sekolahku_students_seeded', 'true');
         setStudents(firestoreStudents);
         saveStoredStudents(firestoreStudents);
       } else if (!studentsCollectionLoadedRef.current && !alreadySeeded) {
         const localStudents = getStoredStudents();
         if (localStudents.length > 0) {
           studentsCollectionLoadedRef.current = true;
-          localStorage.setItem('sekolahku_students_seeded', 'true');
+          safeSetLocalStorage('sekolahku_students_seeded', 'true');
           saveStudentsToFirestoreBatch(localStudents, 'initial_seed').catch((err) =>
             console.warn('Initial student seed warning:', err)
           );
@@ -445,6 +478,7 @@ export default function App() {
       } else {
         // Semua siswa telah dihapus oleh user -> kosongkan state agar tidak muncul kembali
         studentsCollectionLoadedRef.current = true;
+        markLargeCollectionHydratedFromCloud('sekolahku_students');
         setStudents([]);
         saveStoredStudents([]);
       }
@@ -452,16 +486,19 @@ export default function App() {
 
     // Realtime listener langsung untuk koleksi 'teachers' di Firestore (single source of truth hingga 60 guru/pegawai)
     const unsubTeachers = subscribeToTeachersCollection(async (firestoreTeachers) => {
+      await idbHydrationPromise;
+      if (!isMounted) return;
       const alreadySeeded = localStorage.getItem('sekolahku_teachers_seeded') === 'true';
 
       if (firestoreTeachers.length > 0) {
         teachersCollectionLoadedRef.current = true;
-        localStorage.setItem('sekolahku_teachers_seeded', 'true');
+        markLargeCollectionHydratedFromCloud('sekolahku_teachers');
+        safeSetLocalStorage('sekolahku_teachers_seeded', 'true');
         setTeachers(firestoreTeachers);
         saveStoredTeachers(firestoreTeachers);
       } else if (!teachersCollectionLoadedRef.current && !alreadySeeded) {
         teachersCollectionLoadedRef.current = true;
-        localStorage.setItem('sekolahku_teachers_seeded', 'true');
+        safeSetLocalStorage('sekolahku_teachers_seeded', 'true');
         let seedSource = getStoredTeachers();
         try {
           const legacyCloud = await pullAllDataFromCloud();
@@ -478,6 +515,7 @@ export default function App() {
         }
       } else {
         teachersCollectionLoadedRef.current = true;
+        markLargeCollectionHydratedFromCloud('sekolahku_teachers');
         setTeachers([]);
         saveStoredTeachers([]);
       }
@@ -485,18 +523,21 @@ export default function App() {
 
     // Realtime listener langsung untuk koleksi 'attendance' di Firestore (single source of truth)
     const unsubAttendance = subscribeToAttendanceCollection(
-      (firestoreAttendance) => {
+      async (firestoreAttendance) => {
+        await idbHydrationPromise;
+        if (!isMounted) return;
         const alreadySeeded = localStorage.getItem('sekolahku_attendance_seeded') === 'true';
         const recordList = Object.values(firestoreAttendance);
 
         if (recordList.length > 0) {
           attendanceCollectionLoadedRef.current = true;
-          localStorage.setItem('sekolahku_attendance_seeded', 'true');
+          markLargeCollectionHydratedFromCloud('sekolahku_attendance_records');
+          safeSetLocalStorage('sekolahku_attendance_seeded', 'true');
           setAttendanceRecords(firestoreAttendance);
           saveStoredAttendance(firestoreAttendance);
         } else if (!attendanceCollectionLoadedRef.current && !alreadySeeded) {
           attendanceCollectionLoadedRef.current = true;
-          localStorage.setItem('sekolahku_attendance_seeded', 'true');
+          safeSetLocalStorage('sekolahku_attendance_seeded', 'true');
           const localAtt = getStoredAttendance();
           const localList = Object.values(localAtt);
           if (localList.length > 0) {
@@ -506,6 +547,7 @@ export default function App() {
           }
         } else {
           attendanceCollectionLoadedRef.current = true;
+          markLargeCollectionHydratedFromCloud('sekolahku_attendance_records');
           setAttendanceRecords({});
           saveStoredAttendance({});
         }
@@ -526,22 +568,25 @@ export default function App() {
 
     // Realtime listener langsung untuk koleksi 'tka_questions' di Firestore (single source of truth Bank Soal TKA)
     const unsubTkaQuestions = subscribeToTkaQuestionsCollection(
-      (firestoreTkaQuestions) => {
+      async (firestoreTkaQuestions) => {
+        await idbHydrationPromise;
+        if (!isMounted) return;
         const alreadySeeded = localStorage.getItem('sekolahku_tka_questions_seeded') === 'true';
 
         if (firestoreTkaQuestions.length > 0) {
           tkaQuestionsCollectionLoadedRef.current = true;
-          localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+          markLargeCollectionHydratedFromCloud('sekolahku_tka_questions');
+          safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
           runWithoutStorageSync(() => {
             saveStoredTKAQuestions(firestoreTkaQuestions);
           });
         } else if (!tkaQuestionsCollectionLoadedRef.current && !alreadySeeded) {
-          const hasStoredLocal = localStorage.getItem('sekolahku_tka_questions') !== null;
+          const hasStoredLocal = hasStoredTKAQuestionsLocal();
           if (hasStoredLocal) {
             const localQuestions = getStoredTKAQuestions();
             if (localQuestions.length > 0) {
               tkaQuestionsCollectionLoadedRef.current = true;
-              localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
+              safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
               saveTkaQuestionsBatchToFirestore(localQuestions).catch((err) =>
                 console.warn('Initial TKA questions seed warning:', err)
               );
@@ -549,6 +594,7 @@ export default function App() {
           }
         } else {
           tkaQuestionsCollectionLoadedRef.current = true;
+          markLargeCollectionHydratedFromCloud('sekolahku_tka_questions');
           runWithoutStorageSync(() => {
             saveStoredTKAQuestions([]);
           });
@@ -561,13 +607,16 @@ export default function App() {
 
     // Realtime listener langsung untuk koleksi 'tka_submissions' (Analisis & Rekap Hasil TKA real-time lintas perangkat)
     const unsubTkaSubmissions = subscribeToTkaSubmissionsCollection(
-      (firestoreSubs) => {
+      async (firestoreSubs) => {
+        await idbHydrationPromise;
+        if (!isMounted) return;
         const alreadySeeded = localStorage.getItem('sekolahku_tka_submissions_seeded') === 'true';
         const resetMeta = getStoredExamResultsResetMeta();
 
         if (firestoreSubs.length > 0) {
           tkaSubmissionsCollectionLoadedRef.current = true;
-          localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+          markLargeCollectionHydratedFromCloud('sekolahku_tka_submissions');
+          safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
           runWithoutStorageSync(() => {
             saveStoredTKASubmissions(firestoreSubs);
           });
@@ -580,7 +629,7 @@ export default function App() {
           const localSubs = getStoredTKASubmissions();
           if (localSubs.length > 0) {
             tkaSubmissionsCollectionLoadedRef.current = true;
-            localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+            safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
             saveTkaSubmissionsBatchToFirestore(localSubs).catch((err) =>
               console.warn('Initial TKA submissions seed warning:', err)
             );
@@ -589,7 +638,8 @@ export default function App() {
           }
         } else {
           tkaSubmissionsCollectionLoadedRef.current = true;
-          localStorage.setItem('sekolahku_tka_submissions_seeded', 'true');
+          markLargeCollectionHydratedFromCloud('sekolahku_tka_submissions');
+          safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
           runWithoutStorageSync(() => {
             saveStoredTKASubmissions([]);
           });
@@ -602,22 +652,25 @@ export default function App() {
 
     // Realtime listener langsung untuk koleksi 'cbt_exams' di Firestore (single source of truth Paket Soal CBT)
     const unsubCbtExams = subscribeToCbtExamsCollection(
-      (firestoreCbtExams) => {
+      async (firestoreCbtExams) => {
+        await idbHydrationPromise;
+        if (!isMounted) return;
         const alreadySeeded = localStorage.getItem('sekolahku_cbt_exams_seeded') === 'true';
 
         if (firestoreCbtExams.length > 0) {
           cbtExamsCollectionLoadedRef.current = true;
-          localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+          markLargeCollectionHydratedFromCloud('sekolahku_cbt_exams');
+          safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
           runWithoutStorageSync(() => {
             saveStoredCBTExams(firestoreCbtExams);
           });
         } else if (!cbtExamsCollectionLoadedRef.current && !alreadySeeded) {
-          const hasStoredLocal = localStorage.getItem('sekolahku_cbt_exams') !== null;
+          const hasStoredLocal = hasStoredCBTExamsLocal();
           if (hasStoredLocal && activeUserRef.current?.role !== 'siswa') {
             const localExams = getStoredCBTExams();
             if (localExams.length > 0) {
               cbtExamsCollectionLoadedRef.current = true;
-              localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+              safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
               saveCbtExamsBatchToFirestore(localExams).catch((err) =>
                 console.warn('Initial CBT exams seed warning:', err)
               );
@@ -625,6 +678,7 @@ export default function App() {
           }
         } else {
           cbtExamsCollectionLoadedRef.current = true;
+          markLargeCollectionHydratedFromCloud('sekolahku_cbt_exams');
           runWithoutStorageSync(() => {
             saveStoredCBTExams([]);
           });
@@ -636,6 +690,7 @@ export default function App() {
     );
 
     return () => {
+      isMounted = false;
       unsubscribe();
       unsubStudents();
       unsubTeachers();

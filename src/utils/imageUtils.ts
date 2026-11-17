@@ -95,3 +95,56 @@ export async function compressQuestionImage(
     return rawDataUrl;
   }
 }
+
+/**
+ * Mengompres ulang Data URL gambar (base64) ke ukuran lebih ringkas
+ * apabila ukuran dokumen soal mendekati batas 1 MiB Firestore.
+ */
+export async function compressDataUrlImage(
+  dataUrl: string,
+  options: CompressImageOptions = {}
+): Promise<string> {
+  if (!dataUrl || !dataUrl.startsWith('data:image/') || dataUrl.startsWith('data:image/svg+xml')) {
+    return dataUrl;
+  }
+  const {
+    maxWidth = 720,
+    maxHeight = 540,
+    quality = 0.65,
+  } = options;
+
+  try {
+    const img = await loadImageElement(dataUrl);
+    const origW = img.naturalWidth || img.width;
+    const origH = img.naturalHeight || img.height;
+    if (!origW || !origH) return dataUrl;
+
+    const scale = Math.min(1, maxWidth / origW, maxHeight / origH);
+    const targetW = Math.max(1, Math.round(origW * scale));
+    const targetH = Math.max(1, Math.round(origH * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return dataUrl;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, targetW, targetH);
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+
+    let compressed = canvas.toDataURL('image/webp', quality);
+    if (!compressed.startsWith('data:image/webp')) {
+      compressed = canvas.toDataURL('image/jpeg', quality);
+    } else {
+      const jpegAlt = canvas.toDataURL('image/jpeg', quality);
+      if (jpegAlt.length < compressed.length) {
+        compressed = jpegAlt;
+      }
+    }
+
+    return compressed.length < dataUrl.length ? compressed : dataUrl;
+  } catch {
+    return dataUrl;
+  }
+}

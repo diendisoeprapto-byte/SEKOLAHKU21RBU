@@ -13,7 +13,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { CBTExam, CBTQuestion } from '../types';
-import { runWithoutStorageSync, saveStoredCBTExams } from './storage';
+import { runWithoutStorageSync, saveStoredCBTExams, safeSetLocalStorage } from './storage';
 
 export const CBT_EXAMS_COLLECTION = 'cbt_exams';
 const SOAL_CHUNK_MARKER = '__soalchunk_';
@@ -243,7 +243,7 @@ export async function saveCbtExamToFirestore(
       }
     }
 
-    localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+    safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
     return true;
   } catch (error) {
     console.error(`Gagal menyimpan paket CBT ${exam.id} ke Firestore:`, error);
@@ -271,7 +271,7 @@ export async function deleteCbtExamFromFirestore(examId: string): Promise<boolea
     if (prevChunkCount > 0) {
       await deleteChunkDocsRange(safeId, 0, prevChunkCount);
     }
-    localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+    safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
     return true;
   } catch (error) {
     console.error(`Gagal menghapus paket CBT ${examId} dari Firestore:`, error);
@@ -292,7 +292,7 @@ export async function saveCbtExamsBatchToFirestore(exams: CBTExam[]): Promise<bo
         }
       }
     }
-    localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+    safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
     return true;
   } catch (error) {
     console.error('Gagal menyimpan batch paket CBT ke Firestore:', error);
@@ -335,7 +335,7 @@ export async function replaceCbtExamsInFirestore(exams: CBTExam[]): Promise<bool
       await saveCbtExamsBatchToFirestore(normalized);
     }
 
-    localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
+    safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
     runWithoutStorageSync(() => {
       saveStoredCBTExams(normalized);
     });
