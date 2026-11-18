@@ -31,7 +31,7 @@ import {
   Save,
   Trash2,
 } from 'lucide-react';
-import { collection, addDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../utils/firebase';
 import {
   ActiveUser,
@@ -44,6 +44,7 @@ import {
   TKAQuestion,
   TUJUH_KEBIASAAN_LIST,
   KebiasaanReportItem,
+  isAbkExcludedFromTka,
 } from '../types';
 import {
   getStoredCBTExams,
@@ -81,6 +82,7 @@ import { evaluateQuestionScore, normalizeString } from '../utils/answerChecker';
 import { getLocalTodayStr } from '../utils/dateUtils';
 import { QuestionContent } from './QuestionContent';
 import { StudentPerformanceStats } from './StudentPerformanceStats';
+import { StudentKebiasaanTracker } from './StudentKebiasaanTracker';
 
 
 interface Props {
@@ -260,21 +262,21 @@ export const StudentDashboard: React.FC<Props> = ({
     );
     return liveMatch || ad || students[0];
   }, [activeUser, students]);
+  const isExcludedFromTka = isAbkExcludedFromTka(currentStudent);
 
   // State Form Input 7 Kebiasaan Siswa
+  const todayStrKebiasaan = getLocalTodayStr();
   const [kebiasaanFormNama, setKebiasaanFormNama] = useState<string>('');
   const [kebiasaanFormKelas, setKebiasaanFormKelas] = useState<string>(activeClass);
-  const [kebiasaanFormTanggal, setKebiasaanFormTanggal] = useState<string>(
-    getLocalTodayStr()
-  );
+  const [kebiasaanFormTanggal, setKebiasaanFormTanggal] = useState<string>(todayStrKebiasaan);
   const [kebiasaanStatus, setKebiasaanStatus] = useState<Record<string, boolean>>({
-    bangunPagi: true,
-    ibadah: true,
-    mandiGosokGigi: true,
-    sarapanSehat: true,
-    berpamitan: true,
-    membacaBuku: true,
-    membantuOrangTua: true,
+    bangunPagi: false,
+    ibadah: false,
+    mandiGosokGigi: false,
+    sarapanSehat: false,
+    berpamitan: false,
+    membacaBuku: false,
+    membantuOrangTua: false,
   });
   const [kebiasaanNotes, setKebiasaanNotes] = useState<Record<string, string>>({
     bangunPagi: '',
@@ -285,10 +287,25 @@ export const StudentDashboard: React.FC<Props> = ({
     membacaBuku: '',
     membantuOrangTua: '',
   });
+  const [kebiasaanSelectedIndicators, setKebiasaanSelectedIndicators] = useState<
+    Record<string, string[]>
+  >({
+    bangunPagi: [],
+    ibadah: [],
+    mandiGosokGigi: [],
+    sarapanSehat: [],
+    berpamitan: [],
+    membacaBuku: [],
+    membantuOrangTua: [],
+  });
   const [kebiasaanCatatanSiswa, setKebiasaanCatatanSiswa] = useState<string>('');
   const [isSubmittingKebiasaan, setIsSubmittingKebiasaan] = useState<boolean>(false);
   const [kebiasaanSuccessModal, setKebiasaanSuccessModal] = useState<boolean>(false);
-  const [studentPastReports, setStudentPastReports] = useState<KebiasaanReportItem[]>(() => {
+  const [hasKebiasaanUnsavedChanges, setHasKebiasaanUnsavedChanges] = useState<boolean>(false);
+  const kebiasaanDirtyRef = useRef<boolean>(false);
+  const hydratedKebiasaanKeyRef = useRef<string>('');
+  const [cloudStudentKebiasaan, setCloudStudentKebiasaan] = useState<KebiasaanReportItem[]>([]);
+  const [localStudentKebiasaan, setLocalStudentKebiasaan] = useState<KebiasaanReportItem[]>(() => {
     try {
       const saved = localStorage.getItem('sekolahku_student_kebiasaan_history');
       return saved ? JSON.parse(saved) : [];
@@ -304,34 +321,227 @@ export const StudentDashboard: React.FC<Props> = ({
     }
   }, [currentStudent, activeClass]);
 
-  // Handler tandai semua kebiasaan sudah dilakukan
-  const handleMarkAllKebiasaan = (val: boolean) => {
-    const updated: Record<string, boolean> = {};
-    TUJUH_KEBIASAAN_LIST.forEach((h) => {
-      updated[h.id] = val;
+  // Sinkronisasi real-time Firestore collection 'laporan_kebiasaan' khusus siswa yang login
+  useEffect(() => {
+    if (!currentStudent) return;
+    const targetId = (currentStudent.id || '').trim();
+    const targetName = (currentStudent.nama || '').trim().toLowerCase();
+
+    const unsub = onSnapshot(
+      collection(db, 'laporan_kebiasaan'),
+      (snap) => {
+        const items: KebiasaanReportItem[] = [];
+        snap.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const matchesStudent =
+            (targetId && data.studentId === targetId) ||
+            (targetName && (data.namaSiswa || '').trim().toLowerCase() === targetName);
+          if (matchesStudent) {
+            items.push({
+              id: docSnap.id,
+              namaSiswa: data.namaSiswa || currentStudent.nama,
+              studentId: data.studentId || currentStudent.id,
+              kelas: data.kelas || currentStudent.kelas,
+              tanggal: data.tanggal || '',
+              waktuKirim: data.waktuKirim || '-',
+              kebiasaan: data.kebiasaan || {},
+              indikatorTerpilih: data.indikatorTerpilih || undefined,
+              catatan: data.catatan || {},
+              skor: typeof data.skor === 'number' ? data.skor : 0,
+              catatanSiswa: data.catatanSiswa || '',
+              createdAt: data.createdAt || undefined,
+            });
+          }
+        });
+        items.sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''));
+        setCloudStudentKebiasaan(items);
+      },
+      (err) => {
+        console.warn('Listener laporan_kebiasaan siswa warning:', err);
+      }
+    );
+
+    return () => unsub();
+  }, [currentStudent]);
+
+  // Gabungkan laporan cloud & lokal khusus untuk siswa ini
+  const studentPastReports = useMemo(() => {
+    const targetId = (currentStudent?.id || '').trim();
+    const targetName = (currentStudent?.nama || '').trim().toLowerCase();
+    const filteredLocal = localStudentKebiasaan.filter(
+      (r) =>
+        (targetId && r.studentId === targetId) ||
+        (targetName && (r.namaSiswa || '').trim().toLowerCase() === targetName)
+    );
+    const byKey = new Map<string, KebiasaanReportItem>();
+    [...filteredLocal, ...cloudStudentKebiasaan].forEach((rep) => {
+      if (!rep.tanggal) return;
+      const prev = byKey.get(rep.tanggal);
+      if (!prev) {
+        byKey.set(rep.tanggal, rep);
+        return;
+      }
+      const prevFromCloud = prev.id && !prev.id.startsWith('local_');
+      const nextFromCloud = rep.id && !rep.id.startsWith('local_');
+      const prevTime = prev.createdAt ? new Date(prev.createdAt).getTime() : 0;
+      const nextTime = rep.createdAt ? new Date(rep.createdAt).getTime() : 0;
+      if (nextTime > prevTime || (nextTime === prevTime && nextFromCloud && !prevFromCloud)) {
+        byKey.set(rep.tanggal, rep);
+      }
     });
-    setKebiasaanStatus(updated);
-    showToast(val ? 'Semua kebiasaan ditandai Sudah Dilakukan!' : 'Semua kebiasaan direset.', 'success');
+    return Array.from(byKey.values()).sort((a, b) =>
+      (b.tanggal || '').localeCompare(a.tanggal || '')
+    );
+  }, [cloudStudentKebiasaan, localStudentKebiasaan, currentStudent]);
+
+  // Hidrasi otomatis status & indikator untuk tanggal pelaporan yang dipilih bila belum diedit pengguna
+  useEffect(() => {
+    const studentKey = `${currentStudent?.id || ''}_${kebiasaanFormTanggal}`;
+    const savedForDate = studentPastReports.find((r) => r.tanggal === kebiasaanFormTanggal);
+    if (!savedForDate) {
+      if (hydratedKebiasaanKeyRef.current !== studentKey && !kebiasaanDirtyRef.current) {
+        hydratedKebiasaanKeyRef.current = studentKey;
+      }
+      return;
+    }
+    if (kebiasaanDirtyRef.current && hydratedKebiasaanKeyRef.current === studentKey) {
+      return;
+    }
+    hydratedKebiasaanKeyRef.current = studentKey;
+    kebiasaanDirtyRef.current = false;
+    setHasKebiasaanUnsavedChanges(false);
+
+    const nextStatus: Record<string, boolean> = {};
+    const nextIndicators: Record<string, string[]> = {};
+    TUJUH_KEBIASAAN_LIST.forEach((h) => {
+      const savedInd = savedForDate.indikatorTerpilih?.[h.id];
+      const indList = Array.isArray(savedInd) ? savedInd : [];
+      nextIndicators[h.id] = indList;
+      nextStatus[h.id] = Boolean(savedForDate.kebiasaan?.[h.id]) || indList.length > 0;
+    });
+    setKebiasaanStatus(nextStatus);
+    setKebiasaanSelectedIndicators(nextIndicators);
+    if (savedForDate.catatanSiswa) {
+      setKebiasaanCatatanSiswa(savedForDate.catatanSiswa);
+    }
+  }, [studentPastReports, kebiasaanFormTanggal, currentStudent?.id]);
+
+  // Handler toggle indikator kegiatan spesifik per kebiasaan
+  const handleToggleIndikator = (habitId: string, indikatorTitle: string) => {
+    kebiasaanDirtyRef.current = true;
+    setHasKebiasaanUnsavedChanges(true);
+    setKebiasaanSelectedIndicators((prev) => {
+      const currentList = prev[habitId] || [];
+      const exists = currentList.includes(indikatorTitle);
+      const nextList = exists
+        ? currentList.filter((t) => t !== indikatorTitle)
+        : [...currentList, indikatorTitle];
+
+      setKebiasaanStatus((prevStatus) => ({
+        ...prevStatus,
+        [habitId]: nextList.length > 0,
+      }));
+
+      return {
+        ...prev,
+        [habitId]: nextList,
+      };
+    });
   };
 
-  // Handler kirim laporan ke Firestore collection 'laporan_kebiasaan'
-  const handleSubmitKebiasaan = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!kebiasaanFormNama.trim()) {
+  // Handler pilih seluruh indikator pada satu kebiasaan
+  const handleSelectAllIndicatorsForHabit = (
+    habitId: string,
+    titles: string[]
+  ) => {
+    kebiasaanDirtyRef.current = true;
+    setHasKebiasaanUnsavedChanges(true);
+    const currentList = kebiasaanSelectedIndicators[habitId] || [];
+    const allSelected = titles.every((t) => currentList.includes(t));
+    const nextList = allSelected ? [] : titles;
+    setKebiasaanSelectedIndicators((prev) => ({
+      ...prev,
+      [habitId]: nextList,
+    }));
+    setKebiasaanStatus((prev) => ({
+      ...prev,
+      [habitId]: nextList.length > 0,
+    }));
+  };
+
+  // Handler tandai semua kebiasaan / seluruh indikator hari ini
+  const handleMarkAllKebiasaan = (val: boolean, alsoFillIndicators: boolean = false) => {
+    kebiasaanDirtyRef.current = true;
+    setHasKebiasaanUnsavedChanges(true);
+    const updated: Record<string, boolean> = {};
+    const updatedIndikator: Record<string, string[]> = {};
+    TUJUH_KEBIASAAN_LIST.forEach((h) => {
+      updated[h.id] = val;
+      if (val && alsoFillIndicators) {
+        updatedIndikator[h.id] = h.indikator.map((ind) => ind.title);
+      } else if (!val) {
+        updatedIndikator[h.id] = [];
+      }
+    });
+    setKebiasaanStatus(updated);
+    if (!val || alsoFillIndicators) {
+      setKebiasaanSelectedIndicators((prev) => ({ ...prev, ...updatedIndikator }));
+    }
+    showToast(
+      val
+        ? alsoFillIndicators
+          ? 'Seluruh 28 indikator (7/7 kebiasaan) hari ini berhasil dicentang!'
+          : 'Semua kebiasaan ditandai Sudah Dilakukan!'
+        : 'Semua kebiasaan & indikator hari ini direset.',
+      'success'
+    );
+  };
+
+  // Simpan / perbarui progres 7 Kebiasaan ke Firestore & localStorage
+  const saveKebiasaanProgress = async (options?: {
+    targetDate?: string;
+    openModal?: boolean;
+  }) => {
+    const targetNama = (kebiasaanFormNama || currentStudent?.nama || '').trim();
+    const targetKelas = kebiasaanFormKelas || currentStudent?.kelas || activeClass;
+    const targetDate = options?.targetDate || kebiasaanFormTanggal || getLocalTodayStr();
+
+    if (!targetNama) {
       showToast('Nama siswa wajib diisi atau dipilih!', 'error');
       return;
     }
 
     setIsSubmittingKebiasaan(true);
-    const completedCount = Object.values(kebiasaanStatus).filter(Boolean).length;
+    const completedCount = TUJUH_KEBIASAAN_LIST.filter((h) =>
+      Boolean(kebiasaanStatus[h.id])
+    ).length;
     const now = new Date();
-    const waktuKirim = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
+    const waktuKirim =
+      now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
+
+    const mergedCatatan: Record<string, string> = {};
+    TUJUH_KEBIASAAN_LIST.forEach((h) => {
+      const chosen = kebiasaanSelectedIndicators[h.id] || [];
+      const manual = (kebiasaanNotes[h.id] || '').trim();
+      if (chosen.length > 0 && manual) {
+        mergedCatatan[h.id] = `${chosen.join('; ')} — ${manual}`;
+      } else if (chosen.length > 0) {
+        mergedCatatan[h.id] = chosen.join('; ');
+      } else {
+        mergedCatatan[h.id] = manual;
+      }
+    });
+
+    const targetStudentId = currentStudent?.id || `std_${Date.now()}`;
+    const existingDocForDate = cloudStudentKebiasaan.find(
+      (r) => r.tanggal === targetDate && r.id && !r.id.startsWith('local_')
+    );
 
     const newReport: KebiasaanReportItem = {
-      namaSiswa: kebiasaanFormNama.trim(),
-      studentId: currentStudent?.id || `std_${Date.now()}`,
-      kelas: kebiasaanFormKelas,
-      tanggal: kebiasaanFormTanggal,
+      namaSiswa: targetNama,
+      studentId: targetStudentId,
+      kelas: targetKelas,
+      tanggal: targetDate,
       waktuKirim,
       kebiasaan: {
         bangunPagi: Boolean(kebiasaanStatus.bangunPagi),
@@ -342,40 +552,81 @@ export const StudentDashboard: React.FC<Props> = ({
         membacaBuku: Boolean(kebiasaanStatus.membacaBuku),
         membantuOrangTua: Boolean(kebiasaanStatus.membantuOrangTua),
       },
-      catatan: kebiasaanNotes,
+      indikatorTerpilih: {
+        bangunPagi: kebiasaanSelectedIndicators.bangunPagi || [],
+        ibadah: kebiasaanSelectedIndicators.ibadah || [],
+        mandiGosokGigi: kebiasaanSelectedIndicators.mandiGosokGigi || [],
+        sarapanSehat: kebiasaanSelectedIndicators.sarapanSehat || [],
+        berpamitan: kebiasaanSelectedIndicators.berpamitan || [],
+        membacaBuku: kebiasaanSelectedIndicators.membacaBuku || [],
+        membantuOrangTua: kebiasaanSelectedIndicators.membantuOrangTua || [],
+      },
+      catatan: mergedCatatan,
       skor: completedCount,
       catatanSiswa: kebiasaanCatatanSiswa.trim(),
       createdAt: now.toISOString(),
     };
 
-    try {
-      // 1. Kirim ke Firestore collection 'laporan_kebiasaan'
-      const docRef = await addDoc(collection(db, 'laporan_kebiasaan'), {
-        ...newReport,
-        timestamp: serverTimestamp(),
+    const persistLocal = (savedItem: KebiasaanReportItem) => {
+      setLocalStudentKebiasaan((prev) => {
+        const filtered = prev.filter(
+          (r) => !(r.tanggal === savedItem.tanggal && r.studentId === savedItem.studentId)
+        );
+        const next = [savedItem, ...filtered].slice(0, 35);
+        localStorage.setItem('sekolahku_student_kebiasaan_history', JSON.stringify(next));
+        return next;
       });
-      newReport.id = docRef.id;
+    };
 
-      // 2. Simpan ke local history siswa
-      const updatedHistory = [newReport, ...studentPastReports.slice(0, 19)];
-      setStudentPastReports(updatedHistory);
-      localStorage.setItem('sekolahku_student_kebiasaan_history', JSON.stringify(updatedHistory));
+    try {
+      if (existingDocForDate?.id) {
+        await setDoc(
+          doc(db, 'laporan_kebiasaan', existingDocForDate.id),
+          {
+            ...newReport,
+            timestamp: serverTimestamp(),
+          },
+          { merge: true }
+        );
+        newReport.id = existingDocForDate.id;
+      } else {
+        const docRef = await addDoc(collection(db, 'laporan_kebiasaan'), {
+          ...newReport,
+          timestamp: serverTimestamp(),
+        });
+        newReport.id = docRef.id;
+      }
 
-      setKebiasaanSuccessModal(true);
+      persistLocal(newReport);
+      kebiasaanDirtyRef.current = false;
+      setHasKebiasaanUnsavedChanges(false);
+
+      if (options?.openModal) {
+        setKebiasaanSuccessModal(true);
+      }
       showToast(
-        `Alhamdulillah! Laporan 7 Kebiasaan berhasil dikirim ke Firestore. Skor Anda: ${completedCount}/7`,
+        `Progres 7 Kebiasaan tersimpan (${completedCount}/7 kebiasaan)!`,
         'success'
       );
     } catch (err: any) {
       console.warn('Submit Firestore warning (saved locally):', err);
-      const updatedHistory = [newReport, ...studentPastReports.slice(0, 19)];
-      setStudentPastReports(updatedHistory);
-      localStorage.setItem('sekolahku_student_kebiasaan_history', JSON.stringify(updatedHistory));
-      setKebiasaanSuccessModal(true);
-      showToast('Laporan 7 Kebiasaan berhasil disimpan di sistem lokal sekolah!', 'success');
+      newReport.id = `local_${targetDate}_${targetStudentId}`;
+      persistLocal(newReport);
+      kebiasaanDirtyRef.current = false;
+      setHasKebiasaanUnsavedChanges(false);
+      if (options?.openModal) {
+        setKebiasaanSuccessModal(true);
+      }
+      showToast('Progres 7 Kebiasaan berhasil disimpan di sistem lokal sekolah!', 'success');
     } finally {
       setIsSubmittingKebiasaan(false);
     }
+  };
+
+  // Handler kirim laporan dari Formulir Lengkap 7 Kebiasaan
+  const handleSubmitKebiasaan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await saveKebiasaanProgress({ openModal: true });
   };
 
 
@@ -1476,11 +1727,12 @@ export const StudentDashboard: React.FC<Props> = ({
     if (!currentStudent?.id) return null;
     const draft = getLastActiveStudentExamDraft(currentStudent.id);
     if (!draft || draft.timeLeft <= 0) return null;
+    if (isExcludedFromTka && draft.category === 'tka') return null;
     const catalog = draft.category === 'tka' ? tkaExamList : cbtExamList;
     const matchedExam = catalog.find((e) => e.id === draft.examId);
     if (!matchedExam || matchedExam.soalList.length === 0) return null;
     return { draft, exam: matchedExam };
-  }, [currentStudent?.id, cbtExamList, tkaExamList, draftRevisionTick, viewMode]);
+  }, [currentStudent?.id, cbtExamList, tkaExamList, draftRevisionTick, viewMode, isExcludedFromTka]);
 
   // =========================================================================
   // VIEW 1: DASHBOARD CARDS UTAMA SISWA (4 MENU KARTU GRID)
@@ -1523,7 +1775,9 @@ export const StudentDashboard: React.FC<Props> = ({
                   : 'Siswa Reguler Aktif'}
               </span>
               <span className="text-[10px] text-rose-100 block mt-1">
-                Akses Ujian CBT, TKA &amp; Laporan Rapor
+                {isExcludedFromTka
+                  ? 'Akses Ujian CBT & Laporan Rapor (Tidak Masuk TKA)'
+                  : 'Akses Ujian CBT, TKA & Laporan Rapor'}
               </span>
             </div>
           </div>
@@ -1602,6 +1856,28 @@ export const StudentDashboard: React.FC<Props> = ({
           }}
         />
 
+        {/* Pelacakan Progres 7 Kebiasaan Anak Indonesia Hebat & Akumulasi Skor Mingguan */}
+        <StudentKebiasaanTracker
+          studentName={kebiasaanFormNama || currentStudent.nama}
+          studentClass={kebiasaanFormKelas || currentStudent.kelas}
+          todayStr={getLocalTodayStr()}
+          kebiasaanStatus={kebiasaanStatus}
+          kebiasaanSelectedIndicators={kebiasaanSelectedIndicators}
+          studentPastReports={studentPastReports}
+          hasUnsavedChanges={hasKebiasaanUnsavedChanges}
+          isSubmitting={isSubmittingKebiasaan}
+          onToggleIndikator={handleToggleIndikator}
+          onSelectAllIndicatorsForHabit={handleSelectAllIndicatorsForHabit}
+          onCheckAllToday={(checked) => handleMarkAllKebiasaan(checked, true)}
+          onSaveTodayProgress={() =>
+            saveKebiasaanProgress({
+              targetDate: getLocalTodayStr(),
+              openModal: false,
+            })
+          }
+          onOpenFullForm={() => setViewMode('kebiasaan')}
+        />
+
         {/* 4 MENU UTAMA SISWA (DASHBOARD CARDS GRID) */}
         <div className="no-print">
           <div className="mb-4">
@@ -1644,35 +1920,37 @@ export const StudentDashboard: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Card 2: TKA (Tes Kemampuan Akademik) */}
-            <div
-              onClick={() => {
-                setViewMode('tka');
-                setSelectedExamId('');
-                setIsExamRunning(false);
-              }}
-              className="group bg-white p-6 rounded-3xl border-2 border-purple-200 hover:border-purple-500 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden"
-            >
-              <div className="space-y-3">
-                <div className="w-14 h-14 rounded-2xl bg-purple-50 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition shadow-xs">
-                  <Sparkles className="w-7 h-7" />
+            {/* Card 2: TKA (Tes Kemampuan Akademik) - disembunyikan jika siswa inklusi tidak masuk TKA */}
+            {!isExcludedFromTka && (
+              <div
+                onClick={() => {
+                  setViewMode('tka');
+                  setSelectedExamId('');
+                  setIsExamRunning(false);
+                }}
+                className="group bg-white p-6 rounded-3xl border-2 border-purple-200 hover:border-purple-500 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden"
+              >
+                <div className="space-y-3">
+                  <div className="w-14 h-14 rounded-2xl bg-purple-50 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition shadow-xs">
+                    <Sparkles className="w-7 h-7" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-black uppercase text-purple-600 tracking-wider">Modul Asesmen 2</span>
+                    <h3 className="font-display font-black text-lg text-slate-800 group-hover:text-purple-600 transition">
+                      TKA (Tes Kemampuan Akademik)
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                    Uji target capaian belajar tingkat tinggi (C3/C4/C6), pemecahan masalah kontekstual, dan simulasi soal AKM/Tryout.
+                  </p>
                 </div>
-                <div>
-                  <span className="text-[10px] font-black uppercase text-purple-600 tracking-wider">Modul Asesmen 2</span>
-                  <h3 className="font-display font-black text-lg text-slate-800 group-hover:text-purple-600 transition">
-                    TKA (Tes Kemampuan Akademik)
-                  </h3>
-                </div>
-                <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                  Uji target capaian belajar tingkat tinggi (C3/C4/C6), pemecahan masalah kontekstual, dan simulasi soal AKM/Tryout.
-                </p>
-              </div>
 
-              <div className="mt-6 pt-4 border-t border-purple-100 flex items-center justify-between text-xs font-black text-purple-600 group-hover:text-purple-700">
-                <span>Buka Menu TKA</span>
-                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
+                <div className="mt-6 pt-4 border-t border-purple-100 flex items-center justify-between text-xs font-black text-purple-600 group-hover:text-purple-700">
+                  <span>Buka Menu TKA</span>
+                  <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Card 3: Hasil E-Rapor */}
             <div
@@ -1738,11 +2016,11 @@ export const StudentDashboard: React.FC<Props> = ({
                 <div>
                   <span className="text-[10px] font-black uppercase text-amber-600 tracking-wider">Karakter &amp; Pembiasaan</span>
                   <h3 className="font-display font-black text-lg text-slate-800 group-hover:text-amber-600 transition">
-                    Laporan 7 Kebiasaan
+                    Laporan 7 Kebiasaan Anak Indonesia Hebat
                   </h3>
                 </div>
                 <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                  Isi formulir 7 kebiasaan baik harianmu: bangun pagi, ibadah, sarapan, berpamitan, membaca buku, dan membantu orang tua.
+                  Pilih indikator kegiatan harianmu: bangun pagi, beribadah, berolahraga, makan sehat &amp; bergizi, gemar belajar, bermasyarakat, dan tidur cepat.
                 </p>
               </div>
 
@@ -1941,7 +2219,23 @@ export const StudentDashboard: React.FC<Props> = ({
                   <input
                     type="date"
                     value={kebiasaanFormTanggal}
-                    onChange={(e) => setKebiasaanFormTanggal(e.target.value)}
+                    onChange={(e) => {
+                      const nextDate = e.target.value;
+                      kebiasaanDirtyRef.current = false;
+                      setHasKebiasaanUnsavedChanges(false);
+                      const saved = studentPastReports.find((r) => r.tanggal === nextDate);
+                      const resetStatus: Record<string, boolean> = {};
+                      const resetIndicators: Record<string, string[]> = {};
+                      TUJUH_KEBIASAAN_LIST.forEach((h) => {
+                        const savedInd = saved?.indikatorTerpilih?.[h.id];
+                        const indArr = Array.isArray(savedInd) ? savedInd : [];
+                        resetIndicators[h.id] = indArr;
+                        resetStatus[h.id] = Boolean(saved?.kebiasaan?.[h.id]) || indArr.length > 0;
+                      });
+                      setKebiasaanStatus(resetStatus);
+                      setKebiasaanSelectedIndicators(resetIndicators);
+                      setKebiasaanFormTanggal(nextDate);
+                    }}
                     className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-amber-500 outline-none text-xs font-bold text-slate-800 transition cursor-pointer"
                   />
                 </div>
@@ -1986,15 +2280,20 @@ export const StudentDashboard: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* List 7 Kebiasaan */}
-            <div className="space-y-3">
+            {/* List 7 Kebiasaan + Indikator Kegiatan */}
+            <div className="space-y-4">
               {TUJUH_KEBIASAAN_LIST.map((item) => {
                 const isChecked = Boolean(kebiasaanStatus[item.id]);
+                const selectedList = kebiasaanSelectedIndicators[item.id] || [];
+                const allIndicatorTitles = item.indikator.map((ind) => ind.title);
+                const isAllSelected =
+                  allIndicatorTitles.length > 0 &&
+                  allIndicatorTitles.every((t) => selectedList.includes(t));
 
                 return (
                   <div
                     key={item.id}
-                    className={`p-4 rounded-2xl border transition-all duration-200 ${
+                    className={`p-4 sm:p-5 rounded-2xl border transition-all duration-200 ${
                       isChecked
                         ? 'bg-emerald-50/50 border-emerald-300 shadow-2xs'
                         : 'bg-slate-50 border-slate-200'
@@ -2007,15 +2306,26 @@ export const StudentDashboard: React.FC<Props> = ({
                           {item.icon}
                         </span>
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span className="w-5 h-5 rounded-full bg-slate-900 text-white font-black text-[11px] flex items-center justify-center shrink-0">
                               {item.nomor}
                             </span>
                             <h4 className="font-display font-black text-sm text-slate-800">
                               {item.label}
                             </h4>
+                            <span
+                              className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${
+                                selectedList.length > 0
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                  : 'bg-white text-slate-500 border-slate-200'
+                              }`}
+                            >
+                              {selectedList.length}/{item.indikator.length} Indikator
+                            </span>
                           </div>
-                          <p className="text-[11px] text-slate-500 mt-0.5">{item.deskripsi}</p>
+                          <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                            {item.deskripsi}
+                          </p>
                         </div>
                       </div>
 
@@ -2023,12 +2333,14 @@ export const StudentDashboard: React.FC<Props> = ({
                       <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
                         <button
                           type="button"
-                          onClick={() =>
+                          onClick={() => {
+                            kebiasaanDirtyRef.current = true;
+                            setHasKebiasaanUnsavedChanges(true);
                             setKebiasaanStatus((prev) => ({
                               ...prev,
                               [item.id]: !prev[item.id],
-                            }))
-                          }
+                            }));
+                          }}
                           className={`px-4 py-2 rounded-2xl font-display font-black text-xs transition flex items-center gap-2 cursor-pointer ${
                             isChecked
                               ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
@@ -2050,8 +2362,61 @@ export const StudentDashboard: React.FC<Props> = ({
                       </div>
                     </div>
 
+                    {/* Indikator Pemilihan Kegiatan (4 butir per kebiasaan) */}
+                    <div className="mt-3 pt-3 border-t border-slate-200/70 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">
+                          Pilih Indikator Kegiatan yang Dilaksanakan:
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleSelectAllIndicatorsForHabit(item.id, allIndicatorTitles)
+                          }
+                          className="text-[11px] font-extrabold text-emerald-700 hover:text-emerald-900 hover:underline cursor-pointer"
+                        >
+                          {isAllSelected ? 'Batal Pilih Semua' : 'Pilih Semua (4 Indikator)'}
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {item.indikator.map((ind) => {
+                          const isIndSelected = selectedList.includes(ind.title);
+                          return (
+                            <label
+                              key={ind.id}
+                              className={`flex items-start gap-2.5 p-2.5 rounded-xl border transition cursor-pointer ${
+                                isIndSelected
+                                  ? 'bg-white border-emerald-400 ring-1 ring-emerald-300 shadow-2xs'
+                                  : 'bg-white/80 border-slate-200 hover:border-emerald-300'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isIndSelected}
+                                onChange={() => handleToggleIndikator(item.id, ind.title)}
+                                className="w-4 h-4 mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer shrink-0"
+                              />
+                              <div className="min-w-0">
+                                <span
+                                  className={`block text-xs font-extrabold leading-snug ${
+                                    isIndSelected ? 'text-emerald-950' : 'text-slate-800'
+                                  }`}
+                                >
+                                  {ind.title}
+                                </span>
+                                <span className="block text-[11px] text-slate-500 leading-relaxed mt-0.5">
+                                  {ind.detail}
+                                </span>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
                     {/* Catatan / Keterangan Tambahan untuk kebiasaan ini */}
-                    <div className="mt-3 pt-2.5 border-t border-slate-200/60">
+                    <div className="mt-2.5">
                       <input
                         type="text"
                         value={kebiasaanNotes[item.id] || ''}
@@ -2237,6 +2602,40 @@ export const StudentDashboard: React.FC<Props> = ({
   // B. Panel Detail & Menu Waktu (Muncul setelah memilih)
   // C. Antarmuka Saat Ujian Berlangsung (Sticky Header Timer, Soal, Auto Submit)
   // =========================================================================
+  if (viewMode === 'tka' && isExcludedFromTka) {
+    return (
+      <section className="space-y-6">
+        <div className="bg-white p-8 rounded-3xl border-2 border-amber-200 shadow-sm text-center max-w-2xl mx-auto space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
+            <Lock className="w-8 h-8" />
+          </div>
+          <span className="inline-block text-[11px] font-black uppercase px-3 py-1 rounded-full bg-amber-100 text-amber-800">
+            Status Kepesertaan TKA: Tidak Masuk TKA
+          </span>
+          <h2 className="text-xl font-display font-black text-slate-800">
+            Modul TKA Tidak Aktif untuk Akun Anda
+          </h2>
+          <p className="text-sm text-slate-600 leading-relaxed">
+            Berdasarkan pengaturan kepesertaan TKA siswa berkebutuhan khusus oleh admin/guru, akun Anda diatur tidak mengikuti Tes Kemampuan Akademik (TKA) dan tetap dapat mengikuti Ujian CBT serta fitur rapor lainnya.
+          </p>
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('home');
+                setSelectedExamId('');
+                setIsExamRunning(false);
+              }}
+              className="px-5 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs inline-flex items-center gap-2 transition cursor-pointer shadow-sm"
+            >
+              <ArrowLeft className="w-4 h-4" /> Kembali ke Beranda Siswa
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   const themeColor = viewMode === 'tka' ? 'purple' : 'rose';
 
   return (

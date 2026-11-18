@@ -12,6 +12,7 @@ export interface SchoolProfile {
   };
   logoKemendikbudUrl: string;
   logoSekolahUrl: string;
+  adminFotoUrl?: string;
 }
 
 export interface Teacher {
@@ -72,6 +73,13 @@ export const isSiswaInklusi = (val?: string | null): boolean => {
   return true;
 };
 
+export const isAbkExcludedFromTka = (
+  student?: Pick<Student, 'kebutuhanKhusus' | 'ikutTka'> | null
+): boolean => {
+  if (!student) return false;
+  return isSiswaInklusi(student.kebutuhanKhusus) && student.ikutTka === false;
+};
+
 export interface Student {
   id: string;
   barcodeId: string;
@@ -82,6 +90,7 @@ export interface Student {
   nik: string; // 16 digit NIK
   nisn: string; // 10 digit NISN
   kebutuhanKhusus: string;
+  ikutTka?: boolean; // Khusus siswa ABK/Inklusi: true/undefined = ikut TKA, false = tidak masuk TKA
   namaAyah: string;
   namaIbu: string;
   alamat: string;
@@ -266,69 +275,243 @@ export interface ActiveUser {
   studentData?: Student;
 }
 
+export interface KebiasaanIndikatorItem {
+  id: string;
+  title: string;
+  detail: string;
+}
+
 export const TUJUH_KEBIASAAN_LIST = [
   {
     id: 'bangunPagi',
     nomor: 1,
-    label: '1. Bangun pagi dan merapikan tempat tidur',
-    shortLabel: 'Bangun Pagi & Rapikan Tempat Tidur',
+    kodePendek: 'BP',
+    label: '1. Bangun Pagi',
+    shortLabel: 'Bangun Pagi',
     icon: '🌅',
-    deskripsi: 'Membiasakan disiplin bangun tepat waktu dan menjaga kerapihan kamar tidur',
-    placeholder: 'Contoh: Bangun pukul 05.00 WIB, merapikan selimut, bantal dan sprei',
+    deskripsi:
+      'Melatih kedisiplinan waktu dan kesiapan anak memulai aktivitas pada rentang pukul 04.00–06.00 pagi.',
+    placeholder: 'Catatan tambahan kegiatan bangun pagi (opsional)...',
+    indikator: [
+      {
+        id: 'bp_1',
+        title: 'Bangun mandiri tanpa dibangunkan',
+        detail: 'Anak bangun tepat waktu menggunakan alarm atau kesadaran sendiri.',
+      },
+      {
+        id: 'bp_2',
+        title: 'Merapikan tempat tidur',
+        detail: 'Anak melipat selimut dan menata bantal segera setelah bangun.',
+      },
+      {
+        id: 'bp_3',
+        title: 'Menyiapkan perlengkapan sekolah',
+        detail: 'Anak memeriksa kembali buku pelajaran dan seragam sebelum berangkat.',
+      },
+      {
+        id: 'bp_4',
+        title: 'Mandi dan berpakaian rapi tepat waktu',
+        detail: 'Anak menjaga kebersihan diri di pagi hari agar segar berangkat ke sekolah.',
+      },
+    ],
   },
   {
     id: 'ibadah',
     nomor: 2,
-    label: '2. Melaksanakan ibadah',
-    shortLabel: 'Melaksanakan Ibadah',
+    kodePendek: 'IB',
+    label: '2. Beribadah',
+    shortLabel: 'Beribadah',
     icon: '🕌',
-    deskripsi: 'Melaksanakan kewajiban ibadah sesuai ajaran agama masing-masing',
-    placeholder: 'Contoh: Sholat Subuh berjamaah / Doa Pagi bersama keluarga',
+    deskripsi:
+      'Memperkuat nilai spiritual, moral, dan kedekatan anak dengan Tuhan sesuai agama masing-masing.',
+    placeholder: 'Catatan tambahan kegiatan beribadah (opsional)...',
+    indikator: [
+      {
+        id: 'ib_1',
+        title: 'Melaksanakan ibadah wajib tepat waktu',
+        detail: 'Anak menjalankan salat lima waktu (bagi Muslim) atau ibadah harian sesuai keyakinannya.',
+      },
+      {
+        id: 'ib_2',
+        title: 'Membaca doa sebelum dan sesudah beraktivitas',
+        detail: 'Anak terbiasa berdoa saat bangun tidur, sebelum makan, sebelum belajar, dan hendak tidur.',
+      },
+      {
+        id: 'ib_3',
+        title: 'Membaca kitab suci atau hafalan doa pendek',
+        detail: 'Anak meluangkan waktu membaca Al-Qur\'an, Iqra, Alkitab, atau kitab suci lainnya.',
+      },
+      {
+        id: 'ib_4',
+        title: 'Mengikuti kegiatan keagamaan bersama keluarga atau di lingkungan',
+        detail: 'Anak mengikuti salat berjamaah, sekolah minggu, atau kegiatan di tempat ibadah.',
+      },
+    ],
   },
   {
     id: 'mandiGosokGigi',
     nomor: 3,
-    label: '3. Mandi dan menggosok gigi',
-    shortLabel: 'Mandi & Menggosok Gigi',
-    icon: '🚿',
-    deskripsi: 'Menjaga kebersihan diri, kesegaran badan, dan kesehatan gigi',
-    placeholder: 'Contoh: Mandi pagi bersih dan menggosok gigi sebelum berpakaian',
+    kodePendek: 'BO',
+    label: '3. Berolahraga',
+    shortLabel: 'Berolahraga',
+    icon: '🏃',
+    deskripsi:
+      'Menjaga kebugaran fisik, kesehatan mental, dan sportivitas dengan target aktivitas fisik minimal 2 kali seminggu.',
+    placeholder: 'Catatan tambahan kegiatan olahraga hari ini (opsional)...',
+    indikator: [
+      {
+        id: 'bo_1',
+        title: 'Mengikuti Senam Anak Indonesia Hebat',
+        detail: 'Anak melakukan gerakan senam resmi program Kemendikdasmen di sekolah atau di rumah.',
+      },
+      {
+        id: 'bo_2',
+        title: 'Melakukan peregangan ringan di pagi hari',
+        detail: 'Anak melakukan pemanasan otot selama 5–10 menit setelah bangun tidur.',
+      },
+      {
+        id: 'bo_3',
+        title: 'Bermain permainan tradisional yang aktif bergerak',
+        detail: 'Anak bermain lompat tali, petak umpet, gobak sodor, atau kejar-kejaran bersama teman.',
+      },
+      {
+        id: 'bo_4',
+        title: 'Berolahraga bersama keluarga atau teman',
+        detail: 'Anak bersepeda, jalan santai, lari pagi, berenang, atau bermain bola.',
+      },
+    ],
   },
   {
     id: 'sarapanSehat',
     nomor: 4,
-    label: '4. Sarapan sehat',
-    shortLabel: 'Sarapan Sehat Bergizi',
+    kodePendek: 'MS',
+    label: '4. Makan Sehat dan Bergizi',
+    shortLabel: 'Makan Sehat & Bergizi',
     icon: '🥗',
-    deskripsi: 'Mengonsumsi sarapan bergizi seimbang untuk energi belajar',
-    placeholder: 'Contoh: Nasi, telur mata sapi, sayur bayam, dan minum air putih/susu',
+    deskripsi:
+      'Membiasakan anak mengonsumsi nutrisi seimbang sesuai pedoman Isi Piringku dan menghindari jajanan sembarangan.',
+    placeholder: 'Catatan tambahan menu makanan bergizi hari ini (opsional)...',
+    indikator: [
+      {
+        id: 'ms_1',
+        title: 'Sarapan pagi sebelum berangkat sekolah',
+        detail: 'Anak makan pagi dengan menu bergizi agar fokus saat belajar di kelas.',
+      },
+      {
+        id: 'ms_2',
+        title: 'Mengkonsumsi makanan pokok, lauk pauk, sayur, dan buah',
+        detail: 'Anak menghabiskan porsi makan seimbang dalam satu piring.',
+      },
+      {
+        id: 'ms_3',
+        title: 'Minum air putih yang cukup',
+        detail: 'Anak membiasakan minum air putih minimal 6–8 gelas sehari dan mengurangi minuman manis kemasan.',
+      },
+      {
+        id: 'ms_4',
+        title: 'Membawa bekal sehat dari rumah',
+        detail: 'Anak membawa makanan buatan orang tua ke sekolah untuk mengurangi konsumsi makanan instan.',
+      },
+    ],
   },
   {
     id: 'berpamitan',
     nomor: 5,
-    label: '5. Berpamitan sebelum berangkat',
-    shortLabel: 'Berpamitan Sebelum Berangkat',
-    icon: '🤝',
-    deskripsi: 'Mencium tangan orang tua dan mengucapkan salam sopan santun',
-    placeholder: 'Contoh: Mencium tangan ayah dan ibu serta memohon doa restu',
+    kodePendek: 'GB',
+    label: '5. Gemar Belajar',
+    shortLabel: 'Gemar Belajar',
+    icon: '📚',
+    deskripsi:
+      'Menumbuhkan rasa ingin tahu, kreativitas, dan kemandirian anak dalam mencari ilmu.',
+    placeholder: 'Catatan tambahan kegiatan belajar atau hobi (opsional)...',
+    indikator: [
+      {
+        id: 'gb_1',
+        title: 'Mengulang pelajaran dan mengerjakan PR',
+        detail: 'Anak meluangkan waktu khusus di sore atau malam hari untuk belajar mandiri.',
+      },
+      {
+        id: 'gb_2',
+        title: 'Membaca buku bacaan non-pelajaran',
+        detail: 'Anak membaca buku cerita, ensiklopedia anak, atau majalah edukasi minimal 15 menit sehari.',
+      },
+      {
+        id: 'gb_3',
+        title: 'Berdiskusi atau bertanya tentang hal baru',
+        detail: 'Anak aktif bertanya kepada orang tua atau guru mengenai fenomena di sekitarnya.',
+      },
+      {
+        id: 'gb_4',
+        title: 'Mengasah bakat atau hobi positif',
+        detail: 'Anak berlatih menggambar, menulis cerita, bermain alat musik, atau membuat prakarya.',
+      },
+    ],
   },
   {
     id: 'membacaBuku',
     nomor: 6,
-    label: '6. Membaca buku',
-    shortLabel: 'Membaca Buku (Literasi)',
-    icon: '📚',
-    deskripsi: 'Melakukan kegiatan literasi membaca buku pelajaran atau cerita inspiratif',
-    placeholder: 'Contoh: Membaca buku cerita nusantara halaman 10-25',
+    kodePendek: 'BM',
+    label: '6. Bermasyarakat',
+    shortLabel: 'Bermasyarakat',
+    icon: '🤝',
+    deskripsi:
+      'Membangun empati, gotong royong, toleransi, dan kepedulian anak terhadap lingkungan sekitar.',
+    placeholder: 'Catatan tambahan kegiatan bermasyarakat & tolong-menolong (opsional)...',
+    indikator: [
+      {
+        id: 'bm_1',
+        title: 'Membantu pekerjaan rumah tangga orang tua',
+        detail: 'Anak menyapu lantai, mencuci piring sendiri, atau menyiram tanaman di rumah.',
+      },
+      {
+        id: 'bm_2',
+        title: 'Melaksanakan piket kelas dan menjaga kebersihan sekolah',
+        detail: 'Anak bekerja sama dengan teman membersihkan ruang kelas dan membuang sampah pada tempatnya.',
+      },
+      {
+        id: 'bm_3',
+        title: 'Berbagi dan bertutur kata santun',
+        detail: 'Anak membiasakan mengucapkan kata tolong, maaf, terima kasih, serta berbagi dengan teman atau adik.',
+      },
+      {
+        id: 'bm_4',
+        title: 'Mengikuti kegiatan sosial di lingkungan rumah',
+        detail: 'Anak ikut kerja bakti ringan di lingkungan RT atau menjenguk teman yang sakit.',
+      },
+    ],
   },
   {
     id: 'membantuOrangTua',
     nomor: 7,
-    label: '7. Membantu orang tua',
-    shortLabel: 'Membantu Orang Tua',
-    icon: '🧹',
-    deskripsi: 'Meringankan pekerjaan orang tua di rumah dengan rasa tanggung jawab',
-    placeholder: 'Contoh: Menyapu lantai ruang tamu, mencuci piring bekas makan',
+    kodePendek: 'TC',
+    label: '7. Tidur Cepat',
+    shortLabel: 'Tidur Cepat',
+    icon: '🌙',
+    deskripsi:
+      'Memastikan anak mendapatkan waktu istirahat cukup (sekitar 8–10 jam untuk usia SD) agar tubuh bugar dan siap bangun pagi.',
+    placeholder: 'Catatan tambahan waktu & persiapan tidur malam (opsional)...',
+    indikator: [
+      {
+        id: 'tc_1',
+        title: 'Tidur malam maksimal pukul 21.00 WIB',
+        detail: 'Anak sudah berada di tempat tidur sebelum jam 9 malam.',
+      },
+      {
+        id: 'tc_2',
+        title: 'Menerapkan prinsip 3S (Screen Time, Screen Break, Screen Zone)',
+        detail: 'Anak berhenti menggunakan gawai atau menonton TV minimal 30–60 menit sebelum tidur.',
+      },
+      {
+        id: 'tc_3',
+        title: 'Membersihkan diri sebelum tidur',
+        detail: 'Anak mencuci kaki, mencuci tangan, dan menggosok gigi sebelum naik ke tempat tidur.',
+      },
+      {
+        id: 'tc_4',
+        title: 'Menyiapkan jadwal dan seragam untuk esok hari',
+        detail: 'Anak memastikan semua keperluan sekolah beres sebelum beristirahat.',
+      },
+    ],
   },
 ] as const;
 
@@ -349,6 +532,15 @@ export interface KebiasaanReportItem {
     berpamitan: boolean;
     membacaBuku: boolean;
     membantuOrangTua: boolean;
+  };
+  indikatorTerpilih?: {
+    bangunPagi?: string[];
+    ibadah?: string[];
+    mandiGosokGigi?: string[];
+    sarapanSehat?: string[];
+    berpamitan?: string[];
+    membacaBuku?: string[];
+    membantuOrangTua?: string[];
   };
   catatan?: {
     bangunPagi?: string;

@@ -28,9 +28,41 @@ import {
   Lock,
   Eye,
   EyeOff,
+  Download,
+  FileSpreadsheet,
+  ChevronDown,
+  BarChart3,
+  Printer,
+  Search,
+  Trophy,
+  Award,
+  Users,
 } from 'lucide-react';
-import { Subject, CBTExam, CBTQuestion, Student, ActiveUser, isSiswaInklusi } from '../../types';
+import * as XLSX from 'xlsx';
 import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ReferenceLine,
+  Cell,
+} from 'recharts';
+import {
+  Subject,
+  CBTExam,
+  CBTQuestion,
+  CBTExamResult,
+  Student,
+  Teacher,
+  SchoolProfile,
+  ActiveUser,
+  isSiswaInklusi,
+} from '../../types';
+import {
+  CLASSES_LIST,
   getStoredCBTExams,
   saveStoredCBTExams,
   getStoredCBTDurations,
@@ -46,10 +78,12 @@ import {
   getActiveFilters,
   getStoredSubjectsForClass,
   saveStoredSubjectsForClass,
+  isTkaResultEntry,
   notifyStorageMutation,
   MAX_QUESTIONS_PER_PACKAGE,
 } from '../../utils/storage';
 import { getLocalTodayStr } from '../../utils/dateUtils';
+import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../utils/firebase';
 import { pushAllDataToCloud, syncAllLocalToCloud } from '../../utils/cloudSync';
@@ -63,11 +97,19 @@ import {
   extractPastedQuestionText,
   toggleCenterTagOnSelection,
 } from '../../utils/questionFormat';
+import {
+  exportQuestionsToWord,
+  exportCbtQuestionsToExcel,
+} from '../../utils/questionExport';
 
 interface Props {
   activeUser: ActiveUser;
   activeClass: string;
   students: Student[];
+  teachers?: Teacher[];
+  profile?: SchoolProfile;
+  activeYear?: string;
+  activeSemester?: string;
   subjects?: Subject[];
   onUpdateSubjects?: (updated: Subject[], targetClass?: string) => void;
   showToast: (msg: string, type?: 'success' | 'error') => void;
@@ -77,6 +119,10 @@ export const CBTTab: React.FC<Props> = ({
   activeUser,
   activeClass,
   students,
+  teachers = [],
+  profile,
+  activeYear = '2026/2027',
+  activeSemester = 'Ganjil',
   subjects,
   onUpdateSubjects,
   showToast,
@@ -124,8 +170,31 @@ export const CBTTab: React.FC<Props> = ({
     };
   }, []);
 
-  // Tab mode for teacher: "bank-soal" (default for teacher) or "ujian"
-  const [subTab, setSubTab] = useState<'bank-soal' | 'ujian'>('bank-soal');
+  // Tab mode for teacher: "bank-soal" (default), "ujian", or "laporan-cbt"
+  const [subTab, setSubTab] = useState<'bank-soal' | 'ujian' | 'laporan-cbt'>('bank-soal');
+  const [cbtResultsList, setCbtResultsList] = useState<CBTExamResult[]>(() =>
+    getStoredCBTResults().filter((r) => !isTkaResultEntry(r))
+  );
+  const [reportPaketFilter, setReportPaketFilter] = useState<string>('all');
+  const [reportMapelFilter, setReportMapelFilter] = useState<string>('all');
+  const [reportClassFilter, setReportClassFilter] = useState<string>('all');
+  const [reportStatusFilter, setReportStatusFilter] = useState<'all' | 'Tuntas' | 'Remedial'>('all');
+  const [reportSearch, setReportSearch] = useState<string>('');
+  const [selectedCbtReportRow, setSelectedCbtReportRow] = useState<any | null>(null);
+
+  useEffect(() => {
+    const syncResults = () => {
+      setCbtResultsList(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)));
+    };
+    window.addEventListener('sekolahku-cbt-results-updated', syncResults);
+    window.addEventListener('sekolahku-cloud-sync-updated', syncResults);
+    window.addEventListener('storage', syncResults);
+    return () => {
+      window.removeEventListener('sekolahku-cbt-results-updated', syncResults);
+      window.removeEventListener('sekolahku-cloud-sync-updated', syncResults);
+      window.removeEventListener('storage', syncResults);
+    };
+  }, []);
 
   // Exam packages (Paket Sumatif, Remedial, Inklusi Kurikulum Merdeka)
   const [paketList, setPaketList] = useState<string[]>([
@@ -183,7 +252,51 @@ export const CBTTab: React.FC<Props> = ({
   // Editing question state & DOCX file ref
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [confirmDeleteQId, setConfirmDeleteQId] = useState<string | null>(null);
+  const [downloadMenuPos, setDownloadMenuPos] = useState<'toolbar' | 'list' | null>(null);
   const docxInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDownloadCbtQuestions = (mode: 'word_only' | 'word_key' | 'excel') => {
+    setDownloadMenuPos(null);
+    const listToExport = allCreatedQuestions.length > 0 && filterTipe !== 'all'
+      ? allCreatedQuestions
+      : activeExam.soalList;
+
+    if (!listToExport || listToExport.length === 0) {
+      showToast(
+        `Belum ada butir soal di paket ${selectedPaket} • ${selectedMapel} (${selectedSubPaket}) untuk diunduh.`,
+        'error'
+      );
+      return;
+    }
+
+    const fileBase = `Soal_CBT_${selectedPaket}_${selectedMapel}_${selectedSubPaket}_${targetKelas}`;
+    if (mode === 'excel') {
+      exportCbtQuestionsToExcel(listToExport, {
+        title: `Bank Soal CBT - ${selectedPaket}`,
+        paket: `${selectedPaket} (${selectedSubPaket})`,
+        mapel: selectedMapel,
+        kelas: targetKelas,
+        fileNameBase: fileBase,
+      });
+      showToast(`Berhasil mengunduh ${listToExport.length} soal CBT ke Excel (.XLSX)!`, 'success');
+      return;
+    }
+
+    const withKey = mode === 'word_key';
+    exportQuestionsToWord(listToExport, {
+      title: `Naskah Soal Asesmen CBT - ${selectedPaket}`,
+      subtitle: `${selectedMapel} • ${selectedSubPaket}`,
+      paket: `${selectedPaket} (${selectedSubPaket})`,
+      mapel: selectedMapel,
+      kelas: targetKelas,
+      includeAnswerKey: withKey,
+      fileNameBase: fileBase,
+    });
+    showToast(
+      `Berhasil mengunduh ${listToExport.length} soal CBT (.DOC${withKey ? ' + Kunci Jawaban' : ''})!`,
+      'success'
+    );
+  };
 
   // Form Fields matching Image 1
   const [selectedMapel, setSelectedMapel] = useState<string>('Pendidikan Agama Islam');
@@ -1213,26 +1326,34 @@ export const CBTTab: React.FC<Props> = ({
   return (
     <section className="space-y-6">
       {/* Top Banner Navigation */}
-      <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+      <div
+        className={`bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-5 print:shadow-none print:border-0 print:p-0 print:rounded-none ${
+          selectedCbtReportRow ? 'no-print' : ''
+        }`}
+      >
+        <div
+          className={`flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4 ${
+            subTab === 'laporan-cbt' ? 'no-print' : ''
+          }`}
+        >
           <div>
             <span className="text-xs font-extrabold uppercase bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full">
               Menu 4. Penilaian & Pelaporan • Bank Soal & Ujian CBT
             </span>
             <h2 className="text-xl font-display font-black text-slate-800 mt-1 flex items-center gap-2">
-              <Laptop className="w-5 h-5 text-emerald-600" /> Bank Soal Kurikulum Merdeka & Ujian CBT
+              <Laptop className="w-5 h-5 text-emerald-600" /> Bank Soal Kurikulum Merdeka, Ujian &amp; Report CBT
             </h2>
             <p className="text-xs text-slate-500">
-              Form Pembuatan Soal Standar (6 Tipe Soal), Dropdown CP & TP, Bobot Nilai, serta Daftar Soal Tersimpan.
+              Form Pembuatan Soal Standar (6 Tipe Soal), Simulasi Ujian CBT, serta Report &amp; Rekapitulasi Hasil Ujian CBT.
             </p>
           </div>
 
           {activeUser.role !== 'siswa' && !isExamRunning && (
-            <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200">
+            <div className="flex flex-wrap bg-slate-100 p-1 rounded-2xl border border-slate-200 gap-1">
               <button
                 type="button"
                 onClick={() => setSubTab('bank-soal')}
-                className={`px-4 py-2 rounded-xl text-xs font-display font-black transition cursor-pointer ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-display font-black transition cursor-pointer whitespace-nowrap ${
                   subTab === 'bank-soal' ? 'bg-white text-emerald-800 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
@@ -1241,11 +1362,20 @@ export const CBTTab: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => setSubTab('ujian')}
-                className={`px-4 py-2 rounded-xl text-xs font-display font-black transition cursor-pointer ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-display font-black transition cursor-pointer whitespace-nowrap ${
                   subTab === 'ujian' ? 'bg-white text-emerald-800 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 Simulasi / Ujian CBT Siswa
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubTab('laporan-cbt')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-display font-black transition cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                  subTab === 'laporan-cbt' ? 'bg-emerald-700 text-white shadow-xs' : 'text-slate-700 hover:text-emerald-800'
+                }`}
+              >
+                <Award className="w-3.5 h-3.5" /> Report &amp; Hasil CBT ({cbtResultsList.length})
               </button>
             </div>
           )}
@@ -1325,6 +1455,57 @@ export const CBTTab: React.FC<Props> = ({
                 >
                   <FileUp className="w-4 h-4" /> Import Soal (.DOCX)
                 </button>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDownloadMenuPos((prev) => (prev === 'toolbar' ? null : 'toolbar'))
+                    }
+                    className="bg-sky-600 hover:bg-sky-700 text-white font-display font-extrabold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+                    title="Unduh kumpulan soal yang sudah dibuat pada paket ini (Word atau Excel)"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download Soal</span>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </button>
+                  {downloadMenuPos === 'toolbar' && (
+                    <div className="absolute right-0 mt-1.5 w-60 bg-white rounded-2xl shadow-xl border border-slate-200 p-1.5 z-50 space-y-1">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadCbtQuestions('word_only')}
+                        className="w-full text-left px-3 py-2 rounded-xl hover:bg-sky-50 text-xs font-bold text-slate-800 flex items-center gap-2 transition cursor-pointer"
+                      >
+                        <FileText className="w-4 h-4 text-sky-600 shrink-0" />
+                        <div>
+                          <span className="block">Naskah Soal (.DOC Word)</span>
+                          <span className="text-[10px] font-normal text-slate-500">Siap cetak tanpa kunci jawaban</span>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadCbtQuestions('word_key')}
+                        className="w-full text-left px-3 py-2 rounded-xl hover:bg-emerald-50 text-xs font-bold text-slate-800 flex items-center gap-2 transition cursor-pointer"
+                      >
+                        <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <div>
+                          <span className="block">Soal + Kunci &amp; Pembahasan (.DOC)</span>
+                          <span className="text-[10px] font-normal text-slate-500">Arsip guru &amp; kisi-kisi lengkap</span>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadCbtQuestions('excel')}
+                        className="w-full text-left px-3 py-2 rounded-xl hover:bg-amber-50 text-xs font-bold text-slate-800 flex items-center gap-2 transition cursor-pointer"
+                      >
+                        <FileSpreadsheet className="w-4 h-4 text-amber-600 shrink-0" />
+                        <div>
+                          <span className="block">Bank Soal (.XLSX Excel)</span>
+                          <span className="text-[10px] font-normal text-slate-500">Rekap tabel butir soal CBT</span>
+                        </div>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -2114,7 +2295,7 @@ export const CBTTab: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {/* Filter controls */}
+                {/* Filter & Download controls */}
                 <div className="flex flex-wrap items-center gap-2">
                   <select
                     value={filterTipe}
@@ -2129,6 +2310,48 @@ export const CBTTab: React.FC<Props> = ({
                     <option value="menjodohkan">Menjodohkan</option>
                     <option value="uraian">Uraian</option>
                   </select>
+
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDownloadMenuPos((prev) => (prev === 'list' ? null : 'list'))
+                      }
+                      className="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download Soal</span>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                    {downloadMenuPos === 'list' && (
+                      <div className="absolute right-0 mt-1.5 w-60 bg-white rounded-2xl shadow-xl border border-slate-200 p-1.5 z-50 space-y-1">
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadCbtQuestions('word_only')}
+                          className="w-full text-left px-3 py-2 rounded-xl hover:bg-sky-50 text-xs font-bold text-slate-800 flex items-center gap-2 transition cursor-pointer"
+                        >
+                          <FileText className="w-4 h-4 text-sky-600 shrink-0" />
+                          <span>Naskah Soal (.DOC Word)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadCbtQuestions('word_key')}
+                          className="w-full text-left px-3 py-2 rounded-xl hover:bg-emerald-50 text-xs font-bold text-slate-800 flex items-center gap-2 transition cursor-pointer"
+                        >
+                          <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>Soal + Kunci (.DOC Word)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadCbtQuestions('excel')}
+                          className="w-full text-left px-3 py-2 rounded-xl hover:bg-amber-50 text-xs font-bold text-slate-800 flex items-center gap-2 transition cursor-pointer"
+                        >
+                          <FileSpreadsheet className="w-4 h-4 text-amber-600 shrink-0" />
+                          <span>Bank Soal (.XLSX Excel)</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -2828,7 +3051,744 @@ export const CBTTab: React.FC<Props> = ({
             )}
           </div>
         )}
+
+        {/* ============================================================== */}
+        {/* SUBTAB 3: REPORT & REKAPITULASI HASIL UJIAN CBT                */}
+        {/* ============================================================== */}
+        {subTab === 'laporan-cbt' && activeUser.role !== 'siswa' && !isExamRunning && (() => {
+          const examLookup = new Map<string, CBTExam>();
+          exams.forEach((ex) => examLookup.set(ex.id, ex));
+
+          const studentLookup = new Map<string, Student>();
+          students.forEach((st) => studentLookup.set(st.id, st));
+
+          const enrichedRows = cbtResultsList
+            .map((res, idx) => {
+              const linkedExam = examLookup.get(res.examId);
+              const linkedStudent = studentLookup.get(res.studentId);
+              const nama = linkedStudent?.nama || res.studentName || 'Siswa';
+              const nisn = linkedStudent?.nisn || '-';
+              const kelas = linkedStudent?.kelas || linkedExam?.kelas || activeClass || '-';
+              const fotoUrl = linkedStudent?.fotoUrl || '';
+              const mapel = res.mapel || linkedExam?.mapel || 'Umum';
+              const paket = res.paketName || linkedExam?.paketName || 'Reguler';
+              const judul = res.judul || linkedExam?.judul || `${paket} - ${mapel}`;
+              const nilai = Number.isFinite(Number(res.nilai)) ? Number(res.nilai) : 0;
+              const predikat = nilai >= 90 ? 'A' : nilai >= 75 ? 'B' : nilai >= 60 ? 'C' : 'D';
+              const status: 'Tuntas' | 'Remedial' = nilai >= 75 ? 'Tuntas' : 'Remedial';
+              return {
+                id: `${res.examId}_${res.studentId}_${res.recordedAt || idx}`,
+                raw: res,
+                nama,
+                nisn,
+                kelas,
+                fotoUrl,
+                mapel,
+                paket,
+                judul,
+                nilai,
+                skor: res.skor ?? nilai,
+                predikat,
+                status,
+                waktuSelesai: res.waktuSelesai || '-',
+                tanggal: res.tanggal || '-',
+                recordedAt: res.recordedAt || 0,
+              };
+            })
+            .sort((a, b) => {
+              if (b.nilai !== a.nilai) return b.nilai - a.nilai;
+              return (b.recordedAt || 0) - (a.recordedAt || 0);
+            });
+
+          const availableReportPakets = Array.from(
+            new Set(enrichedRows.map((r) => r.paket).filter(Boolean))
+          );
+          const availableReportMapels = Array.from(
+            new Set(enrichedRows.map((r) => r.mapel).filter(Boolean))
+          );
+          const availableReportClasses = Array.from(
+            new Set(enrichedRows.map((r) => r.kelas).filter(Boolean))
+          ).sort();
+
+          const filteredCbtRows = enrichedRows.filter((row) => {
+            if (reportPaketFilter !== 'all' && row.paket !== reportPaketFilter) return false;
+            if (reportMapelFilter !== 'all' && row.mapel !== reportMapelFilter) return false;
+            if (reportClassFilter !== 'all' && row.kelas !== reportClassFilter) return false;
+            if (reportStatusFilter !== 'all' && row.status !== reportStatusFilter) return false;
+            if (reportSearch.trim()) {
+              const q = reportSearch.trim().toLowerCase();
+              const match =
+                row.nama.toLowerCase().includes(q) ||
+                row.nisn.toLowerCase().includes(q) ||
+                row.mapel.toLowerCase().includes(q) ||
+                row.judul.toLowerCase().includes(q);
+              if (!match) return false;
+            }
+            return true;
+          });
+
+          const totalSubmissions = filteredCbtRows.length;
+          const avgCbtScore =
+            totalSubmissions > 0
+              ? (filteredCbtRows.reduce((acc, r) => acc + r.nilai, 0) / totalSubmissions).toFixed(1)
+              : '0.0';
+          const tuntasCbtCount = filteredCbtRows.filter((r) => r.status === 'Tuntas').length;
+          const tuntasCbtPct =
+            totalSubmissions > 0 ? Math.round((tuntasCbtCount / totalSubmissions) * 100) : 0;
+          const highestCbt =
+            totalSubmissions > 0 ? Math.max(...filteredCbtRows.map((r) => r.nilai)) : 0;
+          const lowestCbt =
+            totalSubmissions > 0 ? Math.min(...filteredCbtRows.map((r) => r.nilai)) : 0;
+
+          // Mapel average chart data
+          const mapelStatMap = new Map<string, { sum: number; count: number }>();
+          filteredCbtRows.forEach((r) => {
+            const cur = mapelStatMap.get(r.mapel) || { sum: 0, count: 0 };
+            mapelStatMap.set(r.mapel, { sum: cur.sum + r.nilai, count: cur.count + 1 });
+          });
+          const cbtMapelChartData = Array.from(mapelStatMap.entries()).map(([mapelName, stat]) => {
+            const avg = Math.round(stat.sum / stat.count);
+            return {
+              mapel: mapelName.length > 18 ? `${mapelName.slice(0, 16)}...` : mapelName,
+              fullMapel: mapelName,
+              rataRata: avg,
+              peserta: stat.count,
+              fill: avg >= 75 ? '#059669' : '#f59e0b',
+            };
+          });
+
+          const topCbtStudents = filteredCbtRows.slice(0, 5);
+          const kepsekCbt = resolveKepalaSekolah(teachers, profile);
+          const waliCbt =
+            reportClassFilter !== 'all'
+              ? resolveWaliKelas(teachers, reportClassFilter)
+              : resolveWaliKelas(teachers, activeClass);
+          const tanggalCetakCbt = new Date().toLocaleDateString('id-ID', {
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+          });
+
+          const handleExportCbtExcel = () => {
+            if (filteredCbtRows.length === 0) {
+              showToast('Belum ada data hasil CBT yang dapat diekspor.', 'error');
+              return;
+            }
+            const rowsToExport = filteredCbtRows.map((r, idx) => ({
+              Peringkat: idx + 1,
+              NISN: r.nisn,
+              'Nama Siswa': r.nama,
+              Kelas: r.kelas,
+              'Paket Ujian': r.paket,
+              'Mata Pelajaran': r.mapel,
+              'Nilai Akhir': r.nilai,
+              Predikat: r.predikat,
+              'Status (KKTP 75)': r.status,
+              Tanggal: r.tanggal,
+              Waktu: r.waktuSelesai,
+            }));
+            const ws = XLSX.utils.json_to_sheet(rowsToExport);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Report Hasil CBT');
+            XLSX.writeFile(wb, `Report_Hasil_CBT_${getLocalTodayStr()}.xlsx`);
+            showToast(`Report Hasil CBT (${filteredCbtRows.length} data) berhasil diekspor ke Excel!`, 'success');
+          };
+
+          return (
+            <div className="space-y-6">
+              {/* Formal Kop Surat Sekolah (Khusus Cetak / PDF) */}
+              <div className="hidden print-only border-b-4 border-double border-slate-900 pb-3 mb-4 text-slate-900">
+                <div className="flex items-center justify-between gap-4">
+                  {profile?.logoKemendikbudUrl ? (
+                    <img
+                      src={profile.logoKemendikbudUrl}
+                      alt="Logo Dinas"
+                      referrerPolicy="no-referrer"
+                      className="w-16 h-16 object-contain shrink-0"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 shrink-0" />
+                  )}
+                  <div className="text-center flex-1 px-2">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
+                      Pemerintah Provinsi DKI Jakarta · Suku Dinas Pendidikan Jakarta Utara
+                    </div>
+                    <h1 className="font-display font-black text-xl uppercase tracking-tight text-slate-950">
+                      {profile?.name || 'SDN Rawa Badak Utara 21'}
+                    </h1>
+                    <p className="text-xs text-slate-700">
+                      {profile?.alamat || 'Jl. Rawa Badak Utara'} · {profile?.kota || 'Jakarta Utara'}
+                      {profile?.npsn ? ` · NPSN: ${profile.npsn}` : ''}
+                    </p>
+                  </div>
+                  {profile?.logoSekolahUrl ? (
+                    <img
+                      src={profile.logoSekolahUrl}
+                      alt="Logo Sekolah"
+                      referrerPolicy="no-referrer"
+                      className="w-16 h-16 object-contain shrink-0"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 shrink-0" />
+                  )}
+                </div>
+                <div className="text-center mt-3 pt-2 border-t border-slate-300">
+                  <h2 className="font-display font-black text-sm uppercase tracking-wide text-slate-950">
+                    LAPORAN REKAPITULASI HASIL UJIAN BERBASIS KOMPUTER (CBT)
+                  </h2>
+                  <p className="text-[11px] text-slate-700 mt-0.5 tabular-nums">
+                    Paket: <strong>{reportPaketFilter === 'all' ? 'Semua Paket' : reportPaketFilter}</strong> · Mapel:{' '}
+                    <strong>{reportMapelFilter === 'all' ? 'Semua Mapel' : reportMapelFilter}</strong> · Kelas:{' '}
+                    <strong>{reportClassFilter === 'all' ? 'Semua Kelas' : reportClassFilter}</strong> · Tahun Pelajaran {activeYear} ({activeSemester})
+                  </p>
+                </div>
+              </div>
+
+              {/* Eye-Catching Editorial Header Banner (Layar) */}
+              <div className="no-print bg-gradient-to-br from-slate-900 via-emerald-950 to-cyan-950 text-white p-6 sm:p-7 rounded-3xl shadow-md border border-emerald-900/40 flex flex-col xl:flex-row xl:items-center justify-between gap-5">
+                <div className="space-y-2 max-w-2xl">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-emerald-200 font-medium">
+                    <span>Rekapitulasi Evaluasi CBT</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{reportClassFilter === 'all' ? 'Semua Kelas' : reportClassFilter}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>Tahun Pelajaran {activeYear} ({activeSemester})</span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-display font-black tracking-tight flex items-center gap-2.5 text-white">
+                    <span className="w-10 h-10 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
+                      <Award className="w-5 h-5 text-emerald-300" />
+                    </span>
+                    <span>Report &amp; Rekapitulasi Hasil Ujian CBT</span>
+                  </h2>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Rekapitulasi nilai hasil pengerjaan ujian CBT siswa per paket dan mata pelajaran, grafik rata-rata per mapel, rapor individu CBT, dan cetak laporan standar A4.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCbtResultsList(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)));
+                      showToast('Data hasil CBT diperbarui.', 'success');
+                    }}
+                    className="bg-white/10 hover:bg-white/20 text-white font-display font-bold px-3.5 py-2.5 rounded-xl text-xs border border-white/15 flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <RefreshCw className="w-4 h-4 text-sky-300" />
+                    <span>Segarkan Data</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportCbtExcel}
+                    className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>Export Excel</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="bg-white hover:bg-slate-100 text-slate-900 font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Printer className="w-4 h-4 text-emerald-700" />
+                    <span>Cetak Rekap A4</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Filter Bar (Layar) */}
+              <div className="no-print bg-slate-50 p-4 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                <div>
+                  <label className="block text-[11px] font-black text-slate-700 mb-1">Paket Ujian CBT</label>
+                  <select
+                    value={reportPaketFilter}
+                    onChange={(e) => setReportPaketFilter(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold outline-none cursor-pointer"
+                  >
+                    <option value="all">Semua Paket CBT</option>
+                    {availableReportPakets.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-black text-slate-700 mb-1">Mata Pelajaran</label>
+                  <select
+                    value={reportMapelFilter}
+                    onChange={(e) => setReportMapelFilter(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold outline-none cursor-pointer"
+                  >
+                    <option value="all">Semua Mata Pelajaran</option>
+                    {availableReportMapels.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-black text-slate-700 mb-1">Filter Kelas</label>
+                  <select
+                    value={reportClassFilter}
+                    onChange={(e) => setReportClassFilter(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold outline-none cursor-pointer"
+                  >
+                    <option value="all">Semua Kelas</option>
+                    {(availableReportClasses.length > 0 ? availableReportClasses : CLASSES_LIST).map((cls) => (
+                      <option key={cls} value={cls}>{cls}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-black text-slate-700 mb-1">Ketuntasan (KKTP 75)</label>
+                  <select
+                    value={reportStatusFilter}
+                    onChange={(e) => setReportStatusFilter(e.target.value as 'all' | 'Tuntas' | 'Remedial')}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold outline-none cursor-pointer"
+                  >
+                    <option value="all">Semua Status</option>
+                    <option value="Tuntas">Hanya Tuntas (&gt;= 75)</option>
+                    <option value="Remedial">Perlu Remedial (&lt; 75)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-black text-slate-700 mb-1">Cari Nama / NISN</label>
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={reportSearch}
+                      onChange={(e) => setReportSearch(e.target.value)}
+                      placeholder="Cari siswa..."
+                      className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold outline-none focus:border-emerald-600"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* KPI Strip */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 print:grid-cols-4 gap-3.5 print:gap-2 print-avoid-break">
+                <div className="bg-white p-4 print:p-3 rounded-2xl border border-slate-200 space-y-1">
+                  <div className="text-[11px] font-bold text-emerald-700">Total Pengerjaan CBT</div>
+                  <div className="text-2xl print:text-xl font-display font-black text-slate-900 tabular-nums">
+                    {totalSubmissions} <span className="text-xs font-bold text-slate-500">Sesi</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500">Hasil ujian terekam sistem</p>
+                </div>
+                <div className="bg-white p-4 print:p-3 rounded-2xl border border-slate-200 space-y-1">
+                  <div className="text-[11px] font-bold text-sky-700">Rata-rata Nilai CBT</div>
+                  <div className="text-2xl print:text-xl font-display font-black text-slate-900 tabular-nums">
+                    {avgCbtScore}
+                  </div>
+                  <p className="text-[11px] text-slate-500 tabular-nums">Standar KKTP: 75.0 Poin</p>
+                </div>
+                <div className="bg-white p-4 print:p-3 rounded-2xl border border-slate-200 space-y-1">
+                  <div className="text-[11px] font-bold text-teal-700">Persentase Ketuntasan</div>
+                  <div className="text-2xl print:text-xl font-display font-black text-emerald-700 tabular-nums">
+                    {tuntasCbtPct}%
+                  </div>
+                  <p className="text-[11px] text-slate-600 tabular-nums">
+                    {tuntasCbtCount} dari {totalSubmissions} hasil tuntas
+                  </p>
+                </div>
+                <div className="bg-white p-4 print:p-3 rounded-2xl border border-slate-200 space-y-1">
+                  <div className="text-[11px] font-bold text-amber-700">Nilai Tertinggi / Terendah</div>
+                  <div className="text-2xl print:text-xl font-display font-black text-slate-900 tabular-nums">
+                    {highestCbt} <span className="text-xs font-bold text-slate-400">/ min {lowestCbt}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 tabular-nums">Skala penilaian 0–100</p>
+                </div>
+              </div>
+
+              {totalSubmissions === 0 ? (
+                <div className="p-8 rounded-3xl border border-dashed border-slate-300 bg-slate-50/50 text-center space-y-3">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 mx-auto flex items-center justify-center">
+                    <Laptop className="w-6 h-6" />
+                  </div>
+                  <div className="space-y-1 max-w-md mx-auto">
+                    <h3 className="font-display font-black text-sm text-slate-800">
+                      Belum Ada Data Hasil Ujian CBT
+                    </h3>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Rekapitulasi nilai dan peringkat CBT akan tampil otomatis setelah siswa menyelesaikan ujian CBT atau guru menjalankan Simulasi Ujian CBT.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSubTab('ujian')}
+                    className="no-print px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-display font-black cursor-pointer inline-flex items-center gap-1.5 transition"
+                  >
+                    <Play className="w-3.5 h-3.5" /> Buka Simulasi / Ujian CBT
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Chart + Top 5 Students */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 print-avoid-break">
+                    <div className="lg:col-span-7 bg-white p-5 print:p-3 rounded-2xl border border-slate-200 space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                        <div>
+                          <h3 className="font-display font-black text-sm text-slate-900 flex items-center gap-1.5">
+                            <BarChart3 className="w-4 h-4 text-emerald-600" /> Rata-rata Nilai CBT per Mata Pelajaran
+                          </h3>
+                          <p className="text-[11px] text-slate-500">Perbandingan capaian mapel terhadap ambang KKTP (75)</p>
+                        </div>
+                      </div>
+                      <div className="w-full h-[220px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={cbtMapelChartData} margin={{ top: 10, right: 12, left: -16, bottom: 4 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
+                            <XAxis dataKey="mapel" tick={{ fontSize: 10, fontWeight: 700, fill: '#334155' }} tickLine={false} />
+                            <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#64748B' }} axisLine={false} tickLine={false} />
+                            <ReferenceLine y={75} stroke="#e11d48" strokeDasharray="4 4" />
+                            <Tooltip
+                              content={({ active, payload }) => {
+                                if (!active || !payload || !payload.length) return null;
+                                const d = payload[0].payload as (typeof cbtMapelChartData)[number];
+                                return (
+                                  <div className="bg-white border border-slate-200 rounded-xl p-2.5 shadow-md text-xs space-y-1">
+                                    <div className="font-bold text-slate-900">{d.fullMapel}</div>
+                                    <div className="text-emerald-700 font-mono font-black tabular-nums">
+                                      Rata-rata: {d.rataRata} ({d.peserta} pengerjaan)
+                                    </div>
+                                  </div>
+                                );
+                              }}
+                            />
+                            <Bar dataKey="rataRata" radius={[6, 6, 0, 0]} maxBarSize={40}>
+                              {cbtMapelChartData.map((entry) => (
+                                <Cell key={`cbt-bar-${entry.fullMapel}`} fill={entry.fill} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="lg:col-span-5 bg-white p-5 print:p-3 rounded-2xl border border-slate-200 space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                        <h3 className="font-display font-black text-sm text-slate-900 flex items-center gap-1.5">
+                          <Trophy className="w-4 h-4 text-amber-500" /> Peringkat 5 Terbaik CBT
+                        </h3>
+                        <span className="text-[11px] font-bold text-slate-500">Top 5 Scores</span>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {topCbtStudents.map((item, idx) => (
+                          <div key={`top-cbt-${item.id}`} className="py-2.5 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span
+                                className={`w-6 h-6 rounded-lg font-mono text-xs font-black flex items-center justify-center shrink-0 tabular-nums ${
+                                  idx === 0
+                                    ? 'bg-amber-300 text-slate-900'
+                                    : idx === 1
+                                    ? 'bg-slate-200 text-slate-900'
+                                    : idx === 2
+                                    ? 'bg-orange-200 text-slate-900'
+                                    : 'bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                {idx + 1}
+                              </span>
+                              <div className="min-w-0">
+                                <div className="text-xs font-bold text-slate-900 truncate">{item.nama}</div>
+                                <div className="text-[10px] text-slate-500 truncate">
+                                  {item.kelas} · {item.mapel}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <div className="font-mono font-black text-sm text-emerald-700 tabular-nums">{item.nilai}</div>
+                              <div className="text-[10px] font-bold text-slate-500">Predikat {item.predikat}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tabel Rekapitulasi Nilai CBT */}
+                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                    <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-slate-50/70">
+                      <h3 className="font-display font-black text-sm text-slate-900 flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-emerald-600" />
+                        <span>Daftar Rekapitulasi Nilai Ujian CBT ({filteredCbtRows.length} Data)</span>
+                      </h3>
+                      <span className="text-xs text-slate-500 font-semibold tabular-nums">KKTP: 75</span>
+                    </div>
+                    <div className="overflow-x-auto print-expand-scroll">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-emerald-50 text-emerald-950 font-black uppercase text-[11px] border-b-2 border-emerald-200">
+                            <th className="p-3 text-center w-12">No</th>
+                            <th className="p-3">Identitas Siswa</th>
+                            <th className="p-3 text-center">Kelas</th>
+                            <th className="p-3">Mata Pelajaran &amp; Paket</th>
+                            <th className="p-3 text-center">Nilai</th>
+                            <th className="p-3 text-center">Predikat</th>
+                            <th className="p-3 text-center">Status</th>
+                            <th className="p-3 text-center">Waktu</th>
+                            <th className="no-print p-3 text-right">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {filteredCbtRows.map((row, idx) => (
+                            <tr key={row.id} className="hover:bg-emerald-50/30 even:bg-slate-50/40 transition">
+                              <td className="p-3 text-center font-mono font-bold text-slate-600 tabular-nums">
+                                {idx + 1}
+                              </td>
+                              <td className="p-3">
+                                <div className="font-bold text-slate-900">{row.nama}</div>
+                                <div className="text-[10px] font-mono text-slate-500 tabular-nums">NISN: {row.nisn}</div>
+                              </td>
+                              <td className="p-3 text-center font-bold text-slate-700 whitespace-nowrap">
+                                {row.kelas}
+                              </td>
+                              <td className="p-3">
+                                <div className="font-bold text-slate-800">{row.mapel}</div>
+                                <div className="text-[10px] text-slate-500">{row.paket}</div>
+                              </td>
+                              <td className="p-3 text-center font-mono font-black text-sm text-emerald-800 tabular-nums">
+                                {row.nilai}
+                              </td>
+                              <td className="p-3 text-center">
+                                <span
+                                  className={`inline-block px-2 py-0.5 rounded-md font-black text-[11px] ${
+                                    row.predikat === 'A'
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : row.predikat === 'B'
+                                      ? 'bg-sky-100 text-sky-800'
+                                      : row.predikat === 'C'
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-rose-100 text-rose-800'
+                                  }`}
+                                >
+                                  {row.predikat}
+                                </span>
+                              </td>
+                              <td className="p-3 text-center font-bold text-[11px] whitespace-nowrap">
+                                <span className={row.status === 'Tuntas' ? 'text-emerald-700' : 'text-rose-700'}>
+                                  {row.status}
+                                </span>
+                              </td>
+                              <td className="p-3 text-center text-[11px] text-slate-600 font-mono tabular-nums whitespace-nowrap">
+                                {row.tanggal} · {row.waktuSelesai}
+                              </td>
+                              <td className="no-print p-3 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedCbtReportRow(row)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                                >
+                                  <Eye className="w-3 h-3" /> Rapor CBT
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Blok Pengesahan Resmi Kepala Sekolah & Wali Kelas (Khusus Cetak / PDF) */}
+              <div className="hidden print-only print-avoid-break pt-6 mt-4 text-xs text-slate-900">
+                <div className="grid grid-cols-2 gap-8 text-center">
+                  <div>
+                    <p className="font-medium text-slate-700">
+                      Mengetahui,<br />Kepala {profile?.name || 'SDN Rawa Badak Utara 21'}
+                    </p>
+                    <div className="h-16" />
+                    <p className="font-black text-slate-900 underline">{kepsekCbt.nama}</p>
+                    <p className="text-[11px] font-mono text-slate-600 tabular-nums">
+                      {formatNipLabel(kepsekCbt.status, kepsekCbt.nip)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="font-medium text-slate-700">
+                      Jakarta, {tanggalCetakCbt}<br />
+                      {reportClassFilter !== 'all' ? `Wali Kelas ${reportClassFilter}` : `Wali Kelas / Guru ${activeClass}`}
+                    </p>
+                    <div className="h-16" />
+                    <p className="font-black text-slate-900 underline">
+                      {waliCbt?.nama || activeUser.name || 'Guru Mata Pelajaran'}
+                    </p>
+                    <p className="text-[11px] font-mono text-slate-600 tabular-nums">
+                      {formatNipLabel(waliCbt?.statusPegawai, waliCbt?.nip)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
+
+      {/* MODAL LEMBAR RAPOR CBT INDIVIDU (PRINT-READY A4) */}
+      {selectedCbtReportRow && (() => {
+        const kepsekModal = resolveKepalaSekolah(teachers, profile);
+        const waliModal = resolveWaliKelas(teachers, selectedCbtReportRow.kelas);
+        const tglModal = new Date().toLocaleDateString('id-ID', {
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        });
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto print:static print:inset-auto print:z-auto print:bg-white print:p-0 print:overflow-visible print:block">
+            <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl space-y-5 border border-slate-200 my-8 print:shadow-none print:border-0 print:rounded-none print:max-w-none print:w-full print:my-0 print:p-1">
+              {/* Kop Surat Resmi */}
+              <div className="flex items-center justify-between gap-4 border-b-4 border-double border-slate-900 pb-3">
+                {profile?.logoKemendikbudUrl ? (
+                  <img
+                    src={profile.logoKemendikbudUrl}
+                    alt="Logo Dinas"
+                    referrerPolicy="no-referrer"
+                    className="w-14 h-14 object-contain shrink-0"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                    <Award className="w-6 h-6" />
+                  </div>
+                )}
+                <div className="text-center flex-1">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                    Pemerintah Provinsi DKI Jakarta · Suku Dinas Pendidikan Jakarta Utara
+                  </div>
+                  <h3 className="font-display font-black text-base sm:text-lg text-slate-950 uppercase">
+                    {profile?.name || 'SDN Rawa Badak Utara 21'}
+                  </h3>
+                  <p className="text-[11px] text-slate-600">
+                    {profile?.alamat || 'Jl. Rawa Badak Utara'} · {profile?.kota || 'Jakarta Utara'}
+                    {profile?.npsn ? ` · NPSN: ${profile.npsn}` : ''}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {profile?.logoSekolahUrl && (
+                    <img
+                      src={profile.logoSekolahUrl}
+                      alt="Logo Sekolah"
+                      referrerPolicy="no-referrer"
+                      className="w-14 h-14 object-contain shrink-0"
+                    />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCbtReportRow(null)}
+                    className="no-print w-8 h-8 rounded-xl bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 flex items-center justify-center cursor-pointer transition"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="text-center space-y-0.5">
+                <h4 className="font-display font-black text-sm sm:text-base uppercase tracking-wide text-slate-900">
+                  LEMBAR HASIL UJIAN BERBASIS KOMPUTER (CBT)
+                </h4>
+                <p className="text-xs text-slate-500 font-medium">
+                  Tahun Pelajaran {activeYear} ({activeSemester}) · {selectedCbtReportRow.paket}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-2xl print:rounded-lg border border-slate-200 text-xs">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Nama Lengkap</span>
+                  <span className="font-black text-slate-900">{selectedCbtReportRow.nama}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">NISN</span>
+                  <span className="font-mono font-bold text-slate-800 tabular-nums">{selectedCbtReportRow.nisn}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Kelas / Rombel</span>
+                  <span className="font-bold text-emerald-800">{selectedCbtReportRow.kelas}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">Waktu Selesai</span>
+                  <span className="font-mono font-bold text-slate-700 tabular-nums">
+                    {selectedCbtReportRow.tanggal} · {selectedCbtReportRow.waktuSelesai}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-2xl print:rounded-lg border border-slate-200 overflow-hidden">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-emerald-700 text-white uppercase text-[11px] font-black">
+                      <th className="p-3">Mata Pelajaran</th>
+                      <th className="p-3">Judul / Paket Asesmen</th>
+                      <th className="p-3 text-center">Nilai Akhir</th>
+                      <th className="p-3 text-center">Predikat</th>
+                      <th className="p-3 text-center">Ketuntasan (KKTP 75)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="bg-white font-semibold">
+                      <td className="p-3 text-slate-900 font-bold">{selectedCbtReportRow.mapel}</td>
+                      <td className="p-3 text-slate-700">{selectedCbtReportRow.judul}</td>
+                      <td className="p-3 text-center font-mono font-black text-lg text-emerald-800 tabular-nums">
+                        {selectedCbtReportRow.nilai}
+                      </td>
+                      <td className="p-3 text-center font-black text-base text-slate-900">
+                        {selectedCbtReportRow.predikat}
+                      </td>
+                      <td className="p-3 text-center font-black">
+                        <span className={selectedCbtReportRow.status === 'Tuntas' ? 'text-emerald-700' : 'text-rose-700'}>
+                          {selectedCbtReportRow.status}
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4 pt-4 text-xs text-center border-t border-slate-200 print-avoid-break">
+                <div>
+                  <p className="font-medium text-slate-700 mb-14">Mengetahui,<br />Orang Tua / Wali Murid</p>
+                  <div className="w-36 border-b border-slate-400 mx-auto mb-1" />
+                  <p className="text-[10px] text-slate-500">(Nama Terang Orang Tua)</p>
+                </div>
+                <div>
+                  <p className="font-medium text-slate-700 mb-14">
+                    Mengetahui,<br />Kepala {profile?.name || 'SDN Rawa Badak Utara 21'}
+                  </p>
+                  <p className="font-black text-slate-900 underline">{kepsekModal.nama}</p>
+                  <p className="text-[10px] font-mono text-slate-500 tabular-nums">
+                    {formatNipLabel(kepsekModal.status, kepsekModal.nip)}
+                  </p>
+                </div>
+                <div>
+                  <div className="text-[11px] mb-1 text-slate-700 font-medium">Jakarta, {tglModal}</div>
+                  <p className="font-medium text-slate-700 mb-10">
+                    Mengetahui,<br />Wali Kelas {selectedCbtReportRow.kelas}
+                  </p>
+                  <p className="font-black text-slate-900 underline">
+                    {waliModal?.nama || 'Belum Ditugaskan'}
+                  </p>
+                  <p className="text-[10px] font-mono text-slate-500 tabular-nums">
+                    {formatNipLabel(waliModal?.statusPegawai, waliModal?.nip)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="no-print flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setSelectedCbtReportRow(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+                >
+                  Tutup
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  <Printer className="w-4 h-4" /> Cetak Lembar CBT
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* MODAL: TAMBAH PAKET SUMATIF */}
       {isAddUHOpen && (

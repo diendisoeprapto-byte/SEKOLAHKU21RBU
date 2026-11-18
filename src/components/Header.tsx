@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect } from 'react';
-import { Menu, Calendar, Clock, GraduationCap, Power, KeyRound, Lock } from 'lucide-react';
+import { Menu, Calendar, Clock, GraduationCap, Power, KeyRound, Lock, Camera } from 'lucide-react';
 import { SchoolProfile, ActiveUser, ActiveExamHeaderStatus } from '../types';
 import { ACADEMIC_YEARS, CLASSES_LIST } from '../utils/storage';
 
@@ -13,6 +13,7 @@ interface Props {
   onToggleSidebar: () => void;
   onLogout: () => void;
   onOpenChangePassword?: () => void;
+  onOpenAdminProfile?: () => void;
   activeExamStatus?: ActiveExamHeaderStatus | null;
 }
 
@@ -26,6 +27,7 @@ export const Header: React.FC<Props> = ({
   onToggleSidebar,
   onLogout,
   onOpenChangePassword,
+  onOpenAdminProfile,
   activeExamStatus,
 }) => {
   // Deteksi peran user: Kepsek, Administrator, Guru Mata Pelajaran, Tata Usaha, atau Guru Kelas
@@ -204,21 +206,49 @@ export const Header: React.FC<Props> = ({
           )}
 
           {/* User profile with photo */}
-          <div className="flex items-center gap-2.5 bg-white/15 px-3 py-1.5 rounded-2xl border border-white/25">
-            <img
-              src={activeUser.fotoUrl || profile.logoSekolahUrl}
-              alt="Foto User"
-              className="w-8 h-8 rounded-xl object-cover bg-white border border-yellow-300"
-            />
-            <div className="hidden sm:block text-left leading-tight">
-              <div className="font-display font-extrabold text-xs text-white truncate max-w-[120px]">
-                {activeUser.name}
+          {activeUser.role === 'admin' && onOpenAdminProfile ? (
+            <button
+              type="button"
+              onClick={onOpenAdminProfile}
+              className="group flex items-center gap-2.5 bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-2xl border border-white/25 transition cursor-pointer"
+              title="Ubah Logo & Foto Profil Admin"
+            >
+              <div className="relative shrink-0">
+                <img
+                  src={profile.adminFotoUrl || activeUser.fotoUrl || profile.logoSekolahUrl}
+                  alt="Foto User"
+                  className="w-8 h-8 rounded-xl object-cover bg-white border border-yellow-300"
+                />
+                <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-yellow-400 text-slate-900 flex items-center justify-center shadow-xs group-hover:scale-110 transition">
+                  <Camera className="w-2.5 h-2.5" />
+                </span>
               </div>
-              <div className="text-[10px] text-yellow-200 font-semibold truncate max-w-[120px]">
-                {activeUser.detail}
+              <div className="hidden sm:block text-left leading-tight">
+                <div className="font-display font-extrabold text-xs text-white truncate max-w-[120px]">
+                  {activeUser.name}
+                </div>
+                <div className="text-[10px] text-yellow-200 font-semibold truncate max-w-[120px]">
+                  Ubah Logo / Foto
+                </div>
+              </div>
+            </button>
+          ) : (
+            <div className="flex items-center gap-2.5 bg-white/15 px-3 py-1.5 rounded-2xl border border-white/25">
+              <img
+                src={activeUser.fotoUrl || profile.logoSekolahUrl}
+                alt="Foto User"
+                className="w-8 h-8 rounded-xl object-cover bg-white border border-yellow-300"
+              />
+              <div className="hidden sm:block text-left leading-tight">
+                <div className="font-display font-extrabold text-xs text-white truncate max-w-[120px]">
+                  {activeUser.name}
+                </div>
+                <div className="text-[10px] text-yellow-200 font-semibold truncate max-w-[120px]">
+                  {activeUser.detail}
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           {activeUser.role === 'admin' && onOpenChangePassword && (
             <button

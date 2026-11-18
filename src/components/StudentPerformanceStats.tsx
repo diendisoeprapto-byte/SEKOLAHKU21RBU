@@ -26,7 +26,7 @@ import {
   Printer,
   BookOpen,
 } from 'lucide-react';
-import { CBTExamResult, SchoolProfile, Student } from '../types';
+import { CBTExamResult, SchoolProfile, Student, isAbkExcludedFromTka } from '../types';
 import {
   getStoredCBTResults,
   getStoredTKAResults,
@@ -157,6 +157,8 @@ export const StudentPerformanceStats: React.FC<Props> = ({
     return map;
   }, [cbtExams, tkaExams]);
 
+  const isExcludedFromTka = isAbkExcludedFromTka(student);
+
   const entries: PerformanceEntry[] = useMemo(() => {
     if (!student) return [];
 
@@ -200,31 +202,35 @@ export const StudentPerformanceStats: React.FC<Props> = ({
     });
 
     // 2. Rekap submission TKA yang diinput/disinkronkan dari modul TKA
-    tkaSubmissions.forEach((sub, idx) => {
-      if (!matchStudent(sub.studentId, sub.studentName, sub.nisn)) return;
-      const paketName = sub.paket || `TKA ${idx + 1}`;
-      if (seenTkaPakets.has(paketName.toLowerCase())) return;
-      const score = Math.max(0, Math.min(100, Math.round(Number(sub.skorTotal) || 0)));
-      collected.push({
-        key: `sub_${sub.id || idx}`,
-        urutan: collected.length + 1,
-        labelPendek: `TKA ${collected.length + 1}`,
-        judul: `${paketName} (Rekap Terpadu)`,
-        mapel: 'TKA Terpadu',
-        category: 'TKA',
-        nilai: score,
-        tkaNilai: score,
-        waktu: sub.tanggalUjian || '-',
-        status: score >= KKTP_THRESHOLD ? 'Tuntas' : 'Perlu Latihan',
+    if (!isExcludedFromTka) {
+      tkaSubmissions.forEach((sub, idx) => {
+        if (!matchStudent(sub.studentId, sub.studentName, sub.nisn)) return;
+        const paketName = sub.paket || `TKA ${idx + 1}`;
+        if (seenTkaPakets.has(paketName.toLowerCase())) return;
+        const score = Math.max(0, Math.min(100, Math.round(Number(sub.skorTotal) || 0)));
+        collected.push({
+          key: `sub_${sub.id || idx}`,
+          urutan: collected.length + 1,
+          labelPendek: `TKA ${collected.length + 1}`,
+          judul: `${paketName} (Rekap Terpadu)`,
+          mapel: 'TKA Terpadu',
+          category: 'TKA',
+          nilai: score,
+          tkaNilai: score,
+          waktu: sub.tanggalUjian || '-',
+          status: score >= KKTP_THRESHOLD ? 'Tuntas' : 'Perlu Latihan',
+        });
       });
-    });
+    }
 
-    return collected.map((item, idx) => ({
-      ...item,
-      urutan: idx + 1,
-      labelPendek: `#${idx + 1} ${shortenMapel(item.mapel)}`,
-    }));
-  }, [student, cbtResults, tkaResults, tkaSubmissions, examLookup]);
+    return collected
+      .filter((item) => !(isExcludedFromTka && item.category === 'TKA'))
+      .map((item, idx) => ({
+        ...item,
+        urutan: idx + 1,
+        labelPendek: `#${idx + 1} ${shortenMapel(item.mapel)}`,
+      }));
+  }, [student, isExcludedFromTka, cbtResults, tkaResults, tkaSubmissions, examLookup]);
 
   const categoryEntries = useMemo(() => {
     if (categoryFilter === 'all') return entries;
@@ -456,11 +462,16 @@ export const StudentPerformanceStats: React.FC<Props> = ({
             {/* Segmented Filter Kategori */}
             <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
             {(
-              [
-                { id: 'all', label: 'Semua Ujian' },
-                { id: 'CBT', label: 'Ujian CBT' },
-                { id: 'TKA', label: 'Ujian TKA' },
-              ] as const
+              isExcludedFromTka
+                ? ([
+                    { id: 'all', label: 'Semua Ujian' },
+                    { id: 'CBT', label: 'Ujian CBT' },
+                  ] as const)
+                : ([
+                    { id: 'all', label: 'Semua Ujian' },
+                    { id: 'CBT', label: 'Ujian CBT' },
+                    { id: 'TKA', label: 'Ujian TKA' },
+                  ] as const)
             ).map((opt) => (
               <button
                 key={opt.id}

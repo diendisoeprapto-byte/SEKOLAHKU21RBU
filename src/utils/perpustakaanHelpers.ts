@@ -132,6 +132,52 @@ export function convertToEmbedUrl(rawUrl: string): string {
   return url;
 }
 
+/**
+ * Mengekstrak ID file Google Drive dari berbagai pola URL berbagi.
+ */
+export function extractGoogleDriveFileId(rawUrl?: string): string | null {
+  const url = (rawUrl || '').trim();
+  if (!url) return null;
+
+  const fileMatch = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+  if (fileMatch?.[1]) return fileMatch[1];
+
+  const idMatch = url.match(/drive\.google\.com\/(?:open|uc|thumbnail)\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)/i);
+  if (idMatch?.[1]) return idMatch[1];
+
+  return null;
+}
+
+/**
+ * Menghasilkan URL gambar sampul buku yang dapat ditampilkan di tag <img>.
+ * Mendukung link Google Drive langsung (otomatis diubah menjadi thumbnail halaman 1),
+ * URL gambar langsung, maupun fallback ke file_url jika merupakan link Google Drive / gambar.
+ */
+export function resolveBookCoverUrl(coverUrl?: string, fileUrl?: string): string {
+  const cleanCover = (coverUrl || '').trim();
+  if (cleanCover) {
+    const driveIdFromCover = extractGoogleDriveFileId(cleanCover);
+    if (driveIdFromCover) {
+      return `https://drive.google.com/thumbnail?id=${driveIdFromCover}&sz=w800`;
+    }
+    return cleanCover;
+  }
+
+  const cleanFile = (fileUrl || '').trim();
+  if (!cleanFile) return '';
+
+  const driveIdFromFile = extractGoogleDriveFileId(cleanFile);
+  if (driveIdFromFile) {
+    return `https://drive.google.com/thumbnail?id=${driveIdFromFile}&sz=w800`;
+  }
+
+  if (/\.(png|jpe?g|webp|gif|svg)(\?.*)?$/i.test(cleanFile)) {
+    return cleanFile;
+  }
+
+  return '';
+}
+
 export interface LiteracyBadgeInfo {
   label: string;
   minCount: number;

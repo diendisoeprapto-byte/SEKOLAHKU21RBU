@@ -70,6 +70,7 @@ import { ImageZoomModal } from './components/modals/ImageZoomModal';
 import { CustomHolidayModal } from './components/modals/CustomHolidayModal';
 import { MonthlyAttendanceModal } from './components/modals/MonthlyAttendanceModal';
 import { ChangePasswordModal } from './components/modals/ChangePasswordModal';
+import { AdminProfilePhotoModal } from './components/modals/AdminProfilePhotoModal';
 
 // Tabs
 import { DashboardTab } from './components/tabs/DashboardTab';
@@ -77,6 +78,7 @@ import { ProfilSekolahTab } from './components/tabs/ProfilSekolahTab';
 import { GuruTab } from './components/tabs/GuruTab';
 import { RombelTab } from './components/tabs/RombelTab';
 import { SiswaTab } from './components/tabs/SiswaTab';
+import { VerifikasiInklusiTab } from './components/tabs/VerifikasiInklusiTab';
 import { AbsensiTab } from './components/tabs/AbsensiTab';
 import { KalenderTab } from './components/tabs/KalenderTab';
 import { LaporanAbsensiTab } from './components/tabs/LaporanAbsensiTab';
@@ -116,6 +118,10 @@ import {
   sortStudentsAlphabetically,
 } from './utils/studentFirestore';
 import {
+  findKepalaSekolahInTeachers,
+  syncProfileKepsekWithTeachers,
+} from './utils/teacherSync';
+import {
   subscribeToAttendanceCollection,
   saveSingleAttendanceToFirestore,
   saveBatchAttendanceToFirestore,
@@ -147,8 +153,10 @@ import { getLocalTodayStr } from './utils/dateUtils';
 
 export default function App() {
   // Database States
-  const [profile, setProfile] = useState<SchoolProfile>(getStoredProfile());
   const [teachers, setTeachers] = useState<Teacher[]>(() => sortTeachersAlphabetically(getStoredTeachers()));
+  const [profile, setProfile] = useState<SchoolProfile>(() =>
+    syncProfileKepsekWithTeachers(getStoredProfile(), getStoredTeachers()).profile
+  );
   const [students, setStudents] = useState<Student[]>(() => sortStudentsAlphabetically(getStoredStudents()));
   const studentsCollectionLoadedRef = React.useRef(false);
   const teachersCollectionLoadedRef = React.useRef(false);
@@ -202,7 +210,13 @@ export default function App() {
       },
       onTeachers: (idbTeachers) => {
         if (!isMounted || teachersCollectionLoadedRef.current) return;
-        setTeachers(sortTeachersAlphabetically(idbTeachers));
+        const sortedIdbTeachers = sortTeachersAlphabetically(idbTeachers);
+        setTeachers(sortedIdbTeachers);
+        setProfile((prev) => {
+          const synced = syncProfileKepsekWithTeachers(prev, sortedIdbTeachers);
+          if (synced.changed) saveStoredProfile(synced.profile);
+          return synced.profile;
+        });
       },
       onAttendance: (idbAttendance) => {
         if (!isMounted || attendanceCollectionLoadedRef.current) return;
@@ -287,14 +301,36 @@ export default function App() {
 
       // 2. Terapkan field dokumen utama dalam mode suppressed agar tidak memantul balik ke Firestore
       runWithoutStorageSync(() => {
-        if (cloudData.profile) {
-          setProfile(cloudData.profile);
-          saveStoredProfile(cloudData.profile);
-        }
+        const authoritativeTeachers =
+          cloudData.teachers && !teachersCollectionLoadedRef.current
+            ? sortTeachersAlphabetically(cloudData.teachers)
+            : getStoredTeachers();
         if (cloudData.teachers && !teachersCollectionLoadedRef.current) {
-          const sortedCloudTeachers = sortTeachersAlphabetically(cloudData.teachers);
-          setTeachers(sortedCloudTeachers);
-          saveStoredTeachers(sortedCloudTeachers);
+          setTeachers(authoritativeTeachers);
+          saveStoredTeachers(authoritativeTeachers);
+        }
+        if (cloudData.profile) {
+          const syncedProfile = syncProfileKepsekWithTeachers(
+            cloudData.profile,
+            authoritativeTeachers
+          ).profile;
+          setProfile(syncedProfile);
+          saveStoredProfile(syncedProfile);
+          if (activeUserRef.current?.role === 'admin') {
+            const nextAdminFoto =
+              syncedProfile.adminFotoUrl || syncedProfile.logoSekolahUrl;
+            if (nextAdminFoto && activeUserRef.current.fotoUrl !== nextAdminFoto) {
+              const updatedAdmin = { ...activeUserRef.current, fotoUrl: nextAdminFoto };
+              setActiveUser(updatedAdmin);
+              safeSetLocalStorage('sekolahku_active_user', JSON.stringify(updatedAdmin));
+            }
+          }
+        } else if (cloudData.teachers && !teachersCollectionLoadedRef.current) {
+          setProfile((prev) => {
+            const synced = syncProfileKepsekWithTeachers(prev, authoritativeTeachers);
+            if (synced.changed) saveStoredProfile(synced.profile);
+            return synced.profile;
+          });
         }
         if (cloudData.students && !studentsCollectionLoadedRef.current) {
           const sortedCloudStudents = sortStudentsAlphabetically(cloudData.students);
@@ -498,6 +534,13 @@ export default function App() {
         safeSetLocalStorage('sekolahku_teachers_seeded', 'true');
         setTeachers(firestoreTeachers);
         saveStoredTeachers(firestoreTeachers);
+        setProfile((prevProf) => {
+          const synced = syncProfileKepsekWithTeachers(prevProf, firestoreTeachers);
+          if (synced.changed) {
+            saveStoredProfile(synced.profile);
+          }
+          return synced.profile;
+        });
       } else if (!teachersCollectionLoadedRef.current && !alreadySeeded) {
         teachersCollectionLoadedRef.current = true;
         safeSetLocalStorage('sekolahku_teachers_seeded', 'true');
@@ -824,6 +867,7 @@ export default function App() {
   const [monthlyModalYm, setMonthlyModalYm] = useState<string | null>(null);
   const [isGoogleSitesModalOpen, setIsGoogleSitesModalOpen] = useState(false);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
+  const [isAdminProfileModalOpen, setIsAdminProfileModalOpen] = useState(false);
 
   // Toast System
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; type: 'success' | 'error' }>>([]);
@@ -836,18 +880,55 @@ export default function App() {
     }, 3500);
   };
 
-  // Sync profile update with cloud
+  // Sync profile update with cloud & sync Kepala Sekolah record in Data Guru
   const handleSaveProfile = (newProfile: SchoolProfile) => {
     setProfile(newProfile);
     saveStoredProfile(newProfile);
+    const kepsekInTeachers = findKepalaSekolahInTeachers(teachers);
+    if (
+      kepsekInTeachers &&
+      (kepsekInTeachers.nama !== newProfile.kepalaSekolah.nama ||
+        kepsekInTeachers.nip !== newProfile.kepalaSekolah.nip ||
+        kepsekInTeachers.statusPegawai !== newProfile.kepalaSekolah.status)
+    ) {
+      const updatedTeachers = teachers.map((t) =>
+        t.id === kepsekInTeachers.id
+          ? {
+              ...t,
+              nama: newProfile.kepalaSekolah.nama,
+              nip: newProfile.kepalaSekolah.nip,
+              statusPegawai: newProfile.kepalaSekolah.status,
+            }
+          : t
+      );
+      setTeachers(updatedTeachers);
+      saveStoredTeachers(updatedTeachers);
+      replaceTeachersInFirestore(updatedTeachers).catch((e) =>
+        console.warn('Sync kepsek profile->teachers warning:', e)
+      );
+    }
+    if (activeUser?.role === 'admin') {
+      const updatedAdmin: ActiveUser = {
+        ...activeUser,
+        fotoUrl: newProfile.adminFotoUrl || newProfile.logoSekolahUrl,
+      };
+      setActiveUser(updatedAdmin);
+      safeSetLocalStorage('sekolahku_active_user', JSON.stringify(updatedAdmin));
+    }
     pushAllDataToCloud({ profile: newProfile }, activeUser?.name || 'admin');
   };
 
-  // Sync teachers update directly to dedicated Firestore /teachers collection (supports up to 60 GTK)
+  // Sync teachers update directly to dedicated Firestore /teachers collection & sync Kepala Sekolah to profile
   const handleSaveTeachers = (newTeachers: Teacher[]) => {
     const sorted = sortTeachersAlphabetically(newTeachers);
     setTeachers(sorted);
     saveStoredTeachers(sorted);
+    const synced = syncProfileKepsekWithTeachers(profile, sorted);
+    if (synced.changed) {
+      setProfile(synced.profile);
+      saveStoredProfile(synced.profile);
+      pushAllDataToCloud({ profile: synced.profile }, activeUser?.name || 'admin');
+    }
     replaceTeachersInFirestore(sorted).catch((e) =>
       console.warn('replaceTeachersInFirestore sync warning:', e)
     );
@@ -998,8 +1079,10 @@ export default function App() {
     localStorage.setItem('sekolahku_attendance_seeded', 'true');
     localStorage.setItem('sekolahku_tka_questions_seeded', 'true');
     localStorage.setItem('sekolahku_cbt_exams_seeded', 'true');
-    setProfile(getStoredProfile());
-    setTeachers(sortTeachersAlphabetically(getStoredTeachers()));
+    const restoredTeachers = sortTeachersAlphabetically(getStoredTeachers());
+    const restoredProfile = syncProfileKepsekWithTeachers(getStoredProfile(), restoredTeachers).profile;
+    setProfile(restoredProfile);
+    setTeachers(restoredTeachers);
     setStudents(sortStudentsAlphabetically(getStoredStudents()));
     setSubjects(getStoredSubjectsForClass(activeClassRef.current));
     setKaldikDays(getStoredKaldik());
@@ -1075,6 +1158,15 @@ export default function App() {
         showToast={showToast}
       />
 
+      {/* Change Admin Logo & Profile Photo Modal */}
+      <AdminProfilePhotoModal
+        isOpen={isAdminProfileModalOpen}
+        onClose={() => setIsAdminProfileModalOpen(false)}
+        profile={profile}
+        onSaveProfile={handleSaveProfile}
+        showToast={showToast}
+      />
+
       {/* Google Sites Guide Modal */}
       {isGoogleSitesModalOpen && (
         <div className="fixed inset-0 z-[900] bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
@@ -1133,6 +1225,9 @@ export default function App() {
             onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
             onLogout={handleLogout}
             onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
+            onOpenAdminProfile={
+              activeUser.role === 'admin' ? () => setIsAdminProfileModalOpen(true) : undefined
+            }
             activeExamStatus={activeExamStatus}
           />
 
@@ -1141,9 +1236,14 @@ export default function App() {
               activeTab={activeTab}
               onSelectTab={setActiveTab}
               activeUser={activeUser}
+              profile={profile}
+              students={students}
               isOpen={isSidebarOpen}
               onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
               onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
+              onOpenAdminProfile={
+                activeUser.role === 'admin' ? () => setIsAdminProfileModalOpen(true) : undefined
+              }
             />
 
             <main className="flex-1 min-w-0 space-y-6">
@@ -1250,6 +1350,14 @@ export default function App() {
                 />
               )}
 
+              {/* Tab 2.1b: Verifikasi Siswa Inklusi */}
+              {activeUser.role !== 'siswa' && activeTab === 'verifikasi-inklusi' && (
+                <VerifikasiInklusiTab
+                  students={students}
+                  activeYear={activeYear}
+                />
+              )}
+
               {/* Tab 2.2: Scan Absensi Barcode */}
               {activeTab === 'absensi' && (
                 <AbsensiTab
@@ -1293,6 +1401,8 @@ export default function App() {
               {activeTab === 'laporan-absensi' && (
                 <LaporanAbsensiTab
                   students={students}
+                  teachers={teachers}
+                  profile={profile}
                   activeClass={activeClass}
                   activeSemester={activeSemester}
                   attendanceRecords={attendanceRecords}
@@ -1384,6 +1494,10 @@ export default function App() {
                   activeUser={activeUser}
                   activeClass={activeClass}
                   students={students}
+                  teachers={teachers}
+                  profile={profile}
+                  activeYear={activeYear}
+                  activeSemester={activeSemester}
                   subjects={subjects}
                   onUpdateSubjects={(updated, targetClass) => {
                     const cls = targetClass || activeClass;
@@ -1402,6 +1516,8 @@ export default function App() {
               {activeTab === 'analisis-soal' && (
                 <AnalisisSoalTab
                   students={students}
+                  teachers={teachers}
+                  profile={profile}
                   activeClass={activeClass}
                   activeYear={activeYear}
                   activeSemester={activeSemester}
@@ -1479,9 +1595,13 @@ export default function App() {
                 <TKATabs
                   subType={activeTab}
                   students={students}
+                  teachers={teachers}
+                  profile={profile}
+                  activeYear={activeYear}
                   activeUser={activeUser}
                   showToast={showToast}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
+                  onSaveStudents={handleSaveStudents}
                 />
               )}
               </React.Fragment>

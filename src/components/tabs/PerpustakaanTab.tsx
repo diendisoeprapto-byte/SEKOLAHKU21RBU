@@ -29,6 +29,11 @@ import {
   Clock,
   SwitchCamera,
   RefreshCw,
+  Eye,
+  Link2,
+  Copy,
+  Check,
+  Image as ImageIcon,
 } from 'lucide-react';
 import {
   collection,
@@ -74,6 +79,8 @@ import {
   SEED_LIBRARY_BOOKS,
   TEMPLATE_PERPUSTAKAAN_CSV,
   convertToEmbedUrl,
+  extractGoogleDriveFileId,
+  resolveBookCoverUrl,
   getLiteracyBadge,
   parseLibraryCsv,
   ParsedCsvResult,
@@ -124,16 +131,18 @@ function addDaysToDate(dateStr: string, days: number): string {
 
 interface BookCoverImageProps {
   src?: string;
+  fileUrl?: string;
   title: string;
   kategori: PerpustakaanKategori;
 }
 
-const BookCoverImage: React.FC<BookCoverImageProps> = ({ src, title, kategori }) => {
+const BookCoverImage: React.FC<BookCoverImageProps> = ({ src, fileUrl, title, kategori }) => {
   const [hasError, setHasError] = useState(false);
+  const resolvedSrc = useMemo(() => resolveBookCoverUrl(src, fileUrl), [src, fileUrl]);
 
   useEffect(() => {
     setHasError(false);
-  }, [src]);
+  }, [resolvedSrc]);
 
   const palette = useMemo(() => {
     if (kategori === 'Buku Cerita/Literasi') return 'from-emerald-600 to-teal-700';
@@ -142,7 +151,7 @@ const BookCoverImage: React.FC<BookCoverImageProps> = ({ src, title, kategori })
     return 'from-rose-600 to-red-700';
   }, [kategori]);
 
-  if (!src || hasError) {
+  if (!resolvedSrc || hasError) {
     return (
       <div
         className={`w-full h-full bg-gradient-to-br ${palette} text-white flex flex-col justify-between p-4 select-none`}
@@ -152,7 +161,7 @@ const BookCoverImage: React.FC<BookCoverImageProps> = ({ src, title, kategori })
           <span className="text-[10px] font-bold uppercase tracking-wider">{kategori}</span>
         </div>
         <div className="my-auto">
-          <div className="font-display font-black text-sm leading-snug line-clamp-3">{title}</div>
+          <div className="font-display font-black text-sm leading-snug line-clamp-3">{title || 'Judul Buku Digital'}</div>
         </div>
         <div className="text-[10px] font-semibold opacity-75 border-t border-white/20 pt-1.5">
           Perpustakaan Digital
@@ -163,7 +172,7 @@ const BookCoverImage: React.FC<BookCoverImageProps> = ({ src, title, kategori })
 
   return (
     <img
-      src={src}
+      src={resolvedSrc}
       alt={`Sampul ${title}`}
       referrerPolicy="no-referrer"
       onError={() => setHasError(true)}
@@ -196,8 +205,11 @@ export const PerpustakaanTab: React.FC<Props> = ({
   const [filterKelas, setFilterKelas] = useState<string>('Semua');
   const [filterKategori, setFilterKategori] = useState<string>('Semua');
 
-  // Reader modal
+  // Reader & Cover Preview modals
   const [readingBook, setReadingBook] = useState<PerpustakaanBook | null>(null);
+  const [previewBook, setPreviewBook] = useState<PerpustakaanBook | null>(null);
+  const [showPreviewIframe, setShowPreviewIframe] = useState(false);
+  const [copiedBookUrlId, setCopiedBookUrlId] = useState<string | null>(null);
 
   // Add / Edit Book modal
   const [isBookModalOpen, setIsBookModalOpen] = useState(false);
@@ -209,6 +221,7 @@ export const PerpustakaanTab: React.FC<Props> = ({
   const [formSumber, setFormSumber] = useState('SIBI Kemendikdasmen');
   const [formCoverUrl, setFormCoverUrl] = useState('');
   const [formFileUrl, setFormFileUrl] = useState('');
+  const [showFormBookPreview, setShowFormBookPreview] = useState(false);
   const [isSavingBook, setIsSavingBook] = useState(false);
 
   // Delete book confirmation modal
@@ -752,6 +765,21 @@ export const PerpustakaanTab: React.FC<Props> = ({
     }
   };
 
+  const handleCopyBookUrl = async (url: string, bookKey = 'preview') => {
+    const clean = (url || '').trim();
+    if (!clean) return;
+    try {
+      await navigator.clipboard.writeText(clean);
+      setCopiedBookUrlId(bookKey);
+      showToast('Link URL buku berhasil disalin!', 'success');
+      setTimeout(() => {
+        setCopiedBookUrlId((prev) => (prev === bookKey ? null : prev));
+      }, 2000);
+    } catch {
+      showToast('Gagal menyalin otomatis. Anda dapat menyalin langsung dari kotak link.', 'error');
+    }
+  };
+
   // Add / Edit Book handlers
   const openAddBookModal = () => {
     setEditingBookId(null);
@@ -762,6 +790,7 @@ export const PerpustakaanTab: React.FC<Props> = ({
     setFormSumber('SIBI Kemendikdasmen');
     setFormCoverUrl('');
     setFormFileUrl('');
+    setShowFormBookPreview(false);
     setIsBookModalOpen(true);
   };
 
@@ -774,6 +803,7 @@ export const PerpustakaanTab: React.FC<Props> = ({
     setFormSumber(book.sumber);
     setFormCoverUrl(book.cover_url);
     setFormFileUrl(book.file_url);
+    setShowFormBookPreview(false);
     setIsBookModalOpen(true);
   };
 
@@ -1567,10 +1597,30 @@ export const PerpustakaanTab: React.FC<Props> = ({
                       className="group bg-white rounded-3xl border border-slate-200 hover:border-rose-300 shadow-xs hover:shadow-md transition overflow-hidden flex flex-col justify-between"
                     >
                       <div>
-                        <div className="relative aspect-[4/3] bg-slate-100 overflow-hidden">
-                          <BookCoverImage src={book.cover_url} title={book.judul} kategori={book.kategori} />
+                        <div
+                          onClick={() => {
+                            setShowPreviewIframe(false);
+                            setPreviewBook(book);
+                          }}
+                          className="relative aspect-[4/3] bg-slate-100 overflow-hidden cursor-pointer"
+                          title="Klik untuk preview cover & link URL buku"
+                        >
+                          <BookCoverImage
+                            src={book.cover_url}
+                            fileUrl={book.file_url}
+                            title={book.judul}
+                            kategori={book.kategori}
+                          />
+                          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/75 via-slate-900/25 to-transparent p-2.5 flex items-center justify-between opacity-95 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/95 text-slate-900 text-[10px] font-black shadow-xs">
+                              <Eye className="w-3 h-3 text-rose-600" /> Preview Cover &amp; Link
+                            </span>
+                          </div>
                           {isStaff && (
-                            <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5">
+                            <div
+                              className="absolute top-2.5 right-2.5 flex items-center gap-1.5"
+                              onClick={(e) => e.stopPropagation()}
+                            >
                               <button
                                 type="button"
                                 onClick={() => openEditBookModal(book)}
@@ -1609,6 +1659,36 @@ export const PerpustakaanTab: React.FC<Props> = ({
                               {book.dibaca_count}x dibaca
                             </span>
                           </div>
+
+                          {/* Book Link URL Preview Strip */}
+                          {book.file_url && (
+                            <div className="rounded-xl bg-slate-50 border border-slate-200 px-2.5 py-1.5 flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Link2 className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                                <a
+                                  href={book.file_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title={book.file_url}
+                                  className="text-[10px] font-mono text-sky-700 hover:underline truncate"
+                                >
+                                  {book.file_url}
+                                </a>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyBookUrl(book.file_url, book.id)}
+                                title="Salin link URL buku"
+                                className="text-slate-500 hover:text-slate-900 p-1 rounded-lg hover:bg-slate-200/70 shrink-0 cursor-pointer transition"
+                              >
+                                {copiedBookUrlId === book.id ? (
+                                  <Check className="w-3 h-3 text-emerald-600" />
+                                ) : (
+                                  <Copy className="w-3 h-3" />
+                                )}
+                              </button>
+                            </div>
+                          )}
 
                           {/* Book Availability Status */}
                           <div
@@ -1657,14 +1737,27 @@ export const PerpustakaanTab: React.FC<Props> = ({
                       </div>
 
                       <div className="px-4 pb-4 pt-2 border-t border-slate-100 space-y-2">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenBookReader(book)}
-                          className="w-full py-2.5 rounded-2xl bg-slate-900 hover:bg-rose-600 text-white font-display font-extrabold text-xs flex items-center justify-center gap-2 cursor-pointer transition"
-                        >
-                          <BookOpen className="w-4 h-4" />
-                          <span>Baca Buku</span>
-                        </button>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowPreviewIframe(false);
+                              setPreviewBook(book);
+                            }}
+                            className="py-2.5 px-2 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-display font-extrabold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer transition"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-rose-600" />
+                            <span>Preview</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenBookReader(book)}
+                            className="py-2.5 px-2 rounded-2xl bg-slate-900 hover:bg-rose-600 text-white font-display font-extrabold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer transition"
+                          >
+                            <BookOpen className="w-3.5 h-3.5" />
+                            <span>Baca Buku</span>
+                          </button>
+                        </div>
 
                         {isStaff && (
                           <button
@@ -2347,19 +2440,231 @@ export const PerpustakaanTab: React.FC<Props> = ({
       </div>
 
       {/* ========================================================= */}
+      {/* MODAL PREVIEW COVER BUKU & LINK URL BUKU                  */}
+      {/* ========================================================= */}
+      {previewBook && (() => {
+        const resolvedCover = resolveBookCoverUrl(previewBook.cover_url, previewBook.file_url);
+        const embedUrl = convertToEmbedUrl(previewBook.file_url);
+        const activeBookLoans = activeLoansByBookId.get(previewBook.id) || [];
+
+        return (
+          <div className="fixed inset-0 z-[945] bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-4 no-print overflow-y-auto">
+            <div className="bg-white max-w-3xl w-full rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-200 max-h-[92vh] overflow-y-auto space-y-5 my-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                    <ImageIcon className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-black uppercase tracking-wider text-rose-600">
+                      Preview Cover &amp; Link URL Buku Digital
+                    </div>
+                    <h3 className="font-display font-black text-base sm:text-lg text-slate-900 truncate">
+                      {previewBook.judul}
+                    </h3>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPreviewBook(null)}
+                  className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-600 flex items-center justify-center cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-start">
+                {/* Left: High-res Book Cover Preview */}
+                <div className="md:col-span-5 space-y-2.5">
+                  <div className="relative aspect-[3/4] rounded-2xl overflow-hidden border-2 border-slate-200 bg-slate-100 shadow-sm">
+                    <BookCoverImage
+                      src={previewBook.cover_url}
+                      fileUrl={previewBook.file_url}
+                      title={previewBook.judul}
+                      kategori={previewBook.kategori}
+                    />
+                  </div>
+                  {resolvedCover && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenZoom(resolvedCover, `Cover: ${previewBook.judul}`)}
+                      className="w-full py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-display font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition"
+                    >
+                      <Eye className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Perbesar Gambar Sampul</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Right: Metadata & Link URL Controls */}
+                <div className="md:col-span-7 space-y-4">
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[11px] font-black">
+                        {previewBook.kategori}
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[11px] font-extrabold">
+                        {previewBook.kelas === 'Semua' ? 'Semua Kelas (1–6)' : `Kelas ${previewBook.kelas}`}
+                      </span>
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold ${
+                          activeBookLoans.length > 0
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-emerald-100 text-emerald-800'
+                        }`}
+                      >
+                        {activeBookLoans.length > 0 ? `Dipinjam (${activeBookLoans.length})` : 'Tersedia'}
+                      </span>
+                    </div>
+                    <h4 className="font-display font-black text-lg text-slate-900 leading-snug pt-1">
+                      {previewBook.judul}
+                    </h4>
+                    <p className="text-xs text-slate-600 font-semibold">
+                      Penulis: <strong className="text-slate-800">{previewBook.penulis}</strong> · Sumber:{' '}
+                      <strong className="text-slate-800">{previewBook.sumber}</strong>
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      Telah dibaca <strong className="font-mono text-slate-700">{previewBook.dibaca_count}</strong> kali di Perpustakaan Digital.
+                    </p>
+                  </div>
+
+                  {/* Link URL Buku Panel */}
+                  <div className="p-3.5 rounded-2xl bg-sky-50/70 border border-sky-200 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-black uppercase text-sky-900 flex items-center gap-1.5">
+                        <Link2 className="w-3.5 h-3.5 text-sky-600" /> Link URL Buku Digital
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleCopyBookUrl(previewBook.file_url, `modal_${previewBook.id}`)}
+                          className="px-2.5 py-1 rounded-lg bg-white hover:bg-sky-100 border border-sky-200 text-sky-800 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
+                        >
+                          {copiedBookUrlId === `modal_${previewBook.id}` ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-600" /> Tersalin
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3" /> Salin Link
+                            </>
+                          )}
+                        </button>
+                        <a
+                          href={previewBook.file_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold flex items-center gap-1 transition"
+                        >
+                          <ExternalLink className="w-3 h-3" /> Buka URL
+                        </a>
+                      </div>
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-white border border-sky-100 text-[11px] font-mono text-slate-700 break-all select-all">
+                      {previewBook.file_url}
+                    </div>
+
+                    {resolvedCover && (
+                      <div className="text-[10px] text-slate-500 break-all">
+                        <strong className="text-slate-700">Link URL Cover:</strong>{' '}
+                        <span className="font-mono">{resolvedCover}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = previewBook;
+                        setPreviewBook(null);
+                        handleOpenBookReader(target);
+                      }}
+                      className="flex-1 py-2.5 px-4 rounded-2xl bg-slate-900 hover:bg-rose-600 text-white font-display font-black text-xs flex items-center justify-center gap-2 cursor-pointer transition shadow-xs"
+                    >
+                      <BookOpen className="w-4 h-4" />
+                      <span>Baca Buku Sekarang</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowPreviewIframe((v) => !v)}
+                      className="py-2.5 px-4 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 font-display font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition"
+                    >
+                      <Eye className="w-4 h-4 text-sky-600" />
+                      <span>{showPreviewIframe ? 'Tutup Mini Preview' : 'Preview Isi Link'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Optional Inline Iframe Preview of the Book Link URL */}
+              {showPreviewIframe && embedUrl && (
+                <div className="pt-3 border-t border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between text-[11px] text-slate-500">
+                    <span>
+                      Pratinjau langsung dari URL buku (<span className="font-mono">{embedUrl}</span>)
+                    </span>
+                    <a
+                      href={previewBook.file_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sky-700 font-bold hover:underline flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" /> Buka Layar Penuh
+                    </a>
+                  </div>
+                  <iframe
+                    src={embedUrl}
+                    title={`Preview ${previewBook.judul}`}
+                    className="w-full h-80 rounded-2xl border border-slate-200 bg-slate-50"
+                    allow="autoplay"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ========================================================= */}
       {/* MODAL IFRAME READER (FULLSCREEN RESPONSIVE)               */}
       {/* ========================================================= */}
       {readingBook && (
         <div className="fixed inset-0 z-[950] bg-slate-950/90 backdrop-blur-xs flex flex-col no-print">
           <div className="bg-slate-900 text-white px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800">
-            <div className="min-w-0 flex-1">
-              <div className="text-[11px] font-bold text-rose-400 uppercase tracking-wider">
-                {readingBook.kategori} · {readingBook.sumber}
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <div className="w-10 h-12 rounded-xl overflow-hidden border border-slate-700 shrink-0 hidden sm:block">
+                <BookCoverImage
+                  src={readingBook.cover_url}
+                  fileUrl={readingBook.file_url}
+                  title={readingBook.judul}
+                  kategori={readingBook.kategori}
+                />
               </div>
-              <h3 className="font-display font-black text-sm sm:text-base truncate">{readingBook.judul}</h3>
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] font-bold text-rose-400 uppercase tracking-wider">
+                  {readingBook.kategori} · {readingBook.sumber}
+                </div>
+                <h3 className="font-display font-black text-sm sm:text-base truncate">{readingBook.judul}</h3>
+                <div className="text-[10px] font-mono text-slate-400 truncate">{readingBook.file_url}</div>
+              </div>
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleCopyBookUrl(readingBook.file_url, `reader_${readingBook.id}`)}
+                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-display font-bold text-xs flex items-center gap-1.5 cursor-pointer transition"
+              >
+                {copiedBookUrlId === `reader_${readingBook.id}` ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden sm:inline">Salin Link</span>
+              </button>
               <a
                 href={readingBook.file_url}
                 target="_blank"
@@ -2400,135 +2705,245 @@ export const PerpustakaanTab: React.FC<Props> = ({
       {/* ========================================================= */}
       {/* MODAL TAMBAH / EDIT BUKU (ADMIN & GURU)                   */}
       {/* ========================================================= */}
-      {isBookModalOpen && (
-        <div className="fixed inset-0 z-[920] bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 no-print">
-          <div className="bg-white max-w-xl w-full rounded-3xl p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-display font-black text-lg text-slate-900">
-                {editingBookId ? 'Edit Data Buku' : 'Tambah Buku Baru'}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsBookModalOpen(false)}
-                className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-600 flex items-center justify-center cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      {isBookModalOpen && (() => {
+        const liveResolvedCover = resolveBookCoverUrl(formCoverUrl, formFileUrl);
+        const driveIdFromFile = extractGoogleDriveFileId(formFileUrl);
+        const liveEmbedUrl = convertToEmbedUrl(formFileUrl);
 
-            <form onSubmit={handleSaveBook} className="space-y-3.5 text-xs">
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">Judul Buku *</label>
-                <input
-                  type="text"
-                  required
-                  value={formJudul}
-                  onChange={(e) => setFormJudul(e.target.value)}
-                  placeholder="Cth: Matematika Kelas VI Kurikulum Merdeka"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold text-slate-800"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Penulis</label>
-                  <input
-                    type="text"
-                    value={formPenulis}
-                    onChange={(e) => setFormPenulis(e.target.value)}
-                    placeholder="Nama penulis / penerbit"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-semibold"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Sumber Buku</label>
-                  <input
-                    type="text"
-                    value={formSumber}
-                    onChange={(e) => setFormSumber(e.target.value)}
-                    placeholder="SIBI Kemendikdasmen / Google Drive Sekolah"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-semibold"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Kategori</label>
-                  <select
-                    value={formKategori}
-                    onChange={(e) => setFormKategori(e.target.value as PerpustakaanKategori)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold bg-white"
-                  >
-                    {KATEGORI_OPTIONS.map((k) => (
-                      <option key={k} value={k}>
-                        {k}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Sasaran Kelas</label>
-                  <select
-                    value={formKelas}
-                    onChange={(e) => setFormKelas(e.target.value as PerpustakaanKelas)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold bg-white"
-                  >
-                    {KELAS_OPTIONS.map((kls) => (
-                      <option key={kls} value={kls}>
-                        {kls === 'Semua' ? 'Semua Kelas' : `Kelas ${kls}`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">URL Gambar Sampul (Opsional)</label>
-                <input
-                  type="url"
-                  value={formCoverUrl}
-                  onChange={(e) => setFormCoverUrl(e.target.value)}
-                  placeholder="https://.../sampul-buku.png"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono text-[11px]"
-                />
-              </div>
-
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">URL File Buku (PDF / Google Drive / SIBI) *</label>
-                <input
-                  type="url"
-                  required
-                  value={formFileUrl}
-                  onChange={(e) => setFormFileUrl(e.target.value)}
-                  placeholder="https://drive.google.com/file/d/.../view atau link PDF SIBI"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono text-[11px]"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Link Google Drive yang berakhiran /view atau /edit otomatis dikonversi menjadi /preview saat dibaca.
-                </p>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+        return (
+          <div className="fixed inset-0 z-[920] bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 no-print">
+            <div className="bg-white max-w-4xl w-full rounded-3xl p-6 shadow-2xl border border-slate-200 max-h-[92vh] overflow-y-auto space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="font-display font-black text-lg text-slate-900">
+                  {editingBookId ? 'Edit Data Buku' : 'Tambah Buku Baru'}
+                </h3>
                 <button
                   type="button"
                   onClick={() => setIsBookModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold cursor-pointer"
+                  className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-600 flex items-center justify-center cursor-pointer"
                 >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingBook}
-                  className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-display font-extrabold cursor-pointer"
-                >
-                  {isSavingBook ? 'Menyimpan...' : editingBookId ? 'Simpan Perubahan' : 'Simpan Buku'}
+                  <X className="w-4 h-4" />
                 </button>
               </div>
-            </form>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                <form onSubmit={handleSaveBook} className="lg:col-span-7 space-y-3.5 text-xs">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Judul Buku *</label>
+                    <input
+                      type="text"
+                      required
+                      value={formJudul}
+                      onChange={(e) => setFormJudul(e.target.value)}
+                      placeholder="Cth: Matematika Kelas VI Kurikulum Merdeka"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold text-slate-800"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">Penulis</label>
+                      <input
+                        type="text"
+                        value={formPenulis}
+                        onChange={(e) => setFormPenulis(e.target.value)}
+                        placeholder="Nama penulis / penerbit"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-semibold"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">Sumber Buku</label>
+                      <input
+                        type="text"
+                        value={formSumber}
+                        onChange={(e) => setFormSumber(e.target.value)}
+                        placeholder="SIBI Kemendikdasmen / Google Drive Sekolah"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-semibold"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">Kategori</label>
+                      <select
+                        value={formKategori}
+                        onChange={(e) => setFormKategori(e.target.value as PerpustakaanKategori)}
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold bg-white"
+                      >
+                        {KATEGORI_OPTIONS.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">Sasaran Kelas</label>
+                      <select
+                        value={formKelas}
+                        onChange={(e) => setFormKelas(e.target.value as PerpustakaanKelas)}
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-bold bg-white"
+                      >
+                        {KELAS_OPTIONS.map((kls) => (
+                          <option key={kls} value={kls}>
+                            {kls === 'Semua' ? 'Semua Kelas' : `Kelas ${kls}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <label className="font-bold text-slate-700">URL Gambar Sampul (Opsional)</label>
+                      {driveIdFromFile && !formCoverUrl.trim() && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFormCoverUrl(
+                              `https://drive.google.com/thumbnail?id=${driveIdFromFile}&sz=w800`
+                            )
+                          }
+                          className="text-[10px] font-black text-sky-700 hover:underline cursor-pointer"
+                        >
+                          + Gunakan Cover dari Google Drive
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="url"
+                      value={formCoverUrl}
+                      onChange={(e) => setFormCoverUrl(e.target.value)}
+                      placeholder="https://.../sampul-buku.png atau link gambar Google Drive"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono text-[11px]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">URL File Buku (PDF / Google Drive / SIBI) *</label>
+                    <input
+                      type="url"
+                      required
+                      value={formFileUrl}
+                      onChange={(e) => setFormFileUrl(e.target.value)}
+                      placeholder="https://drive.google.com/file/d/.../view atau link PDF SIBI"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 font-mono text-[11px]"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Link Google Drive yang berakhiran /view atau /edit otomatis dikonversi menjadi /preview saat dibaca dan menghasilkan cover halaman pertama secara otomatis.
+                    </p>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setIsBookModalOpen(false)}
+                      className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSavingBook}
+                      className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-display font-extrabold cursor-pointer"
+                    >
+                      {isSavingBook ? 'Menyimpan...' : editingBookId ? 'Simpan Perubahan' : 'Simpan Buku'}
+                    </button>
+                  </div>
+                </form>
+
+                {/* Live Cover & Link URL Preview Panel */}
+                <div className="lg:col-span-5 bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-black uppercase text-slate-700 flex items-center gap-1.5">
+                      <Eye className="w-3.5 h-3.5 text-rose-600" /> Live Preview Cover &amp; Link
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-600">
+                      {formCoverUrl.trim()
+                        ? 'Cover URL Khusus'
+                        : driveIdFromFile
+                        ? 'Auto Cover Google Drive'
+                        : 'Sampul Digital Default'}
+                    </span>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+                    <div className="aspect-[4/3] bg-slate-100 overflow-hidden">
+                      <BookCoverImage
+                        src={formCoverUrl}
+                        fileUrl={formFileUrl}
+                        title={formJudul || 'Judul Buku Baru'}
+                        kategori={formKategori}
+                      />
+                    </div>
+                    <div className="p-3 space-y-1">
+                      <div className="text-[10px] font-bold text-rose-700">
+                        {formKategori} · {formKelas === 'Semua' ? 'Semua Kelas' : `Kelas ${formKelas}`}
+                      </div>
+                      <div className="font-display font-black text-xs text-slate-900 line-clamp-2">
+                        {formJudul || 'Judul buku akan tampil di sini'}
+                      </div>
+                      <div className="text-[11px] text-slate-500 truncate">
+                        {formPenulis || 'Tim Penulis'} · {formSumber || 'Perpustakaan Digital'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Link URL Buku Preview Box */}
+                  <div className="p-3 rounded-xl bg-white border border-slate-200 space-y-2">
+                    <div className="text-[10px] font-black uppercase text-slate-500 flex items-center gap-1">
+                      <Link2 className="w-3 h-3 text-sky-600" /> Preview Link URL Buku
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-700 break-all bg-slate-50 p-2 rounded-lg border border-slate-100 max-h-16 overflow-y-auto">
+                      {formFileUrl.trim() || 'Masukkan URL file buku untuk melihat pratinjau link...'}
+                    </div>
+                    {liveResolvedCover && (
+                      <div className="text-[10px] text-emerald-700 font-semibold break-all">
+                        URL Gambar Cover: <span className="font-mono">{liveResolvedCover}</span>
+                      </div>
+                    )}
+                    {formFileUrl.trim() && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setShowFormBookPreview((v) => !v)}
+                          className="flex-1 py-1.5 px-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer transition"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>{showFormBookPreview ? 'Tutup Tes Link' : 'Tes Preview Link'}</span>
+                        </button>
+                        <a
+                          href={formFileUrl.trim()}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-[11px] flex items-center justify-center gap-1 transition"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" /> Buka URL
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {showFormBookPreview && liveEmbedUrl && (
+                <div className="pt-3 border-t border-slate-200 space-y-2">
+                  <div className="text-[11px] font-bold text-slate-600">
+                    Pratinjau Isi Buku dari Link URL (<span className="font-mono">{liveEmbedUrl}</span>):
+                  </div>
+                  <iframe
+                    src={liveEmbedUrl}
+                    title="Preview Link Buku"
+                    className="w-full h-72 rounded-2xl border border-slate-200 bg-slate-50"
+                    allow="autoplay"
+                  />
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ========================================================= */}
       {/* MODAL IMPORT CSV KATALOG (ADMIN & GURU)                   */}

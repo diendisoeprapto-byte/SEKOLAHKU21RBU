@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Printer, Sprout, UserCheck } from 'lucide-react';
 import { SchoolProfile, Student, Teacher } from '../../types';
+import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
 
 interface Props {
   profile: SchoolProfile;
@@ -21,8 +22,8 @@ export const RaporKokurikulerTab: React.FC<Props> = ({
   const [selectedStudentId, setSelectedStudentId] = useState<string>(filteredStudents[0]?.id || '');
 
   const student = filteredStudents.find((s) => s.id === selectedStudentId) || filteredStudents[0];
-  const wali = teachers.find((t) => t.penugasan === activeClass);
-  const kepsek = profile.kepalaSekolah;
+  const wali = resolveWaliKelas(teachers, activeClass);
+  const kepsek = resolveKepalaSekolah(teachers, profile);
 
   return (
     <section className="space-y-6">
@@ -160,8 +161,7 @@ export const RaporKokurikulerTab: React.FC<Props> = ({
                   {kepsek.nama}
                 </div>
                 <p className="text-[10px] font-mono text-slate-600">
-                  {kepsek.status === 'PPPK' ? 'NIPPPK. ' : 'NIP. '}
-                  {kepsek.nip}
+                  {formatNipLabel(kepsek.status, kepsek.nip)}
                 </p>
               </div>
 
@@ -169,9 +169,11 @@ export const RaporKokurikulerTab: React.FC<Props> = ({
                 <div className="text-xs mb-1 text-slate-800">Jakarta, 19 Desember 2026</div>
                 <p className="font-medium text-slate-700 mb-12">Mengetahui,<br />Wali Kelas</p>
                 <div className="sig-name-line w-44 mx-auto font-black text-slate-900">
-                  {wali?.nama || 'Siti Aminah, S.Pd.'}
+                  {wali?.nama || 'Belum Ditugaskan'}
                 </div>
-                <p className="text-[10px] font-mono text-slate-600">NIP. {wali?.nip || '-'}</p>
+                <p className="text-[10px] font-mono text-slate-600">
+                  {formatNipLabel(wali?.statusPegawai, wali?.nip)}
+                </p>
               </div>
             </div>
           </div>

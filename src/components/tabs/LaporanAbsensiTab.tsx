@@ -19,13 +19,16 @@ import {
   Download,
   X,
 } from 'lucide-react';
-import { Student, KaldikDay } from '../../types';
+import { Student, KaldikDay, Teacher, SchoolProfile } from '../../types';
 import { AttendanceRecordItem } from '../../utils/storage';
 import { getLocalTodayStr, getLocalYearMonthStr, parseLocalDate } from '../../utils/dateUtils';
+import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
 import { TabId } from '../Sidebar';
 
 interface Props {
   students: Student[];
+  teachers?: Teacher[];
+  profile?: SchoolProfile;
   activeClass: string;
   activeSemester: string;
   attendanceRecords: Record<string, AttendanceRecordItem>;
@@ -38,6 +41,8 @@ interface Props {
 
 export const LaporanAbsensiTab: React.FC<Props> = ({
   students,
+  teachers = [],
+  profile,
   activeClass,
   activeSemester,
   attendanceRecords,
@@ -799,26 +804,39 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
                 </p>
 
                 {/* Signatures */}
-                <div className="pt-6 grid grid-cols-2 gap-8 text-xs text-slate-800">
-                  <div className="space-y-12">
-                    <p>Mengetahui,<br />Guru / Wali Kelas {selectedPiagam.student.kelas}</p>
-                    <div>
-                      <p className="font-display font-black text-slate-900 underline">
-                        Sri Mulyani, S.Pd
-                      </p>
-                      <p className="text-[10px] font-mono text-slate-500">NIP. 198403152008012014</p>
+                {(() => {
+                  const waliPiagam = resolveWaliKelas(teachers, selectedPiagam.student.kelas);
+                  const kepsekPiagam = resolveKepalaSekolah(teachers, profile);
+                  return (
+                    <div className="pt-6 grid grid-cols-2 gap-8 text-xs text-slate-800">
+                      <div className="space-y-12">
+                        <p>Mengetahui,<br />Guru / Wali Kelas {selectedPiagam.student.kelas}</p>
+                        <div>
+                          <p className="font-display font-black text-slate-900 underline">
+                            {waliPiagam?.nama || 'Belum Ditugaskan'}
+                          </p>
+                          <p className="text-[10px] font-mono text-slate-500">
+                            {formatNipLabel(waliPiagam?.statusPegawai, waliPiagam?.nip)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="space-y-12">
+                        <p>
+                          Jakarta, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                          <br />Kepala Sekolah {profile?.name || 'SDN Rawa Badak Utara 21'}
+                        </p>
+                        <div>
+                          <p className="font-display font-black text-slate-900 underline">
+                            {kepsekPiagam.nama}
+                          </p>
+                          <p className="text-[10px] font-mono text-slate-500">
+                            {formatNipLabel(kepsekPiagam.status, kepsekPiagam.nip)}
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="space-y-12">
-                    <p>Jakarta, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}<br />Kepala Sekolah SDN Rawa Badak Utara 21</p>
-                    <div>
-                      <p className="font-display font-black text-slate-900 underline">
-                        Bambang Soedjatmiko, M.Pd
-                      </p>
-                      <p className="text-[10px] font-mono text-slate-500">NIP. 197508122000031002</p>
-                    </div>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
 
               {/* Action Buttons */}

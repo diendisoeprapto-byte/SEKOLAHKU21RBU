@@ -5,6 +5,7 @@ import { getStoredReportNotes, getStoredAssessments, getAssessmentCount } from '
 import { getGradeNumberFromClass } from '../../data/classCurriculumData';
 import { getStoredPenilaianEkskul } from './PenilaianEkskulTab';
 import { getCatatanWaliOtomatisByRank } from './CatatanWaliTab';
+import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
 
 interface Props {
   profile: SchoolProfile;
@@ -33,8 +34,8 @@ export const ERaporTab: React.FC<Props> = ({
   const [withKop, setWithKop] = useState(true);
 
   const student = filteredStudents.find((s) => s.id === selectedStudentId) || filteredStudents[0];
-  const wali = teachers.find((t) => t.penugasan === activeClass);
-  const kepsek = profile.kepalaSekolah;
+  const wali = resolveWaliKelas(teachers, activeClass);
+  const kepsek = resolveKepalaSekolah(teachers, profile);
 
   const notesMap = getStoredReportNotes();
   const currentNotes = student ? notesMap[student.id] : null;
@@ -542,11 +543,10 @@ export const ERaporTab: React.FC<Props> = ({
                 </div>
                 <p className="font-medium text-slate-700 mb-12">Mengetahui,<br />Wali Kelas</p>
                 <div className="sig-name-line w-44 mx-auto font-black text-slate-900">
-                  {wali?.nama || 'Siti Aminah, S.Pd.'}
+                  {wali?.nama || 'Belum Ditugaskan'}
                 </div>
                 <p className="text-[10px] font-mono text-slate-600">
-                  {wali?.statusPegawai === 'PPPK' ? 'NIPPPK. ' : 'NIP. '}
-                  {wali?.nip || '198504122010012008'}
+                  {formatNipLabel(wali?.statusPegawai, wali?.nip)}
                 </p>
               </div>
             </div>

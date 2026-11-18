@@ -13,9 +13,11 @@ import {
   Clock,
   Radio,
   KeyRound,
+  Camera,
 } from 'lucide-react';
 import { SchoolProfile } from '../../types';
 import { exportFullSystemJSON, resetStoredAdminPassword } from '../../utils/storage';
+import { compressQuestionImage } from '../../utils/imageUtils';
 import { testConnection, handleFirestoreError, OperationType } from '../../utils/firebase';
 import {
   CloudBackupDocMeta,
@@ -141,33 +143,54 @@ export const BackupTab: React.FC<Props> = ({
     }
   };
 
-  const handleKemendikbudUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleKemendikbudUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        onSaveProfile({
-          ...profile,
-          logoKemendikbudUrl: reader.result as string,
-        });
-        showToast('Logo Kemendikbud berhasil diperbarui & disinkronkan realtime!', 'success');
-      };
-      reader.readAsDataURL(file);
+      const compressed = await compressQuestionImage(file, {
+        maxWidth: 480,
+        maxHeight: 480,
+        quality: 0.85,
+      });
+      onSaveProfile({
+        ...profile,
+        logoKemendikbudUrl: compressed,
+      });
+      showToast('Logo Kemendikbud berhasil diperbarui & disinkronkan realtime!', 'success');
+      e.target.value = '';
     }
   };
 
-  const handleSchoolLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSchoolLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        onSaveProfile({
-          ...profile,
-          logoSekolahUrl: reader.result as string,
-        });
-        showToast('Logo Sekolah (Monas Edition) berhasil diperbarui & disinkronkan realtime!', 'success');
-      };
-      reader.readAsDataURL(file);
+      const compressed = await compressQuestionImage(file, {
+        maxWidth: 480,
+        maxHeight: 480,
+        quality: 0.85,
+      });
+      onSaveProfile({
+        ...profile,
+        logoSekolahUrl: compressed,
+      });
+      showToast('Logo Sekolah (Monas Edition) berhasil diperbarui & disinkronkan realtime!', 'success');
+      e.target.value = '';
+    }
+  };
+
+  const handleAdminPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const compressed = await compressQuestionImage(file, {
+        maxWidth: 400,
+        maxHeight: 400,
+        quality: 0.82,
+      });
+      onSaveProfile({
+        ...profile,
+        adminFotoUrl: compressed,
+      });
+      showToast('Foto Profil Admin berhasil diperbarui & disinkronkan realtime!', 'success');
+      e.target.value = '';
     }
   };
 
@@ -217,25 +240,25 @@ export const BackupTab: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* 2 Logo Upload Section */}
+        {/* 2 Logo & Foto Profil Admin Upload Section */}
         <div className="p-6 rounded-3xl bg-slate-50 border border-slate-200 space-y-4">
           <h3 className="font-display font-black text-base text-slate-800 flex items-center gap-2">
-            <Image className="w-5 h-5 text-rose-600" /> Pengaturan 2 Logo Resmi (Terkoneksi ke Kartu Barcode &amp; e-Rapor)
+            <Image className="w-5 h-5 text-rose-600" /> Pengaturan Logo Resmi &amp; Foto Profil Admin
           </h3>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Logo 1: Kemendikbud */}
             <div className="p-5 rounded-2xl bg-white border border-slate-200 flex items-center gap-4">
               <img
                 src={profile.logoKemendikbudUrl}
                 alt="Logo Kemendikbud"
-                className="w-20 h-20 rounded-2xl object-contain p-2 bg-slate-50 border-2 border-sky-400 shrink-0"
+                className="w-16 h-16 rounded-2xl object-contain p-1.5 bg-slate-50 border-2 border-sky-400 shrink-0"
               />
-              <div className="space-y-2 min-w-0">
-                <span className="text-[10px] font-black uppercase text-sky-700 bg-sky-50 px-2.5 py-0.5 rounded-full">
+              <div className="space-y-1.5 min-w-0">
+                <span className="text-[10px] font-black uppercase text-sky-700 bg-sky-50 px-2.5 py-0.5 rounded-full inline-block">
                   Logo 1: Kemendikbud
                 </span>
-                <h4 className="font-bold text-sm text-slate-800">Tut Wuri Handayani</h4>
+                <h4 className="font-bold text-xs text-slate-800 truncate">Tut Wuri Handayani</h4>
                 <label className="inline-flex items-center gap-1.5 bg-sky-600 hover:bg-sky-700 text-white font-display font-extrabold px-3 py-1.5 rounded-xl text-xs cursor-pointer shadow-xs transition">
                   <Upload className="w-3.5 h-3.5" /> Ganti Logo 1
                   <input type="file" accept="image/*" onChange={handleKemendikbudUpload} className="hidden" />
@@ -248,17 +271,50 @@ export const BackupTab: React.FC<Props> = ({
               <img
                 src={profile.logoSekolahUrl}
                 alt="Logo Sekolah"
-                className="w-20 h-20 rounded-2xl object-contain p-2 bg-slate-50 border-2 border-rose-400 shrink-0"
+                className="w-16 h-16 rounded-2xl object-contain p-1.5 bg-slate-50 border-2 border-rose-400 shrink-0"
               />
-              <div className="space-y-2 min-w-0">
-                <span className="text-[10px] font-black uppercase text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-full">
+              <div className="space-y-1.5 min-w-0">
+                <span className="text-[10px] font-black uppercase text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-full inline-block">
                   Logo 2: Logo Sekolah
                 </span>
-                <h4 className="font-bold text-sm text-slate-800">SDN Rawa Badak Utara 21</h4>
+                <h4 className="font-bold text-xs text-slate-800 truncate">{profile.name}</h4>
                 <label className="inline-flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold px-3 py-1.5 rounded-xl text-xs cursor-pointer shadow-xs transition">
                   <Upload className="w-3.5 h-3.5" /> Ganti Logo 2
                   <input type="file" accept="image/*" onChange={handleSchoolLogoUpload} className="hidden" />
                 </label>
+              </div>
+            </div>
+
+            {/* Foto Profil Admin */}
+            <div className="p-5 rounded-2xl bg-white border border-slate-200 flex items-center gap-4">
+              <img
+                src={profile.adminFotoUrl || profile.logoSekolahUrl}
+                alt="Foto Profil Admin"
+                className="w-16 h-16 rounded-2xl object-cover bg-slate-50 border-2 border-amber-400 shrink-0"
+              />
+              <div className="space-y-1.5 min-w-0">
+                <span className="text-[10px] font-black uppercase text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded-full inline-block">
+                  Foto Profil Admin
+                </span>
+                <h4 className="font-bold text-xs text-slate-800 truncate">Administrator Utama</h4>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <label className="inline-flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-display font-extrabold px-3 py-1.5 rounded-xl text-xs cursor-pointer shadow-xs transition">
+                    <Camera className="w-3.5 h-3.5" /> Ganti Foto
+                    <input type="file" accept="image/*" onChange={handleAdminPhotoUpload} className="hidden" />
+                  </label>
+                  {profile.adminFotoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onSaveProfile({ ...profile, adminFotoUrl: undefined });
+                        showToast('Foto Profil Admin dikembalikan ke Logo Sekolah.', 'success');
+                      }}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold cursor-pointer"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>

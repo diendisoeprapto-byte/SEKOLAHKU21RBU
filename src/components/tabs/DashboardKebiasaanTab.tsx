@@ -30,6 +30,7 @@ import { db } from '../../utils/firebase';
 import { KebiasaanReportItem, TUJUH_KEBIASAAN_LIST, Student, SchoolProfile, Teacher } from '../../types';
 import { CLASSES_LIST } from '../../utils/storage';
 import { getLocalTodayStr } from '../../utils/dateUtils';
+import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
 
 export const MONTH_NAMES = [
   { value: '01', label: 'Januari' },
@@ -73,6 +74,7 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
 
   // Detail Modal State
   const [activeModalReport, setActiveModalReport] = useState<KebiasaanReportItem | null>(null);
+  const [deleteTargetReportId, setDeleteTargetReportId] = useState<string | null>(null);
 
   // Modal & Loading State Kosongkan Data
   const [isClearAllModalOpen, setIsClearAllModalOpen] = useState<boolean>(false);
@@ -119,6 +121,7 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
                 membacaBuku: false,
                 membantuOrangTua: false,
               },
+              indikatorTerpilih: data.indikatorTerpilih || {},
               catatan: data.catatan || {},
               skor: typeof data.skor === 'number' ? data.skor : 7,
               catatanSiswa: data.catatanSiswa || '',
@@ -190,13 +193,14 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
     return reports.filter((r) => r.skor === 7).length;
   }, [reports]);
 
-  // Handler Hapus Laporan Tunggal
-  const handleDeleteReport = async (reportId?: string) => {
-    if (!reportId) return;
-    if (!confirm('Apakah Anda yakin ingin menghapus data laporan kebiasaan ini?')) return;
+  // Handler Hapus Laporan Tunggal (via in-app confirmation modal)
+  const confirmDeleteSingleReport = async () => {
+    if (!deleteTargetReportId) return;
+    const targetId = deleteTargetReportId;
+    setDeleteTargetReportId(null);
 
     try {
-      await deleteDoc(doc(db, 'laporan_kebiasaan', reportId));
+      await deleteDoc(doc(db, 'laporan_kebiasaan', targetId));
       showToast('Laporan berhasil dihapus dari sistem Firestore!', 'success');
     } catch (err: any) {
       console.error('Delete error:', err);
@@ -255,17 +259,26 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
             membacaBuku: s.skor >= 6,
             membantuOrangTua: s.skor === 7,
           },
+          indikatorTerpilih: {
+            bangunPagi: ['Bangun mandiri tanpa dibangunkan', 'Merapikan tempat tidur'],
+            ibadah: ['Melaksanakan ibadah wajib tepat waktu', 'Membaca doa sebelum dan sesudah beraktivitas'],
+            mandiGosokGigi: ['Mengikuti Senam Anak Indonesia Hebat', 'Melakukan peregangan ringan di pagi hari'],
+            sarapanSehat: ['Sarapan pagi sebelum berangkat sekolah', 'Minum air putih yang cukup'],
+            berpamitan: ['Mengulang pelajaran dan mengerjakan PR', 'Membaca buku bacaan non-pelajaran'],
+            membacaBuku: s.skor >= 6 ? ['Membantu pekerjaan rumah tangga orang tua', 'Berbagi dan bertutur kata santun'] : [],
+            membantuOrangTua: s.skor === 7 ? ['Tidur malam maksimal pukul 21.00 WIB', 'Membersihkan diri sebelum tidur'] : [],
+          },
           catatan: {
-            bangunPagi: 'Bangun pukul 05.00 WIB, merapikan selimut & bantal',
-            ibadah: 'Sholat Subuh berjamaah bersama keluarga',
-            mandiGosokGigi: 'Mandi pagi segar dan menggosok gigi teratur',
-            sarapanSehat: 'Nasi, telur mata sapi, sayur bayam, air putih',
-            berpamitan: 'Mencium tangan ayah dan ibu sebelum ke sekolah',
-            membacaBuku: 'Membaca buku cerita nusantara 15 menit',
-            membantuOrangTua: 'Menyapu lantai ruang tamu dan mencuci piring',
+            bangunPagi: 'Bangun pukul 05.00 WIB, merapikan tempat tidur & perlengkapan sekolah',
+            ibadah: 'Melaksanakan ibadah wajib tepat waktu & membaca doa harian',
+            mandiGosokGigi: 'Melakukan peregangan pagi dan Senam Anak Indonesia Hebat',
+            sarapanSehat: 'Sarapan bergizi seimbang & minum air putih 6-8 gelas',
+            berpamitan: 'Mengulang pelajaran dan membaca buku cerita 15 menit',
+            membacaBuku: s.skor >= 6 ? 'Membantu pekerjaan rumah tangga dan menjaga kebersihan kelas' : '',
+            membantuOrangTua: s.skor === 7 ? 'Tidur sebelum pukul 21.00 WIB & menerapkan prinsip 3S' : '',
           },
           skor: s.skor,
-          catatanSiswa: 'Hari ini saya sangat bersemangat berangkat sekolah tepat waktu!',
+          catatanSiswa: 'Hari ini saya sangat bersemangat menjalankan 7 Kebiasaan Anak Indonesia Hebat!',
           createdAt: new Date().toISOString(),
         });
       }
@@ -285,22 +298,35 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
       return;
     }
 
-    const dataForExcel = filteredReports.map((r, idx) => ({
-      'No': idx + 1,
-      'Tanggal': r.tanggal,
-      'Waktu Kirim': r.waktuKirim || '-',
-      'Nama Siswa': r.namaSiswa,
-      'Kelas': r.kelas,
-      '1. Bangun Pagi': r.kebiasaan?.bangunPagi ? 'Sudah' : 'Belum',
-      '2. Melaksanakan Ibadah': r.kebiasaan?.ibadah ? 'Sudah' : 'Belum',
-      '3. Mandi & Gosok Gigi': r.kebiasaan?.mandiGosokGigi ? 'Sudah' : 'Belum',
-      '4. Sarapan Sehat': r.kebiasaan?.sarapanSehat ? 'Sudah' : 'Belum',
-      '5. Berpamitan Ortu': r.kebiasaan?.berpamitan ? 'Sudah' : 'Belum',
-      '6. Membaca Buku': r.kebiasaan?.membacaBuku ? 'Sudah' : 'Belum',
-      '7. Membantu Orang Tua': r.kebiasaan?.membantuOrangTua ? 'Sudah' : 'Belum',
-      'Total Skor': `${r.skor} / 7`,
-      'Catatan Siswa': r.catatanSiswa || '-',
-    }));
+    const dataForExcel = filteredReports.map((r, idx) => {
+      const indikatorSummary = TUJUH_KEBIASAAN_LIST.map((h) => {
+        const list = r.indikatorTerpilih?.[h.id as keyof NonNullable<KebiasaanReportItem['indikatorTerpilih']>];
+        if (list && list.length > 0) {
+          return `${h.shortLabel}: ${list.join(', ')}`;
+        }
+        return null;
+      })
+        .filter(Boolean)
+        .join(' | ');
+
+      return {
+        No: idx + 1,
+        Tanggal: r.tanggal,
+        'Waktu Kirim': r.waktuKirim || '-',
+        'Nama Siswa': r.namaSiswa,
+        Kelas: r.kelas,
+        '1. Bangun Pagi': r.kebiasaan?.bangunPagi ? 'Sudah' : 'Belum',
+        '2. Beribadah': r.kebiasaan?.ibadah ? 'Sudah' : 'Belum',
+        '3. Berolahraga': r.kebiasaan?.mandiGosokGigi ? 'Sudah' : 'Belum',
+        '4. Makan Sehat & Bergizi': r.kebiasaan?.sarapanSehat ? 'Sudah' : 'Belum',
+        '5. Gemar Belajar': r.kebiasaan?.berpamitan ? 'Sudah' : 'Belum',
+        '6. Bermasyarakat': r.kebiasaan?.membacaBuku ? 'Sudah' : 'Belum',
+        '7. Tidur Cepat': r.kebiasaan?.membantuOrangTua ? 'Sudah' : 'Belum',
+        'Total Skor': `${r.skor} / 7`,
+        'Indikator Kegiatan Dipilih': indikatorSummary || '-',
+        'Catatan Siswa': r.catatanSiswa || '-',
+      };
+    });
 
     const ws = XLSX.utils.json_to_sheet(dataForExcel);
     const wb = XLSX.utils.book_new();
@@ -448,10 +474,15 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
   const waliTeacher = useMemo(() => {
     if (!teachers || teachers.length === 0) return null;
     if (printClass !== 'Semua Kelas') {
-      return teachers.find((t) => t.penugasan === printClass) || teachers[0];
+      return resolveWaliKelas(teachers, printClass) || teachers[0];
     }
     return teachers.find((t) => t.penugasan?.includes('Kelas')) || teachers[0];
   }, [teachers, printClass]);
+
+  const kepsekInfo = useMemo(
+    () => resolveKepalaSekolah(teachers, profile),
+    [teachers, profile]
+  );
 
   const lastDayOfMonth = useMemo(() => {
     return new Date(parseInt(printYear), parseInt(printMonth), 0).getDate();
@@ -474,12 +505,12 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
       'Kepatuhan (%)': `${s.persentase}%`,
       'Predikat Karakter': s.predikat,
       '1. Bangun Pagi': s.kebiasaanCount.bangunPagi,
-      '2. Melaksanakan Ibadah': s.kebiasaanCount.ibadah,
-      '3. Mandi & Gigi': s.kebiasaanCount.mandiGosokGigi,
-      '4. Sarapan Sehat': s.kebiasaanCount.sarapanSehat,
-      '5. Berpamitan Ortu': s.kebiasaanCount.berpamitan,
-      '6. Membaca Buku': s.kebiasaanCount.membacaBuku,
-      '7. Membantu Ortu': s.kebiasaanCount.membantuOrangTua,
+      '2. Beribadah': s.kebiasaanCount.ibadah,
+      '3. Berolahraga': s.kebiasaanCount.mandiGosokGigi,
+      '4. Makan Sehat & Bergizi': s.kebiasaanCount.sarapanSehat,
+      '5. Gemar Belajar': s.kebiasaanCount.berpamitan,
+      '6. Bermasyarakat': s.kebiasaanCount.membacaBuku,
+      '7. Tidur Cepat': s.kebiasaanCount.membantuOrangTua,
     }));
 
     const ws = XLSX.utils.json_to_sheet(dataForExcel);
@@ -816,7 +847,7 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
                             </button>
                             <button
                               type="button"
-                              onClick={() => handleDeleteReport(item.id)}
+                              onClick={() => item.id && setDeleteTargetReportId(item.id)}
                               className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 transition cursor-pointer"
                               title="Hapus Laporan ini"
                             >
@@ -864,6 +895,10 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
               {TUJUH_KEBIASAAN_LIST.map((h) => {
                 const done = Boolean(activeModalReport.kebiasaan?.[h.id as keyof typeof activeModalReport.kebiasaan]);
                 const customNote = activeModalReport.catatan?.[h.id as keyof typeof activeModalReport.catatan];
+                const chosenIndikators =
+                  activeModalReport.indikatorTerpilih?.[
+                    h.id as keyof NonNullable<KebiasaanReportItem['indikatorTerpilih']>
+                  ] || [];
 
                 return (
                   <div
@@ -874,20 +909,35 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
                         : 'bg-slate-50 border-slate-200 text-slate-500'
                     }`}
                   >
-                    <div className="flex items-start gap-2.5">
+                    <div className="flex items-start gap-2.5 flex-1 min-w-0">
                       <span className="text-xl shrink-0 mt-0.5">{h.icon}</span>
-                      <div>
+                      <div className="min-w-0">
                         <h4 className="font-display font-black text-xs text-slate-800">
                           {h.label}
                         </h4>
+                        {chosenIndikators.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {chosenIndikators.map((indTitle, iIdx) => (
+                              <span
+                                key={iIdx}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-emerald-300 text-[10px] font-bold text-emerald-900"
+                              >
+                                <Check className="w-3 h-3 text-emerald-600 shrink-0" />
+                                <span>{indTitle}</span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
                         {customNote ? (
-                          <p className="text-[11px] text-slate-600 mt-0.5 italic">
-                            "{customNote}"
+                          <p className="text-[11px] text-slate-600 mt-1 italic">
+                            &quot;{customNote}&quot;
                           </p>
                         ) : (
-                          <p className="text-[10px] text-slate-400 mt-0.5">
-                            {done ? 'Sudah dilaksanakan dengan baik' : 'Belum dilaksanakan'}
-                          </p>
+                          chosenIndikators.length === 0 && (
+                            <p className="text-[10px] text-slate-400 mt-0.5">
+                              {done ? 'Sudah dilaksanakan dengan baik' : 'Belum dilaksanakan'}
+                            </p>
+                          )
                         )}
                       </div>
                     </div>
@@ -930,6 +980,44 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      {/* MODAL KONFIRMASI HAPUS LAPORAN TUNGGAL */}
+      {deleteTargetReportId && (
+        <div className="fixed inset-0 z-[950] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white max-w-sm w-full rounded-3xl p-6 shadow-2xl border border-rose-200 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-display font-black text-base text-slate-800">
+                  Hapus Laporan Kebiasaan?
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Data yang dihapus dari Firestore tidak dapat dikembalikan.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setDeleteTargetReportId(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteSingleReport}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs cursor-pointer"
+              >
+                Ya, Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL KONFIRMASI KOSONGKAN DATA */}
       {isClearAllModalOpen && (
         <div className="fixed inset-0 z-[950] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
@@ -1235,13 +1323,13 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
                     Keterangan Kolom 7 Indikator Kebiasaan:
                   </span>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-0.5 text-slate-700">
-                    <span><strong>1. BP</strong>: Bangun Pagi &amp; Tempat Tidur</span>
-                    <span><strong>2. IB</strong>: Melaksanakan Ibadah</span>
-                    <span><strong>3. MG</strong>: Mandi &amp; Menggosok Gigi</span>
-                    <span><strong>4. SS</strong>: Sarapan Sehat Bergizi</span>
-                    <span><strong>5. BM</strong>: Berpamitan Orang Tua</span>
-                    <span><strong>6. MB</strong>: Membaca Buku (Literasi)</span>
-                    <span className="col-span-2"><strong>7. MO</strong>: Membantu Orang Tua di Rumah</span>
+                    <span><strong>1. BP</strong>: Bangun Pagi</span>
+                    <span><strong>2. IB</strong>: Beribadah</span>
+                    <span><strong>3. BO</strong>: Berolahraga</span>
+                    <span><strong>4. MS</strong>: Makan Sehat &amp; Bergizi</span>
+                    <span><strong>5. GB</strong>: Gemar Belajar</span>
+                    <span><strong>6. BM</strong>: Bermasyarakat</span>
+                    <span className="col-span-2"><strong>7. TC</strong>: Tidur Cepat</span>
                   </div>
                 </div>
 
@@ -1266,12 +1354,12 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
                         <tr className="bg-slate-100 text-slate-800 font-extrabold border-b border-slate-900 text-center text-[9px]">
                           <th className="border-r border-slate-900" colSpan={7}></th>
                           <th className="p-1 border-r border-slate-900 w-6" title="Bangun Pagi">BP</th>
-                          <th className="p-1 border-r border-slate-900 w-6" title="Ibadah">IB</th>
-                          <th className="p-1 border-r border-slate-900 w-6" title="Mandi & Gigi">MG</th>
-                          <th className="p-1 border-r border-slate-900 w-6" title="Sarapan Sehat">SS</th>
-                          <th className="p-1 border-r border-slate-900 w-6" title="Berpamitan">BM</th>
-                          <th className="p-1 border-r border-slate-900 w-6" title="Membaca Buku">MB</th>
-                          <th className="p-1 border-r border-slate-900 w-6" title="Membantu Orang Tua">MO</th>
+                          <th className="p-1 border-r border-slate-900 w-6" title="Beribadah">IB</th>
+                          <th className="p-1 border-r border-slate-900 w-6" title="Berolahraga">BO</th>
+                          <th className="p-1 border-r border-slate-900 w-6" title="Makan Sehat dan Bergizi">MS</th>
+                          <th className="p-1 border-r border-slate-900 w-6" title="Gemar Belajar">GB</th>
+                          <th className="p-1 border-r border-slate-900 w-6" title="Bermasyarakat">BM</th>
+                          <th className="p-1 border-r border-slate-900 w-6" title="Tidur Cepat">TC</th>
                           <th></th>
                         </tr>
                       </thead>
@@ -1376,14 +1464,14 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
                   <div className="text-center space-y-16">
                     <div>
                       <p>Mengetahui,</p>
-                      <p className="font-bold">Kepala {profile?.name || 'SDN CIPETE UTARA 01 PAGI'}</p>
+                      <p className="font-bold">Kepala {profile?.name || 'SDN Rawa Badak Utara 21'}</p>
                     </div>
                     <div>
-                      <p className="font-bold underline uppercase tracking-tight text-slate-900">
-                        {profile?.kepalaSekolah?.nama || 'H. SUDIRMAN, M.Pd.'}
+                      <p className="font-bold underline tracking-tight text-slate-900">
+                        {kepsekInfo.nama}
                       </p>
                       <p className="text-[11px] font-mono text-slate-700">
-                        NIP. {profile?.kepalaSekolah?.nip || '197508172000031001'}
+                        {formatNipLabel(kepsekInfo.status, kepsekInfo.nip)}
                       </p>
                     </div>
                   </div>
@@ -1395,11 +1483,11 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
                       <p className="font-bold">Guru Kelas / Pembina Karakter</p>
                     </div>
                     <div>
-                      <p className="font-bold underline uppercase tracking-tight text-slate-900">
-                        {waliTeacher?.nama || 'NURHALIMAH, S.Pd.'}
+                      <p className="font-bold underline tracking-tight text-slate-900">
+                        {waliTeacher?.nama || 'Belum Ditugaskan'}
                       </p>
                       <p className="text-[11px] font-mono text-slate-700">
-                        NIP. {waliTeacher?.nip || '198205122008012015'}
+                        {formatNipLabel(waliTeacher?.statusPegawai, waliTeacher?.nip)}
                       </p>
                     </div>
                   </div>

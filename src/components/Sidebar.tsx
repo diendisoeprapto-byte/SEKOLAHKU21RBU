@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Home,
   Building,
@@ -30,8 +30,9 @@ import {
   KeyRound,
   HeartHandshake,
   Archive,
+  Camera,
 } from 'lucide-react';
-import { ActiveUser } from '../types';
+import { ActiveUser, SchoolProfile, Student, isAbkExcludedFromTka } from '../types';
 
 export type TabId =
   | 'dashboard'
@@ -39,6 +40,7 @@ export type TabId =
   | 'guru'
   | 'rombel'
   | 'siswa'
+  | 'verifikasi-inklusi'
   | 'absensi'
   | 'kalender'
   | 'laporan-absensi'
@@ -71,18 +73,24 @@ interface Props {
   activeTab: TabId;
   onSelectTab: (tab: TabId) => void;
   activeUser: ActiveUser;
+  profile?: SchoolProfile;
+  students?: Student[];
   isOpen: boolean;
   onOpenZoom: (url: string, title: string) => void;
   onOpenChangePassword?: () => void;
+  onOpenAdminProfile?: () => void;
 }
 
 export const Sidebar: React.FC<Props> = ({
   activeTab,
   onSelectTab,
   activeUser,
+  profile,
+  students = [],
   isOpen,
   onOpenZoom,
   onOpenChangePassword,
+  onOpenAdminProfile,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
@@ -91,8 +99,12 @@ export const Sidebar: React.FC<Props> = ({
     group3: false,
     group4: false,
     groupTka: false,
-    group5: activeUser.role === 'admin',
+    group5: false,
   });
+
+  useEffect(() => {
+    setOpenGroups((prev) => ({ ...prev, group5: false }));
+  }, [activeUser.role, activeUser.username]);
 
   const toggleGroup = (grp: string) => {
     setOpenGroups((prev) => ({ ...prev, [grp]: !prev[grp] }));
@@ -106,22 +118,45 @@ export const Sidebar: React.FC<Props> = ({
     <aside className="w-full lg:w-72 shrink-0 no-print transition-all duration-300">
       <div className="bg-white rounded-[2rem] shadow-md border-2 border-rose-100 p-4 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto sidebar-scroll space-y-3.5">
         {/* User profile card */}
-        <div className="p-4 rounded-3xl bg-gradient-to-br from-rose-50/90 via-white to-amber-50/70 border border-rose-200 flex items-center gap-3">
-          <img
-            src={activeUser.fotoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
-            alt="Foto Profil"
-            onClick={() => onOpenZoom(activeUser.fotoUrl, 'Foto Profil Pengguna')}
-            className="w-12 h-12 rounded-2xl object-cover border-2 border-rose-600 shadow-xs bg-white cursor-zoom-in shrink-0"
-          />
-          <div className="min-w-0 flex-1">
-            <span className="inline-block text-[10px] font-extrabold uppercase bg-rose-600 text-white px-2.5 py-0.5 rounded-full leading-tight">
-              {activeUser.role}
-            </span>
-            <h4 className="font-display font-black text-sm text-slate-800 truncate mt-1">
-              {activeUser.name}
-            </h4>
-            <p className="text-xs text-slate-500 truncate">{activeUser.detail}</p>
+        <div className="p-4 rounded-3xl bg-gradient-to-br from-rose-50/90 via-white to-amber-50/70 border border-rose-200 space-y-2.5">
+          <div className="flex items-center gap-3">
+            <img
+              src={
+                activeUser.role === 'admin'
+                  ? profile?.adminFotoUrl || activeUser.fotoUrl || profile?.logoSekolahUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'
+                  : activeUser.fotoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'
+              }
+              alt="Foto Profil"
+              onClick={() =>
+                onOpenZoom(
+                  activeUser.role === 'admin'
+                    ? profile?.adminFotoUrl || activeUser.fotoUrl || profile?.logoSekolahUrl || ''
+                    : activeUser.fotoUrl,
+                  'Foto Profil Pengguna'
+                )
+              }
+              className="w-12 h-12 rounded-2xl object-cover border-2 border-rose-600 shadow-xs bg-white cursor-zoom-in shrink-0"
+            />
+            <div className="min-w-0 flex-1">
+              <span className="inline-block text-[10px] font-extrabold uppercase bg-rose-600 text-white px-2.5 py-0.5 rounded-full leading-tight">
+                {activeUser.role}
+              </span>
+              <h4 className="font-display font-black text-sm text-slate-800 truncate mt-1">
+                {activeUser.name}
+              </h4>
+              <p className="text-xs text-slate-500 truncate">{activeUser.detail}</p>
+            </div>
           </div>
+          {activeUser.role === 'admin' && onOpenAdminProfile && (
+            <button
+              type="button"
+              onClick={onOpenAdminProfile}
+              className="w-full px-3 py-1.5 rounded-xl bg-white hover:bg-rose-50 border border-rose-200 text-rose-700 font-display font-extrabold text-[11px] flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer"
+            >
+              <Camera className="w-3.5 h-3.5 text-rose-600" />
+              <span>Ubah Logo / Foto Profil Admin</span>
+            </button>
+          )}
         </div>
 
         {/* Search */}
@@ -187,17 +222,31 @@ export const Sidebar: React.FC<Props> = ({
               <span>Rapor Kokurikuler (P5)</span>
             </button>
 
-            <button
-              onClick={() => onSelectTab('tes-tka-siswa')}
-              className={`w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-3 text-left transition ${
-                activeTab === 'tes-tka-siswa'
-                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
-                  : 'text-slate-700 hover:bg-purple-50'
-              }`}
-            >
-              <Sparkles className="w-5 h-5 text-purple-500" />
-              <span>Tes Kemampuan Akademik (TKA)</span>
-            </button>
+            {(() => {
+              const ad = activeUser.studentData;
+              const liveStudent =
+                students.find(
+                  (s) =>
+                    (ad?.id && s.id === ad.id) ||
+                    (ad?.nisn && s.nisn === ad.nisn) ||
+                    (activeUser.username &&
+                      (s.username || '').toLowerCase() === activeUser.username.toLowerCase())
+                ) || ad;
+              if (isAbkExcludedFromTka(liveStudent)) return null;
+              return (
+                <button
+                  onClick={() => onSelectTab('tes-tka-siswa')}
+                  className={`w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-3 text-left transition ${
+                    activeTab === 'tes-tka-siswa'
+                      ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
+                      : 'text-slate-700 hover:bg-purple-50'
+                  }`}
+                >
+                  <Sparkles className="w-5 h-5 text-purple-500" />
+                  <span>Tes Kemampuan Akademik (TKA)</span>
+                </button>
+              );
+            })()}
 
             <button
               onClick={() => onSelectTab('laporan-kebiasaan')}
@@ -345,6 +394,19 @@ export const Sidebar: React.FC<Props> = ({
                     >
                       <Users className="w-4 h-4" />
                       <span>Siswa, Akun & Barcode</span>
+                    </button>
+                  )}
+                  {(!searchQuery || 'verifikasi siswa inklusi abk reguler kategori kebutuhan khusus'.includes(searchQuery)) && (
+                    <button
+                      onClick={() => onSelectTab('verifikasi-inklusi')}
+                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
+                        activeTab === 'verifikasi-inklusi'
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'text-slate-700 hover:bg-amber-50'
+                      }`}
+                    >
+                      <HeartHandshake className="w-4 h-4" />
+                      <span>Verifikasi Siswa Inklusi</span>
                     </button>
                   )}
                   {(!searchQuery || 'scan absensi barcode kamera'.includes(searchQuery)) && (
@@ -792,6 +854,16 @@ export const Sidebar: React.FC<Props> = ({
                     >
                       <Database className="w-4 h-4" />
                       <span>2 Logo & Backup Data</span>
+                    </button>
+                  )}
+                  {activeUser.role === 'admin' && onOpenAdminProfile && (!searchQuery || 'ubah ganti logo foto profil admin avatar sekolah kemendikbud'.includes(searchQuery)) && (
+                    <button
+                      type="button"
+                      onClick={onOpenAdminProfile}
+                      className="w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition text-sky-800 bg-sky-50/80 hover:bg-sky-100 border border-sky-200 cursor-pointer"
+                    >
+                      <Camera className="w-4 h-4 text-sky-600" />
+                      <span>Ubah Logo &amp; Foto Profil Admin</span>
                     </button>
                   )}
                   {activeUser.role === 'admin' && onOpenChangePassword && (!searchQuery || 'rubah ganti ubah password sandi admin administrator'.includes(searchQuery)) && (

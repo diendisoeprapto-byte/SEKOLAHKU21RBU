@@ -18,8 +18,13 @@ import {
   ArrowUp,
   ArrowDown,
   AlertTriangle,
+  GraduationCap,
 } from 'lucide-react';
+import { collection, doc, getDocs, writeBatch } from 'firebase/firestore';
+import { db } from '../../utils/firebase';
 import { Student, SchoolProfile, ReligionType, KEBUTUHAN_KHUSUS_OPTIONS, isSiswaInklusi } from '../../types';
+import { MAPEL_LIST } from '../../data/defaultData';
+import { getLocalTodayStr } from '../../utils/dateUtils';
 import {
   downloadTemplateStudentsXLSX,
   exportStudentsToXLSX,
@@ -28,7 +33,7 @@ import {
 } from '../../utils/excel';
 import { renderBarcodeToCanvas } from '../../utils/barcode';
 import { BarcodePrintModal } from '../BarcodePrintModal';
-import { CLASSES_LIST, ACADEMIC_YEARS } from '../../utils/storage';
+import { CLASSES_LIST, ACADEMIC_YEARS, isKelas6Class } from '../../utils/storage';
 import {
   saveStudentsToFirestoreBatch,
   saveSingleStudentToFirestore,
@@ -97,6 +102,19 @@ export const SiswaTab: React.FC<Props> = ({
   const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState<boolean>(false);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [isBatchPrintOpen, setIsBatchPrintOpen] = useState<boolean>(false);
+
+  // State Modal Kelulusan Kelas 6 (Luluskan -> Arsip ke Portal Alumni)
+  const [isGraduateModalOpen, setIsGraduateModalOpen] = useState<boolean>(false);
+  const [gradLoading, setGradLoading] = useState<boolean>(false);
+  const [isGraduating, setIsGraduating] = useState<boolean>(false);
+  const [gradSelectedIds, setGradSelectedIds] = useState<Set<string>>(new Set());
+  const [gradFilterClass, setGradFilterClass] = useState<string>('SEMUA');
+  const [gradSearch, setGradSearch] = useState<string>('');
+  const [gradTahunLulus, setGradTahunLulus] = useState<string>(activeYear || '2026/2027');
+  const [gradTanggalLulus, setGradTanggalLulus] = useState<string>(() => getLocalTodayStr());
+  const [gradRemoveFromActive, setGradRemoveFromActive] = useState<boolean>(true);
+  const [gradAsajByKey, setGradAsajByKey] = useState<Record<string, any>>({});
+  const [gradExistingAlumniMap, setGradExistingAlumniMap] = useState<Record<string, any>>({});
 
   // Sinkronkan filter dengan activeClass jika berubah dari global header
   useEffect(() => {
@@ -193,6 +211,245 @@ export const SiswaTab: React.FC<Props> = ({
       if (col === 'kelas') return prev === 'kelas-asc' ? 'kelas-desc' : 'kelas-asc';
       return 'nama-asc';
     });
+  };
+
+  // Daftar siswa Kelas 6 untuk menu Luluskan
+  const grade6Students = useMemo(
+    () =>
+      students
+        .filter((s) => isKelas6Class(s.kelas))
+        .sort((a, b) => (a.nama || '').localeCompare(b.nama || '', 'id', { sensitivity: 'base' })),
+    [students]
+  );
+
+  const grade6Classes = useMemo(
+    () =>
+      Array.from(new Set(grade6Students.map((s) => s.kelas).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b, 'id', { numeric: true })
+      ),
+    [grade6Students]
+  );
+
+  const visibleGradCandidates = useMemo(() => {
+    const q = gradSearch.trim().toLowerCase();
+    return grade6Students.filter((s) => {
+      if (gradFilterClass !== 'SEMUA' && s.kelas !== gradFilterClass) return false;
+      if (!q) return true;
+      return (
+        (s.nama || '').toLowerCase().includes(q) ||
+        (s.nisn || '').toLowerCase().includes(q) ||
+        (s.kelas || '').toLowerCase().includes(q)
+      );
+    });
+  }, [grade6Students, gradFilterClass, gradSearch]);
+
+  const handleOpenGraduateModal = async (preselectedIds?: string[]) => {
+    if (grade6Students.length === 0) {
+      showToast('Belum ada peserta didik Kelas 6 yang terdaftar.', 'error');
+      return;
+    }
+
+    const initialClassFilter =
+      preselectedIds && preselectedIds.length === 1
+        ? 'SEMUA'
+        : isKelas6Class(selectedFilterClass)
+        ? selectedFilterClass
+        : 'SEMUA';
+
+    setGradFilterClass(initialClassFilter);
+    setGradSearch('');
+    setGradTahunLulus(activeYear || '2026/2027');
+    setGradTanggalLulus(getLocalTodayStr());
+    setIsGraduateModalOpen(true);
+    setGradLoading(true);
+
+    try {
+      const asajMap: Record<string, any> = {};
+      try {
+        const snapAsaj = await getDocs(collection(db, 'nilai_asaj'));
+        snapAsaj.forEach((d) => {
+          const data = d.data();
+          asajMap[d.id] = { ...data, studentId: d.id };
+          if (data?.nisn) asajMap[`nisn_${String(data.nisn).trim()}`] = { ...data, studentId: d.id };
+        });
+      } catch {}
+      try {
+        const localRaw = localStorage.getItem('sekolahku_asaj_nilai_v1');
+        if (localRaw) {
+          Object.values(JSON.parse(localRaw)).forEach((r: any) => {
+            if (r?.studentId && !asajMap[r.studentId]) {
+              asajMap[r.studentId] = r;
+              if (r?.nisn) asajMap[`nisn_${String(r.nisn).trim()}`] = r;
+            }
+          });
+        }
+      } catch {}
+
+      const existingAlumni: Record<string, any> = {};
+      try {
+        const snapAlu = await getDocs(collection(db, 'alumni'));
+        snapAlu.forEach((d) => {
+          const data = d.data();
+          existingAlumni[d.id] = data;
+          if (data?.sourceStudentId) existingAlumni[`src_${data.sourceStudentId}`] = data;
+          if (data?.biodata?.nisn) existingAlumni[`nisn_${String(data.biodata.nisn).trim()}`] = data;
+        });
+      } catch {}
+
+      setGradAsajByKey(asajMap);
+      setGradExistingAlumniMap(existingAlumni);
+
+      if (preselectedIds && preselectedIds.length > 0) {
+        setGradSelectedIds(new Set(preselectedIds));
+      } else {
+        const defaults = grade6Students
+          .filter((s) => (initialClassFilter === 'SEMUA' ? true : s.kelas === initialClassFilter))
+          .map((s) => s.id);
+        setGradSelectedIds(new Set(defaults));
+      }
+    } finally {
+      setGradLoading(false);
+    }
+  };
+
+  const handleConfirmGraduate = async () => {
+    const selectedStudents = grade6Students.filter((s) => gradSelectedIds.has(s.id));
+    if (selectedStudents.length === 0) {
+      showToast('Pilih minimal 1 siswa Kelas 6 untuk diluluskan.', 'error');
+      return;
+    }
+
+    setIsGraduating(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const CHUNK_SIZE = 350;
+
+      for (let i = 0; i < selectedStudents.length; i += CHUNK_SIZE) {
+        const chunk = selectedStudents.slice(i, i + CHUNK_SIZE);
+        const batch = writeBatch(db);
+
+        chunk.forEach((s) => {
+          const docId = s.nisn
+            ? `alu_${String(s.nisn).replace(/[^a-zA-Z0-9_-]/g, '')}`
+            : `alu_${String(s.id).replace(/[^a-zA-Z0-9_-]/g, '')}`;
+          const existing =
+            gradExistingAlumniMap[docId] ||
+            gradExistingAlumniMap[`src_${s.id}`] ||
+            (s.nisn ? gradExistingAlumniMap[`nisn_${s.nisn.trim()}`] : null) ||
+            null;
+          const a =
+            gradAsajByKey[s.id] ||
+            (s.nisn ? gradAsajByKey[`nisn_${s.nisn.trim()}`] : null) ||
+            {};
+
+          const semMap = a.raporSemesterMapel || {};
+          const asajPerMapel: Record<string, number> = {};
+          const nilaiIjazah: Record<string, number> = { ...(a.mapelScores || {}) };
+
+          MAPEL_LIST.forEach((m) => {
+            const tVal = Number(a.asajTertulisMapel?.[m] ?? a.nilaiTertulis ?? 0);
+            const pVal = Number(a.asajPraktikMapel?.[m] ?? a.nilaiPraktik ?? 0);
+            if (tVal > 0 || pVal > 0) {
+              asajPerMapel[m] = Math.round(((tVal + pVal) / 2) * 100) / 100;
+            } else if (Number(a.nilaiAsaj) > 0) {
+              asajPerMapel[m] = Number(a.nilaiAsaj);
+            }
+          });
+
+          const payload = {
+            id: docId,
+            biodata: {
+              nama: s.nama || a.nama || '-',
+              nis: s.barcodeId || '',
+              nisn: s.nisn || a.nisn || '',
+              nik: s.nik || '',
+              jenisKelamin: s.jenisKelamin === 'P' ? 'P' : 'L',
+              tempatLahir: s.tempatLahir || 'Jakarta',
+              tanggalLahir: s.tanggalLahir || '',
+              agama: s.agama || 'Islam',
+              alamat: s.alamat || '',
+              namaAyah: s.namaAyah || '',
+              namaIbu: s.namaIbu || '',
+              namaWali: existing?.biodata?.namaWali || '',
+              rombelAsal: s.kelas || a.kelas || 'Kelas 6A',
+              fotoUrl: s.fotoUrl || existing?.biodata?.fotoUrl || '',
+            },
+            kelulusan: {
+              tahunLulus: gradTahunLulus.trim() || activeYear || '2026/2027',
+              noIjazah: a.noIjazah || existing?.kelulusan?.noIjazah || '',
+              noSKL: a.noSkl || existing?.kelulusan?.noSKL || '',
+              tanggalLulus: gradTanggalLulus || getLocalTodayStr(),
+              smpTujuan: existing?.kelulusan?.smpTujuan || '',
+              statusKelulusan: 'LULUS' as const,
+              nilaiAsaj: Number(a.nilaiAsaj || existing?.kelulusan?.nilaiAsaj || 0),
+              nilaiAkhirIjazah: Number(a.nilaiAkhir || existing?.kelulusan?.nilaiAkhirIjazah || 0),
+            },
+            riwayatNilai: {
+              sem1: existing?.riwayatNilai?.sem1 || {},
+              sem2: existing?.riwayatNilai?.sem2 || {},
+              sem3: existing?.riwayatNilai?.sem3 || {},
+              sem4: existing?.riwayatNilai?.sem4 || {},
+              sem5: existing?.riwayatNilai?.sem5 || {},
+              sem6: existing?.riwayatNilai?.sem6 || {},
+              sem7: semMap.k4s1 || existing?.riwayatNilai?.sem7 || {},
+              sem8: semMap.k4s2 || existing?.riwayatNilai?.sem8 || {},
+              sem9: semMap.k5s1 || existing?.riwayatNilai?.sem9 || {},
+              sem10: semMap.k5s2 || existing?.riwayatNilai?.sem10 || {},
+              sem11: semMap.k6s1 || existing?.riwayatNilai?.sem11 || {},
+              sem12: semMap.k6s2 || existing?.riwayatNilai?.sem12 || {},
+              asajPerMapel,
+              nilaiIjazah,
+              rataRataIjazah: Number(a.nilaiAkhir || existing?.riwayatNilai?.rataRataIjazah || 0),
+            },
+            dokumen: existing?.dokumen || {
+              raporSemester1: '',
+              raporSemester2: '',
+              raporSemester3: '',
+              raporSemester4: '',
+              raporSemester5: '',
+              raporSemester6: '',
+              raporSemester7: '',
+              raporSemester8: '',
+              raporSemester9: '',
+              raporSemester10: '',
+              raporSemester11: '',
+              raporSemester12: '',
+              ijazahDepan: '',
+              ijazahBelakang: '',
+              skl: '',
+            },
+            sourceStudentId: s.id,
+            migratedAt: existing?.migratedAt || nowIso,
+            updatedAt: nowIso,
+          };
+
+          batch.set(doc(db, 'alumni', docId), payload, { merge: true });
+        });
+
+        await batch.commit();
+      }
+
+      if (gradRemoveFromActive) {
+        const graduatedIds = selectedStudents.map((s) => s.id);
+        const graduatedIdSet = new Set(graduatedIds);
+        const remainingStudents = students.filter((s) => !graduatedIdSet.has(s.id));
+        await deleteMultipleStudentsFromFirestore(graduatedIds, remainingStudents);
+        onSaveStudents(remainingStudents, true);
+      }
+
+      setIsGraduateModalOpen(false);
+      showToast(
+        gradRemoveFromActive
+          ? `Berhasil meluluskan ${selectedStudents.length} siswa Kelas 6, mengarsipkan ke Portal Alumni, dan memperbarui daftar siswa aktif!`
+          : `Berhasil mengarsipkan ${selectedStudents.length} lulusan Kelas 6 ke Portal Alumni!`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Gagal meluluskan siswa Kelas 6:', err);
+      showToast('Gagal memproses kelulusan siswa Kelas 6 ke Firebase Firestore.', 'error');
+    } finally {
+      setIsGraduating(false);
+    }
   };
 
   const handleImportStudents = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -790,6 +1047,18 @@ export const SiswaTab: React.FC<Props> = ({
               )}
             </div>
 
+            {/* Tombol Luluskan Kelas 6 */}
+            {grade6Students.length > 0 && (
+              <button
+                type="button"
+                onClick={() => handleOpenGraduateModal()}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-display font-extrabold px-3.5 py-1.5 rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+                title="Luluskan siswa Kelas 6 dan arsipkan ke Portal Alumni"
+              >
+                <GraduationCap className="w-4 h-4" /> Luluskan Kelas 6 ({grade6Students.length})
+              </button>
+            )}
+
             {/* Tombol Hapus Massal (Data Yang Tampil) */}
             {filteredStudents.length > 0 && (
               <button
@@ -988,6 +1257,16 @@ export const SiswaTab: React.FC<Props> = ({
                     </td>
                     <td className="p-3 text-right">
                       <div className="flex items-center justify-end gap-1">
+                        {isKelas6Class(s.kelas) && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenGraduateModal([s.id])}
+                            className="p-1.5 rounded-lg text-emerald-700 hover:bg-emerald-50 cursor-pointer"
+                            title="Luluskan Siswa Kelas 6 Ini ke Portal Alumni"
+                          >
+                            <GraduationCap className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => setEditingStudent({ ...s })}
@@ -1068,6 +1347,233 @@ export const SiswaTab: React.FC<Props> = ({
                   </>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Kelulusan Siswa Kelas 6 */}
+      {isGraduateModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border-2 border-emerald-200 space-y-4 my-6">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                  <GraduationCap className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-display font-black text-base sm:text-lg text-slate-900">
+                    Luluskan Peserta Didik Kelas 6
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Arsipkan lulusan Kelas 6 beserta riwayat nilai ASAJ/Ijazah ke Portal Alumni.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isGraduating}
+                onClick={() => setIsGraduateModalOpen(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Metadata Kelulusan */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Tahun Pelajaran / Tahun Lulus</label>
+                <input
+                  type="text"
+                  value={gradTahunLulus}
+                  onChange={(e) => setGradTahunLulus(e.target.value)}
+                  placeholder="2026/2027"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-bold"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Tanggal Kelulusan</label>
+                <input
+                  type="date"
+                  value={gradTanggalLulus}
+                  onChange={(e) => setGradTanggalLulus(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-bold"
+                />
+              </div>
+            </div>
+
+            {/* Filter & Select All Controls */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={gradFilterClass}
+                  onChange={(e) => setGradFilterClass(e.target.value)}
+                  className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800"
+                >
+                  <option value="SEMUA">Semua Kelas 6 ({grade6Students.length})</option>
+                  {grade6Classes.map((c) => (
+                    <option key={c} value={c}>
+                      {c} ({grade6Students.filter((s) => s.kelas === c).length})
+                    </option>
+                  ))}
+                </select>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+                  <input
+                    type="text"
+                    value={gradSearch}
+                    onChange={(e) => setGradSearch(e.target.value)}
+                    placeholder="Cari nama/NISN..."
+                    className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 text-xs bg-white w-44"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = new Set(gradSelectedIds);
+                    visibleGradCandidates.forEach((s) => next.add(s.id));
+                    setGradSelectedIds(next);
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-extrabold cursor-pointer"
+                >
+                  Pilih Tampil ({visibleGradCandidates.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGradSelectedIds(new Set())}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold cursor-pointer"
+                >
+                  Kosongkan
+                </button>
+              </div>
+            </div>
+
+            {/* Checklist Siswa Kelas 6 */}
+            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+              {gradLoading ? (
+                <div className="p-8 text-center text-xs text-slate-500">
+                  Memuat data siswa Kelas 6, nilai ASAJ, dan status arsip alumni...
+                </div>
+              ) : (
+                <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
+                  {visibleGradCandidates.map((s) => {
+                    const checked = gradSelectedIds.has(s.id);
+                    const docId = s.nisn
+                      ? `alu_${String(s.nisn).replace(/[^a-zA-Z0-9_-]/g, '')}`
+                      : `alu_${String(s.id).replace(/[^a-zA-Z0-9_-]/g, '')}`;
+                    const alreadyInAlumni = Boolean(
+                      gradExistingAlumniMap[docId] ||
+                        gradExistingAlumniMap[`src_${s.id}`] ||
+                        (s.nisn ? gradExistingAlumniMap[`nisn_${s.nisn.trim()}`] : false)
+                    );
+                    const hasAsaj = Boolean(
+                      gradAsajByKey[s.id] || (s.nisn ? gradAsajByKey[`nisn_${s.nisn.trim()}`] : false)
+                    );
+                    return (
+                      <label
+                        key={s.id}
+                        className={`flex items-center justify-between gap-3 p-3 text-xs cursor-pointer transition ${
+                          checked ? 'bg-emerald-50/70' : 'hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              const next = new Set(gradSelectedIds);
+                              if (checked) next.delete(s.id);
+                              else next.add(s.id);
+                              setGradSelectedIds(next);
+                            }}
+                            className="w-4 h-4 accent-emerald-600 rounded shrink-0"
+                          />
+                          <img
+                            src={s.fotoUrl}
+                            alt={s.nama}
+                            className="w-8 h-8 rounded-lg object-cover border border-slate-200 shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <div className="font-bold text-slate-800 truncate">{s.nama}</div>
+                            <div className="text-[11px] font-mono text-slate-500">
+                              NISN: {s.nisn || '-'} • {s.kelas}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {hasAsaj && (
+                            <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 text-[10px] font-bold">
+                              Nilai ASAJ Siap
+                            </span>
+                          )}
+                          {alreadyInAlumni && (
+                            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">
+                              Sudah di Alumni
+                            </span>
+                          )}
+                        </div>
+                      </label>
+                    );
+                  })}
+                  {visibleGradCandidates.length === 0 && (
+                    <div className="p-6 text-center text-xs text-slate-400">
+                      Tidak ada siswa Kelas 6 yang cocok dengan filter pencarian.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Option: Remove from active Class 6 list after archiving */}
+            <label className="flex items-start gap-2.5 p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-950 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={gradRemoveFromActive}
+                onChange={(e) => setGradRemoveFromActive(e.target.checked)}
+                className="w-4 h-4 mt-0.5 accent-emerald-600 rounded shrink-0"
+              />
+              <span>
+                <strong>Keluarkan dari daftar siswa aktif Kelas 6</strong> setelah diarsipkan ke Portal Alumni
+                (nonaktifkan centang ini bila hanya ingin menyalin data ke Portal Alumni sambil tetap mempertahankan siswa di Kelas 6).
+              </span>
+            </label>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+              <span className="text-xs font-bold text-slate-600">
+                Terpilih: <strong className="text-emerald-700">{gradSelectedIds.size} siswa</strong>
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isGraduating}
+                  onClick={() => setIsGraduateModalOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer disabled:opacity-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isGraduating || gradSelectedIds.size === 0}
+                  onClick={handleConfirmGraduate}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-display font-extrabold text-xs flex items-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  {isGraduating ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Memproses Kelulusan...</span>
+                    </>
+                  ) : (
+                    <>
+                      <GraduationCap className="w-4 h-4" />
+                      <span>Luluskan ({gradSelectedIds.size} Siswa)</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

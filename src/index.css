@@ -99,19 +99,46 @@
   line-height: 1.25;
 }
 
+.print-only {
+  display: none;
+}
+
 @media print {
   @page {
     size: A4 portrait;
-    margin: 10mm 10mm 20mm 10mm;
+    margin: 10mm 10mm 16mm 10mm;
+  }
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
   body {
     background: #ffffff !important;
+    background-image: none !important;
   }
   .no-print {
     display: none !important;
   }
   .print-only {
     display: block !important;
+  }
+  .print-avoid-break {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+  .print-expand-scroll {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  table {
+    border-collapse: collapse !important;
+  }
+  thead {
+    display: table-header-group !important;
+  }
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
   }
   .a4-rapor-sheet, .f4-rapor-sheet {
     box-shadow: none !important;

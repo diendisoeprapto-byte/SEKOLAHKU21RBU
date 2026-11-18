@@ -19,16 +19,32 @@ import {
   X,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { CBTExam, CBTQuestion, Student, isSiswaInklusi } from '../../types';
-import { DEFAULT_CBT_EXAM, MAPEL_LIST } from '../../data/defaultData';
 import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Cell,
+  ReferenceLine,
+} from 'recharts';
+import { CBTExam, CBTExamResult, SchoolProfile, Student, Teacher, isSiswaInklusi } from '../../types';
+import { MAPEL_LIST } from '../../data/defaultData';
+import {
+  CLASSES_LIST,
   getStoredStudents,
-  getStoredAssessments,
+  getStoredCBTExams,
   getStoredCBTResults,
   clearCBTResultsFromStorage,
+  doesExamResultMatchTarget,
   isTkaResultEntry,
 } from '../../utils/storage';
+import { evaluateQuestionScore } from '../../utils/answerChecker';
+import { stripQuestionTags } from '../../utils/questionFormat';
 import { syncAllLocalToCloud } from '../../utils/cloudSync';
+import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
 
 export const PAKET_SOAL_LIST = [
   'Sumatif 1 (AS 1)',
@@ -64,6 +80,8 @@ export const PAKET_SOAL_LIST = [
 
 interface Props {
   students?: Student[];
+  teachers?: Teacher[];
+  profile?: SchoolProfile;
   activeClass?: string;
   activeYear?: string;
   activeSemester?: string;
@@ -72,6 +90,8 @@ interface Props {
 
 export const AnalisisSoalTab: React.FC<Props> = ({
   students: propStudents,
+  teachers = [],
+  profile,
   activeClass: propActiveClass,
   activeYear = '2026/2027',
   activeSemester = 'Ganjil',
@@ -82,21 +102,26 @@ export const AnalisisSoalTab: React.FC<Props> = ({
   const [selectedClass, setSelectedClass] = useState<string>(propActiveClass || 'Kelas 6A');
   const [activeChartTab, setActiveChartTab] = useState<'kesukaran' | 'pembeda' | 'ketuntasan'>('kesukaran');
   const [isClearModalOpen, setIsClearModalOpen] = useState<boolean>(false);
-  const [cbtResultCount, setCbtResultCount] = useState<number>(
-    () => getStoredCBTResults().filter((r) => !isTkaResultEntry(r)).length
+  const [cbtExams, setCbtExams] = useState<CBTExam[]>(() => getStoredCBTExams());
+  const [cbtResults, setCbtResults] = useState<CBTExamResult[]>(
+    () => getStoredCBTResults().filter((r) => !isTkaResultEntry(r))
   );
+  const cbtResultCount = cbtResults.length;
 
   React.useEffect(() => {
-    const refreshCount = () => {
-      setCbtResultCount(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)).length);
+    const refreshData = () => {
+      setCbtExams(getStoredCBTExams());
+      setCbtResults(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)));
     };
-    window.addEventListener('sekolahku-exam-results-updated', refreshCount);
-    window.addEventListener('sekolahku-cloud-sync-updated', refreshCount);
-    window.addEventListener('storage', refreshCount);
+    window.addEventListener('sekolahku-exam-results-updated', refreshData);
+    window.addEventListener('sekolahku-cbt-exams-updated', refreshData);
+    window.addEventListener('sekolahku-cloud-sync-updated', refreshData);
+    window.addEventListener('storage', refreshData);
     return () => {
-      window.removeEventListener('sekolahku-exam-results-updated', refreshCount);
-      window.removeEventListener('sekolahku-cloud-sync-updated', refreshCount);
-      window.removeEventListener('storage', refreshCount);
+      window.removeEventListener('sekolahku-exam-results-updated', refreshData);
+      window.removeEventListener('sekolahku-cbt-exams-updated', refreshData);
+      window.removeEventListener('sekolahku-cloud-sync-updated', refreshData);
+      window.removeEventListener('storage', refreshData);
     };
   }, []);
 
@@ -108,7 +133,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
         targetMapel: selectedMapel,
       });
       syncAllLocalToCloud('admin').catch(() => {});
-      setCbtResultCount(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)).length);
+      setCbtResults(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)));
       setIsClearModalOpen(false);
       showToast?.(
         `Data hasil CBT "${selectedPaket}" (${selectedMapel}) berhasil dikosongkan & status performa siswa direset!`,
@@ -119,7 +144,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
 
     clearCBTResultsFromStorage({ scope: 'all' });
     syncAllLocalToCloud('admin').catch(() => {});
-    setCbtResultCount(0);
+    setCbtResults([]);
     setIsClearModalOpen(false);
     showToast?.(
       'Seluruh data hasil & analisis CBT berhasil dikosongkan dan status performa siswa direset!',
@@ -127,8 +152,175 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     );
   };
 
-  // Generate dynamic questions tailored to the selected subject and packet
+  // Matching real CBT exam & student results (if created in Bank Soal CBT)
+  const matchingExam = useMemo(() => {
+    const mapelLower = selectedMapel.trim().toLowerCase();
+    const paketLower = selectedPaket.trim().toLowerCase();
+    const classLower = selectedClass.trim().toLowerCase();
+    const gradeMatch = classLower.match(/\d+/)?.[0] || '';
+
+    const candidates = cbtExams.filter((ex) => {
+      const exMapel = (ex.mapel || '').trim().toLowerCase();
+      const mapelOk =
+        Boolean(exMapel) &&
+        (exMapel === mapelLower || exMapel.includes(mapelLower) || mapelLower.includes(exMapel));
+      if (!mapelOk) return false;
+
+      const exPaket = (ex.paketName || ex.subPaket || ex.judul || '').trim().toLowerCase();
+      const paketOk =
+        Boolean(exPaket) &&
+        (exPaket === paketLower ||
+          exPaket.includes(paketLower) ||
+          paketLower.includes(exPaket) ||
+          (paketLower.includes('asas') && exPaket.includes('asas')) ||
+          (paketLower.includes('asts') && exPaket.includes('asts')));
+      return paketOk;
+    });
+
+    if (candidates.length === 0) return null;
+    return (
+      candidates.find((c) => (c.kelas || '').toLowerCase() === classLower) ||
+      candidates.find((c) => gradeMatch && (c.kelas || '').includes(gradeMatch)) ||
+      candidates[0]
+    );
+  }, [cbtExams, selectedMapel, selectedPaket, selectedClass]);
+
+  const matchingExamResults = useMemo(() => {
+    const mapelLower = selectedMapel.trim().toLowerCase();
+    return cbtResults.filter((r) => {
+      if (r.mapel) {
+        const rMapel = r.mapel.trim().toLowerCase();
+        if (rMapel && !(rMapel === mapelLower || rMapel.includes(mapelLower) || mapelLower.includes(rMapel))) {
+          return false;
+        }
+      }
+      if (matchingExam && r.examId === matchingExam.id) return true;
+      return doesExamResultMatchTarget(r, selectedPaket, selectedMapel);
+    });
+  }, [cbtResults, matchingExam, selectedPaket, selectedMapel]);
+
+  // Generate analysis rows: prefer real CBT questions/results when available, fallback to curriculum benchmark items
   const questionsData = useMemo(() => {
+    if (matchingExam && Array.isArray(matchingExam.soalList) && matchingExam.soalList.length > 0) {
+      const typeLabelMap: Record<string, string> = {
+        pg: 'Pilihan Ganda (PG)',
+        pg_kompleks: 'PG Kompleks',
+        benar_salah: 'Benar / Salah',
+        menjodohkan: 'Menjodohkan',
+        isian: 'Isian Singkat',
+        uraian: 'Uraian / Penalaran',
+      };
+      const hasRealSubs = matchingExamResults.length > 0;
+      const sortedSubs = [...matchingExamResults].sort(
+        (a, b) => Number(b.nilai ?? b.skor ?? 0) - Number(a.nilai ?? a.skor ?? 0)
+      );
+      const half = Math.max(1, Math.floor(sortedSubs.length / 2));
+      const upperGroup = sortedSubs.slice(0, half);
+      const lowerGroup = sortedSubs.slice(Math.max(0, sortedSubs.length - half));
+
+      return matchingExam.soalList.map((q, idx) => {
+        if (!hasRealSubs) {
+          const seedBase = (idx * 11 + selectedMapel.length + selectedPaket.length) % 10;
+          const tkValue = Number((0.42 + seedBase * 0.045).toFixed(2));
+          const tkLabel = tkValue > 0.7 ? 'Mudah' : tkValue >= 0.3 ? 'Sedang' : 'Sukar';
+          const dpValue = Number((0.28 + ((idx * 7) % 5) * 0.05).toFixed(2));
+          const dpLabel =
+            dpValue >= 0.4
+              ? 'Sangat Baik'
+              : dpValue >= 0.3
+              ? 'Baik'
+              : dpValue >= 0.2
+              ? 'Cukup'
+              : 'Perlu Revisi';
+          const ketuntasanPct = Math.round(tkValue * 100);
+          return {
+            no: idx + 1,
+            pertanyaan: stripQuestionTags(q.pertanyaan) || `Butir Soal No. ${idx + 1}`,
+            tipe: typeLabelMap[q.tipe] || q.tipe,
+            bobot: q.bobot || 10,
+            tkValue,
+            tkLabel,
+            dpValue,
+            dpLabel,
+            ketuntasanPct,
+            pengecoh: dpValue >= 0.3 ? 'Efektif (Simulasi Awal)' : 'Cukup Efektif',
+            status: dpValue >= 0.3 ? 'Diterima Tanpa Revisi' : 'Diterima dengan Revisi',
+          };
+        }
+
+        let correctCount = 0;
+        matchingExamResults.forEach((res) => {
+          const evalRes = evaluateQuestionScore(
+            q.tipe,
+            res.jawabanSiswa ? res.jawabanSiswa[q.id] : undefined,
+            q.kunciJawaban,
+            q.bobot || 10,
+            q.opsi
+          );
+          if (evalRes.isCorrect) correctCount++;
+        });
+
+        let upperCorrect = 0;
+        upperGroup.forEach((res) => {
+          const evalRes = evaluateQuestionScore(
+            q.tipe,
+            res.jawabanSiswa ? res.jawabanSiswa[q.id] : undefined,
+            q.kunciJawaban,
+            q.bobot || 10,
+            q.opsi
+          );
+          if (evalRes.isCorrect) upperCorrect++;
+        });
+
+        let lowerCorrect = 0;
+        lowerGroup.forEach((res) => {
+          const evalRes = evaluateQuestionScore(
+            q.tipe,
+            res.jawabanSiswa ? res.jawabanSiswa[q.id] : undefined,
+            q.kunciJawaban,
+            q.bobot || 10,
+            q.opsi
+          );
+          if (evalRes.isCorrect) lowerCorrect++;
+        });
+
+        const totalParticipants = matchingExamResults.length;
+        const tkValue = Number((correctCount / totalParticipants).toFixed(2));
+        const tkLabel = tkValue > 0.7 ? 'Mudah' : tkValue >= 0.3 ? 'Sedang' : 'Sukar';
+        const ketuntasanPct = Math.round((correctCount / totalParticipants) * 100);
+        const dpValue = Number(((upperCorrect - lowerCorrect) / half).toFixed(2));
+        const dpLabel =
+          dpValue >= 0.4
+            ? 'Sangat Baik'
+            : dpValue >= 0.3
+            ? 'Baik'
+            : dpValue >= 0.2
+            ? 'Cukup'
+            : 'Perlu Revisi';
+        const pengecoh =
+          dpValue >= 0.35
+            ? 'Efektif'
+            : dpValue >= 0.2
+            ? 'Cukup Efektif'
+            : 'Perlu Revisi Pengecoh';
+        const status = dpValue >= 0.2 ? 'Diterima Tanpa Revisi' : 'Diterima dengan Revisi';
+
+        return {
+          no: idx + 1,
+          pertanyaan: stripQuestionTags(q.pertanyaan) || `Butir Soal No. ${idx + 1}`,
+          tipe: typeLabelMap[q.tipe] || q.tipe,
+          bobot: q.bobot || 10,
+          tkValue,
+          tkLabel,
+          dpValue,
+          dpLabel,
+          ketuntasanPct,
+          pengecoh,
+          status,
+        };
+      });
+    }
+
     const isIpas = selectedMapel.includes('IPAS');
     const isMat = selectedMapel.includes('Matematika');
     const isIndo = selectedMapel.includes('Indonesia');
@@ -275,21 +467,41 @@ export const AnalisisSoalTab: React.FC<Props> = ({
         status: 'Diterima Tanpa Revisi',
       },
     ];
-  }, [selectedMapel, selectedPaket]);
+  }, [selectedMapel, selectedPaket, matchingExam, matchingExamResults]);
 
   // Aggregate stats
-  const totalQuestions = questionsData.length;
+  const totalQuestions = Math.max(1, questionsData.length);
   const mudahCount = questionsData.filter((q) => q.tkLabel === 'Mudah').length;
   const sedangCount = questionsData.filter((q) => q.tkLabel === 'Sedang').length;
   const sukarCount = questionsData.filter((q) => q.tkLabel === 'Sukar').length;
 
-  const sangatBaikCount = questionsData.filter((q) => q.dpLabel === 'Sangat Baik').length;
-  const baikCount = questionsData.filter((q) => q.dpLabel === 'Baik').length;
-  const revisiCount = questionsData.filter((q) => q.status.includes('Revisi')).length;
+  const sangatBaikCount = questionsData.filter((q) => q.dpValue >= 0.4).length;
+  const baikCount = questionsData.filter((q) => q.dpValue >= 0.3 && q.dpValue < 0.4).length;
+  const revisiCount = questionsData.filter((q) => q.dpValue < 0.3 || q.status.includes('Revisi')).length;
 
   const avgKetuntasan = Math.round(
     questionsData.reduce((acc, curr) => acc + curr.ketuntasanPct, 0) / totalQuestions
   );
+
+  const rechartsQuestionData = useMemo(() => {
+    return questionsData.map((q) => ({
+      name: `No.${q.no}`,
+      no: q.no,
+      nilai: q.ketuntasanPct,
+      tkValue: q.tkValue,
+      tkLabel: q.tkLabel,
+      dpValue: q.dpValue,
+      dpLabel: q.dpLabel,
+      tipe: q.tipe,
+      pertanyaan: q.pertanyaan,
+      fillColor:
+        q.tkLabel === 'Mudah'
+          ? '#10B981'
+          : q.tkLabel === 'Sedang'
+          ? '#F59E0B'
+          : '#F43F5E',
+    }));
+  }, [questionsData]);
 
   const handleExportExcel = () => {
     const wsData = [
@@ -356,51 +568,116 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     });
   }, [targetStudents, selectedPaket, isInclusivePackage]);
 
+  const kepsekAnalisis = resolveKepalaSekolah(teachers, profile);
+  const waliAnalisis = resolveWaliKelas(teachers, selectedClass);
+  const tanggalCetakAnalisis = new Date().toLocaleDateString('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+
   return (
     <section className="space-y-6">
-      <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-6">
-        {/* Header Title */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
-          <div>
-            <span className="text-xs font-extrabold uppercase bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full">
-              Menu 4. Penilaian & Pelaporan • Evaluasi Butir Soal
-            </span>
-            <h2 className="text-xl font-display font-black text-slate-800 mt-1 flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-emerald-600" /> Analisis Butir Soal CBT & Grafik Ketuntasan
-            </h2>
-            <p className="text-xs text-slate-500">
-              Evaluasi daya pembeda, tingkat kesukaran soal, efektivitas pengecoh, dan grafik distribusi statistik butir asesmen.
+      {/* Formal Kop Surat Sekolah (Khusus Cetak / PDF) */}
+      <div className="hidden print-only border-b-4 border-double border-slate-900 pb-3 mb-4 text-slate-900">
+        <div className="flex items-center justify-between gap-4">
+          {profile?.logoKemendikbudUrl ? (
+            <img
+              src={profile.logoKemendikbudUrl}
+              alt="Logo Dinas"
+              referrerPolicy="no-referrer"
+              className="w-16 h-16 object-contain shrink-0"
+            />
+          ) : (
+            <div className="w-16 h-16 shrink-0" />
+          )}
+          <div className="text-center flex-1 px-2">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
+              Pemerintah Provinsi DKI Jakarta · Suku Dinas Pendidikan Jakarta Utara
+            </div>
+            <h1 className="font-display font-black text-xl uppercase tracking-tight text-slate-950">
+              {profile?.name || 'SDN Rawa Badak Utara 21'}
+            </h1>
+            <p className="text-xs text-slate-700">
+              {profile?.alamat || 'Jl. Rawa Badak Utara'} · {profile?.kota || 'Jakarta Utara'}
+              {profile?.npsn ? ` · NPSN: ${profile.npsn}` : ''}
             </p>
           </div>
+          {profile?.logoSekolahUrl ? (
+            <img
+              src={profile.logoSekolahUrl}
+              alt="Logo Sekolah"
+              referrerPolicy="no-referrer"
+              className="w-16 h-16 object-contain shrink-0"
+            />
+          ) : (
+            <div className="w-16 h-16 shrink-0" />
+          )}
+        </div>
+        <div className="text-center mt-3 pt-2 border-t border-slate-300">
+          <h2 className="font-display font-black text-sm uppercase tracking-wide text-slate-950">
+            LAPORAN ANALISIS BUTIR SOAL &amp; KETUNTASAN ASESMEN CBT
+          </h2>
+          <p className="text-[11px] text-slate-700 mt-0.5 tabular-nums">
+            Mata Pelajaran: <strong>{selectedMapel}</strong> · Paket: <strong>{selectedPaket}</strong> · Kelas:{' '}
+            <strong>{selectedClass}</strong> · Tahun Pelajaran {activeYear} ({activeSemester})
+          </p>
+        </div>
+      </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setIsClearModalOpen(true)}
-              className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-display font-black px-3.5 py-2 rounded-xl text-xs border border-rose-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
-              title="Kosongkan data hasil CBT siswa dan reset statistik performa"
-            >
-              <Trash2 className="w-4 h-4 text-rose-600" /> Kosongkan Data{cbtResultCount > 0 ? ` (${cbtResultCount})` : ''}
-            </button>
-            <button
-              type="button"
-              onClick={handleExportExcel}
-              className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-display font-black px-4 py-2 rounded-xl text-xs border border-emerald-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
-            >
-              <FileSpreadsheet className="w-4 h-4 text-emerald-700" /> Ekspor Excel (.xlsx)
-            </button>
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
-            >
-              <Printer className="w-4 h-4" /> Cetak Laporan
-            </button>
+      {/* Eye-Catching Editorial Header Card (Layar) */}
+      <div className="no-print bg-gradient-to-br from-slate-900 via-emerald-950 to-teal-950 text-white p-6 sm:p-7 rounded-3xl shadow-md border border-emerald-900/40 flex flex-col xl:flex-row xl:items-center justify-between gap-5">
+        <div className="space-y-2 max-w-2xl">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-emerald-200 font-medium">
+            <span>Evaluasi Butir Soal CBT</span>
+            <span aria-hidden="true">·</span>
+            <span>{selectedMapel}</span>
+            <span aria-hidden="true">·</span>
+            <span>{selectedClass}</span>
           </div>
+          <h2 className="text-xl sm:text-2xl font-display font-black tracking-tight flex items-center gap-2.5 text-white">
+            <span className="w-10 h-10 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
+              <BarChart3 className="w-5 h-5 text-emerald-300" />
+            </span>
+            <span>Analisis Butir Soal CBT &amp; Grafik Ketuntasan</span>
+          </h2>
+          <p className="text-xs text-slate-300 leading-relaxed">
+            Evaluasi daya pembeda (DP), tingkat kesukaran soal (TK), efektivitas pengecoh, serta distribusi ketuntasan siswa untuk laporan cetak A4.
+          </p>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setIsClearModalOpen(true)}
+            className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 font-display font-bold px-3.5 py-2.5 rounded-xl text-xs border border-rose-400/30 flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
+            title="Kosongkan data hasil CBT siswa dan reset statistik performa"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span>Kosongkan Data{cbtResultCount > 0 ? ` (${cbtResultCount})` : ''}</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Ekspor Excel (.xlsx)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="bg-white hover:bg-slate-100 text-slate-900 font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Printer className="w-4 h-4 text-emerald-700" />
+            <span>Cetak Laporan A4</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white p-6 print:p-0 rounded-3xl print:rounded-none shadow-md print:shadow-none border border-slate-100 print:border-0 space-y-6">
         {/* Filter Bar: Dropdown Mapel & Dropdown Jenis Soal */}
-        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
+        <div className="no-print p-4 rounded-2xl bg-slate-50 border border-slate-200 grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
           <div className="md:col-span-5">
             <label className="block text-xs font-extrabold text-slate-700 mb-1">
               Pilih Mata Pelajaran:
@@ -444,31 +721,32 @@ export const AnalisisSoalTab: React.FC<Props> = ({
               onChange={(e) => setSelectedClass(e.target.value)}
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none shadow-2xs cursor-pointer focus:border-emerald-500"
             >
-              <option value="Kelas 6A">Kelas 6A</option>
-              <option value="Kelas 6B">Kelas 6B</option>
-              <option value="Kelas 5">Kelas 5</option>
-              <option value="Kelas 4">Kelas 4</option>
+              {CLASSES_LIST.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
             </select>
           </div>
         </div>
 
         {/* Quick KPI Metrics */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
-          <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200">
+        <div className="grid grid-cols-2 lg:grid-cols-4 print:grid-cols-4 gap-3.5 print:gap-2 print-avoid-break">
+          <div className="p-4 print:p-3 rounded-2xl bg-emerald-50/70 border border-emerald-200">
             <span className="text-[11px] font-extrabold uppercase text-emerald-800">Total Butir Soal</span>
-            <div className="text-2xl font-display font-black text-emerald-950 mt-1">{totalQuestions} Butir</div>
+            <div className="text-2xl print:text-xl font-display font-black text-emerald-950 mt-1 tabular-nums">{totalQuestions} Butir</div>
             <span className="text-[10px] text-emerald-700">100% Teranalisis Sistem</span>
           </div>
 
-          <div className="p-4 rounded-2xl bg-sky-50/70 border border-sky-200">
+          <div className="p-4 print:p-3 rounded-2xl bg-sky-50/70 border border-sky-200">
             <span className="text-[11px] font-extrabold uppercase text-sky-800">Rata-rata Ketuntasan</span>
-            <div className="text-2xl font-display font-black text-sky-950 mt-1">{avgKetuntasan}%</div>
-            <span className="text-[10px] text-sky-700">Di atas KKTP Standar (75%)</span>
+            <div className="text-2xl print:text-xl font-display font-black text-sky-950 mt-1 tabular-nums">{avgKetuntasan}%</div>
+            <span className="text-[10px] text-sky-700 tabular-nums">Di atas KKTP Standar (75%)</span>
           </div>
 
-          <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200">
+          <div className="p-4 print:p-3 rounded-2xl bg-amber-50/70 border border-amber-200">
             <span className="text-[11px] font-extrabold uppercase text-amber-800">Tingkat Kesukaran (TK)</span>
-            <div className="text-sm font-bold text-slate-800 mt-1.5 flex items-center gap-1.5">
+            <div className="text-sm font-bold text-slate-800 mt-1.5 flex items-center gap-1.5 tabular-nums">
               <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-black text-xs">{mudahCount} M</span>
               <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-black text-xs">{sedangCount} S</span>
               <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 font-black text-xs">{sukarCount} Sk</span>
@@ -476,17 +754,17 @@ export const AnalisisSoalTab: React.FC<Props> = ({
             <span className="text-[10px] text-amber-700">Proporsi ideal Kurikulum Merdeka</span>
           </div>
 
-          <div className="p-4 rounded-2xl bg-purple-50/70 border border-purple-200">
+          <div className="p-4 print:p-3 rounded-2xl bg-purple-50/70 border border-purple-200">
             <span className="text-[11px] font-extrabold uppercase text-purple-800">Daya Pembeda (DP)</span>
-            <div className="text-2xl font-display font-black text-purple-950 mt-1">
+            <div className="text-2xl print:text-xl font-display font-black text-purple-950 mt-1 tabular-nums">
               {sangatBaikCount + baikCount}/{totalQuestions}
             </div>
-            <span className="text-[10px] text-purple-700">Butir Soal Valid & Baik</span>
+            <span className="text-[10px] text-purple-700">Butir Soal Valid &amp; Baik</span>
           </div>
         </div>
 
         {/* GRAFIK DATA ANALISIS SOAL */}
-        <div className="p-5 rounded-3xl bg-slate-50 border border-slate-200 space-y-4">
+        <div className="p-5 print:p-3 rounded-3xl print:rounded-xl bg-slate-50 print:bg-white border border-slate-200 space-y-4 print-avoid-break">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
             <div className="flex items-center gap-2">
               <TrendingUp className="w-5 h-5 text-emerald-600" />
@@ -495,7 +773,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
               </h3>
             </div>
 
-            <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 text-xs font-bold">
+            <div className="no-print flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 text-xs font-bold">
               <button
                 type="button"
                 onClick={() => setActiveChartTab('kesukaran')}
@@ -529,6 +807,115 @@ export const AnalisisSoalTab: React.FC<Props> = ({
               >
                 Daya Pembeda
               </button>
+            </div>
+          </div>
+
+          {/* RECHARTS BAR CHART: SEBARAN NILAI & TINGKAT KESULITAN PER SOAL */}
+          <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex items-center gap-1.5">
+                  <BarChart3 className="w-4 h-4 text-emerald-600" />
+                  Grafik Batang Sebaran Nilai &amp; Tingkat Kesukaran Per Soal ({selectedMapel} • {selectedPaket})
+                </h4>
+                <p className="text-[11px] text-slate-500">
+                  Visualisasi persentase nilai benar per butir soal dengan kode warna tingkat kesukaran untuk deteksi soal sukar secara instan.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2.5 text-[11px] font-bold">
+                <span className="inline-flex items-center gap-1 text-emerald-700">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500" /> Mudah (TK &gt; 0.70)
+                </span>
+                <span className="inline-flex items-center gap-1 text-amber-700">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-amber-500" /> Sedang (0.30–0.70)
+                </span>
+                <span className="inline-flex items-center gap-1 text-rose-700">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-rose-500" /> Sukar (TK &lt; 0.30)
+                </span>
+              </div>
+            </div>
+
+            <div className="w-full h-[290px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={rechartsQuestionData}
+                  margin={{ top: 14, right: 16, left: -12, bottom: 8 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
+                  <XAxis
+                    dataKey="name"
+                    tick={{ fontSize: 11, fontWeight: 700, fill: '#334155' }}
+                    axisLine={{ stroke: '#CBD5E1' }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    domain={[0, 100]}
+                    unit="%"
+                    tick={{ fontSize: 11, fontWeight: 600, fill: '#64748B' }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <Tooltip
+                    cursor={{ fill: '#F1F5F9' }}
+                    content={({ active, payload }) => {
+                      if (!active || !payload || !payload.length) return null;
+                      const d = payload[0].payload as (typeof rechartsQuestionData)[number];
+                      return (
+                        <div className="bg-white/95 backdrop-blur-xs p-3 rounded-xl border border-slate-200 shadow-lg text-xs max-w-[260px] space-y-1.5">
+                          <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-1">
+                            <span className="font-display font-black text-slate-900">
+                              Soal No. {d.no} ({d.tipe})
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-md font-black text-[10px] ${
+                                d.tkLabel === 'Mudah'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : d.tkLabel === 'Sedang'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-rose-100 text-rose-800'
+                              }`}
+                            >
+                              {d.tkLabel}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-600 line-clamp-2">{d.pertanyaan}</p>
+                          <div className="grid grid-cols-3 gap-1.5 pt-1 text-[11px] font-mono">
+                            <div className="bg-slate-50 px-2 py-1 rounded-lg">
+                              <span className="text-[9px] text-slate-400 block">Nilai Benar</span>
+                              <strong className="text-slate-900">{d.nilai}%</strong>
+                            </div>
+                            <div className="bg-slate-50 px-2 py-1 rounded-lg">
+                              <span className="text-[9px] text-slate-400 block">Indeks TK</span>
+                              <strong className="text-slate-900">{d.tkValue.toFixed(2)}</strong>
+                            </div>
+                            <div className="bg-slate-50 px-2 py-1 rounded-lg">
+                              <span className="text-[9px] text-slate-400 block">Indeks DP</span>
+                              <strong className="text-purple-700">{d.dpValue.toFixed(2)}</strong>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <ReferenceLine
+                    y={75}
+                    stroke="#0EA5E9"
+                    strokeDasharray="4 4"
+                    label={{
+                      value: 'KKTP 75%',
+                      position: 'insideTopRight',
+                      fill: '#0284C7',
+                      fontSize: 10,
+                      fontWeight: 700,
+                    }}
+                  />
+                  <Bar dataKey="nilai" name="Nilai Benar (%)" radius={[8, 8, 0, 0]} maxBarSize={42}>
+                    {rechartsQuestionData.map((entry) => (
+                      <Cell key={`bar-cell-${entry.no}`} fill={entry.fillColor} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
@@ -682,12 +1069,15 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                   const isPass = q.ketuntasanPct >= 75;
                   return (
                     <div key={q.no} className="space-y-1">
-                      <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center justify-between text-xs gap-2">
                         <span className="font-bold text-slate-800">
                           Soal No. {q.no} ({q.tipe})
                         </span>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[11px] text-slate-500 font-mono">TK: {q.tkValue}</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] text-slate-500 font-mono">TK: {q.tkValue.toFixed(2)}</span>
+                          <span className="text-[11px] text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded font-mono font-bold">
+                            DP: {q.dpValue.toFixed(2)}
+                          </span>
                           <span
                             className={`font-mono font-black text-xs px-2 py-0.5 rounded-md ${
                               isPass ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
@@ -716,53 +1106,107 @@ export const AnalisisSoalTab: React.FC<Props> = ({
 
           {/* Chart Content 3: Daya Pembeda */}
           {activeChartTab === 'pembeda' && (
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black text-emerald-900 uppercase">Sangat Baik (DP ≥ 0.40)</span>
-                  <span className="text-xl font-display font-black text-emerald-700">{sangatBaikCount} Soal</span>
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-5">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-emerald-900 uppercase">Sangat Baik (DP ≥ 0.40)</span>
+                    <span className="text-xl font-display font-black text-emerald-700">{sangatBaikCount} Soal</span>
+                  </div>
+                  <div className="w-full bg-emerald-200/60 rounded-full h-2.5 overflow-hidden">
+                    <div
+                      className="bg-emerald-600 h-2.5 rounded-full"
+                      style={{ width: `${(sangatBaikCount / totalQuestions) * 100}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-[11px] text-emerald-800 leading-relaxed">
+                    Soal mampu membedakan kelompok siswa pandai dan kelompok siswa yang belum tuntas secara tajam dan valid.
+                  </p>
                 </div>
-                <div className="w-full bg-emerald-200/60 rounded-full h-2.5 overflow-hidden">
-                  <div
-                    className="bg-emerald-600 h-2.5 rounded-full"
-                    style={{ width: `${(sangatBaikCount / totalQuestions) * 100}%` }}
-                  ></div>
+
+                <div className="p-4 rounded-2xl bg-blue-50 border border-blue-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-blue-900 uppercase">Baik (0.30 ≤ DP &lt; 0.40)</span>
+                    <span className="text-xl font-display font-black text-blue-700">{baikCount} Soal</span>
+                  </div>
+                  <div className="w-full bg-blue-200/60 rounded-full h-2.5 overflow-hidden">
+                    <div
+                      className="bg-blue-600 h-2.5 rounded-full"
+                      style={{ width: `${(baikCount / totalQuestions) * 100}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-[11px] text-blue-800 leading-relaxed">
+                    Butir soal memiliki daya pembeda yang memuaskan dan dapat langsung disimpan ke Bank Soal Sekolah.
+                  </p>
                 </div>
-                <p className="text-[11px] text-emerald-800 leading-relaxed">
-                  Soal mampu membedakan kelompok siswa pandai dan kelompok siswa yang belum tuntas secara tajam dan valid.
-                </p>
+
+                <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-amber-900 uppercase">Cukup / Revisi (DP &lt; 0.30)</span>
+                    <span className="text-xl font-display font-black text-amber-700">{revisiCount} Soal</span>
+                  </div>
+                  <div className="w-full bg-amber-200/60 rounded-full h-2.5 overflow-hidden">
+                    <div
+                      className="bg-amber-600 h-2.5 rounded-full"
+                      style={{ width: `${(revisiCount / totalQuestions) * 100}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-relaxed">
+                    Dianjurkan merevisi opsi pengecoh atau merapikan redaksi kalimat soal agar tidak membingungkan peserta didik.
+                  </p>
+                </div>
               </div>
 
-              <div className="p-4 rounded-2xl bg-blue-50 border border-blue-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black text-blue-900 uppercase">Baik (0.30 ≤ DP &lt; 0.40)</span>
-                  <span className="text-xl font-display font-black text-blue-700">{baikCount} Soal</span>
+              {/* Per-Question Daya Pembeda Bars */}
+              <div className="space-y-2.5 pt-2 border-t border-slate-100">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">
+                    Nilai Daya Pembeda (DP) Tiap Nomor Soal ({selectedPaket}):
+                  </h4>
+                  <span className="text-[11px] text-slate-500 font-semibold">
+                    Indeks DP: ≥ 0.40 Sangat Baik • 0.30–0.39 Baik • &lt; 0.30 Cukup/Revisi
+                  </span>
                 </div>
-                <div className="w-full bg-blue-200/60 rounded-full h-2.5 overflow-hidden">
-                  <div
-                    className="bg-blue-600 h-2.5 rounded-full"
-                    style={{ width: `${(baikCount / totalQuestions) * 100}%` }}
-                  ></div>
-                </div>
-                <p className="text-[11px] text-blue-800 leading-relaxed">
-                  Butir soal memiliki daya pembeda yang memuaskan dan dapat langsung disimpan ke Bank Soal Sekolah.
-                </p>
-              </div>
 
-              <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black text-amber-900 uppercase">Perlu Revisi (DP &lt; 0.30)</span>
-                  <span className="text-xl font-display font-black text-amber-700">{revisiCount} Soal</span>
+                <div className="space-y-2 max-h-72 overflow-y-auto print-expand-scroll pr-1">
+                  {questionsData.map((q) => {
+                    const dpPct = Math.max(0, Math.min(100, Math.round(q.dpValue * 100)));
+                    const badgeColor =
+                      q.dpValue >= 0.4
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : q.dpValue >= 0.3
+                        ? 'bg-blue-100 text-blue-800'
+                        : q.dpValue >= 0.2
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-rose-100 text-rose-800';
+                    const barColor =
+                      q.dpValue >= 0.4
+                        ? 'bg-emerald-500'
+                        : q.dpValue >= 0.3
+                        ? 'bg-blue-500'
+                        : q.dpValue >= 0.2
+                        ? 'bg-amber-500'
+                        : 'bg-rose-500';
+                    return (
+                      <div key={`dp_bar_${q.no}`} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs gap-2">
+                          <span className="font-bold text-slate-800 truncate">
+                            Soal No. {q.no} ({q.tipe})
+                          </span>
+                          <span className={`font-mono font-black text-[11px] px-2 py-0.5 rounded-md shrink-0 ${badgeColor}`}>
+                            DP: {q.dpValue.toFixed(2)} • {q.dpLabel}
+                          </span>
+                        </div>
+                        <div className="relative w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                          <div
+                            className={`h-3 rounded-full transition-all duration-500 ${barColor}`}
+                            style={{ width: `${dpPct}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div className="w-full bg-amber-200/60 rounded-full h-2.5 overflow-hidden">
-                  <div
-                    className="bg-amber-600 h-2.5 rounded-full"
-                    style={{ width: `${(revisiCount / totalQuestions) * 100}%` }}
-                  ></div>
-                </div>
-                <p className="text-[11px] text-amber-800 leading-relaxed">
-                  Dianjurkan merevisi opsi pengecoh atau merapikan redaksi kalimat soal agar tidak membingungkan peserta didik.
-                </p>
               </div>
             </div>
           )}
@@ -806,7 +1250,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                     <td className="p-3 text-center font-mono font-bold text-slate-700">{q.bobot}</td>
                     <td className="p-3 text-center">
                       <span
-                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold font-mono ${
                           q.tkLabel === 'Mudah'
                             ? 'bg-emerald-100 text-emerald-800'
                             : q.tkLabel === 'Sedang'
@@ -814,11 +1258,23 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                             : 'bg-rose-100 text-rose-800'
                         }`}
                       >
-                        {q.tkLabel} ({q.tkValue})
+                        {q.tkLabel} ({q.tkValue.toFixed(2)})
                       </span>
                     </td>
                     <td className="p-3 text-center">
-                      <span className="font-mono font-bold text-slate-700">{q.dpValue}</span>
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold font-mono ${
+                          q.dpValue >= 0.4
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : q.dpValue >= 0.3
+                            ? 'bg-blue-100 text-blue-800'
+                            : q.dpValue >= 0.2
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-rose-100 text-rose-800'
+                        }`}
+                      >
+                        {q.dpValue.toFixed(2)} • {q.dpLabel}
+                      </span>
                     </td>
                     <td className="p-3 text-center font-mono font-black text-emerald-700">
                       {q.ketuntasanPct}%
@@ -943,10 +1399,38 @@ export const AnalisisSoalTab: React.FC<Props> = ({
             </table>
           </div>
         </div>
+
+        {/* Blok Pengesahan Resmi Kepala Sekolah & Wali Kelas (Khusus Cetak / PDF) */}
+        <div className="hidden print-only print-avoid-break pt-6 mt-4 border-t border-slate-300 text-xs text-slate-900">
+          <div className="grid grid-cols-2 gap-8 text-center">
+            <div>
+              <p className="font-medium text-slate-700">
+                Mengetahui,<br />Kepala {profile?.name || 'SDN Rawa Badak Utara 21'}
+              </p>
+              <div className="h-16" />
+              <p className="font-black text-slate-900 underline">{kepsekAnalisis.nama}</p>
+              <p className="text-[11px] font-mono text-slate-600 tabular-nums">
+                {formatNipLabel(kepsekAnalisis.status, kepsekAnalisis.nip)}
+              </p>
+            </div>
+            <div>
+              <p className="font-medium text-slate-700">
+                Jakarta, {tanggalCetakAnalisis}<br />Wali Kelas / Guru {selectedClass}
+              </p>
+              <div className="h-16" />
+              <p className="font-black text-slate-900 underline">
+                {waliAnalisis?.nama || 'Guru Mata Pelajaran'}
+              </p>
+              <p className="text-[11px] font-mono text-slate-600 tabular-nums">
+                {formatNipLabel(waliAnalisis?.statusPegawai, waliAnalisis?.nip)}
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {isClearModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="no-print fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
             <div className="flex items-start justify-between gap-3">
               <div>

@@ -85,7 +85,7 @@ export const LoginScreen: React.FC<Props> = ({
           username: 'admin',
           name: 'Administrator Utama',
           detail: `Admin ${profile.name}`,
-          fotoUrl: profile.logoSekolahUrl,
+          fotoUrl: profile.adminFotoUrl || profile.logoSekolahUrl,
         });
         showToast('Berhasil masuk sebagai Administrator!', 'success');
         return;
