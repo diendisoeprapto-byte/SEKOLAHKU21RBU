@@ -1,4 +1,5 @@
 import React from 'react';
+import { BenarSalahItem, MenjodohkanData } from '../types';
 
 export type PosisiGambar = 'bawah_judul' | 'bawah_pertanyaan' | 'kanan_teks';
 
@@ -490,4 +491,137 @@ export function stripQuestionTags(text: string): string {
     .replace(/\[\/?(?:pecahan|frac)\]/gi, '')
     .replace(/\^\{?\\circ\}?|\\degree/g, '°')
     .trim();
+}
+
+export function resolveBenarSalahItems(q?: {
+  benarSalahItems?: BenarSalahItem[];
+  opsi?: string[];
+  kunciJawaban?: string | string[];
+}): BenarSalahItem[] {
+  if (!q) return [];
+  if (Array.isArray(q.benarSalahItems) && q.benarSalahItems.length > 0) {
+    return q.benarSalahItems
+      .filter((it) => Boolean(it && (it.pernyataan || '').trim()))
+      .map((it, idx) => ({
+        id: it.id || `bs_${idx + 1}`,
+        pernyataan: it.pernyataan,
+        kunci: it.kunci === 'Salah' ? 'Salah' : 'Benar',
+      }));
+  }
+
+  const isLegacyChoiceOpsi =
+    Array.isArray(q.opsi) &&
+    q.opsi.length === 2 &&
+    q.opsi.every((o) => /^(benar|salah)$/i.test((o || '').trim()));
+
+  if (Array.isArray(q.opsi) && q.opsi.length > 0 && !isLegacyChoiceOpsi) {
+    const kunciArr = Array.isArray(q.kunciJawaban)
+      ? q.kunciJawaban
+      : String(q.kunciJawaban || '')
+          .split(',')
+          .map((s) => s.trim());
+    return q.opsi
+      .filter((o) => Boolean(o && o.trim()))
+      .map((text, idx) => {
+        const rawKey = (kunciArr[idx] || '').replace(/^\d+\.\s*/, '').trim().toLowerCase();
+        return {
+          id: `bs_${idx + 1}`,
+          pernyataan: text,
+          kunci: rawKey === 'salah' || rawKey === 's' ? 'Salah' : 'Benar',
+        };
+      });
+  }
+
+  const singleKey = Array.isArray(q.kunciJawaban)
+    ? q.kunciJawaban[0] || 'Benar'
+    : String(q.kunciJawaban || 'Benar');
+  const norm = singleKey.trim().toLowerCase();
+  if (norm === 'benar' || norm === 'salah') {
+    return [
+      {
+        id: 'bs_1',
+        pernyataan: 'Pernyataan pada soal di atas',
+        kunci: norm === 'salah' ? 'Salah' : 'Benar',
+      },
+    ];
+  }
+  return [];
+}
+
+export function formatBenarSalahKeySummary(items: BenarSalahItem[]): string[] {
+  return items.map((it, idx) => `${idx + 1}. ${it.kunci}`);
+}
+
+export function resolveMenjodohkanData(q?: {
+  menjodohkanData?: MenjodohkanData;
+  kunciJawaban?: string | string[];
+}): MenjodohkanData | null {
+  if (!q) return null;
+  if (
+    q.menjodohkanData &&
+    Array.isArray(q.menjodohkanData.kolomKiri) &&
+    q.menjodohkanData.kolomKiri.some((v) => v.trim()) &&
+    Array.isArray(q.menjodohkanData.kolomKanan) &&
+    q.menjodohkanData.kolomKanan.some((v) => v.trim())
+  ) {
+    return {
+      kolomKiri: q.menjodohkanData.kolomKiri,
+      kolomKanan: q.menjodohkanData.kolomKanan,
+      pasangan: { ...(q.menjodohkanData.pasangan || {}) },
+    };
+  }
+
+  // Fallback otomatis untuk format lama "Kucing:Vivipar, Ayam:Ovipar" atau "Jakarta = Ibukota, ..."
+  const rawKey = Array.isArray(q.kunciJawaban) ? q.kunciJawaban.join(', ') : String(q.kunciJawaban || '');
+  if (!rawKey.trim() || rawKey.trim().toLowerCase() === 'pasangan kunci benar') return null;
+
+  const chunks = rawKey
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const parsedPairs: Array<{ kiri: string; kanan: string }> = [];
+  chunks.forEach((chunk) => {
+    const sepMatch = chunk.match(/^(.+?)\s*(?:->|→|[:=])\s*(.+)$/);
+    if (sepMatch) {
+      const kiri = sepMatch[1].trim();
+      const kanan = sepMatch[2].trim();
+      if (kiri && kanan) {
+        parsedPairs.push({ kiri, kanan });
+      }
+    }
+  });
+
+  if (parsedPairs.length === 0) return null;
+
+  // Abaikan format ringkasan huruf "1-B, 2-D" tanpa kolomKiri/kolomKanan
+  if (parsedPairs.every((p) => /^\d+$/.test(p.kiri) && /^[A-Z]$/i.test(p.kanan))) {
+    return null;
+  }
+
+  const kolomKiri: string[] = [];
+  const kolomKanan: string[] = [];
+  const pasangan: Record<string, string> = {};
+
+  parsedPairs.forEach((p, idx) => {
+    kolomKiri.push(p.kiri);
+    let rightIdx = kolomKanan.findIndex((r) => r.toLowerCase() === p.kanan.toLowerCase());
+    if (rightIdx === -1) {
+      kolomKanan.push(p.kanan);
+      rightIdx = kolomKanan.length - 1;
+    }
+    pasangan[String(idx + 1)] = String.fromCharCode(65 + rightIdx);
+  });
+
+  return { kolomKiri, kolomKanan, pasangan };
+}
+
+export function formatMenjodohkanKeySummary(data: MenjodohkanData): string {
+  return data.kolomKiri
+    .map((_, idx) => {
+      const numKey = String(idx + 1);
+      const letter = data.pasangan[numKey] || '-';
+      return `${numKey}-${letter}`;
+    })
+    .join(', ');
 }

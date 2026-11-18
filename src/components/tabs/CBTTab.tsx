@@ -60,6 +60,8 @@ import {
   SchoolProfile,
   ActiveUser,
   isSiswaInklusi,
+  BenarSalahItem,
+  MenjodohkanData,
 } from '../../types';
 import {
   CLASSES_LIST,
@@ -96,12 +98,23 @@ import { FractionBuilderBar } from '../FormattedMathText';
 import { MathRenderer } from '../MathRenderer';
 import { MathPreviewPanel } from '../MathPreviewPanel';
 import {
+  BenarSalahTableView,
+  MenjodohkanColumnsView,
+  BenarSalahEditor,
+  MenjodohkanEditor,
+} from '../StructuredQuestionViews';
+import {
   PosisiGambar,
   extractPastedQuestionText,
   toggleCenterTagOnSelection,
   insertFractionAtSelection,
   convertPlainFractionsToTags,
+  resolveBenarSalahItems,
+  formatBenarSalahKeySummary,
+  resolveMenjodohkanData,
+  formatMenjodohkanKeySummary,
 } from '../../utils/questionFormat';
+import { isQuestionAnswerFilled } from '../../utils/examDraft';
 import {
   exportQuestionsToWord,
   exportCbtQuestionsToExcel,
@@ -438,6 +451,16 @@ export const CBTTab: React.FC<Props> = ({
   // Input for other types
   const [kunciLain, setKunciLain] = useState('');
   const [pgKompleksKeys, setPgKompleksKeys] = useState<string[]>([]);
+  const [benarSalahItems, setBenarSalahItems] = useState<BenarSalahItem[]>([
+    { id: 'bs_1', pernyataan: '', kunci: 'Benar' },
+    { id: 'bs_2', pernyataan: '', kunci: 'Salah' },
+    { id: 'bs_3', pernyataan: '', kunci: 'Benar' },
+  ]);
+  const [menjodohkanData, setMenjodohkanData] = useState<MenjodohkanData>({
+    kolomKiri: ['', '', ''],
+    kolomKanan: ['', '', ''],
+    pasangan: { '1': 'A', '2': 'B', '3': 'C' },
+  });
   const [pembahasan, setPembahasan] = useState('');
 
   // Filter for created questions list underneath
@@ -867,6 +890,8 @@ export const CBTTab: React.FC<Props> = ({
 
     let parsedOpsi: string[] | undefined = undefined;
     let parsedKunci: any = '';
+    let savedBenarSalahItems: BenarSalahItem[] | undefined = undefined;
+    let savedMenjodohkanData: MenjodohkanData | undefined = undefined;
 
     if (selectedTipeSoal === 'pg') {
       if (!opsiA || !opsiB || !opsiC || !opsiD) {
@@ -879,6 +904,44 @@ export const CBTTab: React.FC<Props> = ({
     } else if (selectedTipeSoal === 'pg_kompleks') {
       parsedOpsi = [opsiA.trim(), opsiB.trim(), opsiC.trim(), opsiD.trim()].filter(Boolean);
       parsedKunci = pgKompleksKeys.length > 0 ? pgKompleksKeys : [opsiA.trim()];
+    } else if (selectedTipeSoal === 'benar_salah') {
+      const cleanedItems = benarSalahItems
+        .map((it, idx) => ({
+          id: it.id || `bs_${idx + 1}`,
+          pernyataan: it.pernyataan.trim(),
+          kunci: (it.kunci === 'Salah' ? 'Salah' : 'Benar') as 'Benar' | 'Salah',
+        }))
+        .filter((it) => it.pernyataan.length > 0);
+      if (cleanedItems.length === 0) {
+        showToast('Harap isi minimal 1 baris pernyataan Benar/Salah pada tabel!', 'error');
+        return;
+      }
+      savedBenarSalahItems = cleanedItems;
+      parsedOpsi = cleanedItems.map((it) => it.pernyataan);
+      parsedKunci = formatBenarSalahKeySummary(cleanedItems);
+    } else if (selectedTipeSoal === 'menjodohkan') {
+      const cleanKiri = menjodohkanData.kolomKiri.map((v) => v.trim()).filter(Boolean);
+      const cleanKanan = menjodohkanData.kolomKanan.map((v) => v.trim()).filter(Boolean);
+      if (cleanKiri.length === 0 || cleanKanan.length === 0) {
+        showToast('Harap isi pernyataan di Kolom Kiri dan pilihan jawaban di Kolom Kanan!', 'error');
+        return;
+      }
+      const cleanPasangan: Record<string, string> = {};
+      for (let i = 0; i < cleanKiri.length; i++) {
+        const numKey = String(i + 1);
+        const mapped = menjodohkanData.pasangan[numKey] || '';
+        if (!mapped) {
+          showToast(`Harap pilih kunci huruf pasangan untuk Kolom Kiri nomor ${numKey}!`, 'error');
+          return;
+        }
+        cleanPasangan[numKey] = mapped;
+      }
+      savedMenjodohkanData = {
+        kolomKiri: cleanKiri,
+        kolomKanan: cleanKanan,
+        pasangan: cleanPasangan,
+      };
+      parsedKunci = formatMenjodohkanKeySummary(savedMenjodohkanData);
     } else {
       if (!kunciLain.trim()) {
         showToast('Harap isi kunci jawaban soal!', 'error');
@@ -895,6 +958,8 @@ export const CBTTab: React.FC<Props> = ({
       judulTeks: judulTeks.trim() || undefined,
       pertanyaan: pertanyaan.replace(/^\n+|\n+$/g, ''),
       opsi: parsedOpsi,
+      benarSalahItems: savedBenarSalahItems,
+      menjodohkanData: savedMenjodohkanData,
       kunciJawaban: parsedKunci,
       bobot: Number(bobotPoin) || 10,
       gambarUrl: gambarUrl || undefined,
@@ -963,6 +1028,16 @@ export const CBTTab: React.FC<Props> = ({
     setOpsiGambar({});
     setKunciLain('');
     setPgKompleksKeys([]);
+    setBenarSalahItems([
+      { id: 'bs_1', pernyataan: '', kunci: 'Benar' },
+      { id: 'bs_2', pernyataan: '', kunci: 'Salah' },
+      { id: 'bs_3', pernyataan: '', kunci: 'Benar' },
+    ]);
+    setMenjodohkanData({
+      kolomKiri: ['', '', ''],
+      kolomKanan: ['', '', ''],
+      pasangan: { '1': 'A', '2': 'B', '3': 'C' },
+    });
     setGambarUrl(null);
     setGambarUrl2(null);
     setPosisiGambar('bawah_judul');
@@ -1000,6 +1075,25 @@ export const CBTTab: React.FC<Props> = ({
       setOpsiC(q.opsi?.[2] || '');
       setOpsiD(q.opsi?.[3] || '');
       setPgKompleksKeys(Array.isArray(q.kunciJawaban) ? q.kunciJawaban : [String(q.kunciJawaban)]);
+    } else if (q.tipe === 'benar_salah') {
+      const resolved = resolveBenarSalahItems(q);
+      setBenarSalahItems(
+        resolved.length > 0
+          ? resolved
+          : [
+              { id: 'bs_1', pernyataan: '', kunci: 'Benar' },
+              { id: 'bs_2', pernyataan: '', kunci: 'Salah' },
+            ]
+      );
+    } else if (q.tipe === 'menjodohkan') {
+      const resolved = resolveMenjodohkanData(q);
+      setMenjodohkanData(
+        resolved || {
+          kolomKiri: ['', '', ''],
+          kolomKanan: ['', '', ''],
+          pasangan: { '1': 'A', '2': 'B', '3': 'C' },
+        }
+      );
     } else {
       setKunciLain(String(q.kunciJawaban || ''));
     }
@@ -1162,8 +1256,8 @@ export const CBTTab: React.FC<Props> = ({
 
     const evaluatedQuestions =
       runningExamQuestions.length > 0 ? runningExamQuestions : activeExam.soalList;
-    const answeredCount = Object.values(studentAnswers).filter(
-      (v) => v !== undefined && v !== null && v !== '' && (!Array.isArray(v) || v.length > 0)
+    const answeredCount = Object.values(studentAnswers).filter((v) =>
+      isQuestionAnswerFilled(v)
     ).length;
 
     let totalScore = 0;
@@ -1172,7 +1266,7 @@ export const CBTTab: React.FC<Props> = ({
     evaluatedQuestions.forEach((q) => {
       maxScore += q.bobot;
       const ans = studentAnswers[q.id];
-      const evalRes = evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot);
+      const evalRes = evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot, q.opsi, q);
       totalScore += evalRes.earnedScore;
     });
 
@@ -2236,35 +2330,24 @@ export const CBTTab: React.FC<Props> = ({
                   </div>
                 )}
 
-                {/* TIPE 4: BENAR / SALAH */}
+                {/* TIPE 4: BENAR / SALAH TABEL */}
                 {selectedTipeSoal === 'benar_salah' && (
-                  <div className="space-y-2">
-                    <label className="block text-xs font-extrabold text-slate-700">Tentukan Kunci Kebenaran Pernyataan:</label>
-                    <div className="flex gap-4">
-                      <label className="flex items-center gap-2 cursor-pointer bg-slate-50 px-4 py-2 rounded-2xl border">
-                        <input
-                          type="radio"
-                          name="bsKey"
-                          checked={kunciLain === 'Benar'}
-                          onChange={() => setKunciLain('Benar')}
-                        />
-                        <span className="text-xs font-bold text-emerald-800">Benar</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer bg-slate-50 px-4 py-2 rounded-2xl border">
-                        <input
-                          type="radio"
-                          name="bsKey"
-                          checked={kunciLain === 'Salah'}
-                          onChange={() => setKunciLain('Salah')}
-                        />
-                        <span className="text-xs font-bold text-rose-800">Salah</span>
-                      </label>
-                    </div>
-                  </div>
+                  <BenarSalahEditor
+                    items={benarSalahItems}
+                    onChange={setBenarSalahItems}
+                  />
                 )}
 
-                {/* TIPE 5 & 6: MENJODOHKAN & URAIAN */}
-                {(selectedTipeSoal === 'menjodohkan' || selectedTipeSoal === 'uraian') && (
+                {/* TIPE 5: MENJODOHKAN DUA KOLOM */}
+                {selectedTipeSoal === 'menjodohkan' && (
+                  <MenjodohkanEditor
+                    data={menjodohkanData}
+                    onChange={setMenjodohkanData}
+                  />
+                )}
+
+                {/* TIPE 6: URAIAN */}
+                {selectedTipeSoal === 'uraian' && (
                   <div className="space-y-2">
                     <label className="block text-xs font-extrabold text-slate-700">
                       Kunci Jawaban / Pedoman Penskoran:
@@ -2294,6 +2377,8 @@ export const CBTTab: React.FC<Props> = ({
                   { key: 'C', text: opsiC, isKey: selectedTipeSoal === 'pg' ? kunciPG === 'C' : pgKompleksKeys.includes(opsiC) && Boolean(opsiC), imageUrl: opsiGambar.C },
                   { key: 'D', text: opsiD, isKey: selectedTipeSoal === 'pg' ? kunciPG === 'D' : pgKompleksKeys.includes(opsiD) && Boolean(opsiD), imageUrl: opsiGambar.D },
                 ]}
+                benarSalahItems={benarSalahItems}
+                menjodohkanData={menjodohkanData}
                 kunciText={kunciLain}
                 pembahasan={pembahasan}
                 accentTheme="rose"
@@ -2530,57 +2615,92 @@ export const CBTTab: React.FC<Props> = ({
                         compact
                       />
 
-                      {/* Options / Answer key with Option Image */}
-                      {q.opsi && q.opsi.length > 0 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-xs">
-                          {q.opsi.map((opt, oIdx) => {
-                            const optLetter = String.fromCharCode(65 + oIdx);
-                            const optImg = q.opsiGambar?.[optLetter];
-                            const isCorrect =
-                              q.kunciJawaban === opt ||
-                              q.kunciJawaban === optLetter ||
-                              (Array.isArray(q.kunciJawaban) && (q.kunciJawaban.includes(opt) || q.kunciJawaban.includes(optLetter)));
-
-                            return (
-                              <div
-                                key={oIdx}
-                                className={`p-2.5 rounded-xl border flex flex-col gap-1.5 ${
-                                  isCorrect
-                                    ? 'bg-emerald-50 border-emerald-400 font-bold text-emerald-950'
-                                    : 'bg-slate-50/50 border-slate-200 text-slate-700'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2">
-                                  <span className="font-black text-[11px] w-4">{optLetter}.</span>
-                                  <span className="flex-1 whitespace-pre-wrap">
-                                    <MathRenderer text={opt} fontFamily="plus-jakarta" />
-                                  </span>
-                                  {isCorrect && <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />}
-                                </div>
-                                {optImg && (
-                                  <img
-                                    src={optImg}
-                                    alt={`Gambar Opsi ${optLetter}`}
-                                    className="h-16 rounded-lg border border-slate-200 object-contain bg-white mx-auto mt-1"
-                                  />
-                                )}
-                              </div>
-                            );
-                          })}
+                      {/* Options / Structured Tables / Answer key */}
+                      {q.tipe === 'benar_salah' ? (
+                        <div className="pt-1 space-y-2">
+                          <BenarSalahTableView
+                            items={resolveBenarSalahItems(q)}
+                            showKeys
+                            accentTheme="rose"
+                          />
                         </div>
-                      )}
+                      ) : q.tipe === 'menjodohkan' ? (
+                        (() => {
+                          const matchData = resolveMenjodohkanData(q);
+                          return matchData ? (
+                            <div className="pt-1">
+                              <MenjodohkanColumnsView
+                                data={matchData}
+                                showKeys
+                                accentTheme="rose"
+                              />
+                            </div>
+                          ) : (
+                            <div className="p-3 rounded-2xl bg-emerald-50/60 border border-emerald-200 text-xs">
+                              <span className="font-bold text-emerald-900">Kunci Jawaban: </span>
+                              <strong className="font-mono text-emerald-950">
+                                <MathRenderer
+                                  text={Array.isArray(q.kunciJawaban) ? q.kunciJawaban.join(', ') : String(q.kunciJawaban)}
+                                  fontFamily="plus-jakarta"
+                                />
+                              </strong>
+                            </div>
+                          );
+                        })()
+                      ) : (
+                        <>
+                          {q.opsi && q.opsi.length > 0 && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-xs">
+                              {q.opsi.map((opt, oIdx) => {
+                                const optLetter = String.fromCharCode(65 + oIdx);
+                                const optImg = q.opsiGambar?.[optLetter];
+                                const isCorrect =
+                                  q.kunciJawaban === opt ||
+                                  q.kunciJawaban === optLetter ||
+                                  (Array.isArray(q.kunciJawaban) && (q.kunciJawaban.includes(opt) || q.kunciJawaban.includes(optLetter)));
 
-                      {/* Key for Isian / Uraian */}
-                      {(!q.opsi || q.opsi.length === 0) && (
-                        <div className="p-3 rounded-2xl bg-emerald-50/60 border border-emerald-200 text-xs">
-                          <span className="font-bold text-emerald-900">Kunci Jawaban: </span>
-                          <strong className="font-mono text-emerald-950">
-                            <MathRenderer
-                              text={Array.isArray(q.kunciJawaban) ? q.kunciJawaban.join(', ') : String(q.kunciJawaban)}
-                              fontFamily="plus-jakarta"
-                            />
-                          </strong>
-                        </div>
+                                return (
+                                  <div
+                                    key={oIdx}
+                                    className={`p-2.5 rounded-xl border flex flex-col gap-1.5 ${
+                                      isCorrect
+                                        ? 'bg-emerald-50 border-emerald-400 font-bold text-emerald-950'
+                                        : 'bg-slate-50/50 border-slate-200 text-slate-700'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-black text-[11px] w-4">{optLetter}.</span>
+                                      <span className="flex-1 whitespace-pre-wrap">
+                                        <MathRenderer text={opt} fontFamily="plus-jakarta" />
+                                      </span>
+                                      {isCorrect && <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />}
+                                    </div>
+                                    {optImg && (
+                                      <img
+                                        src={optImg}
+                                        alt={`Gambar Opsi ${optLetter}`}
+                                        className="h-16 rounded-lg border border-slate-200 object-contain bg-white mx-auto mt-1"
+                                      />
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {/* Key for Isian / Uraian */}
+                          {(!q.opsi || q.opsi.length === 0) && (
+                            <div className="p-3 rounded-2xl bg-emerald-50/60 border border-emerald-200 text-xs">
+                              <span className="font-bold text-emerald-900">Kunci Jawaban: </span>
+                              <strong className="font-mono text-emerald-950">
+                                <MathRenderer
+                                  text={Array.isArray(q.kunciJawaban) ? q.kunciJawaban.join(', ') : String(q.kunciJawaban)}
+                                  fontFamily="plus-jakarta"
+                                />
+                              </strong>
+                            </div>
+                          )}
+                        </>
                       )}
 
                       {q.pembahasan && (
@@ -3008,10 +3128,9 @@ export const CBTTab: React.FC<Props> = ({
                 <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-display font-black text-slate-800">
-                      Navigasi Nomor Soal ({Object.keys(studentAnswers).filter((k) => {
-                        const v = studentAnswers[k];
-                        return v !== undefined && v !== null && v !== '' && (!Array.isArray(v) || v.length > 0);
-                      }).length} / {currentExamQuestions.length} Terjawab)
+                      Navigasi Nomor Soal ({Object.keys(studentAnswers).filter((k) =>
+                        isQuestionAnswerFilled(studentAnswers[k])
+                      ).length} / {currentExamQuestions.length} Terjawab)
                     </span>
                     <div className="flex items-center gap-3 text-[11px] text-slate-500 font-bold">
                       <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-emerald-500 inline-block"></span> Terjawab</span>
@@ -3021,12 +3140,7 @@ export const CBTTab: React.FC<Props> = ({
                   </div>
                   <div className="flex flex-wrap gap-1.5 max-h-44 overflow-y-auto p-0.5">
                     {currentExamQuestions.map((qItem, idx) => {
-                      const ansVal = studentAnswers[qItem.id];
-                      const isAns =
-                        ansVal !== undefined &&
-                        ansVal !== null &&
-                        ansVal !== '' &&
-                        (!Array.isArray(ansVal) || ansVal.length > 0);
+                      const isAns = isQuestionAnswerFilled(studentAnswers[qItem.id]);
                       const isCurr = idx === currentQuestionIndex;
                       return (
                         <button
@@ -3066,18 +3180,67 @@ export const CBTTab: React.FC<Props> = ({
                     bodyClassName="text-sm sm:text-base font-bold text-slate-900 leading-relaxed"
                   />
 
-                  {/* Options with Option Images */}
-                  {currentQ.opsi && currentQ.opsi.length > 0 && (
+                  {/* Jawaban berdasarkan tipe soal */}
+                  {currentQ.tipe === 'benar_salah' ? (
+                    <div className="pt-2">
+                      <BenarSalahTableView
+                        items={resolveBenarSalahItems(currentQ)}
+                        interactive
+                        value={studentAnswers[currentQ.id]}
+                        onChange={(nextMap) => handleAnswerChange(currentQ.id, nextMap)}
+                        accentTheme="rose"
+                      />
+                    </div>
+                  ) : currentQ.tipe === 'menjodohkan' ? (
+                    (() => {
+                      const matchData = resolveMenjodohkanData(currentQ);
+                      return matchData ? (
+                        <div className="pt-2">
+                          <MenjodohkanColumnsView
+                            data={matchData}
+                            interactive
+                            value={studentAnswers[currentQ.id]}
+                            onChange={(nextMap) => handleAnswerChange(currentQ.id, nextMap)}
+                            accentTheme="rose"
+                          />
+                        </div>
+                      ) : (
+                        <textarea
+                          rows={3}
+                          value={studentAnswers[currentQ.id] || ''}
+                          onChange={(e) => handleAnswerChange(currentQ.id, e.target.value)}
+                          placeholder="Tuliskan pasangan jawaban Anda..."
+                          className="w-full p-3.5 rounded-2xl border-2 border-emerald-500 bg-white font-bold text-sm text-slate-900 outline-none"
+                        />
+                      );
+                    })()
+                  ) : currentQ.opsi && currentQ.opsi.length > 0 ? (
                     <div className="space-y-2.5 pt-2">
                       {currentQ.opsi.map((opt, oIdx) => {
                         const optLetter = String.fromCharCode(65 + oIdx);
                         const optImg = currentQ.opsiGambar?.[optLetter];
-                        const isSelected = studentAnswers[currentQ.id] === opt || studentAnswers[currentQ.id] === optLetter;
+                        const isPgKompleks = currentQ.tipe === 'pg_kompleks';
+                        const currArr = Array.isArray(studentAnswers[currentQ.id])
+                          ? (studentAnswers[currentQ.id] as string[])
+                          : [];
+                        const isSelected = isPgKompleks
+                          ? currArr.includes(opt) || currArr.includes(optLetter)
+                          : studentAnswers[currentQ.id] === opt || studentAnswers[currentQ.id] === optLetter;
                         return (
                           <button
                             key={oIdx}
                             type="button"
-                            onClick={() => handleAnswerChange(currentQ.id, opt)}
+                            onClick={() => {
+                              if (isPgKompleks) {
+                                const exists = currArr.includes(opt);
+                                handleAnswerChange(
+                                  currentQ.id,
+                                  exists ? currArr.filter((x) => x !== opt) : [...currArr, opt]
+                                );
+                              } else {
+                                handleAnswerChange(currentQ.id, opt);
+                              }
+                            }}
                             className={`w-full p-3.5 rounded-2xl border text-left text-xs font-bold transition flex flex-col gap-2 cursor-pointer ${
                               isSelected
                                 ? 'bg-emerald-50 border-emerald-500 text-emerald-950 shadow-xs ring-2 ring-emerald-300'
@@ -3103,18 +3266,25 @@ export const CBTTab: React.FC<Props> = ({
                         );
                       })}
                     </div>
-                  )}
-
-                  {/* Isian Singkat Answer Field */}
-                  {currentQ.tipe === 'isian' && (
+                  ) : (
                     <div className="pt-2">
-                      <input
-                        type="text"
-                        value={studentAnswers[currentQ.id] || ''}
-                        onChange={(e) => handleAnswerChange(currentQ.id, e.target.value)}
-                        placeholder="Ketik jawaban singkat Anda di sini..."
-                        className="w-full p-3.5 rounded-2xl border-2 border-emerald-500 bg-white font-bold text-sm text-slate-900 outline-none"
-                      />
+                      {currentQ.tipe === 'uraian' ? (
+                        <textarea
+                          rows={3}
+                          value={studentAnswers[currentQ.id] || ''}
+                          onChange={(e) => handleAnswerChange(currentQ.id, e.target.value)}
+                          placeholder="Ketik jawaban uraian Anda di sini..."
+                          className="w-full p-3.5 rounded-2xl border-2 border-emerald-500 bg-white font-bold text-sm text-slate-900 outline-none"
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          value={studentAnswers[currentQ.id] || ''}
+                          onChange={(e) => handleAnswerChange(currentQ.id, e.target.value)}
+                          placeholder="Ketik jawaban singkat Anda di sini..."
+                          className="w-full p-3.5 rounded-2xl border-2 border-emerald-500 bg-white font-bold text-sm text-slate-900 outline-none"
+                        />
+                      )}
                     </div>
                   )}
                 </div>

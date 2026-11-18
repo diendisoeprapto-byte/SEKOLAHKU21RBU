@@ -162,11 +162,25 @@ export interface StudentReportNotes {
   p5: P5Score[];
 }
 
+export interface BenarSalahItem {
+  id: string;
+  pernyataan: string;
+  kunci: 'Benar' | 'Salah';
+}
+
+export interface MenjodohkanData {
+  kolomKiri: string[];
+  kolomKanan: string[];
+  pasangan: Record<string, string>; // key: '1','2',... -> value: 'A','B',...
+}
+
 export interface CBTQuestion {
   id: string;
   tipe: 'pg' | 'pg_kompleks' | 'benar_salah' | 'menjodohkan' | 'isian' | 'uraian';
   pertanyaan: string;
   opsi?: string[]; // for pg, pg_kompleks
+  benarSalahItems?: BenarSalahItem[]; // tabel pernyataan Benar / Salah
+  menjodohkanData?: MenjodohkanData; // dua kolom menjodohkan (Kolom Kiri & Kolom Kanan)
   kunciJawaban: string | string[]; // string or array for multiselect
   bobot: number;
   pembahasan?: string;

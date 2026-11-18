@@ -44,7 +44,7 @@ import {
   User,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { Student, TKACpTp, TKAQuestion, TKAJenis, ActiveUser, Teacher, SchoolProfile, isSiswaInklusi, isAbkExcludedFromTka } from '../../types';
+import { Student, TKACpTp, TKAQuestion, TKAJenis, ActiveUser, Teacher, SchoolProfile, isSiswaInklusi, isAbkExcludedFromTka, BenarSalahItem, MenjodohkanData } from '../../types';
 import { TKA_JENIS_LIST, TKA_MAPEL_LIST } from '../../data/defaultData';
 import {
   getStoredTKACpTp,
@@ -114,12 +114,22 @@ import { QuestionContent } from '../QuestionContent';
 import { FormattedMathText, FractionBuilderBar } from '../FormattedMathText';
 import { MathPreviewPanel } from '../MathPreviewPanel';
 import {
+  BenarSalahTableView,
+  MenjodohkanColumnsView,
+  BenarSalahEditor,
+  MenjodohkanEditor,
+} from '../StructuredQuestionViews';
+import {
   PosisiGambar,
   extractPastedQuestionText,
   toggleCenterTagOnSelection,
   stripQuestionTags,
   insertFractionAtSelection,
   convertPlainFractionsToTags,
+  resolveBenarSalahItems,
+  formatBenarSalahKeySummary,
+  resolveMenjodohkanData,
+  formatMenjodohkanKeySummary,
 } from '../../utils/questionFormat';
 import {
   TKAExamRoomDraft,
@@ -130,6 +140,7 @@ import {
   getLastActiveTkaRoomDraft,
   clearTkaRoomDraft,
   countAnsweredQuestions,
+  isQuestionAnswerFilled,
 } from '../../utils/examDraft';
 
 interface Props {
@@ -813,9 +824,19 @@ export const TKATabs: React.FC<Props> = ({
   // Other types answers
   const [pgkChecks, setPgkChecks] = useState<Record<string, boolean>>({ A: false, B: false, C: false, D: false });
   const [benarSalahKunci, setBenarSalahKunci] = useState<'Benar' | 'Salah'>('Benar');
+  const [formBenarSalahItems, setFormBenarSalahItems] = useState<BenarSalahItem[]>([
+    { id: 'bs_1', pernyataan: '', kunci: 'Benar' },
+    { id: 'bs_2', pernyataan: '', kunci: 'Salah' },
+    { id: 'bs_3', pernyataan: '', kunci: 'Benar' },
+  ]);
   const [isianKunci, setIsianKunci] = useState('');
   const [uraianKunci, setUraianKunci] = useState('');
   const [menjodohkanKunci, setMenjodohkanKunci] = useState('');
+  const [formMenjodohkanData, setFormMenjodohkanData] = useState<MenjodohkanData>({
+    kolomKiri: ['', '', ''],
+    kolomKanan: ['', '', ''],
+    pasangan: { '1': 'A', '2': 'B', '3': 'C' },
+  });
 
   // TKA CP & TP Editing State
   const [editingCpId, setEditingCpId] = useState<string | null>(null);
@@ -1200,9 +1221,19 @@ export const TKATabs: React.FC<Props> = ({
     setPgKunci('A');
     setPgkChecks({ A: false, B: false, C: false, D: false });
     setBenarSalahKunci('Benar');
+    setFormBenarSalahItems([
+      { id: 'bs_1', pernyataan: '', kunci: 'Benar' },
+      { id: 'bs_2', pernyataan: '', kunci: 'Salah' },
+      { id: 'bs_3', pernyataan: '', kunci: 'Benar' },
+    ]);
     setIsianKunci('');
     setUraianKunci('');
     setMenjodohkanKunci('');
+    setFormMenjodohkanData({
+      kolomKiri: ['', '', ''],
+      kolomKanan: ['', '', ''],
+      pasangan: { '1': 'A', '2': 'B', '3': 'C' },
+    });
   };
 
   const handleEditTkaQuestion = (q: TKAQuestion) => {
@@ -1239,13 +1270,30 @@ export const TKATabs: React.FC<Props> = ({
         D: keys.includes('D') || (Boolean(q.opsi?.[3]) && keys.includes(q.opsi![3])),
       });
     } else if (q.tipe === 'benar_salah') {
+      const resolved = resolveBenarSalahItems(q);
       setBenarSalahKunci(q.kunciJawaban === 'Salah' ? 'Salah' : 'Benar');
+      setFormBenarSalahItems(
+        resolved.length > 0
+          ? resolved
+          : [
+              { id: 'bs_1', pernyataan: '', kunci: 'Benar' },
+              { id: 'bs_2', pernyataan: '', kunci: 'Salah' },
+            ]
+      );
     } else if (q.tipe === 'isian') {
       setIsianKunci(String(q.kunciJawaban || ''));
     } else if (q.tipe === 'uraian') {
       setUraianKunci(String(q.kunciJawaban || ''));
     } else if (q.tipe === 'menjodohkan') {
+      const resolved = resolveMenjodohkanData(q);
       setMenjodohkanKunci(String(q.kunciJawaban || ''));
+      setFormMenjodohkanData(
+        resolved || {
+          kolomKiri: ['', '', ''],
+          kolomKanan: ['', '', ''],
+          pasangan: { '1': 'A', '2': 'B', '3': 'C' },
+        }
+      );
     }
 
     window.scrollTo({ top: 380, behavior: 'smooth' });
@@ -1274,6 +1322,8 @@ export const TKATabs: React.FC<Props> = ({
 
     let parsedOpsi: string[] | undefined = undefined;
     let finalKunci: any = '';
+    let savedBenarSalahItems: BenarSalahItem[] | undefined = undefined;
+    let savedMenjodohkanData: MenjodohkanData | undefined = undefined;
 
     if (formTipe === 'pg') {
       if (!pgOptionA && !pgOptionB && !formOpsiGambar['A'] && !formOpsiGambar['B']) {
@@ -1297,7 +1347,20 @@ export const TKATabs: React.FC<Props> = ({
       }
       finalKunci = selected;
     } else if (formTipe === 'benar_salah') {
-      finalKunci = benarSalahKunci;
+      const cleanedItems = formBenarSalahItems
+        .map((it, idx) => ({
+          id: it.id || `bs_${idx + 1}`,
+          pernyataan: it.pernyataan.trim(),
+          kunci: (it.kunci === 'Salah' ? 'Salah' : 'Benar') as 'Benar' | 'Salah',
+        }))
+        .filter((it) => it.pernyataan.length > 0);
+      if (cleanedItems.length === 0) {
+        showToast('Harap isi minimal 1 baris pernyataan Benar/Salah pada tabel!', 'error');
+        return;
+      }
+      savedBenarSalahItems = cleanedItems;
+      parsedOpsi = cleanedItems.map((it) => it.pernyataan);
+      finalKunci = formatBenarSalahKeySummary(cleanedItems);
     } else if (formTipe === 'isian') {
       if (!isianKunci.trim()) {
         showToast('Harap tuliskan kunci jawaban isian singkat!', 'error');
@@ -1307,7 +1370,28 @@ export const TKATabs: React.FC<Props> = ({
     } else if (formTipe === 'uraian') {
       finalKunci = uraianKunci.trim() || 'Rubrik penilaian uraian';
     } else if (formTipe === 'menjodohkan') {
-      finalKunci = menjodohkanKunci.trim() || 'Pasangan kunci benar';
+      const cleanKiri = formMenjodohkanData.kolomKiri.map((v) => v.trim()).filter(Boolean);
+      const cleanKanan = formMenjodohkanData.kolomKanan.map((v) => v.trim()).filter(Boolean);
+      if (cleanKiri.length === 0 || cleanKanan.length === 0) {
+        showToast('Harap isi pernyataan di Kolom Kiri dan pilihan jawaban di Kolom Kanan!', 'error');
+        return;
+      }
+      const cleanPasangan: Record<string, string> = {};
+      for (let i = 0; i < cleanKiri.length; i++) {
+        const numKey = String(i + 1);
+        const mapped = formMenjodohkanData.pasangan[numKey] || '';
+        if (!mapped) {
+          showToast(`Harap pilih kunci huruf pasangan untuk Kolom Kiri nomor ${numKey}!`, 'error');
+          return;
+        }
+        cleanPasangan[numKey] = mapped;
+      }
+      savedMenjodohkanData = {
+        kolomKiri: cleanKiri,
+        kolomKanan: cleanKanan,
+        pasangan: cleanPasangan,
+      };
+      finalKunci = formatMenjodohkanKeySummary(savedMenjodohkanData);
     }
 
     const formattedPertanyaan = formPertanyaan.replace(/^\n+|\n+$/g, '');
@@ -1328,6 +1412,8 @@ export const TKATabs: React.FC<Props> = ({
             judulTeks: cleanJudulTeks,
             pertanyaan: formattedPertanyaan,
             opsi: parsedOpsi,
+            benarSalahItems: savedBenarSalahItems,
+            menjodohkanData: savedMenjodohkanData,
             opsiGambar: Object.keys(formOpsiGambar).length > 0 ? formOpsiGambar : undefined,
             kunciJawaban: finalKunci,
             bobot: Number(formBobot) || 10,
@@ -1373,6 +1459,8 @@ export const TKATabs: React.FC<Props> = ({
         judulTeks: cleanJudulTeks,
         pertanyaan: formattedPertanyaan,
         opsi: parsedOpsi,
+        benarSalahItems: savedBenarSalahItems,
+        menjodohkanData: savedMenjodohkanData,
         opsiGambar: Object.keys(formOpsiGambar).length > 0 ? formOpsiGambar : undefined,
         kunciJawaban: finalKunci,
         bobot: Number(formBobot) || 10,
@@ -1726,7 +1814,7 @@ export const TKATabs: React.FC<Props> = ({
     simulationQuestions.forEach((q) => {
       totalMax += q.bobot;
       const ans = simAnswers[q.id];
-      const evaluation = evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot);
+      const evaluation = evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot, q.opsi, q);
       earned += evaluation.earnedScore;
       details.push({
         question: q,
@@ -2848,27 +2936,41 @@ export const TKATabs: React.FC<Props> = ({
                   )}
 
                   {curSimQ.tipe === 'benar_salah' && (
-                    <div className="flex gap-4">
-                      {['Benar', 'Salah'].map((val) => (
-                        <button
-                          key={val}
-                          type="button"
-                          onClick={() => setSimAnswers({ ...simAnswers, [curSimQ.id]: val })}
-                          className={`flex-1 py-3 rounded-xl border-2 font-display font-extrabold text-sm transition cursor-pointer ${
-                            simAnswers[curSimQ.id] === val
-                              ? 'bg-amber-500 text-white border-amber-500'
-                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                          }`}
-                        >
-                          {val}
-                        </button>
-                      ))}
-                    </div>
+                    <BenarSalahTableView
+                      items={resolveBenarSalahItems(curSimQ)}
+                      interactive
+                      value={simAnswers[curSimQ.id]}
+                      onChange={(nextMap) => setSimAnswers({ ...simAnswers, [curSimQ.id]: nextMap })}
+                      accentTheme="amber"
+                    />
                   )}
 
-                  {(curSimQ.tipe === 'uraian' || curSimQ.tipe === 'menjodohkan') && (
+                  {curSimQ.tipe === 'menjodohkan' && (
+                    (() => {
+                      const matchData = resolveMenjodohkanData(curSimQ);
+                      return matchData ? (
+                        <MenjodohkanColumnsView
+                          data={matchData}
+                          interactive
+                          value={simAnswers[curSimQ.id]}
+                          onChange={(nextMap) => setSimAnswers({ ...simAnswers, [curSimQ.id]: nextMap })}
+                          accentTheme="amber"
+                        />
+                      ) : (
+                        <textarea
+                          rows={3}
+                          value={simAnswers[curSimQ.id] || ''}
+                          onChange={(e) => setSimAnswers({ ...simAnswers, [curSimQ.id]: e.target.value })}
+                          placeholder="Ketik jawaban Anda..."
+                          className="w-full p-3 rounded-xl border border-slate-300 text-xs font-medium outline-none focus:border-amber-500"
+                        />
+                      );
+                    })()
+                  )}
+
+                  {(curSimQ.tipe === 'isian' || curSimQ.tipe === 'uraian') && (
                     <textarea
-                      rows={3}
+                      rows={curSimQ.tipe === 'isian' ? 2 : 3}
                       value={simAnswers[curSimQ.id] || ''}
                       onChange={(e) => setSimAnswers({ ...simAnswers, [curSimQ.id]: e.target.value })}
                       placeholder="Ketik jawaban Anda..."
@@ -3556,23 +3658,10 @@ export const TKATabs: React.FC<Props> = ({
               )}
 
               {formTipe === 'benar_salah' && (
-                <div className="space-y-2">
-                  <div className="text-xs font-bold text-slate-700">Kunci Jawaban Pernyataan:</div>
-                  <div className="flex gap-4">
-                    {['Benar', 'Salah'].map((val) => (
-                      <label key={val} className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-800">
-                        <input
-                          type="radio"
-                          name="tka_bs_kunci"
-                          checked={benarSalahKunci === val}
-                          onChange={() => setBenarSalahKunci(val as any)}
-                          className="w-4 h-4 text-rose-600"
-                        />
-                        <span>Pernyataan {val}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
+                <BenarSalahEditor
+                  items={formBenarSalahItems}
+                  onChange={setFormBenarSalahItems}
+                />
               )}
 
               {formTipe === 'isian' && (
@@ -3612,16 +3701,10 @@ export const TKATabs: React.FC<Props> = ({
               )}
 
               {formTipe === 'menjodohkan' && (
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-700">Pasangan Jawaban Menjodohkan (Format Kiri = Kanan, pisahkan dengan koma):</label>
-                  <input
-                    type="text"
-                    value={menjodohkanKunci}
-                    onChange={(e) => setMenjodohkanKunci(e.target.value)}
-                    placeholder="Contoh: Jakarta = Ibukota, Bandung = Jawa Barat"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-medium outline-none focus:border-rose-400"
-                  />
-                </div>
+                <MenjodohkanEditor
+                  data={formMenjodohkanData}
+                  onChange={setFormMenjodohkanData}
+                />
               )}
             </div>
 
@@ -3639,15 +3722,13 @@ export const TKATabs: React.FC<Props> = ({
                 { key: 'C', text: pgOptionC, isKey: formTipe === 'pg' ? pgKunci === 'C' : Boolean(pgkChecks.C), imageUrl: formOpsiGambar.C },
                 { key: 'D', text: pgOptionD, isKey: formTipe === 'pg' ? pgKunci === 'D' : Boolean(pgkChecks.D), imageUrl: formOpsiGambar.D },
               ]}
+              benarSalahItems={formBenarSalahItems}
+              menjodohkanData={formMenjodohkanData}
               kunciText={
-                formTipe === 'benar_salah'
-                  ? benarSalahKunci
-                  : formTipe === 'isian'
+                formTipe === 'isian'
                   ? isianKunci
                   : formTipe === 'uraian'
                   ? uraianKunci
-                  : formTipe === 'menjodohkan'
-                  ? menjodohkanKunci
                   : undefined
               }
               accentTheme="indigo"
@@ -3940,8 +4021,29 @@ export const TKATabs: React.FC<Props> = ({
                     compact
                   />
 
-                  {/* Options display */}
-                  {q.opsi && q.opsi.length > 0 && (
+                  {/* Options / Structured Tables display */}
+                  {q.tipe === 'benar_salah' ? (
+                    <div className="pt-1">
+                      <BenarSalahTableView
+                        items={resolveBenarSalahItems(q)}
+                        showKeys
+                        accentTheme="indigo"
+                      />
+                    </div>
+                  ) : q.tipe === 'menjodohkan' ? (
+                    (() => {
+                      const matchData = resolveMenjodohkanData(q);
+                      return matchData ? (
+                        <div className="pt-1">
+                          <MenjodohkanColumnsView
+                            data={matchData}
+                            showKeys
+                            accentTheme="indigo"
+                          />
+                        </div>
+                      ) : null;
+                    })()
+                  ) : q.opsi && q.opsi.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-xs text-slate-700">
                       {q.opsi.map((op, oIdx) => {
                         const optKey = ['A', 'B', 'C', 'D'][oIdx];
@@ -3979,7 +4081,7 @@ export const TKATabs: React.FC<Props> = ({
                         );
                       })}
                     </div>
-                  )}
+                  ) : null}
 
                   {/* Answer key footer */}
                   <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs flex flex-wrap items-center justify-between gap-2">
@@ -4397,7 +4499,8 @@ export const TKATabs: React.FC<Props> = ({
               studentAns,
               q.kunciJawaban,
               q.bobot || 10,
-              q.opsi
+              q.opsi,
+              q
             );
             if (evalResult.isCorrect) correctCount++;
           });
@@ -4420,7 +4523,8 @@ export const TKATabs: React.FC<Props> = ({
               sub.answers ? sub.answers[q.id] : undefined,
               q.kunciJawaban,
               q.bobot || 10,
-              q.opsi
+              q.opsi,
+              q
             );
             if (res.isCorrect) upperCorrect++;
           });
@@ -4432,7 +4536,8 @@ export const TKATabs: React.FC<Props> = ({
               sub.answers ? sub.answers[q.id] : undefined,
               q.kunciJawaban,
               q.bobot || 10,
-              q.opsi
+              q.opsi,
+              q
             );
             if (res.isCorrect) lowerCorrect++;
           });
@@ -6704,7 +6809,7 @@ export const TKATabs: React.FC<Props> = ({
           displayExamQuestions.forEach((q) => {
             const studentAns = studentAnswers[q.id];
             const weight = q.bobot || 10;
-            const res = evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, weight, q.opsi);
+            const res = evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, weight, q.opsi, q);
             totalScoreEarned += res.earnedScore;
             totalMaxScore += weight;
 
@@ -7014,51 +7119,88 @@ export const TKATabs: React.FC<Props> = ({
                       </div>
                     )}
 
-                    {/* Benar / Salah */}
+                    {/* Benar / Salah (Tabel Pernyataan di Kiri & Benar/Salah di Kanan) */}
                     {activeQuestion?.tipe === 'benar_salah' && (
-                      <div className="grid grid-cols-2 gap-3">
-                        {['Benar', 'Salah'].map((val) => {
-                          const isSelected = studentAnswers[activeQuestion.id] === val;
-                          return (
-                            <button
-                              key={val}
-                              type="button"
-                              onClick={() => {
-                                setStudentAnswers((prev) => ({ ...prev, [activeQuestion.id]: val }));
-                              }}
-                              className={`p-4 rounded-2xl border-2 font-display font-black text-sm transition cursor-pointer ${
-                                isSelected
-                                  ? val === 'Benar'
-                                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                                    : 'bg-rose-600 text-white border-rose-600 shadow-xs'
-                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                              }`}
-                            >
-                              {val === 'Benar' ? '✓ Benar' : '✗ Salah'}
-                            </button>
-                          );
-                        })}
-                      </div>
+                      <BenarSalahTableView
+                        items={resolveBenarSalahItems(activeQuestion)}
+                        interactive
+                        value={studentAnswers[activeQuestion.id]}
+                        onChange={(nextMap) =>
+                          setStudentAnswers((prev) => ({ ...prev, [activeQuestion.id]: nextMap }))
+                        }
+                        accentTheme="purple"
+                      />
                     )}
 
-                    {/* Isian Singkat */}
-                    {(activeQuestion?.tipe === 'isian' || activeQuestion?.tipe === 'uraian' || activeQuestion?.tipe === 'menjodohkan') && (
+                    {/* Menjodohkan (Kolom Kiri 1..N & Kolom Kanan A..M) */}
+                    {activeQuestion?.tipe === 'menjodohkan' && (
+                      (() => {
+                        const matchData = resolveMenjodohkanData(activeQuestion);
+                        return matchData ? (
+                          <MenjodohkanColumnsView
+                            data={matchData}
+                            interactive
+                            value={studentAnswers[activeQuestion.id]}
+                            onChange={(nextMap) =>
+                              setStudentAnswers((prev) => ({ ...prev, [activeQuestion.id]: nextMap }))
+                            }
+                            accentTheme="purple"
+                          />
+                        ) : (
+                          <div className="space-y-2">
+                            <label className="block text-xs font-bold text-slate-700">
+                              Tuliskan Jawaban Anda:
+                            </label>
+                            <input
+                              type="text"
+                              value={studentAnswers[activeQuestion?.id] || ''}
+                              onChange={(e) => {
+                                setStudentAnswers((prev) => ({
+                                  ...prev,
+                                  [activeQuestion.id]: e.target.value,
+                                }));
+                              }}
+                              placeholder="Ketik jawaban Anda di sini..."
+                              className="w-full px-4 py-3 rounded-2xl border-2 border-slate-300 text-xs font-bold focus:border-purple-600 outline-none"
+                            />
+                          </div>
+                        );
+                      })()
+                    )}
+
+                    {/* Isian Singkat & Uraian */}
+                    {(activeQuestion?.tipe === 'isian' || activeQuestion?.tipe === 'uraian') && (
                       <div className="space-y-2">
                         <label className="block text-xs font-bold text-slate-700">
                           Tuliskan Jawaban Anda:
                         </label>
-                        <input
-                          type="text"
-                          value={studentAnswers[activeQuestion?.id] || ''}
-                          onChange={(e) => {
-                            setStudentAnswers((prev) => ({
-                              ...prev,
-                              [activeQuestion.id]: e.target.value,
-                            }));
-                          }}
-                          placeholder="Ketik jawaban Anda di sini..."
-                          className="w-full px-4 py-3 rounded-2xl border-2 border-slate-300 text-xs font-bold focus:border-purple-600 outline-none"
-                        />
+                        {activeQuestion.tipe === 'uraian' ? (
+                          <textarea
+                            rows={3}
+                            value={studentAnswers[activeQuestion?.id] || ''}
+                            onChange={(e) => {
+                              setStudentAnswers((prev) => ({
+                                ...prev,
+                                [activeQuestion.id]: e.target.value,
+                              }));
+                            }}
+                            placeholder="Ketik jawaban uraian Anda di sini..."
+                            className="w-full px-4 py-3 rounded-2xl border-2 border-slate-300 text-xs font-bold focus:border-purple-600 outline-none"
+                          />
+                        ) : (
+                          <input
+                            type="text"
+                            value={studentAnswers[activeQuestion?.id] || ''}
+                            onChange={(e) => {
+                              setStudentAnswers((prev) => ({
+                                ...prev,
+                                [activeQuestion.id]: e.target.value,
+                              }));
+                            }}
+                            placeholder="Ketik jawaban Anda di sini..."
+                            className="w-full px-4 py-3 rounded-2xl border-2 border-slate-300 text-xs font-bold focus:border-purple-600 outline-none"
+                          />
+                        )}
                       </div>
                     )}
                   </div>
@@ -7114,7 +7256,7 @@ export const TKATabs: React.FC<Props> = ({
                   {/* Number Grid */}
                   <div className="grid grid-cols-5 gap-2 max-h-72 overflow-y-auto p-1">
                     {displayExamQuestions.map((q, idx) => {
-                      const isAnswered = studentAnswers[q.id] !== undefined && studentAnswers[q.id] !== '';
+                      const isAnswered = isQuestionAnswerFilled(studentAnswers[q.id]);
                       const isRagu = Boolean(raguChecks[q.id]);
                       const isActive = idx === currentQuestionIdx;
 

@@ -76,12 +76,15 @@ import {
   getLastActiveStudentExamDraft,
   clearStudentExamDraft,
   countAnsweredQuestions,
+  isQuestionAnswerFilled,
 } from '../utils/examDraft';
 import { TKA_JENIS_LIST, TKA_MAPEL_LIST } from '../data/defaultData';
 import { evaluateQuestionScore, normalizeString } from '../utils/answerChecker';
 import { getLocalTodayStr } from '../utils/dateUtils';
 import { QuestionContent } from './QuestionContent';
 import { MathRenderer } from './MathRenderer';
+import { BenarSalahTableView, MenjodohkanColumnsView } from './StructuredQuestionViews';
+import { resolveBenarSalahItems, resolveMenjodohkanData } from '../utils/questionFormat';
 import { StudentPerformanceStats } from './StudentPerformanceStats';
 import { StudentKebiasaanTracker } from './StudentKebiasaanTracker';
 
@@ -1216,7 +1219,7 @@ export const StudentDashboard: React.FC<Props> = ({
       }
       return directRes;
     }
-    return evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, q.bobot);
+    return evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, q.bobot, q.opsi, q);
   };
 
   // Simpan referensi state ujian terbaru agar aman saat logout/unmount/beforeunload
@@ -2726,12 +2729,7 @@ export const StudentDashboard: React.FC<Props> = ({
 
             <div className="flex flex-wrap gap-2 max-h-44 overflow-y-auto p-0.5">
               {activeExamSoalList.map((item, idx) => {
-                const ansVal = answers[item.id];
-                const isAnswered =
-                  ansVal !== undefined &&
-                  ansVal !== null &&
-                  ansVal !== '' &&
-                  (!Array.isArray(ansVal) || ansVal.length > 0);
+                const isAnswered = isQuestionAnswerFilled(answers[item.id]);
                 const isCurrent = idx === currentQIndex;
                 return (
                   <button
@@ -3230,32 +3228,49 @@ export const StudentDashboard: React.FC<Props> = ({
                         })}
                       </>
                     ) : q.tipe === 'benar_salah' ? (
-                      <div className="grid grid-cols-2 gap-3">
-                        {['Benar', 'Salah'].map((val) => {
-                          const isChosen = selectedAnswer === val;
-                          return (
-                            <button
-                              key={val}
-                              type="button"
-                              onClick={() =>
-                                setAnswers((prev) => ({
-                                  ...prev,
-                                  [q.id]: val,
-                                }))
-                              }
-                              className={`p-4 rounded-2xl border-2 font-display font-black text-sm transition cursor-pointer ${
-                                isChosen
-                                  ? val === 'Benar'
-                                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                                    : 'bg-rose-600 text-white border-rose-600 shadow-xs'
-                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                              }`}
-                            >
-                              {val === 'Benar' ? '✓ Benar' : '✗ Salah'}
-                            </button>
-                          );
-                        })}
-                      </div>
+                      <BenarSalahTableView
+                        items={resolveBenarSalahItems(q)}
+                        interactive
+                        value={selectedAnswer}
+                        onChange={(nextMap) =>
+                          setAnswers((prev) => ({
+                            ...prev,
+                            [q.id]: nextMap,
+                          }))
+                        }
+                        accentTheme={viewMode === 'tka' ? 'purple' : 'rose'}
+                      />
+                    ) : q.tipe === 'menjodohkan' ? (
+                      (() => {
+                        const matchData = resolveMenjodohkanData(q);
+                        return matchData ? (
+                          <MenjodohkanColumnsView
+                            data={matchData}
+                            interactive
+                            value={selectedAnswer}
+                            onChange={(nextMap) =>
+                              setAnswers((prev) => ({
+                                ...prev,
+                                [q.id]: nextMap,
+                              }))
+                            }
+                            accentTheme={viewMode === 'tka' ? 'purple' : 'rose'}
+                          />
+                        ) : (
+                          <textarea
+                            rows={3}
+                            value={typeof selectedAnswer === 'string' ? selectedAnswer : ''}
+                            onChange={(e) => {
+                              setAnswers((prev) => ({
+                                ...prev,
+                                [q.id]: e.target.value,
+                              }));
+                            }}
+                            placeholder="Tuliskan pasangan jawaban Anda di sini..."
+                            className="w-full p-3 rounded-2xl border border-slate-300 text-xs font-medium outline-none focus:border-rose-500"
+                          />
+                        );
+                      })()
                     ) : q.opsi && q.opsi.length > 0 ? (
                       q.opsi.map((opsi, oIdx) => {
                         const optKey = String.fromCharCode(65 + oIdx); // 'A', 'B', 'C', 'D'

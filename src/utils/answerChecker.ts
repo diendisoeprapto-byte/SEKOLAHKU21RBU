@@ -1,3 +1,6 @@
+import { CBTQuestion } from '../types';
+import { resolveBenarSalahItems, resolveMenjodohkanData } from './questionFormat';
+
 /**
  * Answer Checker Utility for CBT and TKA
  * Handles case-insensitivity, whitespace-insensitivity, and slash-delimited alternative answers
@@ -60,7 +63,8 @@ export const evaluateQuestionScore = (
   studentAnswer: any,
   correctKey: string | string[],
   weight: number,
-  optionsList?: string[]
+  optionsList?: string[],
+  questionObj?: Partial<CBTQuestion>
 ): { isCorrect: boolean; earnedScore: number } => {
   if (studentAnswer === undefined || studentAnswer === null || studentAnswer === '') {
     return { isCorrect: false, earnedScore: 0 };
@@ -137,8 +141,46 @@ export const evaluateQuestionScore = (
   }
 
   if (questionType === 'benar_salah') {
+    const items = resolveBenarSalahItems({
+      benarSalahItems: questionObj?.benarSalahItems,
+      opsi: optionsList || questionObj?.opsi,
+      kunciJawaban: correctKey,
+    });
+
+    // Mode tabel multi-pernyataan (atau 1 pernyataan terstruktur)
+    if (items.length > 0 && (typeof studentAnswer === 'object' || items.length > 1)) {
+      const ansObj: Record<string, string> =
+        studentAnswer && typeof studentAnswer === 'object' && !Array.isArray(studentAnswer)
+          ? studentAnswer
+          : {};
+      const ansArr: string[] = Array.isArray(studentAnswer) ? studentAnswer : [];
+
+      let matchCount = 0;
+      items.forEach((item, idx) => {
+        const rawAns =
+          ansObj[item.id] ??
+          ansObj[String(idx)] ??
+          ansObj[String(idx + 1)] ??
+          ansArr[idx] ??
+          (items.length === 1 && typeof studentAnswer === 'string' ? studentAnswer : '');
+        if (normalizeString(String(rawAns)) === normalizeString(item.kunci)) {
+          matchCount++;
+        }
+      });
+
+      const isCorrect = matchCount === items.length;
+      const earnedScore = isCorrect
+        ? weight
+        : matchCount > 0
+        ? Math.round((weight * matchCount) / items.length)
+        : 0;
+      return { isCorrect, earnedScore };
+    }
+
+    // Fallback mode tunggal klasik ('Benar' / 'Salah')
     const { text: ansText } = extractOptionTextAndKey(studentAnswer);
-    const isCorrect = normalizeString(ansText) === normalizeString(String(correctKey));
+    const keySingle = Array.isArray(correctKey) ? correctKey[0] || '' : String(correctKey || '');
+    const isCorrect = normalizeString(ansText) === normalizeString(keySingle);
     return { isCorrect, earnedScore: isCorrect ? weight : 0 };
   }
 
@@ -170,7 +212,51 @@ export const evaluateQuestionScore = (
     return { isCorrect: false, earnedScore: 0 };
   }
 
-  if (questionType === 'menjodohkan' || questionType === 'uraian') {
+  if (questionType === 'menjodohkan') {
+    const matchData = resolveMenjodohkanData({
+      menjodohkanData: questionObj?.menjodohkanData,
+      kunciJawaban: correctKey,
+    });
+
+    if (matchData && matchData.kolomKiri.length > 0 && typeof studentAnswer === 'object' && !Array.isArray(studentAnswer)) {
+      const ansMap = studentAnswer as Record<string, string>;
+      const totalPairs = matchData.kolomKiri.length;
+      let correctPairs = 0;
+
+      matchData.kolomKiri.forEach((_, idx) => {
+        const numKey = String(idx + 1);
+        const expectedLetter = normalizeString(matchData.pasangan[numKey] || '');
+        const expectedIdx = expectedLetter.length === 1 ? expectedLetter.charCodeAt(0) - 97 : -1;
+        const expectedText =
+          expectedIdx >= 0 && matchData.kolomKanan[expectedIdx]
+            ? normalizeString(matchData.kolomKanan[expectedIdx])
+            : '';
+
+        const studentVal = normalizeString(String(ansMap[numKey] || ''));
+        if (!studentVal) return;
+
+        if (studentVal === expectedLetter || (expectedText && studentVal === expectedText)) {
+          correctPairs++;
+        }
+      });
+
+      const isCorrect = correctPairs === totalPairs;
+      const earnedScore = isCorrect
+        ? weight
+        : correctPairs > 0
+        ? Math.round((weight * correctPairs) / totalPairs)
+        : 0;
+      return { isCorrect, earnedScore };
+    }
+
+    const { text } = extractOptionTextAndKey(studentAnswer);
+    if (text.length >= 3) {
+      return { isCorrect: true, earnedScore: weight };
+    }
+    return { isCorrect: false, earnedScore: 0 };
+  }
+
+  if (questionType === 'uraian') {
     const { text } = extractOptionTextAndKey(studentAnswer);
     const len = text.length;
     if (len >= 3) {

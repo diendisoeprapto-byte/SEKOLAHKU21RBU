@@ -3,6 +3,8 @@ import { ChevronDown, ChevronUp, Eye, Sparkles } from 'lucide-react';
 import { QuestionContent } from './QuestionContent';
 import { MathRenderer, MathFontFamily, MixedFractionMode, MATH_FONT_CONFIGS } from './MathRenderer';
 import { PosisiGambar } from '../utils/questionFormat';
+import { BenarSalahItem, MenjodohkanData } from '../types';
+import { BenarSalahTableView, MenjodohkanColumnsView } from './StructuredQuestionViews';
 
 interface PreviewOptionItem {
   key: 'A' | 'B' | 'C' | 'D';
@@ -19,6 +21,8 @@ interface MathPreviewPanelProps {
   posisiGambar?: PosisiGambar;
   tipeSoal?: 'pg' | 'pg_kompleks' | 'isian' | 'benar_salah' | 'uraian' | 'menjodohkan';
   options?: PreviewOptionItem[];
+  benarSalahItems?: BenarSalahItem[];
+  menjodohkanData?: MenjodohkanData;
   kunciText?: string;
   pembahasan?: string;
   accentTheme?: 'rose' | 'indigo';
@@ -32,6 +36,8 @@ export const MathPreviewPanel: React.FC<MathPreviewPanelProps> = ({
   posisiGambar = 'bawah_judul',
   tipeSoal = 'pg',
   options = [],
+  benarSalahItems = [],
+  menjodohkanData,
   kunciText,
   pembahasan,
   accentTheme = 'indigo',
@@ -40,10 +46,19 @@ export const MathPreviewPanel: React.FC<MathPreviewPanelProps> = ({
   const [previewFont, setPreviewFont] = useState<MathFontFamily>('plus-jakarta');
   const [mixedMode, setMixedMode] = useState<MixedFractionMode>('mixed');
 
+  const validBsItems = (benarSalahItems || []).filter((it) => it.pernyataan.trim());
+  const hasMenjodohkanContent = Boolean(
+    menjodohkanData &&
+      (menjodohkanData.kolomKiri.some((v) => v.trim()) ||
+        menjodohkanData.kolomKanan.some((v) => v.trim()))
+  );
+
   const hasContent = Boolean(
     pertanyaan.trim() ||
       judulTeks?.trim() ||
       options.some((o) => o.text.trim()) ||
+      validBsItems.length > 0 ||
+      hasMenjodohkanContent ||
       kunciText?.trim() ||
       pembahasan?.trim()
   );
@@ -218,8 +233,36 @@ export const MathPreviewPanel: React.FC<MathPreviewPanelProps> = ({
                   </div>
                 )}
 
-              {/* Pratinjau Kunci Non-PG */}
-              {tipeSoal !== 'pg' && tipeSoal !== 'pg_kompleks' && kunciText?.trim() && (
+              {/* Pratinjau Tabel Benar / Salah */}
+              {tipeSoal === 'benar_salah' && validBsItems.length > 0 && (
+                <div className="pt-2 border-t border-slate-100">
+                  <BenarSalahTableView
+                    items={validBsItems}
+                    showKeys
+                    mathFont={previewFont}
+                    accentTheme={accentTheme}
+                  />
+                </div>
+              )}
+
+              {/* Pratinjau Dua Kolom Menjodohkan */}
+              {tipeSoal === 'menjodohkan' && menjodohkanData && hasMenjodohkanContent && (
+                <div className="pt-2 border-t border-slate-100">
+                  <MenjodohkanColumnsView
+                    data={{
+                      kolomKiri: menjodohkanData.kolomKiri.filter((v) => v.trim()),
+                      kolomKanan: menjodohkanData.kolomKanan.filter((v) => v.trim()),
+                      pasangan: menjodohkanData.pasangan || {},
+                    }}
+                    showKeys
+                    mathFont={previewFont}
+                    accentTheme={accentTheme}
+                  />
+                </div>
+              )}
+
+              {/* Pratinjau Kunci Isian / Uraian */}
+              {(tipeSoal === 'isian' || tipeSoal === 'uraian') && kunciText?.trim() && (
                 <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-xs">
                   <span className="font-bold text-emerald-900">Pratinjau Kunci Jawaban: </span>
                   <MathRenderer

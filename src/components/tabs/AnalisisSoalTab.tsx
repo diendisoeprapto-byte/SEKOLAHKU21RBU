@@ -260,7 +260,8 @@ export const AnalisisSoalTab: React.FC<Props> = ({
             res.jawabanSiswa ? res.jawabanSiswa[q.id] : undefined,
             q.kunciJawaban,
             q.bobot || 10,
-            q.opsi
+            q.opsi,
+            q
           );
           if (evalRes.isCorrect) correctCount++;
         });
@@ -272,7 +273,8 @@ export const AnalisisSoalTab: React.FC<Props> = ({
             res.jawabanSiswa ? res.jawabanSiswa[q.id] : undefined,
             q.kunciJawaban,
             q.bobot || 10,
-            q.opsi
+            q.opsi,
+            q
           );
           if (evalRes.isCorrect) upperCorrect++;
         });
@@ -284,7 +286,8 @@ export const AnalisisSoalTab: React.FC<Props> = ({
             res.jawabanSiswa ? res.jawabanSiswa[q.id] : undefined,
             q.kunciJawaban,
             q.bobot || 10,
-            q.opsi
+            q.opsi,
+            q
           );
           if (evalRes.isCorrect) lowerCorrect++;
         });

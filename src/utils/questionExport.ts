@@ -1,6 +1,14 @@
 import * as XLSX from 'xlsx';
 import { CBTQuestion, TKAQuestion } from '../types';
-import { parseQuestionSegments, stripQuestionTags, tokenizeMathText } from './questionFormat';
+import {
+  formatBenarSalahKeySummary,
+  formatMenjodohkanKeySummary,
+  parseQuestionSegments,
+  resolveBenarSalahItems,
+  resolveMenjodohkanData,
+  stripQuestionTags,
+  tokenizeMathText,
+} from './questionFormat';
 
 export interface QuestionExportMeta {
   title: string;
@@ -40,6 +48,18 @@ const renderWordMathHtml = (text: string): string => {
 };
 
 const formatKunciDisplay = (q: CBTQuestion | TKAQuestion): string => {
+  if (q.tipe === 'benar_salah') {
+    const items = resolveBenarSalahItems(q);
+    if (items.length > 0) {
+      return formatBenarSalahKeySummary(items).join(', ');
+    }
+  }
+  if (q.tipe === 'menjodohkan') {
+    const mData = resolveMenjodohkanData(q);
+    if (mData && Object.keys(mData.pasangan || {}).length > 0) {
+      return formatMenjodohkanKeySummary(mData);
+    }
+  }
   if (Array.isArray(q.kunciJawaban)) {
     return q.kunciJawaban.join(', ');
   }
@@ -120,7 +140,68 @@ export const exportQuestionsToWord = (
         .join('');
 
       let optionsHtml = '';
-      if (q.opsi && q.opsi.length > 0) {
+      if (q.tipe === 'benar_salah') {
+        const bsItems = resolveBenarSalahItems(q);
+        if (bsItems.length > 0) {
+          optionsHtml = `<table style="width:100%;border-collapse:collapse;margin-top:6px;margin-bottom:8px;font-size:10.5pt;" border="1" cellpadding="5">
+            <thead>
+              <tr style="background-color:#dbeafe;color:#1e3a8a;">
+                <th style="text-align:left;">Pernyataan</th>
+                <th style="width:72px;text-align:center;">Benar</th>
+                <th style="width:72px;text-align:center;">Salah</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${bsItems
+                .map(
+                  (it, bIdx) => `<tr>
+                    <td style="vertical-align:middle;">${bsItems.length > 1 ? `<strong>${bIdx + 1}.</strong> ` : ''}${renderWordMathHtml(it.pernyataan)}</td>
+                    <td style="text-align:center;vertical-align:middle;font-size:13pt;">&#9711;</td>
+                    <td style="text-align:center;vertical-align:middle;font-size:13pt;">&#9711;</td>
+                  </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>`;
+        } else {
+          optionsHtml = `<p style="margin:4px 0 6px 0;color:#475569;">[ &nbsp; ] Benar &nbsp;&nbsp;&nbsp;&nbsp; [ &nbsp; ] Salah</p>`;
+        }
+      } else if (q.tipe === 'menjodohkan') {
+        const mData = resolveMenjodohkanData(q);
+        if (mData && (mData.kolomKiri.length > 0 || mData.kolomKanan.length > 0)) {
+          const rowCount = Math.max(mData.kolomKiri.length, mData.kolomKanan.length);
+          const rowsHtml = Array.from({ length: rowCount })
+            .map((_, rIdx) => {
+              const leftText = mData.kolomKiri[rIdx];
+              const rightText = mData.kolomKanan[rIdx];
+              const letter = String.fromCharCode(65 + rIdx);
+              return `<tr>
+                <td style="width:55%;vertical-align:top;padding:5px 8px;">${
+                  leftText !== undefined && leftText.trim()
+                    ? `<strong>${rIdx + 1}.</strong> ${renderWordMathHtml(leftText)}`
+                    : '&nbsp;'
+                }</td>
+                <td style="width:45%;vertical-align:top;padding:5px 8px;">${
+                  rightText !== undefined && rightText.trim()
+                    ? `<strong>${letter}.</strong> ${renderWordMathHtml(rightText)}`
+                    : '&nbsp;'
+                }</td>
+              </tr>`;
+            })
+            .join('');
+          optionsHtml = `<table style="width:100%;border-collapse:collapse;margin-top:6px;margin-bottom:8px;font-size:10.5pt;" border="1" cellpadding="5">
+            <thead>
+              <tr style="background-color:#f1f5f9;">
+                <th style="text-align:left;">Kolom Kiri (Pernyataan / Operasi)</th>
+                <th style="text-align:left;">Kolom Kanan (Pilihan Jawaban)</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>`;
+        } else {
+          optionsHtml = `<p style="margin:4px 0 6px 0;color:#475569;">Jawaban: .......................................................................................</p>`;
+        }
+      } else if (q.opsi && q.opsi.length > 0) {
         optionsHtml = `<table style="width:100%;border-collapse:collapse;margin-top:4px;margin-bottom:6px;">
           ${q.opsi
             .map((op, oIdx) => {
@@ -142,9 +223,7 @@ export const exportQuestionsToWord = (
             })
             .join('')}
         </table>`;
-      } else if (q.tipe === 'benar_salah') {
-        optionsHtml = `<p style="margin:4px 0 6px 0;color:#475569;">[ &nbsp; ] Benar &nbsp;&nbsp;&nbsp;&nbsp; [ &nbsp; ] Salah</p>`;
-      } else if (q.tipe === 'isian' || q.tipe === 'uraian' || q.tipe === 'menjodohkan') {
+      } else if (q.tipe === 'isian' || q.tipe === 'uraian') {
         optionsHtml = `<p style="margin:4px 0 6px 0;color:#475569;">Jawaban: .......................................................................................</p>`;
       }
 

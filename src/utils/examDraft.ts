@@ -62,14 +62,21 @@ const notifyDraftMutation = (storageKey: string, immediate: boolean) => {
   }
 };
 
+export const isQuestionAnswerFilled = (val: any): boolean => {
+  if (val === undefined || val === null || val === '') return false;
+  if (Array.isArray(val)) return val.length > 0;
+  if (typeof val === 'object') {
+    if ('key' in val || 'text' in val) {
+      return Boolean(val.key || val.text);
+    }
+    return Object.values(val).some((v) => String(v ?? '').trim().length > 0);
+  }
+  return String(val).trim().length > 0;
+};
+
 export const countAnsweredQuestions = (answers: Record<string, any>): number => {
   if (!answers) return 0;
-  return Object.values(answers).filter((val) => {
-    if (val === undefined || val === null || val === '') return false;
-    if (Array.isArray(val)) return val.length > 0;
-    if (typeof val === 'object') return Boolean(val.key || val.text);
-    return String(val).trim().length > 0;
-  }).length;
+  return Object.values(answers).filter(isQuestionAnswerFilled).length;
 };
 
 export const buildQuestionOrderSnapshot = (
