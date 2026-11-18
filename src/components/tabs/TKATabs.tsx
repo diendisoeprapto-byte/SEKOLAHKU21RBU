@@ -86,12 +86,13 @@ import {
 } from '../../utils/questionExport';
 import {
   exportIndividualTkaReportToWord,
-  exportIndividualTkaReportToExcel,
+  exportIndividualTkaReportToPdf,
   exportClassTkaReportToWord,
-  exportClassTkaReportToExcel,
+  exportClassTkaReportToPdf,
   TkaReportExportOptions,
   TkaReportRecordInput,
 } from '../../utils/tkaReportExport';
+import { doesRecordMatchTerm } from '../../utils/semesterUtils';
 import {
   saveSingleTkaQuestionToFirestore,
   deleteTkaQuestionFromFirestore,
@@ -133,6 +134,7 @@ interface Props {
   teachers?: Teacher[];
   profile?: SchoolProfile;
   activeYear?: string;
+  activeSemester?: string;
   activeUser: ActiveUser;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onOpenZoom: (url: string, title: string) => void;
@@ -145,6 +147,7 @@ export const TKATabs: React.FC<Props> = ({
   teachers = [],
   profile,
   activeYear = '2026/2027',
+  activeSemester = 'Semester 1',
   activeUser,
   showToast,
   onOpenZoom,
@@ -4247,9 +4250,10 @@ export const TKATabs: React.FC<Props> = ({
 
         const totalAnalisis = filteredAnalisisQuestions.length;
 
-        // Submissions matching selected package (or all packages) & excluding ABK set to Tidak Masuk TKA
+        // Submissions matching selected term, package & excluding ABK set to Tidak Masuk TKA
         const relevantSubmissions = tkaSubmissions.filter((s) => {
           if (isExcludedTkaSubmission(s)) return false;
+          if (!doesRecordMatchTerm(s, activeYear, activeSemester)) return false;
           if (analisisPaketTka !== 'all') {
             const baseSubPaket = s.paketDasar || extractBaseTkaPaket(s.paket);
             if (baseSubPaket !== analisisPaketTka && s.paket !== analisisPaketTka) return false;
@@ -5033,10 +5037,11 @@ export const TKATabs: React.FC<Props> = ({
       {/* 5. MENU REPORT & HASIL TKA SISWA                               */}
       {/* ============================================================== */}
       {subType === 'hasil-tka' && (() => {
-        // Read directly from real student test submissions, excluding ABK set to Tidak Masuk TKA, & resolve photos cleanly from students list
+        // Read directly from real student test submissions for active term, excluding ABK set to Tidak Masuk TKA
         const recordsForPaket = tkaSubmissions
           .filter((sub) => {
             if (isExcludedTkaSubmission(sub)) return false;
+            if (!doesRecordMatchTerm(sub, activeYear, activeSemester)) return false;
             if (hasilPaketTka === 'all') return true;
             const baseSubPaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
             return baseSubPaket === hasilPaketTka || sub.paket === hasilPaketTka;
@@ -5243,6 +5248,9 @@ export const TKATabs: React.FC<Props> = ({
         const buildReportExportOptions = (): TkaReportExportOptions => ({
           schoolName: profile?.name || 'SDN Rawa Badak Utara 21',
           schoolAddress: profile?.alamat || '',
+          schoolNpsn: profile?.npsn || '',
+          logoKemendikbudUrl: profile?.logoKemendikbudUrl,
+          logoSekolahUrl: profile?.logoSekolahUrl,
           tahunPelajaran: activeYear,
           paketLabel: hasilPaketTka === 'all' ? 'Semua Paket TKA' : hasilPaketTka,
           kepsekNama: kepsekForReport.nama,
@@ -5286,33 +5294,7 @@ export const TKATabs: React.FC<Props> = ({
           rank: customRank ?? rankById.get(r.id),
         });
 
-        // Export to Excel (seluruh filteredRecords tanpa terpotong halaman & hanya mapel yang ada tes)
-        const handleExportExcel = () => {
-          const exportData = filteredRecords.map((r, idx) => {
-            const rowObj: Record<string, any> = {
-              'Peringkat': rankById.get(r.id) ?? idx + 1,
-              'NISN': r.nisn,
-              'Nama Siswa': r.nama,
-              'Kelas': r.kelas,
-              'Paket Ujian TKA': r.paket,
-            };
-            activeTestedMapels.forEach((def) => {
-              rowObj[def.excelHeader] = r[def.field] ?? '-';
-            });
-            rowObj['Rata-rata Skor'] = r.skorTotal;
-            rowObj['Predikat'] = r.predikat;
-            rowObj['Status (KKTP 75)'] = r.status;
-            rowObj['Tanggal Pengerjaan'] = r.tanggalUjian;
-            return rowObj;
-          });
-          const ws = XLSX.utils.json_to_sheet(exportData);
-          const wb = XLSX.utils.book_new();
-          XLSX.utils.book_append_sheet(wb, ws, 'Hasil TKA');
-          XLSX.writeFile(wb, `Report_Hasil_TKA_${hasilPaketTka.replace(/\s+/g, '_')}_SDN_RBU21.xlsx`);
-          showToast(`Data Report Hasil TKA (${filteredRecords.length} siswa) berhasil diekspor ke Excel!`, 'success');
-        };
-
-        const handleDownloadIndividualReport = (record: any, format: 'word' | 'excel') => {
+        const handleDownloadIndividualReport = async (record: any, format: 'word' | 'pdf') => {
           if (!record) {
             showToast('Pilih salah satu siswa terlebih dahulu.', 'error');
             return;
@@ -5323,14 +5305,14 @@ export const TKATabs: React.FC<Props> = ({
             exportIndividualTkaReportToWord(payload, opts);
             showToast(`Report TKA individu "${payload.nama}" (.DOC Word) berhasil diunduh.`, 'success');
           } else {
-            exportIndividualTkaReportToExcel(payload, opts);
-            showToast(`Report TKA individu "${payload.nama}" (.XLSX Excel) berhasil diunduh.`, 'success');
+            await exportIndividualTkaReportToPdf(payload, opts);
+            showToast(`Report TKA individu "${payload.nama}" (.PDF) berhasil diunduh.`, 'success');
           }
         };
 
-        const handleDownloadClassReport = (
+        const handleDownloadClassReport = async (
           targetClass: string,
-          format: 'excel' | 'word_rekap' | 'word_bundel'
+          format: 'pdf_rekap' | 'pdf_bundel' | 'word_rekap' | 'word_bundel'
         ) => {
           const classLabel = targetClass === 'all' ? 'Semua Kelas 6' : targetClass;
           const pool = recordsForPaket
@@ -5347,10 +5329,16 @@ export const TKATabs: React.FC<Props> = ({
           }
 
           const opts = buildReportExportOptions();
-          if (format === 'excel') {
-            exportClassTkaReportToExcel(pool, classLabel, opts);
+          if (format === 'pdf_rekap') {
+            await exportClassTkaReportToPdf(pool, classLabel, opts, 'rekap');
             showToast(
-              `Report TKA ${classLabel} (${pool.length} siswa) berhasil diunduh ke Excel!`,
+              `Rekapitulasi Report TKA ${classLabel} (${pool.length} siswa, .PDF) berhasil diunduh!`,
+              'success'
+            );
+          } else if (format === 'pdf_bundel') {
+            await exportClassTkaReportToPdf(pool, classLabel, opts, 'rapor_bundel');
+            showToast(
+              `Bundel Rapor TKA ${classLabel} (${pool.length} halaman siswa, .PDF) berhasil diunduh!`,
               'success'
             );
           } else if (format === 'word_rekap') {
@@ -5481,18 +5469,19 @@ export const TKATabs: React.FC<Props> = ({
                     setShowDownloadReportModal(true);
                   }}
                   className="bg-purple-500 hover:bg-purple-400 text-white font-display font-black px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
-                  title="Download Report TKA per orang (individu) atau per kelas (Word / Excel)"
+                  title="Download Report TKA per orang (individu) atau per kelas (PDF / Word)"
                 >
                   <Download className="w-4 h-4" />
                   <span>Download Report</span>
                 </button>
                 <button
                   type="button"
-                  onClick={handleExportExcel}
-                  className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-display font-black px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                  onClick={() => void handleDownloadClassReport(hasilKelasTka, 'pdf_rekap')}
+                  className="bg-rose-500 hover:bg-rose-400 text-white font-display font-black px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                  title="Unduh langsung Rekap Report TKA dalam format PDF (.PDF)"
                 >
-                  <FileSpreadsheet className="w-4 h-4" />
-                  <span>Export Excel</span>
+                  <Download className="w-4 h-4" />
+                  <span>Unduh PDF</span>
                 </button>
                 <button
                   type="button"
@@ -6044,11 +6033,11 @@ export const TKATabs: React.FC<Props> = ({
                           <div className="inline-flex items-center justify-end gap-1.5">
                             <button
                               type="button"
-                              onClick={() => handleDownloadIndividualReport(r, 'word')}
-                              className="bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 px-2.5 py-1.5 rounded-xl font-display font-extrabold text-[11px] transition cursor-pointer flex items-center gap-1 whitespace-nowrap"
-                              title={`Download Report TKA ${r.nama} (.DOC Word)`}
+                              onClick={() => void handleDownloadIndividualReport(r, 'pdf')}
+                              className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-2.5 py-1.5 rounded-xl font-display font-extrabold text-[11px] transition cursor-pointer flex items-center gap-1 whitespace-nowrap"
+                              title={`Download Report TKA ${r.nama} (.PDF)`}
                             >
-                              <Download className="w-3 h-3" /> Unduh
+                              <Download className="w-3 h-3" /> Unduh PDF
                             </button>
                             <button
                               type="button"
@@ -6107,7 +6096,7 @@ export const TKATabs: React.FC<Props> = ({
                   <p className="font-medium text-slate-700">
                     Mengetahui,<br />Kepala {profile?.name || 'SDN Rawa Badak Utara 21'}
                   </p>
-                  <div className="h-16" />
+                  <div style={{ height: '4cm' }} />
                   <p className="font-black text-slate-900 underline">{kepsekForReport.nama}</p>
                   <p className="text-[11px] font-mono text-slate-600 tabular-nums">
                     {formatNipLabel(kepsekForReport.status, kepsekForReport.nip)}
@@ -6118,7 +6107,7 @@ export const TKATabs: React.FC<Props> = ({
                     Jakarta, {tanggalCetakTka}<br />
                     {waliKelasTkaReport ? `Wali Kelas ${hasilKelasTka}` : 'Koordinator Evaluasi & TKA Kelas 6'}
                   </p>
-                  <div className="h-16" />
+                  <div style={{ height: '4cm' }} />
                   <p className="font-black text-slate-900 underline">
                     {waliKelasTkaReport ? waliKelasTkaReport.nama : activeUser?.name || 'Tim Evaluasi TKA'}
                   </p>
@@ -6176,7 +6165,7 @@ export const TKATabs: React.FC<Props> = ({
                             Download Report Hasil Ujian TKA
                           </h3>
                           <p className="text-[11px] text-slate-500">
-                            Unduh laporan hasil TKA <strong>per orang (individu)</strong> atau <strong>per kelas / rombel</strong> dalam format Word (.DOC) atau Excel (.XLSX).
+                            Unduh laporan hasil TKA <strong>per orang (individu)</strong> atau <strong>per kelas / rombel</strong> dalam format PDF (.PDF) atau Word (.DOC).
                           </p>
                         </div>
                       </div>
@@ -6286,17 +6275,17 @@ export const TKATabs: React.FC<Props> = ({
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
                               <button
                                 type="button"
-                                onClick={() => handleDownloadIndividualReport(activeDownloadStudent, 'word')}
-                                className="py-2.5 px-3 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-display font-black text-xs flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer"
+                                onClick={() => void handleDownloadIndividualReport(activeDownloadStudent, 'pdf')}
+                                className="py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer"
                               >
-                                <FileText className="w-4 h-4" /> Word Rapor (.DOC)
+                                <Download className="w-4 h-4" /> Unduh PDF (.PDF)
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleDownloadIndividualReport(activeDownloadStudent, 'excel')}
-                                className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black text-xs flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer"
+                                onClick={() => void handleDownloadIndividualReport(activeDownloadStudent, 'word')}
+                                className="py-2.5 px-3 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-display font-black text-xs flex items-center justify-center gap-1.5 shadow-xs transition cursor-pointer"
                               >
-                                <FileSpreadsheet className="w-4 h-4" /> Excel Individu (.XLSX)
+                                <FileText className="w-4 h-4" /> Word Rapor (.DOC)
                               </button>
                               <button
                                 type="button"
@@ -6358,23 +6347,45 @@ export const TKATabs: React.FC<Props> = ({
                           <button
                             type="button"
                             disabled={classTargetRecords.length === 0}
-                            onClick={() => handleDownloadClassReport(downloadSelectedClass, 'excel')}
-                            className="w-full p-3.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 border border-emerald-200 text-left flex items-center justify-between gap-3 transition cursor-pointer"
+                            onClick={() => void handleDownloadClassReport(downloadSelectedClass, 'pdf_rekap')}
+                            className="w-full p-3.5 rounded-2xl bg-rose-50 hover:bg-rose-100 disabled:opacity-50 border border-rose-200 text-left flex items-center justify-between gap-3 transition cursor-pointer"
                           >
                             <div className="flex items-center gap-3">
-                              <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                                <FileSpreadsheet className="w-4 h-4" />
+                              <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+                                <Download className="w-4 h-4" />
                               </div>
                               <div>
-                                <div className="font-display font-black text-xs text-emerald-950">
-                                  Download Rekap Nilai &amp; Statistik Kelas (.XLSX Excel)
+                                <div className="font-display font-black text-xs text-rose-950">
+                                  Download Rekapitulasi Nilai &amp; Statistik Kelas (.PDF)
                                 </div>
-                                <div className="text-[11px] text-emerald-700">
-                                  Berisi daftar nilai seluruh siswa di {downloadSelectedClass === 'all' ? 'Semua Kelas 6' : downloadSelectedClass} + sheet ringkasan statistik.
+                                <div className="text-[11px] text-rose-700">
+                                  Berisi kop resmi berlogo sekolah &amp; tabel nilai lengkap {downloadSelectedClass === 'all' ? 'Semua Kelas 6' : downloadSelectedClass} dalam PDF A4 Landscape.
                                 </div>
                               </div>
                             </div>
-                            <Download className="w-4 h-4 text-emerald-700 shrink-0" />
+                            <Download className="w-4 h-4 text-rose-700 shrink-0" />
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={classTargetRecords.length === 0}
+                            onClick={() => void handleDownloadClassReport(downloadSelectedClass, 'pdf_bundel')}
+                            className="w-full p-3.5 rounded-2xl bg-amber-50 hover:bg-amber-100 disabled:opacity-50 border border-amber-200 text-left flex items-center justify-between gap-3 transition cursor-pointer"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 rounded-xl bg-amber-600 text-white flex items-center justify-center shrink-0">
+                                <Award className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <div className="font-display font-black text-xs text-amber-950">
+                                  Download Bundel Rapor TKA Sekelas (.PDF)
+                                </div>
+                                <div className="text-[11px] text-amber-800">
+                                  Menghasilkan 1 halaman rapor PDF berlogo &amp; tanda tangan resmi (spasi 4 cm) untuk setiap siswa.
+                                </div>
+                              </div>
+                            </div>
+                            <Download className="w-4 h-4 text-amber-700 shrink-0" />
                           </button>
 
                           <button
@@ -7731,24 +7742,26 @@ export const TKATabs: React.FC<Props> = ({
               return (
                 <div className="grid grid-cols-3 gap-4 pt-4 text-xs text-center border-t border-slate-200 print-avoid-break">
                   <div>
-                    <p className="font-medium text-slate-700 mb-14">Mengetahui,<br />Orang Tua / Wali Murid</p>
+                    <p className="font-medium text-slate-700">Mengetahui,<br />Orang Tua / Wali Murid</p>
+                    <div style={{ height: '4cm' }} />
                     <div className="w-36 border-b border-slate-400 mx-auto mb-1"></div>
                     <p className="text-[10px] text-slate-500">(Nama Terang Orang Tua)</p>
                   </div>
                   <div>
-                    <p className="font-medium text-slate-700 mb-14">
+                    <p className="font-medium text-slate-700">
                       Mengetahui,<br />Kepala {profile?.name || 'SDN Rawa Badak Utara 21'}
                     </p>
+                    <div style={{ height: '4cm' }} />
                     <p className="font-black text-slate-800 underline">{kepsekRaporTka.nama}</p>
                     <p className="text-[10px] font-mono text-slate-500 tabular-nums">
                       {formatNipLabel(kepsekRaporTka.status, kepsekRaporTka.nip)}
                     </p>
                   </div>
                   <div>
-                    <div className="text-[11px] mb-1 text-slate-700 font-medium">Jakarta, {tglRapor}</div>
-                    <p className="font-medium text-slate-700 mb-10">
-                      Mengetahui,<br />Wali Kelas {selectedHasilStudent.kelas}
+                    <p className="font-medium text-slate-700">
+                      Jakarta, {tglRapor}<br />Wali Kelas {selectedHasilStudent.kelas}
                     </p>
+                    <div style={{ height: '4cm' }} />
                     <p className="font-black text-slate-800 underline">
                       {waliRaporTka?.nama || 'Belum Ditugaskan'}
                     </p>
@@ -7797,6 +7810,9 @@ export const TKATabs: React.FC<Props> = ({
                   exportIndividualTkaReportToWord(recordPayload, {
                     schoolName: profile?.name || 'SDN Rawa Badak Utara 21',
                     schoolAddress: profile?.alamat || '',
+                    schoolNpsn: profile?.npsn || '',
+                    logoKemendikbudUrl: profile?.logoKemendikbudUrl,
+                    logoSekolahUrl: profile?.logoSekolahUrl,
                     tahunPelajaran: activeYear,
                     paketLabel: recordPayload.paket,
                     kepsekNama: kepsekModal.nama,
@@ -7819,7 +7835,7 @@ export const TKATabs: React.FC<Props> = ({
               </button>
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   const kepsekModal = resolveKepalaSekolah(teachers, profile);
                   const recordPayload: TkaReportRecordInput = {
                     id: selectedHasilStudent.id,
@@ -7842,9 +7858,12 @@ export const TKATabs: React.FC<Props> = ({
                     tanggalUjian: selectedHasilStudent.tanggalUjian,
                     durasiPengerjaan: selectedHasilStudent.durasiPengerjaan,
                   };
-                  exportIndividualTkaReportToExcel(recordPayload, {
+                  await exportIndividualTkaReportToPdf(recordPayload, {
                     schoolName: profile?.name || 'SDN Rawa Badak Utara 21',
                     schoolAddress: profile?.alamat || '',
+                    schoolNpsn: profile?.npsn || '',
+                    logoKemendikbudUrl: profile?.logoKemendikbudUrl,
+                    logoSekolahUrl: profile?.logoSekolahUrl,
                     tahunPelajaran: activeYear,
                     paketLabel: recordPayload.paket,
                     kepsekNama: kepsekModal.nama,
@@ -7859,11 +7878,11 @@ export const TKATabs: React.FC<Props> = ({
                     activeTestedMapels: [],
                     tkaQuestions,
                   });
-                  showToast(`Report TKA "${recordPayload.nama}" (.XLSX Excel) berhasil diunduh.`, 'success');
+                  showToast(`Report TKA "${recordPayload.nama}" (.PDF) berhasil diunduh.`, 'success');
                 }}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black text-xs shadow-xs flex items-center gap-1.5 cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs shadow-xs flex items-center gap-1.5 cursor-pointer"
               >
-                <FileSpreadsheet className="w-4 h-4" /> Download Excel (.XLSX)
+                <Download className="w-4 h-4" /> Unduh PDF (.PDF)
               </button>
               <button
                 type="button"

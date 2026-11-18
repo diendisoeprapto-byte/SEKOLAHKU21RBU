@@ -1,11 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { MessageSquare, Save, User, Sparkles, Trophy, Award, Medal, CheckCircle2 } from 'lucide-react';
 import { Student, StudentReportNotes, Subject } from '../../types';
 import {
-  getStoredReportNotes,
-  saveStoredReportNotes,
-  getStoredAssessments,
-  getAssessmentCount,
+  getStoredReportNotesForTerm,
+  saveStoredReportNotesForTerm,
 } from '../../utils/storage';
 import { calculateClassStudentRankings } from '../../utils/rankingHelper';
 import { pushAllDataToCloud } from '../../utils/cloudSync';
@@ -66,11 +64,17 @@ export const CatatanWaliTab: React.FC<Props> = ({
   subjects,
   activeClass,
   activeYear = '2026/2027',
-  activeSemester = 'Ganjil',
+  activeSemester = 'Semester 1',
   showToast,
   onOpenZoom,
 }) => {
-  const [reportNotes, setReportNotes] = useState<Record<string, StudentReportNotes>>(getStoredReportNotes());
+  const [reportNotes, setReportNotes] = useState<Record<string, StudentReportNotes>>(() =>
+    getStoredReportNotesForTerm(activeYear, activeSemester)
+  );
+
+  useEffect(() => {
+    setReportNotes(getStoredReportNotesForTerm(activeYear, activeSemester));
+  }, [activeYear, activeSemester]);
 
   const filteredStudents = useMemo(() => {
     return students.filter((s) => s.kelas === activeClass);
@@ -115,9 +119,9 @@ export const CatatanWaliTab: React.FC<Props> = ({
   };
 
   const handleSave = () => {
-    saveStoredReportNotes(reportNotes);
+    saveStoredReportNotesForTerm(activeYear, activeSemester, reportNotes);
     pushAllDataToCloud({ reportNotes });
-    showToast('Catatan Wali Kelas & Keputusan Kenaikan berhasil disimpan!', 'success');
+    showToast(`Catatan Wali Kelas & Keputusan (${activeSemester} ${activeYear}) berhasil disimpan!`, 'success');
   };
 
   const DAFTAR_PILIHAN_KEPUTUSAN = [
@@ -168,9 +172,9 @@ export const CatatanWaliTab: React.FC<Props> = ({
       count++;
     });
     setReportNotes(updated);
-    saveStoredReportNotes(updated);
+    saveStoredReportNotesForTerm(activeYear, activeSemester, updated);
     pushAllDataToCloud({ reportNotes: updated });
-    showToast(`Berhasil! Catatan wali kelas untuk seluruh ${count} siswa berhasil di-generate otomatis sesuai peringkat (Peringkat 1 s.d. 32).`, 'success');
+    showToast(`Berhasil! Catatan wali kelas untuk seluruh ${count} siswa berhasil di-generate otomatis sesuai peringkat.`, 'success');
   };
 
   // Terapkan Template Peringkat untuk 1 Siswa Tertentu
@@ -199,7 +203,7 @@ export const CatatanWaliTab: React.FC<Props> = ({
       count++;
     });
     setReportNotes(updated);
-    saveStoredReportNotes(updated);
+    saveStoredReportNotesForTerm(activeYear, activeSemester, updated);
     pushAllDataToCloud({ reportNotes: updated });
     showToast(`Berhasil! Seluruh ${count} siswa otomatis diset naik kelas / lulus sesuai jenjang kelas masing-masing.`, 'success');
   };
@@ -282,23 +286,43 @@ export const CatatanWaliTab: React.FC<Props> = ({
           </div>
         </div>
 
+        {!rankingData.hasAnyData && Object.keys(reportNotes).length === 0 && (
+          <div className="p-4 rounded-2xl bg-slate-50 border-2 border-dashed border-slate-300 text-xs text-slate-600 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <strong className="text-slate-800 block">
+                Catatan Wali Kelas {activeSemester} ({activeYear}) Masih Kosong
+              </strong>
+              <span>
+                Belum ada catatan wali kelas maupun nilai akademik yang tercatat pada semester ini untuk{' '}
+                <strong>{activeClass}</strong>. Anda dapat menulis catatan manual atau mengisinya setelah nilai tersedia.
+              </span>
+            </div>
+            <span className="text-[11px] font-bold px-3 py-1 rounded-xl bg-white border border-slate-200">
+              {activeYear} • {activeSemester}
+            </span>
+          </div>
+        )}
+
         <div className="space-y-4">
           {filteredStudents.map((s, idx) => {
             const defaultDecision = getDefaultDecision(activeClass);
             const savedData = reportNotes[s.id];
-            const rankInfo = studentRankMap[s.id] || { rank: idx + 1, total: 0 };
+            const rankInfo = studentRankMap[s.id] || { rank: 0, total: 0 };
             const rank = rankInfo.rank;
-            const badge = getRankBadgeInfo(rank);
+            const hasValidRank = rankingData.hasAnyData && rank > 0;
+            const badge = hasValidRank ? getRankBadgeInfo(rank) : null;
 
-            // Default catatan wali: jika belum pernah diedit, gunakan catatan otomatis sesuai peringkat
-            const currentNote = savedData?.catatanWali !== undefined && savedData?.catatanWali !== ''
-              ? savedData.catatanWali
-              : getCatatanWaliOtomatisByRank(rank);
+            const currentNote =
+              savedData?.catatanWali !== undefined && savedData?.catatanWali !== ''
+                ? savedData.catatanWali
+                : hasValidRank
+                ? getCatatanWaliOtomatisByRank(rank)
+                : '';
 
             const data = {
               studentId: s.id,
               catatanWali: currentNote,
-              keputusanKenaikan: savedData?.keputusanKenaikan || defaultDecision,
+              keputusanKenaikan: savedData?.keputusanKenaikan || (hasValidRank ? defaultDecision : ''),
               ekskul: savedData?.ekskul ?? [],
               p5: savedData?.p5 ?? [],
             };
@@ -316,24 +340,32 @@ export const CatatanWaliTab: React.FC<Props> = ({
                     <div>
                       <div className="flex items-center gap-2">
                         <h4 className="font-display font-black text-sm text-slate-800">{s.nama}</h4>
-                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${badge.bg} ${badge.text} ${badge.border}`}>
-                          {badge.label}
-                        </span>
+                        {badge ? (
+                          <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${badge.bg} ${badge.text} ${badge.border}`}>
+                            {badge.label}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-slate-100 text-slate-500 border-slate-200">
+                            Belum Ada Peringkat
+                          </span>
+                        )}
                       </div>
                       <span className="text-[11px] font-mono text-slate-500">NISN: {s.nisn} • {s.barcodeId}</span>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleApplySingleStudentTemplate(s.id, rank, s.nama)}
-                      className="px-2.5 py-1 rounded-xl bg-white hover:bg-indigo-50 text-indigo-900 border border-indigo-200 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition shadow-2xs"
-                      title={`Terapkan template resmi untuk Peringkat #${rank}`}
-                    >
-                      <Sparkles className="w-3 h-3 text-indigo-600" />
-                      <span>Reset ke Template Peringkat #{rank}</span>
-                    </button>
+                    {hasValidRank && (
+                      <button
+                        type="button"
+                        onClick={() => handleApplySingleStudentTemplate(s.id, rank, s.nama)}
+                        className="px-2.5 py-1 rounded-xl bg-white hover:bg-indigo-50 text-indigo-900 border border-indigo-200 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition shadow-2xs"
+                        title={`Terapkan template resmi untuk Peringkat #${rank}`}
+                      >
+                        <Sparkles className="w-3 h-3 text-indigo-600" />
+                        <span>Reset ke Template Peringkat #{rank}</span>
+                      </button>
+                    )}
                     <span className="text-[11px] font-extrabold bg-white px-2.5 py-1 rounded-lg border text-slate-600">
                       No. Urut: {idx + 1}
                     </span>

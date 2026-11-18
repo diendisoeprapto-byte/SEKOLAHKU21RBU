@@ -257,6 +257,8 @@ export interface CBTExamResult {
   paketName?: string;
   tanggal?: string;
   recordedAt?: number;
+  tahunPelajaran?: string;
+  semester?: string;
 }
 
 export interface ExamResultsResetMeta {

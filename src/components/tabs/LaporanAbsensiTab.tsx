@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   PieChart,
   TableProperties,
@@ -23,6 +23,12 @@ import { Student, KaldikDay, Teacher, SchoolProfile } from '../../types';
 import { AttendanceRecordItem } from '../../utils/storage';
 import { getLocalTodayStr, getLocalYearMonthStr, parseLocalDate } from '../../utils/dateUtils';
 import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
+import {
+  isDateInSemester,
+  getDefaultMonthForSemester,
+  countSemesterEffectiveDays,
+  getSemesterDateRange,
+} from '../../utils/semesterUtils';
 import { TabId } from '../Sidebar';
 
 interface Props {
@@ -30,6 +36,7 @@ interface Props {
   teachers?: Teacher[];
   profile?: SchoolProfile;
   activeClass: string;
+  activeYear?: string;
   activeSemester: string;
   attendanceRecords: Record<string, AttendanceRecordItem>;
   kaldikDays: KaldikDay[];
@@ -44,6 +51,7 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
   teachers = [],
   profile,
   activeClass,
+  activeYear = '2026/2027',
   activeSemester,
   attendanceRecords,
   kaldikDays,
@@ -52,7 +60,13 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
   showToast,
   onOpenZoom,
 }) => {
-  const [selectedMonth, setSelectedMonth] = useState(getLocalYearMonthStr());
+  const [selectedMonth, setSelectedMonth] = useState(() =>
+    getDefaultMonthForSemester(activeYear, activeSemester, getLocalTodayStr())
+  );
+
+  useEffect(() => {
+    setSelectedMonth(getDefaultMonthForSemester(activeYear, activeSemester, getLocalTodayStr()));
+  }, [activeYear, activeSemester]);
   const [top5ViewMode, setTop5ViewMode] = useState<'cards' | 'table'>('cards');
   const [top5Scope, setTop5Scope] = useState<'kelas' | 'semua'>('kelas');
   const [selectedPiagam, setSelectedPiagam] = useState<{
@@ -105,8 +119,9 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
     mPctAlfa = 0;
   }
 
-  // Daily attendance calculation synchronized with active class and students count
+  // Daily attendance calculation synchronized with active class, students count, and semester range
   const todayDate = getLocalTodayStr();
+  const isTodayInActiveSemester = isDateInSemester(todayDate, activeYear, activeSemester);
   const todayKaldik = kaldikDays.find((k) => k.date === todayDate);
   const isTodaySunday = parseLocalDate(todayDate).getDay() === 0;
   const isTodayHoliday = isTodaySunday || (todayKaldik ? todayKaldik.isHoliday : false);
@@ -116,7 +131,7 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
   let todayIzin = 0;
   let todayAlfa = 0;
 
-  if (!isTodayHoliday) {
+  if (!isTodayHoliday && isTodayInActiveSemester) {
     filteredStudents.forEach((s) => {
       const rec = attendanceRecords[`${todayDate}_${s.id}`];
       if (rec) {
@@ -130,25 +145,21 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
 
   const totalClassStudents = filteredStudents.length;
   const totalRecordedToday = todayHadir + todaySakit + todayIzin + todayAlfa;
-  const belumAbsenCount = isTodayHoliday ? 0 : Math.max(0, totalClassStudents - totalRecordedToday);
+  const belumAbsenCount =
+    isTodayHoliday || !isTodayInActiveSemester ? 0 : Math.max(0, totalClassStudents - totalRecordedToday);
   const todayPct =
-    !isTodayHoliday && totalClassStudents > 0
+    !isTodayHoliday && isTodayInActiveSemester && totalClassStudents > 0
       ? Math.round((todayHadir / totalClassStudents) * 100)
       : 0;
 
-  // Semester attendance calculation synchronized with active class
+  // Semester attendance calculation synchronized strictly with activeYear & activeSemester
   let semHadir = 0;
   let semSakit = 0;
   let semIzin = 0;
   let semAlfa = 0;
 
-  const isSemester1 = activeSemester.includes('1') || activeSemester.toLowerCase().includes('ganjil');
-  const semMonths = isSemester1
-    ? ['-07-', '-08-', '-09-', '-10-', '-11-', '-12-']
-    : ['-01-', '-02-', '-03-', '-04-', '-05-', '-06-'];
-
   Object.values(attendanceRecords).forEach((r) => {
-    if (semMonths.some((m) => r.date.includes(m))) {
+    if (isDateInSemester(r.date, activeYear, activeSemester)) {
       if (filteredStudents.some((s) => s.id === r.studentId)) {
         if (r.status === 'H') semHadir++;
         else if (r.status === 'S') semSakit++;
@@ -164,37 +175,61 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
   const semPctIzin = semTotal > 0 ? Math.round((semIzin / semTotal) * 100) : 0;
   const semPctAlfa = semTotal > 0 ? Math.max(0, 100 - (semPctHadir + semPctSakit + semPctIzin)) : 0;
 
-  // Calculate Top 5 Students with highest attendance rate for selectedMonth
-  const [yearStr, monthStr] = selectedMonth.split('-');
-  const selYear = parseInt(yearStr) || 2026;
-  const selMonth = parseInt(monthStr) || 8;
-  const daysInSelMonth = new Date(selYear, selMonth, 0).getDate();
+  // Calculate Top 5 Students strictly per activeYear + activeSemester (real data only, no dummy fallback)
+  const semesterRange = getSemesterDateRange(activeYear, activeSemester);
+  const holidayDateSet = new Set<string>(
+    kaldikDays.filter((k) => k.isHoliday).map((k) => k.date)
+  );
+  const semEffectiveDays = countSemesterEffectiveDays(
+    activeYear,
+    activeSemester,
+    holidayDateSet,
+    todayDate
+  );
 
-  const holidayDateMap: Record<string, boolean> = {};
-  kaldikDays.forEach((k) => {
-    if (k.isHoliday) holidayDateMap[k.date] = true;
-  });
-
-  let effectiveDaysCount = 0;
-  for (let d = 1; d <= daysInSelMonth; d++) {
-    const dStr = `${selYear}-${String(selMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const isSun = new Date(selYear, selMonth - 1, d).getDay() === 0;
-    if (!isSun && !holidayDateMap[dStr]) {
-      effectiveDaysCount++;
+  // Distinct active attendance dates recorded in this semester
+  const semRecordedDates = new Set<string>();
+  Object.values(attendanceRecords).forEach((rec) => {
+    if (isDateInSemester(rec.date, activeYear, activeSemester)) {
+      semRecordedDates.add(rec.date);
     }
-  }
-  const effectiveBase = effectiveDaysCount || 20;
+  });
 
   const targetStudents = top5Scope === 'kelas' ? filteredStudents : students;
 
-  const studentAttendanceStats = targetStudents.map((s, idx) => {
+  // Monthly stats per student for CSV Bulanan
+  const monthlyStudentStats = filteredStudents.map((s) => {
+    let mSHadir = 0;
+    let mSSakit = 0;
+    let mSIzin = 0;
+    let mSAlfa = 0;
+    Object.values(attendanceRecords).forEach((rec) => {
+      if (rec.studentId === s.id && rec.date.startsWith(selectedMonth)) {
+        if (rec.status === 'H') mSHadir++;
+        else if (rec.status === 'S') mSSakit++;
+        else if (rec.status === 'I') mSIzin++;
+        else if (rec.status === 'A') mSAlfa++;
+      }
+    });
+    const mTotal = mSHadir + mSSakit + mSIzin + mSAlfa;
+    return {
+      student: s,
+      hadir: mSHadir,
+      sakit: mSSakit,
+      izin: mSIzin,
+      alfa: mSAlfa,
+      percentage: mTotal > 0 ? Math.round((mSHadir / mTotal) * 100) : 0,
+    };
+  });
+
+  const studentSemesterAttendanceStats = targetStudents.map((s) => {
     let sHadir = 0;
     let sSakit = 0;
     let sIzin = 0;
     let sAlfa = 0;
 
     Object.values(attendanceRecords).forEach((rec) => {
-      if (rec.studentId === s.id && rec.date.startsWith(selectedMonth)) {
+      if (rec.studentId === s.id && isDateInSemester(rec.date, activeYear, activeSemester)) {
         if (rec.status === 'H') sHadir++;
         else if (rec.status === 'S') sSakit++;
         else if (rec.status === 'I') sIzin++;
@@ -202,17 +237,13 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
       }
     });
 
-    if (sHadir === 0 && sSakit === 0 && sIzin === 0 && sAlfa === 0) {
-      sAlfa = idx === 4 ? 1 : 0;
-      sIzin = idx === 3 ? 1 : 0;
-      sSakit = idx === 1 ? 1 : 0;
-      sHadir = effectiveBase - (sAlfa + sIzin + sSakit);
-    }
-
-    const percentage = effectiveBase > 0 ? Math.min(100, Math.round((sHadir / effectiveBase) * 100)) : 100;
+    const totalRec = sHadir + sSakit + sIzin + sAlfa;
+    const denom = Math.max(semEffectiveDays, totalRec, 1);
+    const percentage = totalRec > 0 ? Math.min(100, Math.round((sHadir / denom) * 100)) : 0;
 
     let predikat = 'Sangat Disiplin (Teladan)';
-    if (percentage < 85) predikat = 'Cukup Baik';
+    if (totalRec === 0) predikat = 'Belum Ada Data';
+    else if (percentage < 85) predikat = 'Cukup Baik';
     else if (percentage < 95) predikat = 'Disiplin';
 
     return {
@@ -221,12 +252,15 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
       sakit: sSakit,
       izin: sIzin,
       alfa: sAlfa,
+      totalRec,
       percentage,
       predikat,
     };
   });
 
-  const top5Students = [...studentAttendanceStats]
+  // Only include students who actually have attendance records in this semester
+  const top5Students = studentSemesterAttendanceStats
+    .filter((item) => item.totalRec > 0)
     .sort((a, b) => {
       if (b.percentage !== a.percentage) return b.percentage - a.percentage;
       if (b.hadir !== a.hadir) return b.hadir - a.hadir;
@@ -234,9 +268,15 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
     })
     .slice(0, 5);
 
+  const effectiveBase = semEffectiveDays > 0 ? semEffectiveDays : semRecordedDates.size;
+
   const handleDownloadTop5CSV = () => {
+    if (top5Students.length === 0) {
+      showToast(`Belum ada data kehadiran pada ${activeSemester} (${activeYear}) untuk diunduh.`, 'error');
+      return;
+    }
     const rows: string[][] = [
-      ['Peringkat', 'Nama Siswa', 'NISN', 'Kelas', 'Bulan', 'Hari Efektif', 'Hadir', 'Sakit', 'Izin', 'Alfa', 'Persentase (%)', 'Predikat Disiplin'],
+      ['Peringkat', 'Nama Siswa', 'NISN', 'Kelas', 'Semester', 'Tahun Pelajaran', 'Hari Efektif', 'Hadir', 'Sakit', 'Izin', 'Alfa', 'Persentase (%)', 'Predikat Disiplin'],
     ];
     top5Students.forEach((item, idx) => {
       rows.push([
@@ -244,7 +284,8 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
         item.student.nama,
         item.student.nisn,
         item.student.kelas,
-        selectedMonth,
+        activeSemester,
+        activeYear,
         String(effectiveBase),
         String(item.hadir),
         String(item.sakit),
@@ -262,20 +303,31 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
     link.setAttribute('href', encodedUri);
     link.setAttribute(
       'download',
-      `Peringkat_5_Besar_Kehadiran_${top5Scope === 'kelas' ? activeClass.replace(/\s+/g, '_') : 'Semua_Kelas'}_${selectedMonth}.csv`
+      `Peringkat_5_Besar_Kehadiran_${top5Scope === 'kelas' ? activeClass.replace(/\s+/g, '_') : 'Semua_Kelas'}_${activeSemester.replace(/\s+/g, '_')}_${activeYear.replace('/', '-')}.csv`
     );
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    showToast('Laporan CSV Peringkat 5 Besar berhasil diunduh!', 'success');
+    showToast(`Laporan CSV Peringkat 5 Besar ${activeSemester} berhasil diunduh!`, 'success');
   };
 
   const handleDownloadCSV = (type: 'harian' | 'bulanan') => {
     const rows: string[][] = [];
     if (type === 'harian') {
-      rows.push(['No', 'Nama Siswa', 'NISN', 'Kelas', 'Status Kehadiran Hari Ini']);
+      rows.push(['No', 'Nama Siswa', 'NISN', 'Kelas', 'Tanggal', 'Status Kehadiran']);
       filteredStudents.forEach((s, idx) => {
-        rows.push([String(idx + 1), s.nama, s.nisn, s.kelas, 'Hadir (H)']);
+        const rec = isTodayInActiveSemester ? attendanceRecords[`${todayDate}_${s.id}`] : undefined;
+        const label =
+          rec?.status === 'H'
+            ? 'Hadir (H)'
+            : rec?.status === 'S'
+            ? 'Sakit (S)'
+            : rec?.status === 'I'
+            ? 'Izin (I)'
+            : rec?.status === 'A'
+            ? 'Alfa (A)'
+            : '-';
+        rows.push([String(idx + 1), s.nama, s.nisn, s.kelas, todayDate, label]);
       });
     } else {
       rows.push([
@@ -290,7 +342,7 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
         'Alfa',
         'Persentase Kehadiran (%)',
       ]);
-      studentAttendanceStats.forEach((stat, idx) => {
+      monthlyStudentStats.forEach((stat, idx) => {
         rows.push([
           String(idx + 1),
           stat.student.nama,
@@ -411,18 +463,19 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="p-1.5 rounded-xl bg-amber-400 text-slate-950 font-black text-xs inline-flex items-center gap-1 shadow-xs">
-                  <Crown className="w-4 h-4 text-slate-950" /> Peringkat 5 Besar Kehadiran
+                  <Crown className="w-4 h-4 text-slate-950" /> Peringkat 5 Besar Kehadiran Per Semester
                 </span>
                 <span className="text-[11px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
-                  Otomatis Terhitung
+                  {activeSemester} • {activeYear}
                 </span>
               </div>
               <h3 className="font-display font-black text-lg text-slate-900 mt-1 flex items-center gap-2">
-                <Trophy className="w-5 h-5 text-amber-500" /> Peringkat 5 Besar Siswa Kehadiran Tertinggi (
+                <Trophy className="w-5 h-5 text-amber-500" /> Peringkat 5 Besar Siswa Kehadiran Tertinggi Per Semester (
                 {top5Scope === 'kelas' ? activeClass : 'Semua Rombel'})
               </h3>
               <p className="text-xs text-slate-600 mt-0.5">
-                Dihitung otomatis dari rekapitulasi absensi bulan <strong>{selectedMonth}</strong> ({effectiveBase} hari efektif belajar).
+                Dihitung otomatis dari seluruh rekapitulasi absensi <strong>{activeSemester}</strong> ({semesterRange.label}, Tahun Pelajaran {activeYear} •{' '}
+                {effectiveBase > 0 ? `${effectiveBase} hari efektif tercatat` : 'Belum ada hari aktif'}).
               </p>
             </div>
 
@@ -607,8 +660,9 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
               })}
 
               {top5Students.length === 0 && (
-                <div className="col-span-5 p-4 text-center text-xs text-slate-500 italic bg-white rounded-2xl border">
-                  Belum ada data kehadiran siswa terdata di rombel ini pada bulan terpilih.
+                <div className="col-span-5 p-6 text-center text-xs text-slate-500 italic bg-white rounded-2xl border border-dashed border-amber-300">
+                  Belum ada data kehadiran siswa tercatat pada <strong>{activeSemester}</strong> ({activeYear}) untuk{' '}
+                  {top5Scope === 'kelas' ? activeClass : 'seluruh kelas'}.
                 </div>
               )}
             </div>
@@ -728,6 +782,11 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
                   })}
                 </tbody>
               </table>
+              {top5Students.length === 0 && (
+                <div className="p-6 text-center text-xs text-slate-500 italic bg-white border-t border-amber-100">
+                  Belum ada data kehadiran siswa tercatat pada <strong>{activeSemester}</strong> ({activeYear}).
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -798,19 +857,20 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
                     Peringkat ke-{selectedPiagam.rank} Kehadiran Terbaik
                   </strong>{' '}
                   dengan persentase kehadiran sebesar{' '}
-                  <strong className="text-emerald-700 font-black">{selectedPiagam.percentage}%</strong> ({selectedPiagam.hadir} hari hadir efektif) pada periode bulan{' '}
-                  <strong>{selectedMonth}</strong>, serta memperoleh predikat{' '}
+                  <strong className="text-emerald-700 font-black">{selectedPiagam.percentage}%</strong> ({selectedPiagam.hadir} hari hadir efektif) pada periode{' '}
+                  <strong>{activeSemester} ({activeYear})</strong>, serta memperoleh predikat{' '}
                   <strong>&quot;{selectedPiagam.predikat}&quot;</strong>.
                 </p>
 
-                {/* Signatures */}
+                {/* Signatures (4cm signature gap) */}
                 {(() => {
                   const waliPiagam = resolveWaliKelas(teachers, selectedPiagam.student.kelas);
                   const kepsekPiagam = resolveKepalaSekolah(teachers, profile);
                   return (
                     <div className="pt-6 grid grid-cols-2 gap-8 text-xs text-slate-800">
-                      <div className="space-y-12">
+                      <div>
                         <p>Mengetahui,<br />Guru / Wali Kelas {selectedPiagam.student.kelas}</p>
+                        <div style={{ height: '4cm' }} />
                         <div>
                           <p className="font-display font-black text-slate-900 underline">
                             {waliPiagam?.nama || 'Belum Ditugaskan'}
@@ -820,11 +880,12 @@ export const LaporanAbsensiTab: React.FC<Props> = ({
                           </p>
                         </div>
                       </div>
-                      <div className="space-y-12">
+                      <div>
                         <p>
                           Jakarta, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
                           <br />Kepala Sekolah {profile?.name || 'SDN Rawa Badak Utara 21'}
                         </p>
+                        <div style={{ height: '4cm' }} />
                         <div>
                           <p className="font-display font-black text-slate-900 underline">
                             {kepsekPiagam.nama}

@@ -31,6 +31,7 @@ import { KebiasaanReportItem, TUJUH_KEBIASAAN_LIST, Student, SchoolProfile, Teac
 import { CLASSES_LIST } from '../../utils/storage';
 import { getLocalTodayStr } from '../../utils/dateUtils';
 import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
+import { getDefaultMonthForSemester, isDateInSemester } from '../../utils/semesterUtils';
 
 export const MONTH_NAMES = [
   { value: '01', label: 'Januari' },
@@ -52,6 +53,8 @@ interface Props {
   teachers?: Teacher[];
   profile?: SchoolProfile;
   activeClass?: string;
+  activeYear?: string;
+  activeSemester?: string;
   showToast: (msg: string, type?: 'success' | 'error') => void;
 }
 
@@ -60,6 +63,8 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
   teachers = [],
   profile,
   activeClass: initialClass = 'Semua Kelas',
+  activeYear = '2026/2027',
+  activeSemester = 'Semester 1',
   showToast,
 }) => {
   const [reports, setReports] = useState<KebiasaanReportItem[]>([]);
@@ -81,12 +86,19 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
   const [isClearing, setIsClearing] = useState<boolean>(false);
 
   // Modal & Controls State Cetak Laporan Per Bulan
-  const now = new Date();
+  const todayStr = getLocalTodayStr();
+  const defaultTermYm = getDefaultMonthForSemester(activeYear, activeSemester, todayStr);
   const [isMonthlyPrintModalOpen, setIsMonthlyPrintModalOpen] = useState<boolean>(false);
-  const [printMonth, setPrintMonth] = useState<string>(String(now.getMonth() + 1).padStart(2, '0'));
-  const [printYear, setPrintYear] = useState<string>(String(now.getFullYear()));
+  const [printMonth, setPrintMonth] = useState<string>(defaultTermYm.slice(5, 7));
+  const [printYear, setPrintYear] = useState<string>(defaultTermYm.slice(0, 4));
   const [printClass, setPrintClass] = useState<string>('Semua Kelas');
   const [printViewType, setPrintViewType] = useState<'rekap_siswa' | 'jurnal_harian'>('rekap_siswa');
+
+  useEffect(() => {
+    const nextYm = getDefaultMonthForSemester(activeYear, activeSemester, getLocalTodayStr());
+    setPrintYear(nextYm.slice(0, 4));
+    setPrintMonth(nextYm.slice(5, 7));
+  }, [activeYear, activeSemester]);
 
   // Real-time listener menggunakan onSnapshot dari Firestore collection 'laporan_kebiasaan'
   useEffect(() => {
@@ -158,9 +170,14 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
     };
   }, []);
 
+  // Term-scoped reports based on activeYear & activeSemester
+  const termReports = useMemo(() => {
+    return reports.filter((item) => isDateInSemester(item.tanggal, activeYear, activeSemester));
+  }, [reports, activeYear, activeSemester]);
+
   // Filtered reports
   const filteredReports = useMemo(() => {
-    return reports.filter((item) => {
+    return termReports.filter((item) => {
       if (selectedClassFilter !== 'Semua Kelas' && item.kelas !== selectedClassFilter) {
         return false;
       }
@@ -175,23 +192,24 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
       }
       return true;
     });
-  }, [reports, selectedClassFilter, selectedDateFilter, searchQuery]);
+  }, [termReports, selectedClassFilter, selectedDateFilter, searchQuery]);
 
-  // Statistik Agregat
-  const todayStr = getLocalTodayStr();
+  // Statistik Agregat (per semester aktif)
+  const isTodayInActiveSemester = isDateInSemester(todayStr, activeYear, activeSemester);
   const todayReportsCount = useMemo(() => {
-    return reports.filter((r) => r.tanggal === todayStr).length;
-  }, [reports, todayStr]);
+    if (!isTodayInActiveSemester) return 0;
+    return termReports.filter((r) => r.tanggal === todayStr).length;
+  }, [termReports, todayStr, isTodayInActiveSemester]);
 
   const avgScore = useMemo(() => {
-    if (reports.length === 0) return 0;
-    const total = reports.reduce((acc, curr) => acc + (curr.skor || 0), 0);
-    return Math.round((total / reports.length) * 10) / 10;
-  }, [reports]);
+    if (termReports.length === 0) return 0;
+    const total = termReports.reduce((acc, curr) => acc + (curr.skor || 0), 0);
+    return Math.round((total / termReports.length) * 10) / 10;
+  }, [termReports]);
 
   const perfectScoreCount = useMemo(() => {
-    return reports.filter((r) => r.skor === 7).length;
-  }, [reports]);
+    return termReports.filter((r) => r.skor === 7).length;
+  }, [termReports]);
 
   // Handler Hapus Laporan Tunggal (via in-app confirmation modal)
   const confirmDeleteSingleReport = async () => {
@@ -208,12 +226,12 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
     }
   };
 
-  // Handler Kosongkan Seluruh Data Laporan dari Firestore
+  // Handler Kosongkan Data Laporan Semester Aktif dari Firestore
   const handleClearAllReports = async () => {
-    if (reports.length === 0) return;
+    if (termReports.length === 0) return;
     setIsClearing(true);
     try {
-      const deletePromises = reports.map((r) => {
+      const deletePromises = termReports.map((r) => {
         if (r.id) {
           return deleteDoc(doc(db, 'laporan_kebiasaan', r.id));
         }
@@ -221,7 +239,7 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
       });
       await Promise.all(deletePromises);
       setIsClearAllModalOpen(false);
-      showToast(`Seluruh data laporan 7 kebiasaan berhasil dikosongkan dari Firestore! (${reports.length} data dihapus)`, 'success');
+      showToast(`Seluruh data laporan 7 kebiasaan ${activeSemester} (${activeYear}) berhasil dikosongkan! (${termReports.length} data dihapus)`, 'success');
     } catch (err: any) {
       console.error('Clear all error:', err);
       showToast(`Gagal mengosongkan data: ${err.message}`, 'error');
@@ -340,12 +358,12 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
   // =========================================================================
   const monthlyReports = useMemo(() => {
     const prefix = `${printYear}-${printMonth}`;
-    return reports.filter((r) => {
+    return termReports.filter((r) => {
       if (!r.tanggal?.startsWith(prefix)) return false;
       if (printClass !== 'Semua Kelas' && r.kelas !== printClass) return false;
       return true;
     });
-  }, [reports, printYear, printMonth, printClass]);
+  }, [termReports, printYear, printMonth, printClass]);
 
   const monthlyStudentSummaries = useMemo(() => {
     const map: Record<string, {
@@ -528,7 +546,7 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-black uppercase bg-amber-100 text-amber-900 px-3 py-1 rounded-full border border-amber-300">
-                Menu Administrator • Pembiasaan Karakter
+                Menu Administrator • {activeSemester} • {activeYear}
               </span>
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -539,13 +557,13 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
               <Sparkles className="w-6 h-6 text-amber-500" /> Dashboard Monitoring Laporan 7 Kebiasaan Siswa
             </h2>
             <p className="text-xs text-slate-500 mt-1">
-              Data laporan harian pembiasaan 7 Kebiasaan Anak Indonesia Hebat yang dikirim siswa secara real-time dari collection Firestore <code>laporan_kebiasaan</code>.
+              Data laporan harian pembiasaan 7 Kebiasaan Anak Indonesia Hebat yang dikirim siswa secara real-time pada periode <strong>{activeSemester} ({activeYear})</strong>.
             </p>
           </div>
 
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-2">
-            {reports.length === 0 && (
+            {termReports.length === 0 && isTodayInActiveSemester && (
               <button
                 type="button"
                 onClick={handleSeedSampleData}
@@ -589,10 +607,10 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
             {/* Tombol Kosongkan Data */}
             <button
               type="button"
-              disabled={reports.length === 0 || isClearing}
+              disabled={termReports.length === 0 || isClearing}
               onClick={() => setIsClearAllModalOpen(true)}
               className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-display font-black px-4 py-2.5 rounded-2xl text-xs border border-rose-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Kosongkan seluruh data laporan 7 kebiasaan di Firestore"
+              title="Kosongkan data laporan 7 kebiasaan pada semester aktif di Firestore"
             >
               <Trash2 className="w-4 h-4 text-rose-600" />
               <span>Kosongkan Data</span>
@@ -603,9 +621,9 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
         {/* Aggregate Stats Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
           <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50 to-amber-100/60 border border-amber-200 shadow-2xs">
-            <span className="text-amber-800 font-bold block text-[11px]">Total Laporan Masuk</span>
+            <span className="text-amber-800 font-bold block text-[11px]">Total Laporan ({activeSemester})</span>
             <div className="flex items-baseline gap-2 mt-1">
-              <span className="text-2xl font-display font-black text-amber-950">{reports.length}</span>
+              <span className="text-2xl font-display font-black text-amber-950">{termReports.length}</span>
               <span className="text-amber-700 text-[10px] font-semibold">laporan</span>
             </div>
           </div>
@@ -719,7 +737,7 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
               Tabel Rekapitulasi Laporan Masuk
             </span>
             <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-xl border border-slate-200">
-              Menampilkan {filteredReports.length} dari {reports.length} Laporan
+              Menampilkan {filteredReports.length} dari {termReports.length} Laporan ({activeSemester})
             </span>
           </div>
 
@@ -749,14 +767,16 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
                 ) : filteredReports.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="p-8 text-center text-slate-500 font-medium space-y-2">
-                      <p>Belum ada data laporan kebiasaan yang cocok dengan filter yang dipilih.</p>
-                      <button
-                        type="button"
-                        onClick={handleSeedSampleData}
-                        className="text-xs text-indigo-600 hover:underline font-bold cursor-pointer"
-                      >
-                        + Tambahkan Data Sampel Awal
-                      </button>
+                      <p>Belum ada data laporan kebiasaan pada {activeSemester} ({activeYear}).</p>
+                      {isTodayInActiveSemester && (
+                        <button
+                          type="button"
+                          onClick={handleSeedSampleData}
+                          className="text-xs text-indigo-600 hover:underline font-bold cursor-pointer"
+                        >
+                          + Tambahkan Data Sampel Awal
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ) : (
@@ -1028,10 +1048,10 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
 
             <div className="text-center space-y-1">
               <h3 className="font-display font-black text-lg text-slate-800">
-                Kosongkan Seluruh Data Laporan?
+                Kosongkan Data Laporan ({activeSemester})?
               </h3>
               <p className="text-xs text-slate-500 leading-relaxed">
-                Tindakan ini akan menghapus secara permanen <strong className="text-rose-600 font-bold">{reports.length} rekaman data</strong> dari koleksi Firestore <code className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-mono">laporan_kebiasaan</code>.
+                Tindakan ini akan menghapus secara permanen <strong className="text-rose-600 font-bold">{termReports.length} rekaman data</strong> periode {activeSemester} ({activeYear}) dari koleksi Firestore <code className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-mono">laporan_kebiasaan</code>.
               </p>
             </div>
 
@@ -1461,11 +1481,12 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
                 {/* 7. LEMBAR TANDA TANGAN RESMI */}
                 <div className="grid grid-cols-2 gap-8 pt-4 text-xs font-medium text-slate-900 print-break-inside-avoid">
                   {/* Kiri: Mengetahui Kepala Sekolah */}
-                  <div className="text-center space-y-16">
+                  <div className="text-center">
                     <div>
                       <p>Mengetahui,</p>
                       <p className="font-bold">Kepala {profile?.name || 'SDN Rawa Badak Utara 21'}</p>
                     </div>
+                    <div style={{ height: '4cm' }} />
                     <div>
                       <p className="font-bold underline tracking-tight text-slate-900">
                         {kepsekInfo.nama}
@@ -1477,11 +1498,12 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
                   </div>
 
                   {/* Kanan: Guru Kelas / Pembina */}
-                  <div className="text-center space-y-16">
+                  <div className="text-center">
                     <div>
                       <p>Jakarta, {lastDayOfMonth} {monthlySelectedMonthName} {printYear}</p>
                       <p className="font-bold">Guru Kelas / Pembina Karakter</p>
                     </div>
+                    <div style={{ height: '4cm' }} />
                     <div>
                       <p className="font-bold underline tracking-tight text-slate-900">
                         {waliTeacher?.nama || 'Belum Ditugaskan'}

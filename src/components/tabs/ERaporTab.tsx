@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
-import { Printer, Download, UserCheck, FileText, CheckCircle2 } from 'lucide-react';
-import { Student, SchoolProfile, Teacher, Subject } from '../../types';
-import { getStoredReportNotes, getStoredAssessments, getAssessmentCount } from '../../utils/storage';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Printer, UserCheck, FileText, Info } from 'lucide-react';
+import { Student, SchoolProfile, Teacher, Subject, AttendanceRecord } from '../../types';
+import { getStoredReportNotesForTerm, getStoredAssessments, getAssessmentCount } from '../../utils/storage';
 import { getGradeNumberFromClass } from '../../data/classCurriculumData';
 import { getStoredPenilaianEkskul } from './PenilaianEkskulTab';
 import { getCatatanWaliOtomatisByRank } from './CatatanWaliTab';
 import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
+import { isDateInSemester, isSemesterOneLabel } from '../../utils/semesterUtils';
 
 interface Props {
   profile: SchoolProfile;
@@ -15,6 +16,7 @@ interface Props {
   activeClass: string;
   activeYear: string;
   activeSemester: string;
+  attendanceRecords?: Record<string, AttendanceRecord>;
   showToast: (msg: string, type?: 'success' | 'error') => void;
 }
 
@@ -26,18 +28,24 @@ export const ERaporTab: React.FC<Props> = ({
   activeClass,
   activeYear,
   activeSemester,
-  showToast,
+  attendanceRecords = {},
 }) => {
   const filteredStudents = students.filter((s) => s.kelas === activeClass);
   const [selectedStudentId, setSelectedStudentId] = useState<string>(filteredStudents[0]?.id || '');
   const [paperSize, setPaperSize] = useState<'A4' | 'F4'>('A4');
   const [withKop, setWithKop] = useState(true);
 
+  useEffect(() => {
+    if (filteredStudents.length > 0 && !filteredStudents.some((s) => s.id === selectedStudentId)) {
+      setSelectedStudentId(filteredStudents[0].id);
+    }
+  }, [activeClass, filteredStudents, selectedStudentId]);
+
   const student = filteredStudents.find((s) => s.id === selectedStudentId) || filteredStudents[0];
   const wali = resolveWaliKelas(teachers, activeClass);
   const kepsek = resolveKepalaSekolah(teachers, profile);
 
-  const notesMap = getStoredReportNotes();
+  const notesMap = getStoredReportNotesForTerm(activeYear, activeSemester);
   const currentNotes = student ? notesMap[student.id] : null;
 
   const getDefaultDecision = (kelas: string) => {
@@ -49,9 +57,6 @@ export const ERaporTab: React.FC<Props> = ({
     if (kelas.includes('5') || kelas.toUpperCase().includes(' V')) return 'Naik ke Kelas VI (Enam)';
     return 'Lulus ke Jenjang SMP';
   };
-
-  const rawDecision = currentNotes?.keputusanKenaikan || getDefaultDecision(activeClass);
-  const currentDecision = rawDecision.includes('VII') ? 'Lulus ke Jenjang SMP' : rawDecision;
 
   // Subjects adapted to student religion with dynamic NA Rapor lookup
   const getSubjectList = () => {
@@ -95,8 +100,8 @@ export const ERaporTab: React.FC<Props> = ({
     }
 
     return baseList.map((item) => {
-      let finalScore = item.defaultScore;
-      let dynamicCap = item.cap;
+      let finalScore = 0;
+      let dynamicCap = 'Belum ada nilai dan deskripsi capaian kompetensi untuk semester ini.';
 
       if (subjects && student) {
         const matched = subjects.find(
@@ -143,22 +148,21 @@ export const ERaporTab: React.FC<Props> = ({
             const asas = grade.asas || 0;
             if (avgAs > 0 || asts > 0 || asas > 0) {
               finalScore = Math.round((2 * avgAs + asts + asas) / 4);
-            }
 
-            // Kurikulum Merdeka dynamic report description from active TP:
-            if (highestScore >= 80 && lowestScore > 0 && lowestScore < kktp && highestTpText && lowestTpText) {
-              dynamicCap = `Menunjukkan penguasaan yang sangat baik dalam ${highestTpText}. Perlu bimbingan dan peningkatan dalam ${lowestTpText}.`;
-            } else if (highestScore >= 75 && highestTpText) {
-              dynamicCap = `Menunjukkan penguasaan yang sangat baik dalam ${highestTpText}, serta mampu menyelesaikan tugas dengan disiplin.`;
-            } else if (lowestScore > 0 && lowestScore < kktp && lowestTpText) {
-              dynamicCap = `Cukup menguasai materi pembelajaran, namun perlu bimbingan lebih lanjut dalam ${lowestTpText}.`;
-            } else if (matched.description) {
-              dynamicCap = `Menunjukkan pemahaman yang baik sesuai Capaian Pembelajaran: ${matched.description}`;
+              if (highestScore >= 80 && lowestScore > 0 && lowestScore < kktp && highestTpText && lowestTpText) {
+                dynamicCap = `Menunjukkan penguasaan yang sangat baik dalam ${highestTpText}. Perlu bimbingan dan peningkatan dalam ${lowestTpText}.`;
+              } else if (highestScore >= 75 && highestTpText) {
+                dynamicCap = `Menunjukkan penguasaan yang sangat baik dalam ${highestTpText}, serta mampu menyelesaikan tugas dengan disiplin.`;
+              } else if (lowestScore > 0 && lowestScore < kktp && lowestTpText) {
+                dynamicCap = `Cukup menguasai materi pembelajaran, namun perlu bimbingan lebih lanjut dalam ${lowestTpText}.`;
+              } else if (matched.tujuanPembelajaran && matched.tujuanPembelajaran.length > 0) {
+                dynamicCap = `Menunjukkan penguasaan yang baik dalam ${matched.tujuanPembelajaran[0]}.`;
+              } else if (matched.description) {
+                dynamicCap = `Menunjukkan pemahaman yang baik sesuai Capaian Pembelajaran: ${matched.description}`;
+              } else {
+                dynamicCap = item.cap;
+              }
             }
-          } else if (matched.tujuanPembelajaran && matched.tujuanPembelajaran.length > 0) {
-            dynamicCap = `Menunjukkan penguasaan yang baik dalam ${matched.tujuanPembelajaran[0]}.`;
-          } else if (matched.description) {
-            dynamicCap = `Menunjukkan pemahaman yang baik sesuai Capaian Pembelajaran: ${matched.description}`;
           }
         }
       }
@@ -171,7 +175,7 @@ export const ERaporTab: React.FC<Props> = ({
     });
   };
 
-  // Dynamic extracurricular ratings for the current student
+  // Dynamic extracurricular ratings for the current student scoped to term
   const getStudentEkskuls = () => {
     if (!student) return [];
     try {
@@ -179,7 +183,7 @@ export const ERaporTab: React.FC<Props> = ({
       const ekskulList: Array<{ id: string; nama: string; anggotaIds?: string[] }> = ekskulListRaw
         ? JSON.parse(ekskulListRaw)
         : [];
-      const store = getStoredPenilaianEkskul();
+      const store = getStoredPenilaianEkskul(activeYear, activeSemester);
 
       const results: Array<{ nama: string; predikat: string; keterangan: string }> = [];
 
@@ -188,13 +192,13 @@ export const ERaporTab: React.FC<Props> = ({
         const studentRating = ratings.find((r) => r.studentId === student.id);
         const isEnrolled = ek.anggotaIds && ek.anggotaIds.includes(student.id);
 
-        if (studentRating) {
+        if (studentRating && studentRating.predikat) {
           results.push({
             nama: ek.nama,
             predikat: studentRating.predikat,
             keterangan: studentRating.keterangan || `Menunjukkan keaktifan dan penguasaan teknik yang baik dalam kegiatan ${ek.nama}.`,
           });
-        } else if (isEnrolled) {
+        } else if (isEnrolled && activeYear === '2026/2027' && isSemesterOneLabel(activeSemester)) {
           results.push({
             nama: ek.nama,
             predikat: 'Baik',
@@ -203,27 +207,43 @@ export const ERaporTab: React.FC<Props> = ({
         }
       });
 
-      if (results.length > 0) return results;
+      return results;
     } catch (e) {
       console.error(e);
     }
 
-    // Default fallback so Rapor stays complete
-    return [
-      {
-        nama: 'Pramuka Siaga / Penggalang',
-        predikat: 'Sangat Baik',
-        keterangan: 'Menunjukkan sikap kemandirian, kepemimpinan, dan gotong royong dalam kepramukaan.',
-      },
-      {
-        nama: 'Seni Tari Tradisional Betawi',
-        predikat: 'Baik',
-        keterangan: 'Mampu menampilkan gerak tari tradisional Betawi dengan percaya diri.',
-      },
-    ];
+    return [];
   };
 
   const subjectsWithGrades = getSubjectList();
+  const hasAnySubjectScores = subjectsWithGrades.some((s) => s.score > 0);
+  const ekskulList = getStudentEkskuls();
+  const isInitialDefaultTerm = activeYear === '2026/2027' && isSemesterOneLabel(activeSemester);
+  const hasP5Content = Boolean((currentNotes?.p5 && currentNotes.p5.length > 0) || isInitialDefaultTerm);
+
+  const rawDecision =
+    currentNotes?.keputusanKenaikan ||
+    (hasAnySubjectScores || isInitialDefaultTerm ? getDefaultDecision(activeClass) : 'Menunggu pengisian penilaian semester ini');
+  const currentDecision = rawDecision.includes('VII') ? 'Lulus ke Jenjang SMP' : rawDecision;
+
+  const semesterAbsenceStats = useMemo(() => {
+    const counts = { S: 0, I: 0, A: 0 };
+    if (!student) return counts;
+    Object.values(attendanceRecords).forEach((rec) => {
+      if (rec.studentId === student.id && isDateInSemester(rec.date, activeYear, activeSemester)) {
+        if (rec.status === 'S') counts.S += 1;
+        else if (rec.status === 'I') counts.I += 1;
+        else if (rec.status === 'A') counts.A += 1;
+      }
+    });
+    return counts;
+  }, [attendanceRecords, student, activeYear, activeSemester]);
+
+  const formattedPrintDate = new Date().toLocaleDateString('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
 
   const handlePrint = () => {
     window.print();
@@ -286,6 +306,18 @@ export const ERaporTab: React.FC<Props> = ({
           </button>
         </div>
       </div>
+
+      {!hasAnySubjectScores && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-amber-900 flex items-center gap-3 no-print">
+          <Info className="w-5 h-5 text-amber-600 shrink-0" />
+          <div>
+            <span className="font-black block">Belum Ada Nilai Mata Pelajaran untuk {activeSemester} ({activeYear})</span>
+            <span className="text-[11px] text-amber-800">
+              Nilai akhir, ekskul, catatan wali kelas, dan ketidakhadiran ditampilkan kosong/nol sampai guru menginput data pada semester ini.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Printable Sheet */}
       <div className="flex justify-center bg-slate-200/60 p-4 sm:p-8 rounded-3xl overflow-x-auto">
@@ -398,7 +430,7 @@ export const ERaporTab: React.FC<Props> = ({
                     <td className="p-2 border-r border-slate-900 text-center font-bold">{idx + 1}</td>
                     <td className="p-2 border-r border-slate-900 font-bold leading-tight">{sub.name}</td>
                     <td className="p-2 border-r border-slate-900 text-center font-mono font-black text-sm">
-                      {sub.score}
+                      {sub.score > 0 ? sub.score : '-'}
                     </td>
                     <td className="p-2 text-[11px] leading-relaxed text-slate-800">{sub.cap}</td>
                   </tr>
@@ -413,45 +445,53 @@ export const ERaporTab: React.FC<Props> = ({
               <span className="flex items-center gap-1.5">
                 Hasil Kokurikuler (Projek Penguatan Profil Pelajar Pancasila)
               </span>
-              <span className="text-[10px] font-bold text-slate-600 normal-case">
-                Tema: Gerakan 7 Kebiasaan Anak Indonesia Hebat & Gaya Hidup Berkelanjutan
-              </span>
+              {hasP5Content && (
+                <span className="text-[10px] font-bold text-slate-600 normal-case">
+                  Tema: Gerakan 7 Kebiasaan Anak Indonesia Hebat & Gaya Hidup Berkelanjutan
+                </span>
+              )}
             </div>
 
-            <div className="space-y-1.5 text-xs">
-              <div className="flex flex-wrap items-center justify-between gap-1">
-                <span className="font-bold text-slate-900">
-                  Nama Projek: "Napas Hijau: Tanam, Kompos, Lestari!"
-                </span>
-                <span className="text-[10px] font-extrabold bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded border border-emerald-300">
-                  Predikat: Sangat Berkembang (SB)
-                </span>
+            {hasP5Content ? (
+              <div className="space-y-1.5 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-1">
+                  <span className="font-bold text-slate-900">
+                    Nama Projek: &quot;Napas Hijau: Tanam, Kompos, Lestari!&quot;
+                  </span>
+                  <span className="text-[10px] font-extrabold bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded border border-emerald-300">
+                    Predikat: Sangat Berkembang (SB)
+                  </span>
+                </div>
+                <p className="text-[10.5px] text-slate-700 leading-relaxed italic">
+                  &quot;{currentNotes?.catatanWali
+                    ? `Ananda ${student?.nama || 'peserta didik'} menunjukkan partisipasi aktif, kemandirian, gotong royong, dan nalar kritis yang tinggi dalam pelaksanaan kegiatan penghijauan dan pembiasaan karakter Profil Pelajar Pancasila.`
+                    : `Peserta didik aktif berkolaborasi, bertanggung jawab dalam pengelolaan lingkungan sekolah, serta mengamalkan nilai-nilai luhur Pancasila secara nyata.`}&quot;
+                </p>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-0.5 text-[10px]">
+                  <div className="p-1.5 bg-white border border-slate-300 rounded text-center">
+                    <div className="text-[9px] text-slate-500 font-bold leading-tight">1. Beriman &amp; Bertakwa</div>
+                    <div className="font-black text-emerald-800 text-[9.5px]">Berkembang Sesuai Harapan</div>
+                  </div>
+                  <div className="p-1.5 bg-white border border-slate-300 rounded text-center">
+                    <div className="text-[9px] text-slate-500 font-bold leading-tight">2. Bergotong Royong</div>
+                    <div className="font-black text-emerald-800 text-[9.5px]">Sangat Berkembang</div>
+                  </div>
+                  <div className="p-1.5 bg-white border border-slate-300 rounded text-center">
+                    <div className="text-[9px] text-slate-500 font-bold leading-tight">3. Bernalar Kritis</div>
+                    <div className="font-black text-emerald-800 text-[9.5px]">Sangat Berkembang</div>
+                  </div>
+                  <div className="p-1.5 bg-white border border-slate-300 rounded text-center">
+                    <div className="text-[9px] text-slate-500 font-bold leading-tight">4. Mandiri &amp; Kreatif</div>
+                    <div className="font-black text-emerald-800 text-[9.5px]">Berkembang Sesuai Harapan</div>
+                  </div>
+                </div>
               </div>
-              <p className="text-[10.5px] text-slate-700 leading-relaxed italic">
-                "{currentNotes?.catatanWali
-                  ? `Ananda ${student?.nama || 'peserta didik'} menunjukkan partisipasi aktif, kemandirian, gotong royong, dan nalar kritis yang tinggi dalam pelaksanaan kegiatan penghijauan dan pembiasaan karakter Profil Pelajar Pancasila.`
-                  : `Peserta didik aktif berkolaborasi, bertanggung jawab dalam pengelolaan lingkungan sekolah, serta mengamalkan nilai-nilai luhur Pancasila secara nyata.`}"
+            ) : (
+              <p className="text-[11px] text-slate-500 italic py-2 text-center">
+                Belum ada data projek kokurikuler (P5) pada {activeSemester} ({activeYear}).
               </p>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-0.5 text-[10px]">
-                <div className="p-1.5 bg-white border border-slate-300 rounded text-center">
-                  <div className="text-[9px] text-slate-500 font-bold leading-tight">1. Beriman & Bertakwa</div>
-                  <div className="font-black text-emerald-800 text-[9.5px]">Berkembang Sesuai Harapan</div>
-                </div>
-                <div className="p-1.5 bg-white border border-slate-300 rounded text-center">
-                  <div className="text-[9px] text-slate-500 font-bold leading-tight">2. Bergotong Royong</div>
-                  <div className="font-black text-emerald-800 text-[9.5px]">Sangat Berkembang</div>
-                </div>
-                <div className="p-1.5 bg-white border border-slate-300 rounded text-center">
-                  <div className="text-[9px] text-slate-500 font-bold leading-tight">3. Bernalar Kritis</div>
-                  <div className="font-black text-emerald-800 text-[9.5px]">Sangat Berkembang</div>
-                </div>
-                <div className="p-1.5 bg-white border border-slate-300 rounded text-center">
-                  <div className="text-[9px] text-slate-500 font-bold leading-tight">4. Mandiri & Kreatif</div>
-                  <div className="font-black text-emerald-800 text-[9.5px]">Berkembang Sesuai Harapan</div>
-                </div>
-              </div>
-            </div>
+            )}
           </div>
 
           {/* Ekstrakurikuler & Kehadiran in 2 columns */}
@@ -471,13 +511,21 @@ export const ERaporTab: React.FC<Props> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {getStudentEkskuls().map((ek, i) => (
-                    <tr key={i}>
-                      <td className="py-1 font-semibold text-slate-900">{ek.nama}</td>
-                      <td className="py-1 text-center font-black text-emerald-800">{ek.predikat}</td>
-                      <td className="py-1 text-[9.5px] text-slate-600 leading-tight">{ek.keterangan}</td>
+                  {ekskulList.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="py-3 text-center text-slate-500 italic text-[10px]">
+                        Belum ada penilaian ekstrakurikuler pada {activeSemester}.
+                      </td>
                     </tr>
-                  ))}
+                  ) : (
+                    ekskulList.map((ek, i) => (
+                      <tr key={i}>
+                        <td className="py-1 font-semibold text-slate-900">{ek.nama}</td>
+                        <td className="py-1 text-center font-black text-emerald-800">{ek.predikat}</td>
+                        <td className="py-1 text-[9.5px] text-slate-600 leading-tight">{ek.keterangan}</td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -485,20 +533,20 @@ export const ERaporTab: React.FC<Props> = ({
             {/* Kehadiran */}
             <div className="border border-slate-900 rounded-lg p-2 bg-slate-50/30">
               <div className="font-black text-slate-900 uppercase text-[11px] mb-1.5 pb-1 border-b border-slate-900">
-                Ketidakhadiran (Semester Ini)
+                Ketidakhadiran ({activeSemester})
               </div>
               <div className="space-y-1 text-xs">
                 <div className="flex justify-between">
                   <span>Sakit (S)</span>
-                  <span className="font-bold">0 Hari</span>
+                  <span className="font-bold">{semesterAbsenceStats.S} Hari</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Izin (I)</span>
-                  <span className="font-bold">1 Hari</span>
+                  <span className="font-bold">{semesterAbsenceStats.I} Hari</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Tanpa Keterangan (A)</span>
-                  <span className="font-bold">0 Hari</span>
+                  <span className="font-bold">{semesterAbsenceStats.A} Hari</span>
                 </div>
               </div>
             </div>
@@ -510,7 +558,15 @@ export const ERaporTab: React.FC<Props> = ({
               Catatan Wali Kelas:
             </span>
             <p className="italic text-slate-800 text-[11px] leading-relaxed">
-              "{currentNotes?.catatanWali || getCatatanWaliOtomatisByRank((filteredStudents.findIndex((st) => st.id === student?.id) >= 0 ? filteredStudents.findIndex((st) => st.id === student?.id) + 1 : 1))}"
+              &quot;{currentNotes?.catatanWali
+                ? currentNotes.catatanWali
+                : hasAnySubjectScores
+                ? getCatatanWaliOtomatisByRank(
+                    filteredStudents.findIndex((st) => st.id === student?.id) >= 0
+                      ? filteredStudents.findIndex((st) => st.id === student?.id) + 1
+                      : 1
+                  )
+                : 'Belum ada catatan wali kelas untuk semester ini.'}&quot;
             </p>
             <div className="mt-2 pt-1 border-t border-slate-300 font-bold text-slate-900 text-xs">
               Keputusan: <span className="font-black text-emerald-900">{currentDecision}</span>
@@ -521,13 +577,15 @@ export const ERaporTab: React.FC<Props> = ({
           <div className="pt-2">
             <div className="grid grid-cols-3 gap-4 text-center text-xs">
               <div>
-                <p className="font-medium text-slate-700 mb-16">Mengetahui,<br />Orang Tua / Wali Murid</p>
+                <p className="font-medium text-slate-700">Mengetahui,<br />Orang Tua / Wali Murid</p>
+                <div style={{ height: '4cm' }} />
                 <div className="sig-name-line w-40 mx-auto"></div>
                 <p className="text-[10px] text-slate-500">(Nama Terang Orang Tua)</p>
               </div>
 
               <div>
-                <p className="font-medium text-slate-700 mb-16">Mengetahui,<br />Kepala Sekolah<br />{profile.name}</p>
+                <p className="font-medium text-slate-700">Mengetahui,<br />Kepala Sekolah<br />{profile.name}</p>
+                <div style={{ height: '4cm' }} />
                 <div className="sig-name-line w-44 mx-auto font-black text-slate-900">
                   {kepsek.nama}
                 </div>
@@ -539,9 +597,10 @@ export const ERaporTab: React.FC<Props> = ({
 
               <div>
                 <div className="text-xs mb-1 text-slate-800 font-medium">
-                  Jakarta, 19 Desember 2026
+                  Jakarta, {formattedPrintDate}
                 </div>
-                <p className="font-medium text-slate-700 mb-12">Mengetahui,<br />Wali Kelas</p>
+                <p className="font-medium text-slate-700">Mengetahui,<br />Wali Kelas</p>
+                <div style={{ height: '4cm' }} />
                 <div className="sig-name-line w-44 mx-auto font-black text-slate-900">
                   {wali?.nama || 'Belum Ditugaskan'}
                 </div>

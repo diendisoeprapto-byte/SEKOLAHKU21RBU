@@ -17,10 +17,11 @@ import * as XLSX from 'xlsx';
 import { Student } from '../../types';
 import { notifyStorageMutation } from '../../utils/storage';
 import { pushAllDataToCloud } from '../../utils/cloudSync';
+import { isSemesterOneLabel } from '../../utils/semesterUtils';
 
 export interface EkskulAssessmentItem {
   studentId: string;
-  predikat: 'Sangat Baik' | 'Baik' | 'Cukup' | 'Kurang' | 'Perlu Bimbingan';
+  predikat: '' | 'Sangat Baik' | 'Baik' | 'Cukup' | 'Kurang' | 'Perlu Bimbingan';
   keterangan: string;
 }
 
@@ -54,27 +55,49 @@ export const getEkskulDeskripsiTemplate = (
 
 interface Props {
   students: Student[];
+  activeYear?: string;
+  activeSemester?: string;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onOpenZoom?: (url: string, title: string) => void;
 }
 
-export const getStoredPenilaianEkskul = (): PenilaianEkskulStore => {
+export const getStoredPenilaianEkskul = (
+  year: string = '2026/2027',
+  semester: string = 'Semester 1'
+): PenilaianEkskulStore => {
   try {
-    const saved = localStorage.getItem('sekolahku_penilaian_ekskul');
-    if (saved) return JSON.parse(saved);
+    const termKey = `sekolahku_penilaian_ekskul_${year}_${semester}`;
+    const termSaved = localStorage.getItem(termKey);
+    if (termSaved) return JSON.parse(termSaved);
+
+    if (year === '2026/2027' && isSemesterOneLabel(semester)) {
+      const legacySaved = localStorage.getItem('sekolahku_penilaian_ekskul');
+      if (legacySaved) return JSON.parse(legacySaved);
+    }
   } catch (e) {
     console.error(e);
   }
   return {};
 };
 
-export const saveStoredPenilaianEkskul = (data: PenilaianEkskulStore) => {
-  localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(data));
-  notifyStorageMutation('sekolahku_penilaian_ekskul');
+export const saveStoredPenilaianEkskul = (
+  data: PenilaianEkskulStore,
+  year: string = '2026/2027',
+  semester: string = 'Semester 1'
+) => {
+  const termKey = `sekolahku_penilaian_ekskul_${year}_${semester}`;
+  localStorage.setItem(termKey, JSON.stringify(data));
+  notifyStorageMutation(termKey);
+  if (year === '2026/2027' && isSemesterOneLabel(semester)) {
+    localStorage.setItem('sekolahku_penilaian_ekskul', JSON.stringify(data));
+    notifyStorageMutation('sekolahku_penilaian_ekskul');
+  }
 };
 
 export const PenilaianEkskulTab: React.FC<Props> = ({
   students,
+  activeYear = '2026/2027',
+  activeSemester = 'Semester 1',
   showToast,
   onOpenZoom,
 }) => {
@@ -110,9 +133,12 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
   const [selectedEkskulId, setSelectedEkskulId] = useState<string>(
     ekskulList[0]?.id || 'ek_1'
   );
-  const [penilaianStore, setPenilaianStore] = useState<PenilaianEkskulStore>(
-    getStoredPenilaianEkskul()
+  const [penilaianStore, setPenilaianStore] = useState<PenilaianEkskulStore>(() =>
+    getStoredPenilaianEkskul(activeYear, activeSemester)
   );
+  useEffect(() => {
+    setPenilaianStore(getStoredPenilaianEkskul(activeYear, activeSemester));
+  }, [activeYear, activeSemester]);
   const [searchQuery, setSearchQuery] = useState('');
   const [classFilter, setClassFilter] = useState('all');
 
@@ -143,11 +169,10 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
   const getStudentGrade = (studentId: string): EkskulAssessmentItem => {
     const found = currentEkskulGrades.find((g) => g.studentId === studentId);
     if (found) return found;
-    const sName = students.find((s) => s.id === studentId)?.nama || 'Peserta didik';
     return {
       studentId,
-      predikat: 'Sangat Baik',
-      keterangan: getEkskulDeskripsiTemplate('Sangat Baik', sName, activeEkskul?.nama || 'Ekstrakurikuler'),
+      predikat: '',
+      keterangan: '',
     };
   };
 
@@ -162,8 +187,12 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
 
     // Jika predikat diubah, otomatis generate deskripsi sesuai predikat, nama siswa, dan ekskul
     if (field === 'predikat') {
-      const sName = studentName || students.find((s) => s.id === studentId)?.nama || 'Peserta didik';
-      newKeterangan = getEkskulDeskripsiTemplate(value, sName, activeEkskul?.nama || 'Ekstrakurikuler');
+      if (!value) {
+        newKeterangan = '';
+      } else {
+        const sName = studentName || students.find((s) => s.id === studentId)?.nama || 'Peserta didik';
+        newKeterangan = getEkskulDeskripsiTemplate(value, sName, activeEkskul?.nama || 'Ekstrakurikuler');
+      }
     } else {
       newKeterangan = value;
     }
@@ -174,10 +203,9 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
       keterangan: newKeterangan,
     };
 
-    const newGradeList = [
-      ...currentEkskulGrades.filter((g) => g.studentId !== studentId),
-      updatedItem,
-    ];
+    const newGradeList = updatedItem.predikat
+      ? [...currentEkskulGrades.filter((g) => g.studentId !== studentId), updatedItem]
+      : currentEkskulGrades.filter((g) => g.studentId !== studentId);
 
     const newStore = {
       ...penilaianStore,
@@ -188,24 +216,35 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
   };
 
   const handleRegenerateDeskripsi = (studentId: string, predikat: string, studentName: string) => {
-    const template = getEkskulDeskripsiTemplate(predikat, studentName, activeEkskul?.nama || 'Ekstrakurikuler');
+    const targetPredikat = predikat || 'Sangat Baik';
+    const template = getEkskulDeskripsiTemplate(targetPredikat, studentName, activeEkskul?.nama || 'Ekstrakurikuler');
     handleUpdateStudentGrade(studentId, 'keterangan', template, studentName);
     showToast(`Deskripsi otomatis untuk ${studentName} berhasil disesuaikan!`, 'success');
   };
 
   const handleSaveAll = () => {
-    // Ensure all displayed students have an assessment entry
-    const completedGrades = displayStudents.map((s) => getStudentGrade(s.id));
+    const completedGrades = displayStudents
+      .map((s) => getStudentGrade(s.id))
+      .filter((g) => Boolean(g.predikat));
     const newStore = {
       ...penilaianStore,
       [selectedEkskulId]: completedGrades,
     };
 
     setPenilaianStore(newStore);
-    saveStoredPenilaianEkskul(newStore);
-    pushAllDataToCloud({ penilaianEkskul: newStore });
+    saveStoredPenilaianEkskul(newStore, activeYear, activeSemester);
+    const sanitizedForCloud = Object.fromEntries(
+      Object.entries(newStore).map(([ekId, list]) => [
+        ekId,
+        list.filter(
+          (g): g is { studentId: string; predikat: 'Sangat Baik' | 'Baik' | 'Cukup' | 'Kurang' | 'Perlu Bimbingan'; keterangan: string } =>
+            g.predikat !== ''
+        ),
+      ])
+    );
+    pushAllDataToCloud({ penilaianEkskul: sanitizedForCloud });
     showToast(
-      `Penilaian untuk ekstrakurikuler ${activeEkskul?.nama} (${completedGrades.length} siswa) berhasil disimpan!`,
+      `Penilaian untuk ekstrakurikuler ${activeEkskul?.nama} (${completedGrades.length} siswa) pada ${activeSemester} (${activeYear}) berhasil disimpan!`,
       'success'
     );
   };
@@ -407,6 +446,22 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
 
       {/* Assessment Table */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+        {currentEkskulGrades.length === 0 && (
+          <div className="mx-4 mt-4 p-4 rounded-2xl bg-slate-50 border-2 border-dashed border-slate-300 text-xs text-slate-600 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <strong className="text-slate-800 block">
+                Belum Ada Penilaian Ekstrakurikuler pada {activeSemester} ({activeYear})
+              </strong>
+              <span>
+                Pilih predikat per siswa atau gunakan tombol <strong>Isi Cepat Semua</strong> untuk mulai mengisi penilaian ekskul semester ini.
+              </span>
+            </div>
+            <span className="text-[11px] font-bold px-3 py-1 rounded-xl bg-white border border-slate-200">
+              {activeYear} • {activeSemester}
+            </span>
+          </div>
+        )}
+
         <div className="p-4 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs font-black text-slate-800">
             <Users className="w-4 h-4 text-emerald-600" />
@@ -475,9 +530,12 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
                             ? 'bg-sky-50 text-sky-800 border-sky-300'
                             : grade.predikat === 'Cukup'
                             ? 'bg-amber-50 text-amber-800 border-amber-300'
-                            : 'bg-rose-50 text-rose-800 border-rose-300'
+                            : grade.predikat === 'Perlu Bimbingan' || grade.predikat === 'Kurang'
+                            ? 'bg-rose-50 text-rose-800 border-rose-300'
+                            : 'bg-slate-50 text-slate-500 border-slate-300'
                         }`}
                       >
+                        <option value="">-- Belum Dinilai --</option>
                         <option value="Sangat Baik">Nilai A (Sangat Baik)</option>
                         <option value="Baik">Nilai B (Baik)</option>
                         <option value="Cukup">Nilai C (Cukup)</option>

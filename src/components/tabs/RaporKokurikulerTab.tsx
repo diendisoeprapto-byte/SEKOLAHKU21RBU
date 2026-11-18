@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Printer, Sprout, UserCheck } from 'lucide-react';
 import { SchoolProfile, Student, Teacher } from '../../types';
 import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
+import { isSemesterOneLabel } from '../../utils/semesterUtils';
 
 interface Props {
   profile: SchoolProfile;
@@ -9,6 +10,7 @@ interface Props {
   teachers: Teacher[];
   activeClass: string;
   activeYear: string;
+  activeSemester?: string;
 }
 
 export const RaporKokurikulerTab: React.FC<Props> = ({
@@ -17,20 +19,47 @@ export const RaporKokurikulerTab: React.FC<Props> = ({
   teachers,
   activeClass,
   activeYear,
+  activeSemester = 'Semester 1',
 }) => {
   const filteredStudents = students.filter((s) => s.kelas === activeClass);
   const [selectedStudentId, setSelectedStudentId] = useState<string>(filteredStudents[0]?.id || '');
 
+  useEffect(() => {
+    if (filteredStudents.length > 0 && !filteredStudents.some((s) => s.id === selectedStudentId)) {
+      setSelectedStudentId(filteredStudents[0].id);
+    }
+  }, [activeClass, filteredStudents, selectedStudentId]);
+
   const student = filteredStudents.find((s) => s.id === selectedStudentId) || filteredStudents[0];
   const wali = resolveWaliKelas(teachers, activeClass);
   const kepsek = resolveKepalaSekolah(teachers, profile);
+
+  const hasSavedTermKokurikuler = (() => {
+    try {
+      const raw = localStorage.getItem(`sekolahku_kokurikuler_${activeYear}_${activeSemester}`);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.length > 0 : Boolean(parsed && Object.keys(parsed).length > 0);
+    } catch {
+      return false;
+    }
+  })();
+
+  const hasKokurikulerData =
+    hasSavedTermKokurikuler || (activeYear === '2026/2027' && isSemesterOneLabel(activeSemester));
+
+  const formattedDate = new Date().toLocaleDateString('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
 
   return (
     <section className="space-y-6">
       <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 flex flex-wrap items-center justify-between gap-4 no-print">
         <div>
           <span className="text-xs font-extrabold uppercase bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full">
-            Rapor Kokurikuler (P5) • Kurikulum Merdeka
+            Rapor Kokurikuler (P5) • {activeSemester} • {activeYear}
           </span>
           <h2 className="text-xl font-display font-black text-slate-800 mt-1 flex items-center gap-2">
             <Sprout className="w-5 h-5 text-emerald-600" /> Rapor Projek Penguatan Profil Pelajar Pancasila
@@ -103,60 +132,76 @@ export const RaporKokurikulerTab: React.FC<Props> = ({
                 NISN: <strong className="font-mono">{student.nisn}</strong>
               </div>
               <div>
-                Tahun Pelajaran: <strong>{activeYear}</strong>
+                Tahun / Semester: <strong>{activeYear} ({activeSemester})</strong>
               </div>
             </div>
           )}
 
-          {/* Project 1 */}
-          <div className="border border-slate-900 rounded-lg p-3 mb-4 space-y-2">
-            <div className="bg-emerald-100 p-2 rounded font-black text-xs text-emerald-950 uppercase">
-              Projek 1: Gaya Hidup Berkelanjutan - "Pilah Sampah Jadi Berkah di SDN RBU 21"
-            </div>
-            <p className="text-[11px] text-slate-700 leading-relaxed">
-              Peserta didik menunjukkan kemampuan luar biasa dalam memilah sampah organik dan non-organik di sekolah,
-              serta bergotong royong mendaur ulang botol plastik menjadi pot tanaman hidroponik.
-            </p>
-            <div className="grid grid-cols-4 gap-2 text-center text-[10px] font-bold pt-1">
-              <div className="bg-slate-100 p-1 rounded">BB: -</div>
-              <div className="bg-slate-100 p-1 rounded">MB: -</div>
-              <div className="bg-slate-100 p-1 rounded">BSH: -</div>
-              <div className="bg-emerald-600 text-white p-1 rounded font-black">
-                SB (Sangat Berkembang) ✓
+          {hasKokurikulerData ? (
+            <>
+              {/* Project 1 */}
+              <div className="border border-slate-900 rounded-lg p-3 mb-4 space-y-2">
+                <div className="bg-emerald-100 p-2 rounded font-black text-xs text-emerald-950 uppercase">
+                  Projek 1: Gaya Hidup Berkelanjutan - &quot;Pilah Sampah Jadi Berkah di SDN RBU 21&quot;
+                </div>
+                <p className="text-[11px] text-slate-700 leading-relaxed">
+                  Peserta didik menunjukkan kemampuan luar biasa dalam memilah sampah organik dan non-organik di sekolah,
+                  serta bergotong royong mendaur ulang botol plastik menjadi pot tanaman hidroponik.
+                </p>
+                <div className="grid grid-cols-4 gap-2 text-center text-[10px] font-bold pt-1">
+                  <div className="bg-slate-100 p-1 rounded">BB: -</div>
+                  <div className="bg-slate-100 p-1 rounded">MB: -</div>
+                  <div className="bg-slate-100 p-1 rounded">BSH: -</div>
+                  <div className="bg-emerald-600 text-white p-1 rounded font-black">
+                    SB (Sangat Berkembang) ✓
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* Project 2 */}
-          <div className="border border-slate-900 rounded-lg p-3 mb-6 space-y-2">
-            <div className="bg-amber-100 p-2 rounded font-black text-xs text-amber-950 uppercase">
-              Projek 2: Kearifan Lokal - "Melestarikan Budaya & Kuliner Khas Betawi"
-            </div>
-            <p className="text-[11px] text-slate-700 leading-relaxed">
-              Peserta didik aktif berkolaborasi dan berkebinekaan global dalam memperkenalkan kesenian ondel-ondel
-              serta kuliner tradisional Betawi Jakarta Utara.
-            </p>
-            <div className="grid grid-cols-4 gap-2 text-center text-[10px] font-bold pt-1">
-              <div className="bg-slate-100 p-1 rounded">BB: -</div>
-              <div className="bg-slate-100 p-1 rounded">MB: -</div>
-              <div className="bg-emerald-600 text-white p-1 rounded font-black">
-                BSH (Sesuai Harapan) ✓
+              {/* Project 2 */}
+              <div className="border border-slate-900 rounded-lg p-3 mb-6 space-y-2">
+                <div className="bg-amber-100 p-2 rounded font-black text-xs text-amber-950 uppercase">
+                  Projek 2: Kearifan Lokal - &quot;Melestarikan Budaya &amp; Kuliner Khas Betawi&quot;
+                </div>
+                <p className="text-[11px] text-slate-700 leading-relaxed">
+                  Peserta didik aktif berkolaborasi dan berkebinekaan global dalam memperkenalkan kesenian ondel-ondel
+                  serta kuliner tradisional Betawi Jakarta Utara.
+                </p>
+                <div className="grid grid-cols-4 gap-2 text-center text-[10px] font-bold pt-1">
+                  <div className="bg-slate-100 p-1 rounded">BB: -</div>
+                  <div className="bg-slate-100 p-1 rounded">MB: -</div>
+                  <div className="bg-emerald-600 text-white p-1 rounded font-black">
+                    BSH (Sesuai Harapan) ✓
+                  </div>
+                  <div className="bg-slate-100 p-1 rounded">SB: -</div>
+                </div>
               </div>
-              <div className="bg-slate-100 p-1 rounded">SB: -</div>
+            </>
+          ) : (
+            <div className="border border-dashed border-slate-400 rounded-xl p-8 mb-6 text-center bg-slate-50">
+              <Sprout className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm font-black text-slate-700">
+                Belum Ada Data Projek Kokurikuler (P5) untuk {activeSemester} ({activeYear})
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Data capaian projek P5 akan tampil setelah penilaian kokurikuler semester ini diisi.
+              </p>
             </div>
-          </div>
+          )}
 
           {/* Signatures */}
           <div className="pt-4 border-t border-slate-300">
             <div className="grid grid-cols-3 gap-4 text-center text-xs">
               <div>
-                <p className="font-medium text-slate-700 mb-16">Orang Tua / Wali</p>
+                <p className="font-medium text-slate-700">Orang Tua / Wali</p>
+                <div style={{ height: '4cm' }} />
                 <div className="sig-name-line w-40 mx-auto"></div>
                 <p className="text-[10px] text-slate-500">(Nama Orang Tua)</p>
               </div>
 
               <div>
-                <p className="font-medium text-slate-700 mb-16">Mengetahui,<br />Kepala Sekolah</p>
+                <p className="font-medium text-slate-700">Mengetahui,<br />Kepala Sekolah</p>
+                <div style={{ height: '4cm' }} />
                 <div className="sig-name-line w-44 mx-auto font-black text-slate-900">
                   {kepsek.nama}
                 </div>
@@ -166,8 +211,9 @@ export const RaporKokurikulerTab: React.FC<Props> = ({
               </div>
 
               <div>
-                <div className="text-xs mb-1 text-slate-800">Jakarta, 19 Desember 2026</div>
-                <p className="font-medium text-slate-700 mb-12">Mengetahui,<br />Wali Kelas</p>
+                <div className="text-xs mb-1 text-slate-800">Jakarta, {formattedDate}</div>
+                <p className="font-medium text-slate-700">Mengetahui,<br />Wali Kelas</p>
+                <div style={{ height: '4cm' }} />
                 <div className="sig-name-line w-44 mx-auto font-black text-slate-900">
                   {wali?.nama || 'Belum Ditugaskan'}
                 </div>

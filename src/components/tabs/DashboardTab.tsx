@@ -24,11 +24,13 @@ import { AttendanceRecordItem, CLASSES_LIST } from '../../utils/storage';
 import { TabId } from '../Sidebar';
 import { getStorageStats, syncAllLocalToCloud } from '../../utils/cloudSync';
 import { parseLocalDate } from '../../utils/dateUtils';
+import { isDateInSemester } from '../../utils/semesterUtils';
 
 interface Props {
   profile: SchoolProfile;
   activeClass: string;
   activeYear: string;
+  activeSemester?: string;
   students: Student[];
   teachers: Teacher[];
   attendanceRecords: Record<string, AttendanceRecordItem>;
@@ -45,6 +47,7 @@ export const DashboardTab: React.FC<Props> = ({
   profile,
   activeClass,
   activeYear,
+  activeSemester = 'Semester 1',
   students,
   teachers,
   attendanceRecords,
@@ -84,7 +87,8 @@ export const DashboardTab: React.FC<Props> = ({
   const totalInklusi = siswaInklusiList.length;
   const totalReguler = totalSiswaAll - totalInklusi;
 
-  // Persentase Kehadiran Hari Ini
+  // Persentase Kehadiran Hari Ini (disesuaikan dengan rentang semester aktif)
+  const isTodayInActiveSemester = isDateInSemester(todayDate, activeYear, activeSemester);
   const todayKaldik = kaldikDays.find((k) => k.date === todayDate);
   const isTodaySunday = parseLocalDate(todayDate).getDay() === 0;
   const isTodayHoliday = isTodaySunday || (todayKaldik ? todayKaldik.isHoliday : false);
@@ -93,28 +97,28 @@ export const DashboardTab: React.FC<Props> = ({
     : todayKaldik?.keterangan || 'Hari Libur Nasional / Cuti Bersama';
 
   let totalHadirHariIni = 0;
-  if (!isTodayHoliday) {
+  if (!isTodayHoliday && isTodayInActiveSemester) {
     students.forEach((s) => {
       const rec = attendanceRecords[`${todayDate}_${s.id}`];
       if (rec && rec.status === 'H') totalHadirHariIni++;
     });
   }
   const persentaseKehadiranTotal =
-    totalSiswaAll > 0 && !isTodayHoliday
+    totalSiswaAll > 0 && !isTodayHoliday && isTodayInActiveSemester
       ? Math.round((totalHadirHariIni / totalSiswaAll) * 100)
       : 0;
 
   // Kehadiran Rombel Aktif
   const activeClassStudents = students.filter((s) => s.kelas === activeClass);
   let activeClassHadir = 0;
-  if (!isTodayHoliday) {
+  if (!isTodayHoliday && isTodayInActiveSemester) {
     activeClassStudents.forEach((s) => {
       const rec = attendanceRecords[`${todayDate}_${s.id}`];
       if (rec && rec.status === 'H') activeClassHadir++;
     });
   }
   const activeClassPct =
-    activeClassStudents.length > 0 && !isTodayHoliday
+    activeClassStudents.length > 0 && !isTodayHoliday && isTodayInActiveSemester
       ? Math.round((activeClassHadir / activeClassStudents.length) * 100)
       : 0;
 
@@ -168,7 +172,7 @@ export const DashboardTab: React.FC<Props> = ({
             {activeClass}
           </div>
           <span className="text-xs text-rose-100 block mt-1">
-            Tahun Ajaran: <strong>{activeYear}</strong>
+            <strong>{activeYear}</strong> • <strong>{activeSemester}</strong>
           </span>
           <span className="text-[11px] text-yellow-100 block mt-0.5">
             Wali Kelas: {homeroomTeacher ? homeroomTeacher.nama : 'Belum Ditugaskan'}
@@ -302,24 +306,38 @@ export const DashboardTab: React.FC<Props> = ({
               Kehadiran Hari Ini
             </span>
             <div className={`w-10 h-10 rounded-2xl flex items-center justify-center text-lg group-hover:scale-105 transition ${
-              isTodayHoliday ? 'bg-amber-100 text-amber-700' : 'bg-teal-100 text-teal-700'
+              !isTodayInActiveSemester
+                ? 'bg-slate-100 text-slate-500'
+                : isTodayHoliday
+                ? 'bg-amber-100 text-amber-700'
+                : 'bg-teal-100 text-teal-700'
             }`}>
-              {isTodayHoliday ? <Calendar className="w-5 h-5" /> : <Activity className="w-5 h-5" />}
+              {isTodayHoliday || !isTodayInActiveSemester ? <Calendar className="w-5 h-5" /> : <Activity className="w-5 h-5" />}
             </div>
           </div>
           <div className="mt-2">
             <div className={`text-2xl sm:text-3xl font-display font-black ${
-              isTodayHoliday ? 'text-amber-700' : 'text-teal-700'
+              !isTodayInActiveSemester
+                ? 'text-slate-400'
+                : isTodayHoliday
+                ? 'text-amber-700'
+                : 'text-teal-700'
             }`}>
-              {isTodayHoliday ? '0%' : `${persentaseKehadiranTotal}%`}
+              {isTodayHoliday || !isTodayInActiveSemester ? '0%' : `${persentaseKehadiranTotal}%`}
             </div>
             <p className="text-[11px] font-bold mt-1 truncate text-slate-600">
-              {isTodayHoliday ? holidayName : `${totalHadirHariIni} / ${totalSiswaAll} Siswa Hadir`}
+              {!isTodayInActiveSemester
+                ? `Belum dimulai (${activeSemester})`
+                : isTodayHoliday
+                ? holidayName
+                : `${totalHadirHariIni} / ${totalSiswaAll} Siswa Hadir`}
             </p>
           </div>
           <div className="mt-3 pt-2.5 border-t border-slate-100 text-[10.5px] text-slate-500 flex justify-between">
             <span>Kelas {activeClass}</span>
-            <strong className="text-teal-800">{isTodayHoliday ? 'Libur' : `${activeClassPct}% Hadir`}</strong>
+            <strong className="text-teal-800">
+              {!isTodayInActiveSemester ? 'Kosong' : isTodayHoliday ? 'Libur' : `${activeClassPct}% Hadir`}
+            </strong>
           </div>
         </div>
       </div>

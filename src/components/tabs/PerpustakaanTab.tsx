@@ -95,7 +95,7 @@ interface Props {
   onOpenZoom: (url: string, title: string) => void;
 }
 
-type LibrarySubTab = 'katalog' | 'literasi' | 'sirkulasi';
+type LibrarySubTab = 'katalog' | 'pencarian' | 'literasi' | 'sirkulasi';
 
 const MONTH_NAMES_ID = [
   'Januari',
@@ -204,6 +204,12 @@ export const PerpustakaanTab: React.FC<Props> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [filterKelas, setFilterKelas] = useState<string>('Semua');
   const [filterKategori, setFilterKategori] = useState<string>('Semua');
+
+  // Dedicated Pencarian Koleksi sub-tab states
+  const [searchTabQuery, setSearchTabQuery] = useState('');
+  const [searchTabKelas, setSearchTabKelas] = useState<string>('Semua');
+  const [searchTabKategori, setSearchTabKategori] = useState<string>('Semua');
+  const [searchTabSumber, setSearchTabSumber] = useState<string>('Semua');
 
   // Reader & Cover Preview modals
   const [readingBook, setReadingBook] = useState<PerpustakaanBook | null>(null);
@@ -595,12 +601,73 @@ export const PerpustakaanTab: React.FC<Props> = ({
         !q ||
         b.judul.toLowerCase().includes(q) ||
         b.penulis.toLowerCase().includes(q) ||
-        b.sumber.toLowerCase().includes(q);
+        b.sumber.toLowerCase().includes(q) ||
+        b.kategori.toLowerCase().includes(q) ||
+        b.kelas.toLowerCase().includes(q) ||
+        (b.file_url || '').toLowerCase().includes(q);
       const matchKelas = filterKelas === 'Semua' || b.kelas === filterKelas || b.kelas === 'Semua';
       const matchKategori = filterKategori === 'Semua' || b.kategori === filterKategori;
       return matchQuery && matchKelas && matchKategori;
     });
   }, [books, searchQuery, filterKelas, filterKategori]);
+
+  const availableSources = useMemo(() => {
+    const set = new Set<string>();
+    books.forEach((b) => {
+      if (b.sumber) set.add(b.sumber);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'id'));
+  }, [books]);
+
+  const searchTabMatchedBooks = useMemo(() => {
+    const q = searchTabQuery.trim().toLowerCase();
+    return books.filter((b) => {
+      const matchQuery =
+        !q ||
+        b.judul.toLowerCase().includes(q) ||
+        b.penulis.toLowerCase().includes(q) ||
+        b.sumber.toLowerCase().includes(q) ||
+        b.kategori.toLowerCase().includes(q) ||
+        b.kelas.toLowerCase().includes(q) ||
+        (b.file_url || '').toLowerCase().includes(q);
+      const matchKelas = searchTabKelas === 'Semua' || b.kelas === searchTabKelas || b.kelas === 'Semua';
+      const matchKategori = searchTabKategori === 'Semua' || b.kategori === searchTabKategori;
+      const matchSumber = searchTabSumber === 'Semua' || b.sumber === searchTabSumber;
+      return matchQuery && matchKelas && matchKategori && matchSumber;
+    });
+  }, [books, searchTabQuery, searchTabKelas, searchTabKategori, searchTabSumber]);
+
+  const searchTabMatchedPortals = useMemo(() => {
+    const q = searchTabQuery.trim().toLowerCase();
+    if (!q) return OFFICIAL_LIBRARY_PORTALS;
+    return OFFICIAL_LIBRARY_PORTALS.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.subtitle.toLowerCase().includes(q) ||
+        p.url.toLowerCase().includes(q)
+    );
+  }, [searchTabQuery]);
+
+  const searchTabMatchedLoans = useMemo(() => {
+    const q = searchTabQuery.trim().toLowerCase();
+    if (!q) return loans.slice(0, 8);
+    return loans.filter((l) => {
+      if (isStudent && currentStudentRecord) {
+        const isMe =
+          l.student_id === currentStudentRecord.id ||
+          (currentStudentRecord.nisn && l.nisn === currentStudentRecord.nisn) ||
+          (currentStudentRecord.barcodeId && l.barcode_id === currentStudentRecord.barcodeId);
+        if (!isMe) return false;
+      }
+      return (
+        l.nama_siswa.toLowerCase().includes(q) ||
+        l.judul_buku.toLowerCase().includes(q) ||
+        l.kelas.toLowerCase().includes(q) ||
+        l.barcode_id.toLowerCase().includes(q) ||
+        l.nisn.toLowerCase().includes(q)
+      );
+    });
+  }, [loans, searchTabQuery, isStudent, currentStudentRecord]);
 
   // Available months & classes for Leaderboard filters
   const availableMonths = useMemo(() => {
@@ -1388,6 +1455,19 @@ export const PerpustakaanTab: React.FC<Props> = ({
 
             <button
               type="button"
+              onClick={() => setSubTab('pencarian')}
+              className={`px-4 py-2.5 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-2 transition cursor-pointer ${
+                subTab === 'pencarian'
+                  ? 'bg-rose-600 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              <Search className="w-4 h-4" />
+              <span>Pencarian Koleksi</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setSubTab('literasi')}
               className={`px-4 py-2.5 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-2 transition cursor-pointer ${
                 subTab === 'literasi'
@@ -1773,6 +1853,297 @@ export const PerpustakaanTab: React.FC<Props> = ({
                     </article>
                   );
                 })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ========================================================= */}
+        {/* SUB-TAB 1B: PENCARIAN KOLEKSI PERPUSTAKAAN DIGITAL        */}
+        {/* ========================================================= */}
+        {subTab === 'pencarian' && (
+          <div className="space-y-5">
+            <div className="bg-white rounded-3xl p-5 sm:p-6 border border-rose-200 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <span className="text-[11px] font-black uppercase tracking-wider text-rose-600">
+                    Mesin Pencari Perpustakaan Digital
+                  </span>
+                  <h2 className="font-display font-black text-lg text-slate-900 flex items-center gap-2 mt-0.5">
+                    <Search className="w-5 h-5 text-rose-600" /> Cari Buku, Sumber Resmi, URL &amp; Riwayat Pinjaman
+                  </h2>
+                </div>
+                {(searchTabQuery || searchTabKelas !== 'Semua' || searchTabKategori !== 'Semua' || searchTabSumber !== 'Semua') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchTabQuery('');
+                      setSearchTabKelas('Semua');
+                      setSearchTabKategori('Semua');
+                      setSearchTabSumber('Semua');
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-extrabold flex items-center gap-1.5 self-start sm:self-auto cursor-pointer transition"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Reset Pencarian
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+                <div className="md:col-span-5 relative">
+                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-rose-500" />
+                  <input
+                    type="text"
+                    value={searchTabQuery}
+                    onChange={(e) => setSearchTabQuery(e.target.value)}
+                    placeholder="Ketik judul, penulis, mata pelajaran, URL, atau nama peminjam..."
+                    className="w-full pl-10 pr-4 py-2.5 rounded-2xl border-2 border-rose-200 bg-rose-50/30 focus:bg-white focus:border-rose-500 outline-none text-xs sm:text-sm font-bold text-slate-800"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <select
+                    value={searchTabKelas}
+                    onChange={(e) => setSearchTabKelas(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-2xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-700 outline-none"
+                  >
+                    {KELAS_OPTIONS.map((kls) => (
+                      <option key={kls} value={kls}>
+                        {kls === 'Semua' ? 'Semua Kelas' : `Kelas ${kls}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="md:col-span-3">
+                  <select
+                    value={searchTabKategori}
+                    onChange={(e) => setSearchTabKategori(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-2xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-700 outline-none"
+                  >
+                    <option value="Semua">Semua Kategori</option>
+                    {KATEGORI_OPTIONS.map((kat) => (
+                      <option key={kat} value={kat}>
+                        {kat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="md:col-span-2">
+                  <select
+                    value={searchTabSumber}
+                    onChange={(e) => setSearchTabSumber(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-2xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-700 outline-none"
+                  >
+                    <option value="Semua">Semua Sumber</option>
+                    {availableSources.map((src) => (
+                      <option key={src} value={src}>
+                        {src}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Quick Topic Keywords */}
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-[11px] font-bold text-slate-500 mr-1">Kata kunci cepat:</span>
+                {['Matematika', 'Bahasa Indonesia', 'IPAS', 'Pancasila', 'PJOK', 'Cerita', 'Kelas 6'].map((kw) => (
+                  <button
+                    key={kw}
+                    type="button"
+                    onClick={() => setSearchTabQuery(kw)}
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-extrabold border transition cursor-pointer ${
+                      searchTabQuery.toLowerCase() === kw.toLowerCase()
+                        ? 'bg-rose-600 text-white border-rose-600'
+                        : 'bg-slate-50 hover:bg-rose-50 text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    {kw}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Search Result Summary Strip */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="bg-white p-3.5 rounded-2xl border border-slate-200 flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-600">Buku Digital Ditemukan</span>
+                <span className="font-mono font-black text-base text-rose-700">{searchTabMatchedBooks.length}</span>
+              </div>
+              <div className="bg-white p-3.5 rounded-2xl border border-slate-200 flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-600">Portal Resmi Cocok</span>
+                <span className="font-mono font-black text-base text-sky-700">{searchTabMatchedPortals.length}</span>
+              </div>
+              <div className="bg-white p-3.5 rounded-2xl border border-slate-200 flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-600">Data Sirkulasi / Pinjaman</span>
+                <span className="font-mono font-black text-base text-amber-700">{searchTabMatchedLoans.length}</span>
+              </div>
+            </div>
+
+            {/* Section A: Matched Books */}
+            <div className="space-y-3">
+              <h3 className="font-display font-black text-sm text-slate-800 flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-rose-600" />
+                Hasil Pencarian Koleksi Buku Digital ({searchTabMatchedBooks.length})
+              </h3>
+              {searchTabMatchedBooks.length === 0 ? (
+                <div className="bg-white rounded-3xl p-8 border border-slate-200 text-center text-xs text-slate-500 italic">
+                  Tidak ditemukan buku digital yang sesuai dengan kata kunci &ldquo;{searchTabQuery || 'filter terpilih'}&rdquo;.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {searchTabMatchedBooks.map((book) => {
+                    const activeBookLoans = activeLoansByBookId.get(book.id) || [];
+                    const isCheckedOut = activeBookLoans.length > 0;
+                    return (
+                      <article
+                        key={book.id}
+                        className="group bg-white rounded-3xl border border-slate-200 hover:border-rose-300 shadow-xs transition overflow-hidden flex flex-col justify-between"
+                      >
+                        <div>
+                          <div
+                            onClick={() => {
+                              setShowPreviewIframe(false);
+                              setPreviewBook(book);
+                            }}
+                            className="relative aspect-[4/3] bg-slate-100 overflow-hidden cursor-pointer"
+                          >
+                            <BookCoverImage
+                              src={book.cover_url}
+                              fileUrl={book.file_url}
+                              title={book.judul}
+                              kategori={book.kategori}
+                            />
+                            <span
+                              className={`absolute top-2.5 left-2.5 px-2.5 py-1 rounded-xl text-[10px] font-black shadow-xs ${
+                                isCheckedOut
+                                  ? 'bg-amber-400 text-slate-950'
+                                  : 'bg-emerald-600 text-white'
+                              }`}
+                            >
+                              {isCheckedOut ? 'Dipinjam' : 'Tersedia'}
+                            </span>
+                          </div>
+                          <div className="p-4 space-y-1.5">
+                            <div className="text-[11px] font-bold text-rose-700">
+                              {book.kategori} · {book.kelas === 'Semua' ? 'Semua Kelas' : `Kelas ${book.kelas}`}
+                            </div>
+                            <h4 className="font-display font-black text-sm text-slate-900 line-clamp-2">{book.judul}</h4>
+                            <p className="text-xs text-slate-600 line-clamp-1">
+                              {book.penulis} • {book.sumber}
+                            </p>
+                            {book.file_url && (
+                              <div className="rounded-xl bg-slate-50 border border-slate-200 px-2.5 py-1 flex items-center gap-1.5">
+                                <Link2 className="w-3 h-3 text-sky-600 shrink-0" />
+                                <span className="text-[10px] font-mono text-sky-700 truncate">{book.file_url}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="px-4 pb-4 pt-2 border-t border-slate-100 space-y-2">
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPreviewIframe(false);
+                                setPreviewBook(book);
+                              }}
+                              className="py-2 px-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-display font-extrabold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-rose-600" /> Preview
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenBookReader(book)}
+                              className="py-2 px-2 rounded-xl bg-slate-900 hover:bg-rose-600 text-white font-display font-extrabold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              <BookOpen className="w-3.5 h-3.5" /> Baca Buku
+                            </button>
+                          </div>
+                          {isStaff && (
+                            <button
+                              type="button"
+                              onClick={() => openCheckoutScannerForBook(book)}
+                              className="w-full py-1.5 rounded-xl border border-sky-300 bg-sky-50 hover:bg-sky-600 text-sky-900 hover:text-white font-display font-extrabold text-[11px] flex items-center justify-center gap-1 cursor-pointer transition"
+                            >
+                              <QrCode className="w-3.5 h-3.5" /> Pinjamkan
+                            </button>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Section B: Matched Official Portals */}
+            {searchTabMatchedPortals.length > 0 && (
+              <div className="space-y-3">
+                <h3 className="font-display font-black text-sm text-slate-800 flex items-center gap-2">
+                  <ExternalLink className="w-4 h-4 text-sky-600" />
+                  Portal Sumber Resmi Kemendikbud ({searchTabMatchedPortals.length})
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                  {searchTabMatchedPortals.map((portal) => (
+                    <a
+                      key={portal.name}
+                      href={portal.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`rounded-2xl border p-3.5 flex items-center justify-between gap-3 transition shadow-2xs ${portal.accent}`}
+                    >
+                      <div className="min-w-0">
+                        <div className="font-display font-black text-xs sm:text-sm truncate">{portal.name}</div>
+                        <div className="text-[11px] opacity-80 truncate">{portal.subtitle}</div>
+                      </div>
+                      <ExternalLink className="w-4 h-4 shrink-0 opacity-75" />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Section C: Matched Loan History */}
+            {searchTabMatchedLoans.length > 0 && (
+              <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-xs space-y-3">
+                <h3 className="font-display font-black text-sm text-slate-800 flex items-center gap-2">
+                  <QrCode className="w-4 h-4 text-amber-600" />
+                  Catatan Peminjaman Terkait ({searchTabMatchedLoans.length})
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 font-black uppercase text-[10px]">
+                      <tr>
+                        <th className="p-2.5">Siswa</th>
+                        <th className="p-2.5">Kelas</th>
+                        <th className="p-2.5">Judul Buku</th>
+                        <th className="p-2.5">Tgl Pinjam</th>
+                        <th className="p-2.5">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {searchTabMatchedLoans.slice(0, 12).map((loan) => (
+                        <tr key={loan.id} className="hover:bg-slate-50">
+                          <td className="p-2.5 font-bold text-slate-900">{loan.nama_siswa}</td>
+                          <td className="p-2.5 text-slate-600">{loan.kelas}</td>
+                          <td className="p-2.5 font-medium text-slate-800">{loan.judul_buku}</td>
+                          <td className="p-2.5 font-mono text-[11px] text-slate-500">{loan.tanggal_pinjam}</td>
+                          <td className="p-2.5">
+                            <span
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${
+                                loan.status === 'Dipinjam'
+                                  ? 'bg-amber-100 text-amber-900'
+                                  : 'bg-emerald-100 text-emerald-800'
+                              }`}
+                            >
+                              {loan.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>

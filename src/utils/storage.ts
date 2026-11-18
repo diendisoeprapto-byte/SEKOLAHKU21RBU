@@ -3,6 +3,7 @@ import { DEFAULT_SCHOOL_PROFILE, DEFAULT_TEACHERS, DEFAULT_STUDENTS, DEFAULT_SUB
 import { getDefaultSubjectsForGrade, getGradeNumberFromClass } from '../data/classCurriculumData';
 import { getLocalTodayStr } from './dateUtils';
 import { idbGet, idbRemove, idbSet } from './idbStorage';
+import { isSemesterOneLabel } from './semesterUtils';
 
 const STORAGE_KEYS = {
   PROFILE: 'sekolahku_school_profile',
@@ -445,26 +446,32 @@ export const setAssessmentCount = (key: string, count: number) => {
 export const getStoredAssessments = (key: string): AssessmentData => {
   const data = localStorage.getItem(`${STORAGE_KEYS.ASSESSMENTS}_${key}`);
   if (!data) {
-    // Generate default sample grades for students
-    const initial: AssessmentData = {};
-    DEFAULT_STUDENTS.forEach((s, idx) => {
-      const base = 78 + (idx % 12);
-      initial[s.id] = {
-        sumatif: {
-          1: base + 2,
-          2: base,
-          3: Math.max(70, base - 3),
-          4: base + 4,
-        },
-        remedial: {
-          3: base >= 75 ? 0 : 75,
-        },
-        asts: base + 1,
-        asas: base + 3,
-        catatan: 'Menunjukkan penguasaan materi yang sangat baik.',
-      };
-    });
-    return initial;
+    const parts = String(key || '').split('_');
+    const yearPart = parts[0] || '';
+    const semPart = parts[1] || '';
+    // Generate default sample grades ONLY for the initial default term (2026/2027 Semester 1)
+    if (yearPart === '2026/2027' && isSemesterOneLabel(semPart)) {
+      const initial: AssessmentData = {};
+      DEFAULT_STUDENTS.forEach((s, idx) => {
+        const base = 78 + (idx % 12);
+        initial[s.id] = {
+          sumatif: {
+            1: base + 2,
+            2: base,
+            3: Math.max(70, base - 3),
+            4: base + 4,
+          },
+          remedial: {
+            3: base >= 75 ? 0 : 75,
+          },
+          asts: base + 1,
+          asas: base + 3,
+          catatan: 'Menunjukkan penguasaan materi yang sangat baik.',
+        };
+      });
+      return initial;
+    }
+    return {};
   }
   try {
     return JSON.parse(data);
@@ -512,6 +519,38 @@ export const getStoredReportNotes = (): Record<string, StudentReportNotes> => {
 export const saveStoredReportNotes = (notes: Record<string, StudentReportNotes>) => {
   safeSetLocalStorage(STORAGE_KEYS.NOTES, JSON.stringify(notes));
   notifyStorageMutation(STORAGE_KEYS.NOTES);
+};
+
+export const getStoredReportNotesForTerm = (
+  year: string = '2026/2027',
+  semester: string = 'Semester 1'
+): Record<string, StudentReportNotes> => {
+  const termKey = `${STORAGE_KEYS.NOTES}_${year}_${semester}`;
+  const termRaw = localStorage.getItem(termKey);
+  if (termRaw) {
+    try {
+      return JSON.parse(termRaw);
+    } catch {
+      return {};
+    }
+  }
+  if (year === '2026/2027' && isSemesterOneLabel(semester)) {
+    return getStoredReportNotes();
+  }
+  return {};
+};
+
+export const saveStoredReportNotesForTerm = (
+  year: string,
+  semester: string,
+  notes: Record<string, StudentReportNotes>
+) => {
+  const termKey = `${STORAGE_KEYS.NOTES}_${year}_${semester}`;
+  safeSetLocalStorage(termKey, JSON.stringify(notes));
+  notifyStorageMutation(termKey);
+  if (year === '2026/2027' && isSemesterOneLabel(semester)) {
+    saveStoredReportNotes(notes);
+  }
 };
 
 export const getStoredCBTExams = (): CBTExam[] => {

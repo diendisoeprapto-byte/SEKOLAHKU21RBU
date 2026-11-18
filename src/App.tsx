@@ -1275,6 +1275,7 @@ export default function App() {
                   profile={profile}
                   activeClass={activeClass}
                   activeYear={activeYear}
+                  activeSemester={activeSemester}
                   students={students}
                   teachers={teachers}
                   attendanceRecords={attendanceRecords}
@@ -1321,6 +1322,8 @@ export default function App() {
                   teachers={teachers}
                   profile={profile}
                   activeClass={activeClass}
+                  activeYear={activeYear}
+                  activeSemester={activeSemester}
                   showToast={showToast}
                 />
               )}
@@ -1404,6 +1407,7 @@ export default function App() {
                   teachers={teachers}
                   profile={profile}
                   activeClass={activeClass}
+                  activeYear={activeYear}
                   activeSemester={activeSemester}
                   attendanceRecords={attendanceRecords}
                   kaldikDays={kaldikDays}
@@ -1456,6 +1460,8 @@ export default function App() {
               {activeTab === 'penilaian-ekskul' && (
                 <PenilaianEkskulTab
                   students={students}
+                  activeYear={activeYear}
+                  activeSemester={activeSemester}
                   showToast={showToast}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
                 />
@@ -1535,6 +1541,7 @@ export default function App() {
                   activeClass={activeClass}
                   activeYear={activeYear}
                   activeSemester={activeSemester}
+                  attendanceRecords={attendanceRecords}
                   showToast={showToast}
                 />
               )}
@@ -1547,6 +1554,7 @@ export default function App() {
                   teachers={teachers}
                   activeClass={activeClass}
                   activeYear={activeYear}
+                  activeSemester={activeSemester}
                 />
               )}
 
@@ -1598,6 +1606,7 @@ export default function App() {
                   teachers={teachers}
                   profile={profile}
                   activeYear={activeYear}
+                  activeSemester={activeSemester}
                   activeUser={activeUser}
                   showToast={showToast}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}

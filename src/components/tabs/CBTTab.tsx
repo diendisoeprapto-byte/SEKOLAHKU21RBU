@@ -101,6 +101,15 @@ import {
   exportQuestionsToWord,
   exportCbtQuestionsToExcel,
 } from '../../utils/questionExport';
+import {
+  exportIndividualCbtReportToWord,
+  exportClassCbtReportToWord,
+  exportIndividualCbtReportToPdf,
+  exportClassCbtReportToPdf,
+  CbtReportExportOptions,
+  CbtReportRecordInput,
+} from '../../utils/cbtReportExport';
+import { doesRecordMatchTerm } from '../../utils/semesterUtils';
 
 interface Props {
   activeUser: ActiveUser;
@@ -1164,6 +1173,8 @@ export const CBTTab: React.FC<Props> = ({
       paketName: selectedPaket,
       tanggal: getLocalTodayStr(),
       recordedAt: Date.now(),
+      tahunPelajaran: activeYear,
+      semester: activeSemester,
     });
     saveStoredCBTResults(results);
 
@@ -3063,6 +3074,7 @@ export const CBTTab: React.FC<Props> = ({
           students.forEach((st) => studentLookup.set(st.id, st));
 
           const enrichedRows = cbtResultsList
+            .filter((res) => doesRecordMatchTerm(res, activeYear, activeSemester))
             .map((res, idx) => {
               const linkedExam = examLookup.get(res.examId);
               const linkedStudent = studentLookup.get(res.studentId);
@@ -3169,29 +3181,75 @@ export const CBTTab: React.FC<Props> = ({
             year: 'numeric',
           });
 
-          const handleExportCbtExcel = () => {
+          const buildCbtExportOptions = (): CbtReportExportOptions => ({
+            schoolName: profile?.name || 'SDN Rawa Badak Utara 21',
+            schoolAddress: profile?.alamat || '',
+            schoolNpsn: profile?.npsn || '',
+            logoKemendikbudUrl: profile?.logoKemendikbudUrl,
+            logoSekolahUrl: profile?.logoSekolahUrl,
+            tahunPelajaran: activeYear,
+            semester: activeSemester,
+            filterSummary: `Paket: ${reportPaketFilter === 'all' ? 'Semua Paket' : reportPaketFilter} • Mapel: ${
+              reportMapelFilter === 'all' ? 'Semua Mapel' : reportMapelFilter
+            } • Kelas: ${reportClassFilter === 'all' ? 'Semua Kelas' : reportClassFilter}`,
+            kepsekNama: kepsekCbt.nama,
+            kepsekNipLabel: formatNipLabel(kepsekCbt.status, kepsekCbt.nip),
+            waliKelasLabel:
+              reportClassFilter !== 'all'
+                ? `Wali Kelas ${reportClassFilter}`
+                : `Wali Kelas / Guru ${activeClass}`,
+            waliNama: waliCbt?.nama || activeUser.name || 'Guru Mata Pelajaran',
+            waliNipLabel: formatNipLabel(waliCbt?.statusPegawai, waliCbt?.nip),
+          });
+
+          const toCbtExportRecord = (r: (typeof filteredCbtRows)[number]): CbtReportRecordInput => ({
+            id: r.id,
+            nama: r.nama,
+            nisn: r.nisn,
+            kelas: r.kelas,
+            mapel: r.mapel,
+            paket: r.paket,
+            judul: r.judul,
+            nilai: r.nilai,
+            predikat: r.predikat,
+            status: r.status,
+            tanggal: r.tanggal,
+            waktuSelesai: r.waktuSelesai,
+          });
+
+          const handleDownloadCbtPdf = async () => {
             if (filteredCbtRows.length === 0) {
-              showToast('Belum ada data hasil CBT yang dapat diekspor.', 'error');
+              showToast('Belum ada data hasil CBT pada semester ini untuk diunduh.', 'error');
               return;
             }
-            const rowsToExport = filteredCbtRows.map((r, idx) => ({
-              Peringkat: idx + 1,
-              NISN: r.nisn,
-              'Nama Siswa': r.nama,
-              Kelas: r.kelas,
-              'Paket Ujian': r.paket,
-              'Mata Pelajaran': r.mapel,
-              'Nilai Akhir': r.nilai,
-              Predikat: r.predikat,
-              'Status (KKTP 75)': r.status,
-              Tanggal: r.tanggal,
-              Waktu: r.waktuSelesai,
-            }));
-            const ws = XLSX.utils.json_to_sheet(rowsToExport);
-            const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, ws, 'Report Hasil CBT');
-            XLSX.writeFile(wb, `Report_Hasil_CBT_${getLocalTodayStr()}.xlsx`);
-            showToast(`Report Hasil CBT (${filteredCbtRows.length} data) berhasil diekspor ke Excel!`, 'success');
+            await exportClassCbtReportToPdf(
+              filteredCbtRows.map(toCbtExportRecord),
+              buildCbtExportOptions()
+            );
+            showToast(`Report Hasil CBT (${filteredCbtRows.length} data, .PDF) berhasil diunduh!`, 'success');
+          };
+
+          const handleDownloadCbtWord = () => {
+            if (filteredCbtRows.length === 0) {
+              showToast('Belum ada data hasil CBT pada semester ini untuk diunduh.', 'error');
+              return;
+            }
+            exportClassCbtReportToWord(
+              filteredCbtRows.map(toCbtExportRecord),
+              buildCbtExportOptions()
+            );
+            showToast(`Report Hasil CBT (${filteredCbtRows.length} data, .DOC Word) berhasil diunduh!`, 'success');
+          };
+
+          const handleDownloadIndividualCbtPdf = async (row: (typeof filteredCbtRows)[number]) => {
+            const waliRow = resolveWaliKelas(teachers, row.kelas);
+            await exportIndividualCbtReportToPdf(toCbtExportRecord(row), {
+              ...buildCbtExportOptions(),
+              waliKelasLabel: `Wali Kelas ${row.kelas}`,
+              waliNama: waliRow?.nama || activeUser.name || 'Guru Mata Pelajaran',
+              waliNipLabel: formatNipLabel(waliRow?.statusPegawai, waliRow?.nip),
+            });
+            showToast(`Rapor CBT "${row.nama}" (.PDF) berhasil diunduh.`, 'success');
           };
 
           return (
@@ -3279,11 +3337,21 @@ export const CBTTab: React.FC<Props> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={handleExportCbtExcel}
-                    className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                    onClick={() => void handleDownloadCbtPdf()}
+                    className="bg-rose-500 hover:bg-rose-400 text-white font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                    title="Unduh Report Rekapitulasi CBT (.PDF)"
                   >
-                    <FileSpreadsheet className="w-4 h-4" />
-                    <span>Export Excel</span>
+                    <Download className="w-4 h-4" />
+                    <span>Unduh PDF</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDownloadCbtWord}
+                    className="bg-sky-500 hover:bg-sky-400 text-white font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                    title="Unduh Report Rekapitulasi CBT (.DOC Word) dengan Kop Logo & spasi tanda tangan 4 cm"
+                  >
+                    <FileText className="w-4 h-4" />
+                    <span>Word (.DOC)</span>
                   </button>
                   <button
                     type="button"
@@ -3572,13 +3640,23 @@ export const CBTTab: React.FC<Props> = ({
                                 {row.tanggal} · {row.waktuSelesai}
                               </td>
                               <td className="no-print p-3 text-right">
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedCbtReportRow(row)}
-                                  className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
-                                >
-                                  <Eye className="w-3 h-3" /> Rapor CBT
-                                </button>
+                                <div className="inline-flex items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDownloadIndividualCbtPdf(row)}
+                                    className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                                    title={`Unduh Rapor CBT ${row.nama} (.PDF)`}
+                                  >
+                                    <Download className="w-3 h-3" /> Unduh PDF
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedCbtReportRow(row)}
+                                    className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                                  >
+                                    <Eye className="w-3 h-3" /> Rapor CBT
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           ))}
@@ -3596,7 +3674,7 @@ export const CBTTab: React.FC<Props> = ({
                     <p className="font-medium text-slate-700">
                       Mengetahui,<br />Kepala {profile?.name || 'SDN Rawa Badak Utara 21'}
                     </p>
-                    <div className="h-16" />
+                    <div style={{ height: '4cm' }} />
                     <p className="font-black text-slate-900 underline">{kepsekCbt.nama}</p>
                     <p className="text-[11px] font-mono text-slate-600 tabular-nums">
                       {formatNipLabel(kepsekCbt.status, kepsekCbt.nip)}
@@ -3607,7 +3685,7 @@ export const CBTTab: React.FC<Props> = ({
                       Jakarta, {tanggalCetakCbt}<br />
                       {reportClassFilter !== 'all' ? `Wali Kelas ${reportClassFilter}` : `Wali Kelas / Guru ${activeClass}`}
                     </p>
-                    <div className="h-16" />
+                    <div style={{ height: '4cm' }} />
                     <p className="font-black text-slate-900 underline">
                       {waliCbt?.nama || activeUser.name || 'Guru Mata Pelajaran'}
                     </p>
@@ -3742,24 +3820,26 @@ export const CBTTab: React.FC<Props> = ({
 
               <div className="grid grid-cols-3 gap-4 pt-4 text-xs text-center border-t border-slate-200 print-avoid-break">
                 <div>
-                  <p className="font-medium text-slate-700 mb-14">Mengetahui,<br />Orang Tua / Wali Murid</p>
+                  <p className="font-medium text-slate-700">Mengetahui,<br />Orang Tua / Wali Murid</p>
+                  <div style={{ height: '4cm' }} />
                   <div className="w-36 border-b border-slate-400 mx-auto mb-1" />
                   <p className="text-[10px] text-slate-500">(Nama Terang Orang Tua)</p>
                 </div>
                 <div>
-                  <p className="font-medium text-slate-700 mb-14">
+                  <p className="font-medium text-slate-700">
                     Mengetahui,<br />Kepala {profile?.name || 'SDN Rawa Badak Utara 21'}
                   </p>
+                  <div style={{ height: '4cm' }} />
                   <p className="font-black text-slate-900 underline">{kepsekModal.nama}</p>
                   <p className="text-[10px] font-mono text-slate-500 tabular-nums">
                     {formatNipLabel(kepsekModal.status, kepsekModal.nip)}
                   </p>
                 </div>
                 <div>
-                  <div className="text-[11px] mb-1 text-slate-700 font-medium">Jakarta, {tglModal}</div>
-                  <p className="font-medium text-slate-700 mb-10">
-                    Mengetahui,<br />Wali Kelas {selectedCbtReportRow.kelas}
+                  <p className="font-medium text-slate-700">
+                    Jakarta, {tglModal}<br />Wali Kelas {selectedCbtReportRow.kelas}
                   </p>
+                  <div style={{ height: '4cm' }} />
                   <p className="font-black text-slate-900 underline">
                     {waliModal?.nama || 'Belum Ditugaskan'}
                   </p>
@@ -3769,13 +3849,95 @@ export const CBTTab: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="no-print flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="no-print flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setSelectedCbtReportRow(null)}
                   className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
                 >
                   Tutup
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const opts: CbtReportExportOptions = {
+                      schoolName: profile?.name || 'SDN Rawa Badak Utara 21',
+                      schoolAddress: profile?.alamat || '',
+                      schoolNpsn: profile?.npsn || '',
+                      logoKemendikbudUrl: profile?.logoKemendikbudUrl,
+                      logoSekolahUrl: profile?.logoSekolahUrl,
+                      tahunPelajaran: activeYear,
+                      semester: activeSemester,
+                      filterSummary: `${selectedCbtReportRow.paket} • ${selectedCbtReportRow.mapel}`,
+                      kepsekNama: kepsekModal.nama,
+                      kepsekNipLabel: formatNipLabel(kepsekModal.status, kepsekModal.nip),
+                      waliKelasLabel: `Wali Kelas ${selectedCbtReportRow.kelas}`,
+                      waliNama: waliModal?.nama || activeUser.name || 'Guru Mata Pelajaran',
+                      waliNipLabel: formatNipLabel(waliModal?.statusPegawai, waliModal?.nip),
+                    };
+                    exportIndividualCbtReportToWord(
+                      {
+                        id: selectedCbtReportRow.id,
+                        nama: selectedCbtReportRow.nama,
+                        nisn: selectedCbtReportRow.nisn,
+                        kelas: selectedCbtReportRow.kelas,
+                        mapel: selectedCbtReportRow.mapel,
+                        paket: selectedCbtReportRow.paket,
+                        judul: selectedCbtReportRow.judul,
+                        nilai: selectedCbtReportRow.nilai,
+                        predikat: selectedCbtReportRow.predikat,
+                        status: selectedCbtReportRow.status,
+                        tanggal: selectedCbtReportRow.tanggal,
+                        waktuSelesai: selectedCbtReportRow.waktuSelesai,
+                      },
+                      opts
+                    );
+                    showToast(`Rapor CBT "${selectedCbtReportRow.nama}" (.DOC Word) berhasil diunduh.`, 'success');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-display font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  <FileText className="w-4 h-4" /> Word (.DOC)
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const opts: CbtReportExportOptions = {
+                      schoolName: profile?.name || 'SDN Rawa Badak Utara 21',
+                      schoolAddress: profile?.alamat || '',
+                      schoolNpsn: profile?.npsn || '',
+                      logoKemendikbudUrl: profile?.logoKemendikbudUrl,
+                      logoSekolahUrl: profile?.logoSekolahUrl,
+                      tahunPelajaran: activeYear,
+                      semester: activeSemester,
+                      filterSummary: `${selectedCbtReportRow.paket} • ${selectedCbtReportRow.mapel}`,
+                      kepsekNama: kepsekModal.nama,
+                      kepsekNipLabel: formatNipLabel(kepsekModal.status, kepsekModal.nip),
+                      waliKelasLabel: `Wali Kelas ${selectedCbtReportRow.kelas}`,
+                      waliNama: waliModal?.nama || activeUser.name || 'Guru Mata Pelajaran',
+                      waliNipLabel: formatNipLabel(waliModal?.statusPegawai, waliModal?.nip),
+                    };
+                    await exportIndividualCbtReportToPdf(
+                      {
+                        id: selectedCbtReportRow.id,
+                        nama: selectedCbtReportRow.nama,
+                        nisn: selectedCbtReportRow.nisn,
+                        kelas: selectedCbtReportRow.kelas,
+                        mapel: selectedCbtReportRow.mapel,
+                        paket: selectedCbtReportRow.paket,
+                        judul: selectedCbtReportRow.judul,
+                        nilai: selectedCbtReportRow.nilai,
+                        predikat: selectedCbtReportRow.predikat,
+                        status: selectedCbtReportRow.status,
+                        tanggal: selectedCbtReportRow.tanggal,
+                        waktuSelesai: selectedCbtReportRow.waktuSelesai,
+                      },
+                      opts
+                    );
+                    showToast(`Rapor CBT "${selectedCbtReportRow.nama}" (.PDF) berhasil diunduh.`, 'success');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  <Download className="w-4 h-4" /> Unduh PDF
                 </button>
                 <button
                   type="button"

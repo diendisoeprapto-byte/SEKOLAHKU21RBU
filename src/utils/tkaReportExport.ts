@@ -656,7 +656,7 @@ const renderIndividualTkaPdfPage = (
       4: { halign: 'center', fontStyle: 'bold', cellWidth: 15 },
       5: { cellWidth: 'auto' },
     },
-    didParseCell: (data) => {
+    didParseCell: (data: any) => {
       if (data.row.index === bodyRows.length - 1 && data.section === 'body') {
         data.cell.styles.fillColor = [243, 232, 255];
         data.cell.styles.fontStyle = 'bold';

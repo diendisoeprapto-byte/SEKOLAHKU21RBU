@@ -26,7 +26,7 @@ export const LegerTab: React.FC<Props> = ({
   showToast,
   onOpenZoom,
 }) => {
-  const { rankedMap, studentRows, displaySubjects } = useMemo(() => {
+  const { rankedMap, studentRows, displaySubjects, hasAnyData } = useMemo(() => {
     return calculateClassStudentRankings(students, subjects, activeClass, activeYear, activeSemester);
   }, [students, subjects, activeClass, activeYear, activeSemester]);
 
@@ -90,6 +90,18 @@ export const LegerTab: React.FC<Props> = ({
           </div>
         </div>
 
+        {!hasAnyData && (
+          <div className="p-5 rounded-2xl bg-slate-50 border-2 border-dashed border-slate-300 text-center space-y-1">
+            <h3 className="font-display font-black text-sm text-slate-800">
+              Data Leger Nilai {activeSemester} ({activeYear}) Masih Kosong
+            </h3>
+            <p className="text-xs text-slate-500">
+              Belum ada nilai mata pelajaran yang diinput untuk rombel <strong>{activeClass}</strong> pada periode{' '}
+              <strong>{activeSemester}</strong> Tahun Pelajaran <strong>{activeYear}</strong>.
+            </p>
+          </div>
+        )}
+
         {/* Master Leger Table */}
         <div className="overflow-x-auto border-2 border-slate-200 rounded-3xl shadow-xs">
           <table className="w-full text-left border-collapse text-xs">
@@ -134,34 +146,41 @@ export const LegerTab: React.FC<Props> = ({
                     <td className="p-3 text-center border-r border-slate-200 text-slate-600 font-medium">
                       {row.student.agama}
                     </td>
-                    {displaySubjects.map((sub) => (
-                      <td
-                        key={sub.code}
-                        className="p-2 text-center border-r border-slate-200 font-mono font-bold text-slate-700"
-                      >
-                        {row.scores[sub.code]}
-                      </td>
-                    ))}
+                    {displaySubjects.map((sub) => {
+                      const val = row.scores[sub.code];
+                      return (
+                        <td
+                          key={sub.code}
+                          className="p-2 text-center border-r border-slate-200 font-mono font-bold text-slate-700"
+                        >
+                          {val > 0 ? val : '-'}
+                        </td>
+                      );
+                    })}
                     <td className="p-3 text-center border-r border-slate-200 font-mono font-black text-sky-800 bg-sky-50/30">
-                      {row.total}
+                      {row.total > 0 ? row.total : '-'}
                     </td>
                     <td className="p-3 text-center border-r border-slate-200 font-mono font-black text-emerald-800 bg-emerald-50/30">
-                      {row.average}
+                      {row.average > 0 ? row.average : '-'}
                     </td>
                     <td className="p-3 text-center bg-amber-50/30">
-                      <span
-                        className={`inline-flex items-center justify-center w-6 h-6 rounded-full font-display font-black text-xs ${
-                          rank === 1
-                            ? 'bg-amber-400 text-slate-950 shadow-xs'
-                            : rank === 2
-                            ? 'bg-slate-300 text-slate-900'
-                            : rank === 3
-                            ? 'bg-amber-200 text-amber-900'
-                            : 'text-slate-600'
-                        }`}
-                      >
-                        {rank}
-                      </span>
+                      {rank > 0 ? (
+                        <span
+                          className={`inline-flex items-center justify-center w-6 h-6 rounded-full font-display font-black text-xs ${
+                            rank === 1
+                              ? 'bg-amber-400 text-slate-950 shadow-xs'
+                              : rank === 2
+                              ? 'bg-slate-300 text-slate-900'
+                              : rank === 3
+                              ? 'bg-amber-200 text-amber-900'
+                              : 'text-slate-600'
+                          }`}
+                        >
+                          {rank}
+                        </span>
+                      ) : (
+                        <span className="font-mono font-bold text-xs text-slate-400">-</span>
+                      )}
                     </td>
                   </tr>
                 );

@@ -328,11 +328,13 @@ export const PenilaianTab: React.FC<Props> = ({
     });
 
     const top10 = list.slice(0, 10);
+    const hasAnyGrades = list.some((item) => item.naRapor > 0 || item.avgAs > 0 || item.asts > 0 || item.asas > 0);
 
     return {
       sortedList: list,
       rankMap,
       top10,
+      hasAnyGrades,
     };
   }, [currentClassStudents, grades, asCount, selectedSubject]);
 
@@ -615,8 +617,26 @@ export const PenilaianTab: React.FC<Props> = ({
           </div>
         )}
 
+        {/* Notice when active semester has no grades yet */}
+        {!studentRankings.hasAnyGrades && (
+          <div className="p-4 rounded-2xl bg-slate-50 border-2 border-dashed border-slate-300 text-xs text-slate-600 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <strong className="text-slate-800 block">
+                Belum Ada Nilai pada {activeSemester} ({activeYear})
+              </strong>
+              <span>
+                Data penilaian untuk mata pelajaran <strong>{selectedSubject?.name}</strong> di{' '}
+                <strong>{activeClass}</strong> pada semester ini masih kosong. Silakan input nilai pada tabel di bawah atau impor file Excel.
+              </span>
+            </div>
+            <span className="text-[11px] font-bold px-3 py-1 rounded-xl bg-white border border-slate-200 text-slate-600">
+              {activeYear} • {activeSemester}
+            </span>
+          </div>
+        )}
+
         {/* ================= PAPAN PERINGKAT 10 BESAR SISWA (PERINGKAT 1 - 10) ================= */}
-        {showTop10Leaderboard && (
+        {showTop10Leaderboard && studentRankings.hasAnyGrades && (
           <div className="bg-gradient-to-br from-amber-50/70 via-white to-amber-50/30 p-5 rounded-3xl border-2 border-amber-200/80 shadow-xs space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-200/60 pb-3">
               <div className="flex items-center gap-2.5">
@@ -1008,7 +1028,9 @@ export const PenilaianTab: React.FC<Props> = ({
 
                     {/* Kolom Peringkat Siswa */}
                     <td className="p-2 text-center border-r border-slate-200 font-bold bg-amber-50/20">
-                      {rank === 1 ? (
+                      {!studentRankings.hasAnyGrades || naRapor === 0 ? (
+                        <span className="font-mono font-bold text-xs text-slate-400">-</span>
+                      ) : rank === 1 ? (
                         <span className="inline-flex items-center gap-1 font-black px-2 py-0.5 rounded-full text-[11px] bg-amber-100 text-amber-950 border border-amber-300 shadow-2xs">
                           🥇 Ke-1
                         </span>

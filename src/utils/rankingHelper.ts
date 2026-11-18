@@ -14,6 +14,7 @@ export interface ClassRankingData {
   rankedMap: Record<string, number>;
   studentRows: StudentRankResult[];
   displaySubjects: Array<{ code: string; name: string }>;
+  hasAnyData: boolean;
 }
 
 export const LEGER_DISPLAY_SUBJECTS = [
@@ -40,7 +41,7 @@ export function calculateClassStudentRankings(
   subjects: Subject[],
   activeClass: string,
   activeYear: string = '2026/2027',
-  activeSemester: string = 'Ganjil'
+  activeSemester: string = 'Semester 1'
 ): ClassRankingData {
   const filteredStudents = students.filter((s) => s.kelas === activeClass);
   const gradeNum = getGradeNumberFromClass(activeClass);
@@ -57,11 +58,14 @@ export function calculateClassStudentRankings(
     ? [...LEGER_DISPLAY_SUBJECTS, KKA_DISPLAY_SUBJECT]
     : LEGER_DISPLAY_SUBJECTS;
 
+  let hasAnyData = false;
+
   const studentRows: Omit<StudentRankResult, 'rank'>[] = filteredStudents.map((s) => {
     const subjectScores: Record<string, number> = {};
     let totalScore = 0;
+    let gradedSubjectCount = 0;
 
-    displaySubjects.forEach((sub, sIdx) => {
+    displaySubjects.forEach((sub) => {
       const matchedSubject = (subjects || []).find((sj) => {
         const sc = sj.code.toUpperCase();
         const sn = sj.name.toLowerCase();
@@ -99,21 +103,20 @@ export function calculateClassStudentRankings(
           const asas = studentGrade.asas || 0;
           if (avgAs > 0 || asts > 0 || asas > 0) {
             naRapor = Math.round((2 * avgAs + asts + asas) / 4);
+            if (naRapor > 0) {
+              hasAnyData = true;
+              gradedSubjectCount++;
+            }
           }
         }
-      }
-
-      // Jika belum ada nilai diisi oleh guru, gunakan seed konsisten berdasarkan nama
-      if (!naRapor) {
-        const seed = ((s.nama.charCodeAt(0) + sIdx * 7) % 18) + 78;
-        naRapor = seed;
       }
 
       subjectScores[sub.code] = naRapor;
       totalScore += naRapor;
     });
 
-    const averageScore = Math.round((totalScore / displaySubjects.length) * 10) / 10;
+    const averageScore =
+      gradedSubjectCount > 0 ? Math.round((totalScore / displaySubjects.length) * 10) / 10 : 0;
 
     return {
       student: s,
@@ -127,17 +130,18 @@ export function calculateClassStudentRankings(
   const sorted = [...studentRows].sort((a, b) => b.total - a.total);
   const rankedMap: Record<string, number> = {};
   sorted.forEach((item, rIdx) => {
-    rankedMap[item.student.id] = rIdx + 1;
+    rankedMap[item.student.id] = hasAnyData && item.total > 0 ? rIdx + 1 : 0;
   });
 
   const fullResults: StudentRankResult[] = studentRows.map((row) => ({
     ...row,
-    rank: rankedMap[row.student.id] || 1,
+    rank: rankedMap[row.student.id] || 0,
   }));
 
   return {
     rankedMap,
     studentRows: fullResults,
     displaySubjects,
+    hasAnyData,
   };
 }

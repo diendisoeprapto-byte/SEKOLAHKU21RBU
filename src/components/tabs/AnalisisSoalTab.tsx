@@ -45,6 +45,7 @@ import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { stripQuestionTags } from '../../utils/questionFormat';
 import { syncAllLocalToCloud } from '../../utils/cloudSync';
 import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
+import { doesRecordMatchTerm, isSemesterOneLabel } from '../../utils/semesterUtils';
 
 export const PAKET_SOAL_LIST = [
   'Sumatif 1 (AS 1)',
@@ -106,7 +107,11 @@ export const AnalisisSoalTab: React.FC<Props> = ({
   const [cbtResults, setCbtResults] = useState<CBTExamResult[]>(
     () => getStoredCBTResults().filter((r) => !isTkaResultEntry(r))
   );
-  const cbtResultCount = cbtResults.length;
+  const termCbtResults = useMemo(
+    () => cbtResults.filter((r) => doesRecordMatchTerm(r, activeYear, activeSemester)),
+    [cbtResults, activeYear, activeSemester]
+  );
+  const cbtResultCount = termCbtResults.length;
 
   React.useEffect(() => {
     const refreshData = () => {
@@ -187,7 +192,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
 
   const matchingExamResults = useMemo(() => {
     const mapelLower = selectedMapel.trim().toLowerCase();
-    return cbtResults.filter((r) => {
+    return termCbtResults.filter((r) => {
       if (r.mapel) {
         const rMapel = r.mapel.trim().toLowerCase();
         if (rMapel && !(rMapel === mapelLower || rMapel.includes(mapelLower) || mapelLower.includes(rMapel))) {
@@ -197,7 +202,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
       if (matchingExam && r.examId === matchingExam.id) return true;
       return doesExamResultMatchTarget(r, selectedPaket, selectedMapel);
     });
-  }, [cbtResults, matchingExam, selectedPaket, selectedMapel]);
+  }, [termCbtResults, matchingExam, selectedPaket, selectedMapel]);
 
   // Generate analysis rows: prefer real CBT questions/results when available, fallback to curriculum benchmark items
   const questionsData = useMemo(() => {
@@ -550,7 +555,39 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     return inClass.filter((s) => !isSiswaInklusi(s.kebutuhanKhusus));
   }, [propStudents, selectedClass, isInclusivePackage]);
 
+  const isDefaultTerm = activeYear === '2026/2027' && isSemesterOneLabel(activeSemester);
+
   const studentAnalysisRows = useMemo(() => {
+    if (matchingExamResults.length === 0 && !isDefaultTerm) {
+      return [];
+    }
+    if (matchingExamResults.length > 0) {
+      const rows = targetStudents
+        .map((s) => {
+          const matched = matchingExamResults.find(
+            (r) =>
+              r.studentId === s.id ||
+              (r.studentName && r.studentName.trim().toLowerCase() === s.nama.trim().toLowerCase())
+          );
+          if (!matched) return null;
+          const score = Number.isFinite(Number(matched.nilai)) ? Math.round(Number(matched.nilai)) : 0;
+          const isTuntas = score >= 75;
+          return {
+            student: s,
+            score,
+            isTuntas,
+            rekomendasi: isTuntas
+              ? 'Tuntas - Memiliki penguasaan kompetensi yang baik pada materi ini'
+              : isInclusivePackage
+              ? 'Perlu Penguatan Pendampingan Individual / Remedial Adaptif'
+              : 'Diberikan Pendampingan Remedial Terarah pada TP yang Belum Tercapai',
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null);
+      if (rows.length > 0 || !isDefaultTerm) {
+        return rows;
+      }
+    }
     return targetStudents.map((s, idx) => {
       const seed = ((s.nama.charCodeAt(0) * 3 + idx * 7 + selectedPaket.length * 5) % 25) + 75;
       const score = Math.min(100, Math.max(65, seed));
@@ -566,7 +603,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           : 'Diberikan Pendampingan Remedial Terarah pada TP yang Belum Tercapai',
       };
     });
-  }, [targetStudents, selectedPaket, isInclusivePackage]);
+  }, [targetStudents, selectedPaket, isInclusivePackage, matchingExamResults, isDefaultTerm]);
 
   const kepsekAnalisis = resolveKepalaSekolah(teachers, profile);
   const waliAnalisis = resolveWaliKelas(teachers, selectedClass);
@@ -1344,7 +1381,9 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                 {studentAnalysisRows.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="p-6 text-center text-slate-500 font-medium">
-                      {isInclusivePackage
+                      {!isDefaultTerm && matchingExamResults.length === 0
+                        ? `Belum ada data hasil asesmen CBT pada ${activeSemester} (${activeYear}) untuk ${selectedClass}.`
+                        : isInclusivePackage
                         ? `Tidak ada data siswa inklusi di ${selectedClass}.`
                         : `Tidak ada data siswa reguler di ${selectedClass}.`}
                     </td>
@@ -1407,7 +1446,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
               <p className="font-medium text-slate-700">
                 Mengetahui,<br />Kepala {profile?.name || 'SDN Rawa Badak Utara 21'}
               </p>
-              <div className="h-16" />
+              <div style={{ height: '4cm' }} />
               <p className="font-black text-slate-900 underline">{kepsekAnalisis.nama}</p>
               <p className="text-[11px] font-mono text-slate-600 tabular-nums">
                 {formatNipLabel(kepsekAnalisis.status, kepsekAnalisis.nip)}
@@ -1417,7 +1456,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
               <p className="font-medium text-slate-700">
                 Jakarta, {tanggalCetakAnalisis}<br />Wali Kelas / Guru {selectedClass}
               </p>
-              <div className="h-16" />
+              <div style={{ height: '4cm' }} />
               <p className="font-black text-slate-900 underline">
                 {waliAnalisis?.nama || 'Guru Mata Pelajaran'}
               </p>
