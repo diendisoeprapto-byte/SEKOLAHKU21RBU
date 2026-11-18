@@ -27,6 +27,153 @@ const FRACTION_MAP: Record<string, string> = {
   '1/10': 'satu persepuluh',
 };
 
+export interface MathTextToken {
+  type: 'text' | 'fraction';
+  value?: string;
+  whole?: string;
+  numerator?: string;
+  denominator?: string;
+  raw?: string;
+}
+
+const parseFractionPayload = (
+  payload: string
+): { whole?: string; numerator: string; denominator: string } | null => {
+  const clean = (payload || '').trim();
+  const slashIdx = clean.indexOf('/');
+  if (slashIdx === -1) return null;
+
+  const left = clean.slice(0, slashIdx).trim();
+  const right = clean.slice(slashIdx + 1).trim();
+  if (!left || !right) return null;
+
+  // Mixed fraction inside tag: e.g. "1 2/5" or "-2 3/4"
+  const mixedMatch = left.match(/^([+-]?\d+)\s+(.+)$/);
+  if (mixedMatch) {
+    return {
+      whole: mixedMatch[1],
+      numerator: mixedMatch[2].trim(),
+      denominator: right,
+    };
+  }
+
+  return {
+    numerator: left,
+    denominator: right,
+  };
+};
+
+/**
+ * Mengurai teks menjadi token teks biasa & pecahan susun vertikal (2/5, 1 2/5, [pecahan]2/5[/pecahan], \frac{2}{5}).
+ * Aman terhadap tanggal (mis. 17/08/1945) dan URL.
+ */
+export function tokenizeMathText(text: string): MathTextToken[] {
+  const input = text || '';
+  if (!input) return [];
+
+  const tokens: MathTextToken[] = [];
+  // Matches:
+  // 1) [pecahan]...[/pecahan] or [frac]...[/frac]
+  // 2) optional whole + \frac{num}{den}
+  // 3) optional whole + numeric num/den bounded safely so dates like 17/08/1945 or URLs are skipped
+  const pattern =
+    /\[(?:pecahan|frac)\]([\s\S]*?)\[\/(?:pecahan|frac)\]|(?:([+-]?\d+)\s+)?\\frac\{([^{}]+)\}\{([^{}]+)\}|(?:^|(?<=[\s(\[=+\-×÷*:,;"'<>]))(?:([+-]?\d{1,3})\s+)?(\d{1,4})\/(\d{1,4})(?=$|[\s)\]=+\-×÷*:,;"'<>%?!.])/g;
+
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(input)) !== null) {
+    const fullMatch = match[0];
+    const start = match.index;
+
+    if (start > lastIndex) {
+      tokens.push({ type: 'text', value: input.slice(lastIndex, start) });
+    }
+
+    if (match[1] !== undefined) {
+      const parsed = parseFractionPayload(match[1]);
+      if (parsed) {
+        tokens.push({
+          type: 'fraction',
+          whole: parsed.whole,
+          numerator: parsed.numerator,
+          denominator: parsed.denominator,
+          raw: fullMatch,
+        });
+      } else {
+        tokens.push({ type: 'text', value: fullMatch });
+      }
+    } else if (match[3] !== undefined && match[4] !== undefined) {
+      tokens.push({
+        type: 'fraction',
+        whole: match[2]?.trim() || undefined,
+        numerator: match[3].trim(),
+        denominator: match[4].trim(),
+        raw: fullMatch,
+      });
+    } else if (match[6] !== undefined && match[7] !== undefined) {
+      tokens.push({
+        type: 'fraction',
+        whole: match[5]?.trim() || undefined,
+        numerator: match[6],
+        denominator: match[7],
+        raw: fullMatch,
+      });
+    } else {
+      tokens.push({ type: 'text', value: fullMatch });
+    }
+
+    lastIndex = start + fullMatch.length;
+  }
+
+  if (lastIndex < input.length) {
+    tokens.push({ type: 'text', value: input.slice(lastIndex) });
+  }
+
+  return tokens;
+}
+
+/**
+ * Menyisipkan atau membungkus seleksi menjadi tag [pecahan]...[/pecahan].
+ */
+export function insertFractionAtSelection(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  numerator: string,
+  denominator: string,
+  whole?: string
+): { nextValue: string; nextCursor: number } {
+  const num = (numerator || '').trim();
+  const den = (denominator || '').trim();
+  const wh = (whole || '').trim();
+  const payload = wh ? `${wh} ${num}/${den}` : `${num}/${den}`;
+  const tag = `[pecahan]${payload}[/pecahan]`;
+
+  const before = value.slice(0, selectionStart);
+  const after = value.slice(selectionEnd);
+  const nextValue = `${before}${tag}${after}`;
+  const nextCursor = before.length + tag.length;
+  return { nextValue, nextCursor };
+}
+
+/**
+ * Mengonversi penulisan pecahan miring (mis. 2/5 atau 1 2/5) menjadi tag eksplisit [pecahan]...[/pecahan]
+ * agar siap dipakai di form pertanyaan maupun opsi pilihan.
+ */
+export function convertPlainFractionsToTags(text: string): string {
+  const tokens = tokenizeMathText(text);
+  return tokens
+    .map((tok) => {
+      if (tok.type === 'text') return tok.value || '';
+      const payload = tok.whole
+        ? `${tok.whole} ${tok.numerator}/${tok.denominator}`
+        : `${tok.numerator}/${tok.denominator}`;
+      return `[pecahan]${payload}[/pecahan]`;
+    })
+    .join('');
+}
+
 export function convertFractionsText(text: string): string {
   let updated = text;
   Object.entries(FRACTION_MAP).forEach(([frac, rep]) => {
@@ -131,17 +278,17 @@ export function extractPastedQuestionText(e: React.ClipboardEvent<HTMLTextAreaEl
           const rawText = (clone.textContent || '').replace(/\u00a0/g, ' ');
           const subLines = rawText
             .split('\n')
-            .map((l) => l.replace(/\s+/g, ' ').trim())
-            .filter(Boolean);
+            .map((l) => l.replace(/[ \t]+$/g, ''))
+            .filter((l) => l.trim().length > 0);
 
           if (subLines.length === 0) {
-            if (lines.length > 0 && lines[lines.length - 1] !== '') {
+            if (lines.length > 0) {
               lines.push('');
             }
           } else {
             const centered = isCenteredElement(el);
             subLines.forEach((sub) => {
-              lines.push(centered ? `[center]${sub}[/center]` : sub);
+              lines.push(centered ? `[center]${sub.trim()}[/center]` : sub);
             });
           }
         }
@@ -157,7 +304,7 @@ export function extractPastedQuestionText(e: React.ClipboardEvent<HTMLTextAreaEl
       walk(body.childNodes[i]);
     }
 
-    const joined = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    const joined = lines.join('\n').replace(/^\n+|\n+$/g, '');
     return joined || null;
   } catch {
     return null;
@@ -261,13 +408,12 @@ export function parseQuestionSegments(
   }
 
   // Langkah 2: Untuk teks di luar tag [center], deteksi baris yang ditulis di tengah (menggunakan spasi/tab simetris atau indentasi tengah)
-  // serta pertahankan pemisahan paragraf/baris agar judul tidak menyatu dengan paragraf setelahnya.
+  // serta pertahankan pemisahan & jarak spasi antar paragraf (termasuk beberapa baris kosong).
   const bodyLinesBuffer: string[] = [];
   const flushBodyBuffer = () => {
     const joined = bodyLinesBuffer
       .join('\n')
-      .replace(/^\n+|\n+$/g, '')
-      .replace(/\n{3,}/g, '\n\n');
+      .replace(/^\n+|\n+$/g, '');
     if (joined.trim()) {
       segments.push({ type: 'body', text: joined });
     }
@@ -294,7 +440,7 @@ export function parseQuestionSegments(
       const trimmed = line.trim();
 
       if (!trimmed) {
-        if (bodyLinesBuffer.length > 0 && bodyLinesBuffer[bodyLinesBuffer.length - 1] !== '') {
+        if (bodyLinesBuffer.length > 0) {
           bodyLinesBuffer.push('');
         }
         continue;
@@ -305,12 +451,12 @@ export function parseQuestionSegments(
       const hasCenterIndent = /^(?: {4,}|\t+)\S/.test(line);
       const isOptionOrBullet = /^(?:[A-Ea-e][\.\)]|\d+[\.\)]|[-•*]\s)/.test(trimmed);
       const hasFollowingText = rawLines.slice(i + 1).some((nl) => nl.trim().length > 0);
-      const looksLikeQuestion = /[?:]$/.test(trimmed);
+      const looksLikeProseOrQuestion = /[?:.,!]$/.test(trimmed);
 
       const isHeuristicCentered =
         !isOptionOrBullet &&
         trimmed.length <= 110 &&
-        (hasSymmetricPadding || (hasCenterIndent && hasFollowingText && !looksLikeQuestion));
+        (hasSymmetricPadding || (hasCenterIndent && hasFollowingText && !looksLikeProseOrQuestion));
 
       if (isHeuristicCentered) {
         flushBodyBuffer();
@@ -321,7 +467,7 @@ export function parseQuestionSegments(
           segments.push({ type: 'title', text: trimmed });
         }
       } else {
-        bodyLinesBuffer.push(trimmed);
+        bodyLinesBuffer.push(line.replace(/\s+$/, ''));
       }
     }
   });
@@ -335,8 +481,13 @@ export function parseQuestionSegments(
 }
 
 /**
- * Mengubah teks soal menjadi string bersih untuk ekspor/ringkasan tabel tanpa tag [center].
+ * Mengubah teks soal menjadi string bersih untuk ekspor/ringkasan tabel tanpa tag [center]/[pecahan].
  */
 export function stripQuestionTags(text: string): string {
-  return (text || '').replace(/\[\/?center\]/gi, '').replace(/<\/?center>/gi, '').trim();
+  return (text || '')
+    .replace(/\[\/?center\]/gi, '')
+    .replace(/<\/?center>/gi, '')
+    .replace(/\[\/?(?:pecahan|frac)\]/gi, '')
+    .replace(/\^\{?\\circ\}?|\\degree/g, '°')
+    .trim();
 }

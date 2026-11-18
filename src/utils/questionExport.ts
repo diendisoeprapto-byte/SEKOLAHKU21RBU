@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import { CBTQuestion, TKAQuestion } from '../types';
-import { parseQuestionSegments, stripQuestionTags } from './questionFormat';
+import { parseQuestionSegments, stripQuestionTags, tokenizeMathText } from './questionFormat';
 
 export interface QuestionExportMeta {
   title: string;
@@ -20,6 +20,24 @@ const escapeHtml = (str: string): string =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+
+const renderWordMathHtml = (text: string): string => {
+  return tokenizeMathText(text || '')
+    .map((tok) => {
+      if (tok.type === 'fraction' && tok.numerator && tok.denominator) {
+        const wholeHtml = tok.whole
+          ? `<span style="font-weight:bold;vertical-align:middle;margin-right:2px;">${escapeHtml(tok.whole)}</span>`
+          : '';
+        return `${wholeHtml}<span style="display:inline-table;vertical-align:middle;text-align:center;line-height:1.05;margin:0 2px;font-size:0.88em;font-weight:bold;"><span style="display:table-row;"><span style="display:table-cell;border-bottom:1.5px solid #0f172a;padding:0 3px 1px 3px;">${escapeHtml(
+          tok.numerator
+        )}</span></span><span style="display:table-row;"><span style="display:table-cell;padding:1px 3px 0 3px;">${escapeHtml(
+          tok.denominator
+        )}</span></span></span>`;
+      }
+      return escapeHtml(tok.value || '');
+    })
+    .join('');
+};
 
 const formatKunciDisplay = (q: CBTQuestion | TKAQuestion): string => {
   if (Array.isArray(q.kunciJawaban)) {
@@ -49,7 +67,7 @@ const formatTipeLabel = (tipe: CBTQuestion['tipe']): string => {
 
 /**
  * Mengunduh daftar soal (CBT maupun TKA) dalam format dokumen Microsoft Word (.doc)
- * yang rapi, mendukung judul rata tengah, gambar soal, opsi A-D, serta opsional kunci jawaban & pembahasan.
+ * yang rapi, mendukung judul rata tengah, pecahan susun, jarak paragraf, gambar soal, opsi A-D, serta opsional kunci jawaban.
  */
 export const exportQuestionsToWord = (
   questions: Array<CBTQuestion | TKAQuestion>,
@@ -68,11 +86,26 @@ export const exportQuestionsToWord = (
 
       const stemHtml = segments
         .map((seg) => {
-          const safe = escapeHtml(seg.text).replace(/\n/g, '<br/>');
           if (seg.type === 'title') {
-            return `<p style="text-align:center;font-weight:bold;margin:4px 0 6px 0;">${safe}</p>`;
+            const safeTitle = renderWordMathHtml(seg.text).replace(/\n/g, '<br/>');
+            return `<p style="text-align:center;font-weight:bold;margin:4px 0 8px 0;">${safeTitle}</p>`;
           }
-          return `<p style="margin:2px 0 6px 0;text-align:justify;">${safe}</p>`;
+          const chunks = seg.text.split(/(\n{2,})/);
+          return chunks
+            .map((chunk) => {
+              if (!chunk) return '';
+              if (/^\n{2,}$/.test(chunk)) {
+                const blanks = chunk.length - 1;
+                return blanks > 1
+                  ? `<div style="height:${(blanks - 1) * 12}pt;"></div>`
+                  : '';
+              }
+              const cleanChunk = chunk.replace(/^\n+|\n+$/g, '');
+              if (!cleanChunk.trim()) return '';
+              const safeBody = renderWordMathHtml(cleanChunk).replace(/\n/g, '<br/>');
+              return `<p style="margin:2px 0 10px 0;text-align:justify;">${safeBody}</p>`;
+            })
+            .join('');
         })
         .join('');
 
@@ -96,7 +129,7 @@ export const exportQuestionsToWord = (
               return `<tr>
                 <td style="width:24px;vertical-align:top;padding:2px 0;font-weight:bold;">${letter}.</td>
                 <td style="vertical-align:top;padding:2px 0;">
-                  ${escapeHtml(op)}
+                  ${renderWordMathHtml(op)}
                   ${
                     opImg
                       ? `<div style="margin-top:3px;"><img src="${escapeHtml(

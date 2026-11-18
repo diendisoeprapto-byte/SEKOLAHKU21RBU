@@ -89,9 +89,8 @@ export async function parseQuestionsFromDocx(file: File): Promise<DocxParseResul
 function parseSingleQuestionBlock(block: string, id: string): CBTQuestion | null {
   const lines = block
     .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (lines.length === 0) return null;
+    .map((l) => l.replace(/\s+$/, ''));
+  if (!lines.some((l) => l.trim().length > 0)) return null;
 
   let pertanyaan = '';
   const opsi: string[] = [];
@@ -103,32 +102,35 @@ function parseSingleQuestionBlock(block: string, id: string): CBTQuestion | null
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      if (!inOptions && qLines.length > 0) {
+        qLines.push('');
+      }
+      continue;
+    }
 
     // Deteksi kunci jawaban
-    const keyMatch = line.match(/^(?:Kunci|Jawaban|Kunci Jawaban|KUNCI)\s*[:=]\s*([A-Ea-e1-4]|\w+)/i);
+    const keyMatch = trimmed.match(/^(?:Kunci|Jawaban|Kunci Jawaban|KUNCI)\s*[:=]\s*([A-Ea-e1-4]|\w+)/i);
     if (keyMatch) {
       kunciJawaban = keyMatch[1].trim().toUpperCase();
       continue;
     }
 
     // Deteksi pembahasan
-    const pembMatch = line.match(/^(?:Pembahasan|Penjelasan|Keterangan)\s*[:=]\s*(.+)/i);
+    const pembMatch = trimmed.match(/^(?:Pembahasan|Penjelasan|Keterangan)\s*[:=]\s*(.+)/i);
     if (pembMatch) {
       pembahasan = pembMatch[1].trim();
       continue;
     }
 
     // Deteksi opsi A, B, C, D, E
-    const optMatch = line.match(/^([A-Ea-e])[\.\)]\s*(.+)/);
+    const optMatch = trimmed.match(/^([A-Ea-e])[\.\)]\s*(.+)/);
     if (optMatch) {
       inOptions = true;
       const optText = optMatch[2].trim();
-      // Tandai jika ada bintang kunci jawaban, misal: *A. Jakarta
-      if (optMatch[1].toUpperCase() === kunciJawaban) {
-        opsi.push(optText);
-      } else {
-        opsi.push(optText);
-      }
+      opsi.push(optText);
       continue;
     }
 
@@ -137,13 +139,13 @@ function parseSingleQuestionBlock(block: string, id: string): CBTQuestion | null
     } else {
       // Sambungan opsi sebelumnya atau pembahasan
       if (opsi.length > 0) {
-        opsi[opsi.length - 1] += ' ' + line;
+        opsi[opsi.length - 1] += ' ' + trimmed;
       }
     }
   }
 
-  pertanyaan = qLines.join('\n').trim();
-  if (!pertanyaan) return null;
+  pertanyaan = qLines.join('\n').replace(/^\n+|\n+$/g, '');
+  if (!pertanyaan.trim()) return null;
 
   // Tentukan tipe soal
   let tipe: CBTQuestion['tipe'] = 'pg';

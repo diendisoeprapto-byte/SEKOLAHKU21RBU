@@ -1,5 +1,6 @@
 import React from 'react';
 import { PosisiGambar, parseQuestionSegments } from '../utils/questionFormat';
+import { MathRenderer, MathFontFamily, MixedFractionMode } from './MathRenderer';
 
 interface QuestionContentProps {
   pertanyaan: string;
@@ -11,6 +12,8 @@ interface QuestionContentProps {
   titleClassName?: string;
   bodyClassName?: string;
   compact?: boolean;
+  mathFont?: MathFontFamily;
+  mixedFractionMode?: MixedFractionMode;
 }
 
 export const QuestionContent: React.FC<QuestionContentProps> = ({
@@ -23,6 +26,8 @@ export const QuestionContent: React.FC<QuestionContentProps> = ({
   titleClassName = 'text-sm sm:text-base font-display font-black text-slate-900',
   bodyClassName = 'text-xs sm:text-sm font-semibold text-slate-800 leading-relaxed',
   compact = false,
+  mathFont,
+  mixedFractionMode = 'mixed',
 }) => {
   const { segments, hasTitle } = parseQuestionSegments(pertanyaan, judulTeks);
   const hasAnyImage = Boolean(gambarUrl || gambarUrl2);
@@ -110,25 +115,47 @@ export const QuestionContent: React.FC<QuestionContentProps> = ({
       return (
         <div
           key={`seg-title-${idx}`}
-          className={`w-full text-center whitespace-pre-line py-1.5 px-3 rounded-xl bg-slate-50/70 border border-slate-200/80 tracking-wide ${titleClassName}`}
+          className={`w-full text-center whitespace-pre-wrap py-1.5 px-3 rounded-xl bg-slate-50/70 border border-slate-200/80 tracking-wide ${titleClassName}`}
         >
-          {seg.text}
+          <MathRenderer
+            text={seg.text}
+            fontFamily={mathFont || 'nunito'}
+            mixedFractionMode={mixedFractionMode}
+          />
         </div>
       );
     }
 
-    const paragraphs = seg.text
-      .split(/\n{2,}/)
-      .map((p) => p.trim())
-      .filter(Boolean);
+    // Pisahkan berdasarkan jeda baris kosong (\n\n, \n\n\n, dst.) sehingga perbedaan jarak antar paragraf
+    // maupun spasi awal/indentasi paragraf tetap terlihat jelas saat ditampilkan ke siswa.
+    const chunks = seg.text.split(/(\n{2,})/);
 
     return (
-      <div key={`seg-body-${idx}`} className="space-y-2.5">
-        {paragraphs.map((para, pIdx) => (
-          <p key={pIdx} className={`${bodyClassName} whitespace-pre-line text-left`}>
-            {para}
-          </p>
-        ))}
+      <div key={`seg-body-${idx}`} className="space-y-1.5">
+        {chunks.map((chunk, cIdx) => {
+          if (!chunk) return null;
+          if (/^\n{2,}$/.test(chunk)) {
+            const blankLines = chunk.length - 1;
+            return (
+              <div
+                key={`gap-${cIdx}`}
+                aria-hidden="true"
+                style={{ height: `${blankLines * 1.0}rem` }}
+              />
+            );
+          }
+          const cleaned = chunk.replace(/^\n+|\n+$/g, '');
+          if (!cleaned.trim()) return null;
+          return (
+            <p key={`p-${cIdx}`} className={`${bodyClassName} whitespace-pre-wrap text-left`}>
+              <MathRenderer
+                text={cleaned}
+                fontFamily={mathFont || 'plus-jakarta'}
+                mixedFractionMode={mixedFractionMode}
+              />
+            </p>
+          );
+        })}
       </div>
     );
   };

@@ -111,11 +111,15 @@ import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxI
 import { compressQuestionImage } from '../../utils/imageUtils';
 import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
 import { QuestionContent } from '../QuestionContent';
+import { FormattedMathText, FractionBuilderBar } from '../FormattedMathText';
+import { MathPreviewPanel } from '../MathPreviewPanel';
 import {
   PosisiGambar,
   extractPastedQuestionText,
   toggleCenterTagOnSelection,
   stripQuestionTags,
+  insertFractionAtSelection,
+  convertPlainFractionsToTags,
 } from '../../utils/questionFormat';
 import {
   TKAExamRoomDraft,
@@ -653,6 +657,7 @@ export const TKATabs: React.FC<Props> = ({
   const [formPosisiGambar, setFormPosisiGambar] = useState<PosisiGambar>('bawah_judul');
   const [formOpsiGambar, setFormOpsiGambar] = useState<Record<string, string>>({});
   const [formBobot, setFormBobot] = useState(10);
+  const [showTkaFractionBuilder, setShowTkaFractionBuilder] = useState(false);
   const [formDurasiMenit, setFormDurasiMenit] = useState<number>(() =>
     getTKADurationMinutes(getStoredTKADurations(), 'Simulasi 1', 'Bahasa Indonesia')
   );
@@ -906,34 +911,6 @@ export const TKATabs: React.FC<Props> = ({
     return () => clearInterval(interval);
   }, [isSimulationRunning]);
 
-  // Fraction converter helper (1/3 -> satu pertiga)
-  const convertFractions = (text: string) => {
-    const fractionMap: Record<string, string> = {
-      '1/2': 'satu perdua (setengah)',
-      '1/3': 'satu pertiga',
-      '2/3': 'dua pertiga',
-      '1/4': 'satu perempat (seperempat)',
-      '3/4': 'tiga perempat',
-      '1/5': 'satu perlima',
-      '2/5': 'dua perlima',
-      '3/5': 'tiga perlima',
-      '4/5': 'empat perlima',
-      '1/6': 'satu perenam',
-      '5/6': 'lima perenam',
-      '1/8': 'satu perdelapan',
-      '3/8': 'tiga perdelapan',
-      '5/8': 'lima perdelapan',
-      '7/8': 'tujuh perdelapan',
-      '1/10': 'satu persepuluh',
-    };
-    let updated = text;
-    Object.keys(fractionMap).forEach((frac) => {
-      const regex = new RegExp(`\\b${frac.replace('/', '\\/')}\\b`, 'g');
-      updated = updated.replace(regex, fractionMap[frac]);
-    });
-    return updated;
-  };
-
   const [clearTkaModalContext, setClearTkaModalContext] = useState<{
     source: 'analisis' | 'rekap';
     targetPaket: string;
@@ -1092,10 +1069,70 @@ export const TKATabs: React.FC<Props> = ({
     }
   };
 
-  const handleApplyFractionConvert = () => {
-    const converted = convertFractions(formPertanyaan);
-    setFormPertanyaan(converted);
-    showToast('Pecahan berhasil diubah ke format teks sesuai EYD V!', 'success');
+  const handleInsertTkaFraction = (numerator: string, denominator: string, whole?: string) => {
+    const el = tkaPertanyaanTextareaRef.current;
+    const start = el?.selectionStart ?? formPertanyaan.length;
+    const end = el?.selectionEnd ?? formPertanyaan.length;
+    const { nextValue, nextCursor } = insertFractionAtSelection(
+      formPertanyaan,
+      start,
+      end,
+      numerator,
+      denominator,
+      whole
+    );
+    setFormPertanyaan(nextValue);
+    setTimeout(() => {
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCursor, nextCursor);
+      }
+    }, 0);
+  };
+
+  const handleConvertAllTkaFractions = () => {
+    setFormPertanyaan(convertPlainFractionsToTags(formPertanyaan));
+    showToast('Semua pecahan angka pada soal diformat menjadi pecahan susun!', 'success');
+  };
+
+  const handleInsertTkaFractionToOption = (
+    optKey: 'A' | 'B' | 'C' | 'D',
+    numerator: string,
+    denominator: string,
+    whole?: string
+  ) => {
+    const payload = whole ? `${whole} ${numerator}/${denominator}` : `${numerator}/${denominator}`;
+    const tag = `[pecahan]${payload}[/pecahan]`;
+    const appendVal = (prev: string) => (prev ? `${prev} ${tag}` : tag);
+    if (optKey === 'A') setPgOptionA(appendVal);
+    else if (optKey === 'B') setPgOptionB(appendVal);
+    else if (optKey === 'C') setPgOptionC(appendVal);
+    else setPgOptionD(appendVal);
+    showToast(`Pecahan susun disisipkan ke Opsi ${optKey}!`, 'success');
+  };
+
+  const handleInsertTkaSymbol = (symbol: string) => {
+    const el = tkaPertanyaanTextareaRef.current;
+    const start = el?.selectionStart ?? formPertanyaan.length;
+    const end = el?.selectionEnd ?? formPertanyaan.length;
+    const nextValue = formPertanyaan.slice(0, start) + symbol + formPertanyaan.slice(end);
+    const nextCursor = start + (symbol === '\\sqrt{}' ? symbol.length - 1 : symbol.length);
+    setFormPertanyaan(nextValue);
+    setTimeout(() => {
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCursor, nextCursor);
+      }
+    }, 0);
+  };
+
+  const handleInsertTkaSymbolToOption = (optKey: 'A' | 'B' | 'C' | 'D', symbol: string) => {
+    const appendSym = (prev: string) => `${prev}${symbol}`;
+    if (optKey === 'A') setPgOptionA(appendSym);
+    else if (optKey === 'B') setPgOptionB(appendSym);
+    else if (optKey === 'C') setPgOptionC(appendSym);
+    else setPgOptionD(appendSym);
+    showToast(`Simbol "${symbol.trim()}" disisipkan ke Opsi ${optKey}!`, 'success');
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1273,7 +1310,7 @@ export const TKATabs: React.FC<Props> = ({
       finalKunci = menjodohkanKunci.trim() || 'Pasangan kunci benar';
     }
 
-    const autoEydPertanyaan = convertFractions(formPertanyaan);
+    const formattedPertanyaan = formPertanyaan.replace(/^\n+|\n+$/g, '');
     const cleanJudulTeks = formJudulTeks.trim() || undefined;
 
     const existingSavedDuration = getTKADurationMinutes(tkaDurations, formPaket, formMapel);
@@ -1289,7 +1326,7 @@ export const TKATabs: React.FC<Props> = ({
             tpId: activeTp?.id || q.tpId || 'tp_01',
             tipe: formTipe,
             judulTeks: cleanJudulTeks,
-            pertanyaan: autoEydPertanyaan,
+            pertanyaan: formattedPertanyaan,
             opsi: parsedOpsi,
             opsiGambar: Object.keys(formOpsiGambar).length > 0 ? formOpsiGambar : undefined,
             kunciJawaban: finalKunci,
@@ -1334,7 +1371,7 @@ export const TKATabs: React.FC<Props> = ({
         tpId: activeTp?.id || 'tp_01',
         tipe: formTipe,
         judulTeks: cleanJudulTeks,
-        pertanyaan: autoEydPertanyaan,
+        pertanyaan: formattedPertanyaan,
         opsi: parsedOpsi,
         opsiGambar: Object.keys(formOpsiGambar).length > 0 ? formOpsiGambar : undefined,
         kunciJawaban: finalKunci,
@@ -1578,7 +1615,7 @@ export const TKATabs: React.FC<Props> = ({
               mapel,
               tipe,
               judulTeks: judulRaw || undefined,
-              pertanyaan: convertFractions(pertanyaan),
+              pertanyaan,
               opsi: opsiParsed,
               kunciJawaban: kunci,
               bobot,
@@ -2739,7 +2776,9 @@ export const TKATabs: React.FC<Props> = ({
                                 className="w-4 h-4 text-amber-600"
                               />
                               <span className="font-mono font-bold">{optKey}.</span>
-                              <span className="text-xs">{op}</span>
+                              <span className="text-xs whitespace-pre-wrap">
+                                <FormattedMathText text={op} />
+                              </span>
                             </div>
                             {optImg && (
                               <img
@@ -2787,7 +2826,9 @@ export const TKATabs: React.FC<Props> = ({
                                 className="w-4 h-4 text-amber-600"
                               />
                               <span className="font-mono font-bold">{optKey}.</span>
-                              <span className="text-xs">{op}</span>
+                              <span className="text-xs whitespace-pre-wrap">
+                                <FormattedMathText text={op} />
+                              </span>
                             </div>
                             {optImg && (
                               <img
@@ -3155,9 +3196,9 @@ export const TKATabs: React.FC<Props> = ({
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="text-xs font-semibold text-slate-700">
-                    Pertanyaan / Butir Soal (Otomatis EYD V Pecahan saat Disimpan)
+                    Pertanyaan / Butir Soal (Mendukung Pecahan Susun &amp; Jarak Paragraf)
                   </label>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
                       onClick={() => {
@@ -3180,16 +3221,44 @@ export const TKATabs: React.FC<Props> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={handleApplyFractionConvert}
-                      className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer"
+                      onClick={() => handleInsertTkaSymbol('°')}
+                      className="text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-lg cursor-pointer transition flex items-center gap-1"
+                      title="Sisipkan simbol derajat (°) ke posisi kursor di soal"
                     >
-                      <span>🔤</span> Ubah Pecahan (1/3 → satu pertiga)
+                      <span className="font-black text-xs leading-none">°</span> Derajat
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowTkaFractionBuilder((prev) => !prev)}
+                      className={`text-xs font-bold flex items-center gap-1.5 cursor-pointer px-2.5 py-0.5 rounded-lg border transition ${
+                        showTkaFractionBuilder
+                          ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                          : 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100'
+                      }`}
+                      title="Buka pengaturan penulisan pecahan susun atas-bawah (misal 2/5)"
+                    >
+                      <span className="inline-flex flex-col items-center leading-none text-[8px] font-black">
+                        <span className="border-b border-current px-0.5">2</span>
+                        <span>5</span>
+                      </span>
+                      <span>Format Pecahan</span>
                     </button>
                   </div>
                 </div>
+                {showTkaFractionBuilder && (
+                  <FractionBuilderBar
+                    onInsertToQuestion={handleInsertTkaFraction}
+                    onConvertAllInQuestion={handleConvertAllTkaFractions}
+                    onInsertToOption={handleInsertTkaFractionToOption}
+                    onInsertSymbolToQuestion={handleInsertTkaSymbol}
+                    onInsertSymbolToOption={handleInsertTkaSymbolToOption}
+                    showOptionsTargets={formTipe === 'pg' || formTipe === 'pg_kompleks'}
+                    onClose={() => setShowTkaFractionBuilder(false)}
+                  />
+                )}
                 <textarea
                   ref={tkaPertanyaanTextareaRef}
-                  rows={4}
+                  rows={5}
                   value={formPertanyaan}
                   onChange={(e) => setFormPertanyaan(e.target.value)}
                   onPaste={(e) => {
@@ -3204,7 +3273,7 @@ export const TKATabs: React.FC<Props> = ({
                       showToast('Teks rata tengah dari salinan otomatis terdeteksi sebagai Judul terpisah!', 'success');
                     }
                   }}
-                  placeholder="Tuliskan teks bacaan atau pertanyaan. Jika menempel teks rata tengah atau pakai tombol [Tengah / Judul], teks tersebut otomatis menjadi Judul terpisah..."
+                  placeholder="Tuliskan soal atau bacaan. Tekan Enter beberapa kali untuk jarak antar paragraf, ketik 2/5 atau gunakan Format Pecahan / ° Derajat agar tampil rapi..."
                   className="w-full p-3 rounded-2xl border border-slate-300 text-xs text-slate-800 placeholder:text-slate-400 outline-none focus:border-rose-400 leading-relaxed"
                 />
               </div>
@@ -3556,6 +3625,34 @@ export const TKATabs: React.FC<Props> = ({
               )}
             </div>
 
+            {/* Panel Pratinjau Matematika Live Sebelum Simpan */}
+            <MathPreviewPanel
+              judulTeks={formJudulTeks}
+              pertanyaan={formPertanyaan}
+              gambarUrl={formGambarUrl}
+              gambarUrl2={formGambarUrl2}
+              posisiGambar={formPosisiGambar}
+              tipeSoal={formTipe}
+              options={[
+                { key: 'A', text: pgOptionA, isKey: formTipe === 'pg' ? pgKunci === 'A' : Boolean(pgkChecks.A), imageUrl: formOpsiGambar.A },
+                { key: 'B', text: pgOptionB, isKey: formTipe === 'pg' ? pgKunci === 'B' : Boolean(pgkChecks.B), imageUrl: formOpsiGambar.B },
+                { key: 'C', text: pgOptionC, isKey: formTipe === 'pg' ? pgKunci === 'C' : Boolean(pgkChecks.C), imageUrl: formOpsiGambar.C },
+                { key: 'D', text: pgOptionD, isKey: formTipe === 'pg' ? pgKunci === 'D' : Boolean(pgkChecks.D), imageUrl: formOpsiGambar.D },
+              ]}
+              kunciText={
+                formTipe === 'benar_salah'
+                  ? benarSalahKunci
+                  : formTipe === 'isian'
+                  ? isianKunci
+                  : formTipe === 'uraian'
+                  ? uraianKunci
+                  : formTipe === 'menjodohkan'
+                  ? menjodohkanKunci
+                  : undefined
+              }
+              accentTheme="indigo"
+            />
+
             {/* Row 5: Action Buttons matching Image 1 */}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
               <div>
@@ -3865,7 +3962,9 @@ export const TKATabs: React.FC<Props> = ({
                           >
                             <div className="flex items-center gap-2">
                               <span className="font-mono font-black">{optKey}.</span>
-                              <span className="flex-1">{op}</span>
+                              <span className="flex-1 whitespace-pre-wrap">
+                                <FormattedMathText text={op} />
+                              </span>
                               {isKey && <span className="ml-auto text-[10px] uppercase font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">✓ Kunci</span>}
                             </div>
                             {optImg && (
@@ -3887,12 +3986,14 @@ export const TKATabs: React.FC<Props> = ({
                     <div>
                       <span className="font-bold text-slate-600">Kunci Jawaban: </span>
                       <span className="font-mono font-bold text-rose-700">
-                        {Array.isArray(q.kunciJawaban) ? q.kunciJawaban.join(', ') : String(q.kunciJawaban)}
+                        <FormattedMathText
+                          text={Array.isArray(q.kunciJawaban) ? q.kunciJawaban.join(', ') : String(q.kunciJawaban)}
+                        />
                       </span>
                     </div>
                     {q.pembahasan && (
                       <span className="text-[11px] text-slate-500 italic max-w-lg truncate">
-                        {q.pembahasan}
+                        <FormattedMathText text={q.pembahasan} />
                       </span>
                     )}
                   </div>
@@ -6850,7 +6951,9 @@ export const TKATabs: React.FC<Props> = ({
                                 {optKey}
                               </div>
                               <div className="space-y-1.5 flex-1">
-                                <span className="text-xs leading-relaxed">{optText}</span>
+                                <span className="text-xs leading-relaxed whitespace-pre-wrap">
+                                  <FormattedMathText text={optText} />
+                                </span>
                                 {optImg && (
                                   <img
                                     src={optImg}
@@ -6902,7 +7005,9 @@ export const TKATabs: React.FC<Props> = ({
                                 onChange={() => {}}
                                 className="w-4 h-4 text-purple-600 rounded cursor-pointer"
                               />
-                              <span className="text-xs">{optKey}. {optText}</span>
+                              <span className="text-xs leading-relaxed whitespace-pre-wrap">
+                                {optKey}. <FormattedMathText text={optText} />
+                              </span>
                             </label>
                           );
                         })}

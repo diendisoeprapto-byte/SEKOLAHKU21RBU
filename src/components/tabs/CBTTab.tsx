@@ -92,10 +92,15 @@ import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx } from '../../utils/docxImporter';
 import { compressQuestionImage } from '../../utils/imageUtils';
 import { QuestionContent } from '../QuestionContent';
+import { FractionBuilderBar } from '../FormattedMathText';
+import { MathRenderer } from '../MathRenderer';
+import { MathPreviewPanel } from '../MathPreviewPanel';
 import {
   PosisiGambar,
   extractPastedQuestionText,
   toggleCenterTagOnSelection,
+  insertFractionAtSelection,
+  convertPlainFractionsToTags,
 } from '../../utils/questionFormat';
 import {
   exportQuestionsToWord,
@@ -419,6 +424,7 @@ export const CBTTab: React.FC<Props> = ({
   const [gambarUrl2, setGambarUrl2] = useState<string | null>(null);
   const [posisiGambar, setPosisiGambar] = useState<PosisiGambar>('bawah_judul');
   const [bobotPoin, setBobotPoin] = useState(10);
+  const [showFractionBuilder, setShowFractionBuilder] = useState(false);
   const pertanyaanTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Options for PG & images for options
@@ -729,35 +735,65 @@ export const CBTTab: React.FC<Props> = ({
     }
   }, [isExamRunning, timeLeft]);
 
-  // Convert fractions helper: 1/3 -> satu pertiga
-  const handleConvertFractions = () => {
-    let text = pertanyaan;
-    const fractionMap: Record<string, string> = {
-      '1/2': 'satu perdua (setengah)',
-      '1/3': 'satu pertiga',
-      '2/3': 'dua pertiga',
-      '1/4': 'satu perempat (seperempat)',
-      '2/4': 'dua perempat',
-      '3/4': 'tiga perempat',
-      '1/5': 'satu perlima',
-      '2/5': 'dua perlima',
-      '3/5': 'tiga perlima',
-      '4/5': 'empat perlima',
-      '1/6': 'satu perenam',
-      '5/6': 'lima perenam',
-      '1/8': 'satu perdelapan',
-      '3/8': 'tiga perdelapan',
-      '5/8': 'lima perdelapan',
-      '7/8': 'tujuh perdelapan',
-      '1/10': 'satu persepuluh',
-    };
+  // Sisipkan pecahan susun ke posisi kursor di textarea soal CBT
+  const handleInsertCbtFraction = (numerator: string, denominator: string, whole?: string) => {
+    const el = pertanyaanTextareaRef.current;
+    const start = el?.selectionStart ?? pertanyaan.length;
+    const end = el?.selectionEnd ?? pertanyaan.length;
+    const { nextValue, nextCursor } = insertFractionAtSelection(pertanyaan, start, end, numerator, denominator, whole);
+    setPertanyaan(nextValue);
+    setTimeout(() => {
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCursor, nextCursor);
+      }
+    }, 0);
+  };
 
-    Object.entries(fractionMap).forEach(([frac, textRep]) => {
-      text = text.replace(new RegExp(frac, 'g'), textRep);
-    });
+  const handleConvertAllCbtFractions = () => {
+    const next = convertPlainFractionsToTags(pertanyaan);
+    setPertanyaan(next);
+    showToast('Semua pecahan angka di soal diformat menjadi pecahan susun!', 'success');
+  };
 
-    setPertanyaan(text);
-    showToast('Pecahan otomatis dikonversi ke kata PUEBI / EYD V!', 'success');
+  const handleInsertCbtFractionToOption = (
+    optKey: 'A' | 'B' | 'C' | 'D',
+    numerator: string,
+    denominator: string,
+    whole?: string
+  ) => {
+    const payload = whole ? `${whole} ${numerator}/${denominator}` : `${numerator}/${denominator}`;
+    const tag = `[pecahan]${payload}[/pecahan]`;
+    const appendVal = (prev: string) => (prev ? `${prev} ${tag}` : tag);
+    if (optKey === 'A') setOpsiA(appendVal);
+    else if (optKey === 'B') setOpsiB(appendVal);
+    else if (optKey === 'C') setOpsiC(appendVal);
+    else setOpsiD(appendVal);
+    showToast(`Pecahan susun disisipkan ke Opsi ${optKey}!`, 'success');
+  };
+
+  const handleInsertCbtSymbol = (symbol: string) => {
+    const el = pertanyaanTextareaRef.current;
+    const start = el?.selectionStart ?? pertanyaan.length;
+    const end = el?.selectionEnd ?? pertanyaan.length;
+    const nextValue = pertanyaan.slice(0, start) + symbol + pertanyaan.slice(end);
+    const nextCursor = start + (symbol === '\\sqrt{}' ? symbol.length - 1 : symbol.length);
+    setPertanyaan(nextValue);
+    setTimeout(() => {
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCursor, nextCursor);
+      }
+    }, 0);
+  };
+
+  const handleInsertCbtSymbolToOption = (optKey: 'A' | 'B' | 'C' | 'D', symbol: string) => {
+    const appendSym = (prev: string) => `${prev}${symbol}`;
+    if (optKey === 'A') setOpsiA(appendSym);
+    else if (optKey === 'B') setOpsiB(appendSym);
+    else if (optKey === 'C') setOpsiC(appendSym);
+    else setOpsiD(appendSym);
+    showToast(`Simbol "${symbol.trim()}" disisipkan ke Opsi ${optKey}!`, 'success');
   };
 
   // Handle image upload 1 (compressed for 50-question package safety)
@@ -857,7 +893,7 @@ export const CBTTab: React.FC<Props> = ({
       tpId: currentTp?.id || 'TP 1',
       tipe: selectedTipeSoal,
       judulTeks: judulTeks.trim() || undefined,
-      pertanyaan: pertanyaan.trim(),
+      pertanyaan: pertanyaan.replace(/^\n+|\n+$/g, ''),
       opsi: parsedOpsi,
       kunciJawaban: parsedKunci,
       bobot: Number(bobotPoin) || 10,
@@ -1819,9 +1855,9 @@ export const CBTTab: React.FC<Props> = ({
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                     <label className="font-display font-black text-slate-800">
-                      Pertanyaan / Butir Soal (Otomatis EYD V Pecahan saat Disimpan)
+                      Pertanyaan / Butir Soal (Mendukung Pecahan Susun &amp; Jarak Paragraf)
                     </label>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         onClick={() => {
@@ -1844,16 +1880,44 @@ export const CBTTab: React.FC<Props> = ({
                       </button>
                       <button
                         type="button"
-                        onClick={handleConvertFractions}
-                        className="text-[11px] font-extrabold text-emerald-700 hover:underline flex items-center gap-1 cursor-pointer"
+                        onClick={() => handleInsertCbtSymbol('°')}
+                        className="text-[11px] font-extrabold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-lg cursor-pointer transition flex items-center gap-1"
+                        title="Sisipkan simbol derajat (°) ke posisi kursor di soal"
                       >
-                        <Sparkles className="w-3 h-3 text-emerald-600" /> Ubah Pecahan (1/3 → satu pertiga)
+                        <span className="font-black text-xs leading-none">°</span> Derajat
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowFractionBuilder((prev) => !prev)}
+                        className={`text-[11px] font-extrabold flex items-center gap-1.5 cursor-pointer px-2.5 py-0.5 rounded-lg border transition ${
+                          showFractionBuilder
+                            ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                            : 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100'
+                        }`}
+                        title="Buka pengaturan penulisan pecahan susun atas-bawah (misal 2/5)"
+                      >
+                        <span className="inline-flex flex-col items-center leading-none text-[8px] font-black">
+                          <span className="border-b border-current px-0.5">2</span>
+                          <span>5</span>
+                        </span>
+                        <span>Format Pecahan</span>
                       </button>
                     </div>
                   </div>
+                  {showFractionBuilder && (
+                    <FractionBuilderBar
+                      onInsertToQuestion={handleInsertCbtFraction}
+                      onConvertAllInQuestion={handleConvertAllCbtFractions}
+                      onInsertToOption={handleInsertCbtFractionToOption}
+                      onInsertSymbolToQuestion={handleInsertCbtSymbol}
+                      onInsertSymbolToOption={handleInsertCbtSymbolToOption}
+                      showOptionsTargets={selectedTipeSoal === 'pg' || selectedTipeSoal === 'pg_kompleks'}
+                      onClose={() => setShowFractionBuilder(false)}
+                    />
+                  )}
                   <textarea
                     ref={pertanyaanTextareaRef}
-                    rows={4}
+                    rows={5}
                     value={pertanyaan}
                     onChange={(e) => setPertanyaan(e.target.value)}
                     onPaste={(e) => {
@@ -1869,7 +1933,7 @@ export const CBTTab: React.FC<Props> = ({
                       }
                     }}
                     required
-                    placeholder="Tuliskan teks bacaan atau pertanyaan. Jika menempel teks rata tengah atau pakai tombol [Tengah / Judul], teks tersebut otomatis menjadi Judul terpisah..."
+                    placeholder="Tuliskan soal atau bacaan. Tekan Enter beberapa kali untuk jarak antar paragraf, ketik 2/5 atau gunakan Format Pecahan / ° Derajat agar tampil rapi..."
                     className="w-full p-3 rounded-2xl border border-slate-300 bg-white text-xs text-slate-800 outline-none focus:border-rose-500 font-medium leading-relaxed"
                   />
                 </div>
@@ -2216,6 +2280,25 @@ export const CBTTab: React.FC<Props> = ({
                 )}
               </div>
 
+              {/* PANEL PRATINJAU MATEMATIKA LIVE SEBELUM SIMPAN */}
+              <MathPreviewPanel
+                judulTeks={judulTeks}
+                pertanyaan={pertanyaan}
+                gambarUrl={gambarUrl}
+                gambarUrl2={gambarUrl2}
+                posisiGambar={posisiGambar}
+                tipeSoal={selectedTipeSoal}
+                options={[
+                  { key: 'A', text: opsiA, isKey: selectedTipeSoal === 'pg' ? kunciPG === 'A' : pgKompleksKeys.includes(opsiA) && Boolean(opsiA), imageUrl: opsiGambar.A },
+                  { key: 'B', text: opsiB, isKey: selectedTipeSoal === 'pg' ? kunciPG === 'B' : pgKompleksKeys.includes(opsiB) && Boolean(opsiB), imageUrl: opsiGambar.B },
+                  { key: 'C', text: opsiC, isKey: selectedTipeSoal === 'pg' ? kunciPG === 'C' : pgKompleksKeys.includes(opsiC) && Boolean(opsiC), imageUrl: opsiGambar.C },
+                  { key: 'D', text: opsiD, isKey: selectedTipeSoal === 'pg' ? kunciPG === 'D' : pgKompleksKeys.includes(opsiD) && Boolean(opsiD), imageUrl: opsiGambar.D },
+                ]}
+                kunciText={kunciLain}
+                pembahasan={pembahasan}
+                accentTheme="rose"
+              />
+
               {/* ACTION BUTTONS (Simpan dan Batal) */}
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
@@ -2469,7 +2552,9 @@ export const CBTTab: React.FC<Props> = ({
                               >
                                 <div className="flex items-center gap-2">
                                   <span className="font-black text-[11px] w-4">{optLetter}.</span>
-                                  <span className="flex-1">{opt}</span>
+                                  <span className="flex-1 whitespace-pre-wrap">
+                                    <MathRenderer text={opt} fontFamily="plus-jakarta" />
+                                  </span>
                                   {isCorrect && <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />}
                                 </div>
                                 {optImg && (
@@ -2490,14 +2575,17 @@ export const CBTTab: React.FC<Props> = ({
                         <div className="p-3 rounded-2xl bg-emerald-50/60 border border-emerald-200 text-xs">
                           <span className="font-bold text-emerald-900">Kunci Jawaban: </span>
                           <strong className="font-mono text-emerald-950">
-                            {Array.isArray(q.kunciJawaban) ? q.kunciJawaban.join(', ') : q.kunciJawaban}
+                            <MathRenderer
+                              text={Array.isArray(q.kunciJawaban) ? q.kunciJawaban.join(', ') : String(q.kunciJawaban)}
+                              fontFamily="plus-jakarta"
+                            />
                           </strong>
                         </div>
                       )}
 
                       {q.pembahasan && (
-                        <div className="text-[11px] text-slate-500 italic bg-slate-50 p-2.5 rounded-xl">
-                          ℹ️ {q.pembahasan}
+                        <div className="text-[11px] text-slate-500 italic bg-slate-50 p-2.5 rounded-xl whitespace-pre-wrap">
+                          ℹ️ <MathRenderer text={q.pembahasan} fontFamily="plus-jakarta" />
                         </div>
                       )}
                     </div>
@@ -3000,7 +3088,9 @@ export const CBTTab: React.FC<Props> = ({
                               <span className="w-6 h-6 rounded-full bg-white border border-slate-300 flex items-center justify-center text-xs font-black shrink-0">
                                 {optLetter}
                               </span>
-                              <span className="flex-1">{opt}</span>
+                              <span className="flex-1 whitespace-pre-wrap">
+                                <MathRenderer text={opt} fontFamily="plus-jakarta" />
+                              </span>
                             </div>
                             {optImg && (
                               <img

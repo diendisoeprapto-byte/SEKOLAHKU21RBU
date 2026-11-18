@@ -19,6 +19,59 @@
   }
 }
 
+@layer components {
+  .math-renderer .katex {
+    font-size: 1.06em;
+    line-height: 1.3;
+    text-indent: 0;
+  }
+
+  .math-renderer .katex-display {
+    margin: 0.55em 0;
+  }
+
+  .math-renderer .katex .mfrac .frac-line {
+    border-bottom-width: 1.6px;
+    border-color: currentColor;
+  }
+
+  .math-renderer--nunito .katex,
+  .math-renderer--nunito .katex .mord,
+  .math-renderer--nunito .katex .mbin,
+  .math-renderer--nunito .katex .mrel,
+  .math-renderer--nunito .katex .mopen,
+  .math-renderer--nunito .katex .mclose,
+  .math-renderer--nunito .katex .mpunct,
+  .math-renderer--nunito .katex .minner,
+  .math-renderer--nunito .katex .text {
+    font-family: var(--font-display) !important;
+    font-weight: 700;
+  }
+
+  .math-renderer--plus-jakarta .katex,
+  .math-renderer--plus-jakarta .katex .mord,
+  .math-renderer--plus-jakarta .katex .mbin,
+  .math-renderer--plus-jakarta .katex .mrel,
+  .math-renderer--plus-jakarta .katex .mopen,
+  .math-renderer--plus-jakarta .katex .mclose,
+  .math-renderer--plus-jakarta .katex .mpunct,
+  .math-renderer--plus-jakarta .katex .minner,
+  .math-renderer--plus-jakarta .katex .text {
+    font-family: var(--font-sans) !important;
+    font-weight: 600;
+  }
+
+  /* Pertahankan font simbol khusus KaTeX untuk akar, operator besar, dan kurung bertingkat */
+  .math-renderer--nunito .katex .delimsizing,
+  .math-renderer--nunito .katex .op-symbol,
+  .math-renderer--nunito .katex .sqrt-sign,
+  .math-renderer--plus-jakarta .katex .delimsizing,
+  .math-renderer--plus-jakarta .katex .op-symbol,
+  .math-renderer--plus-jakarta .katex .sqrt-sign {
+    font-family: KaTeX_Main, KaTeX_Size1, KaTeX_Size2, KaTeX_Size3, KaTeX_Size4, serif !important;
+  }
+}
+
 @keyframes scanLaser {
   0% { top: 8%; opacity: 0.9; }
   50% { top: 88%; opacity: 1; }

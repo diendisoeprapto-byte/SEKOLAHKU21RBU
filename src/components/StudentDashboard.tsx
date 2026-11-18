@@ -81,6 +81,7 @@ import { TKA_JENIS_LIST, TKA_MAPEL_LIST } from '../data/defaultData';
 import { evaluateQuestionScore, normalizeString } from '../utils/answerChecker';
 import { getLocalTodayStr } from '../utils/dateUtils';
 import { QuestionContent } from './QuestionContent';
+import { MathRenderer } from './MathRenderer';
 import { StudentPerformanceStats } from './StudentPerformanceStats';
 import { StudentKebiasaanTracker } from './StudentKebiasaanTracker';
 
@@ -3213,7 +3214,9 @@ export const StudentDashboard: React.FC<Props> = ({
                                 <span className="w-7 h-7 rounded-lg font-mono font-black text-xs flex items-center justify-center shrink-0 bg-slate-100 text-slate-700 border border-slate-200">
                                   {optKey}
                                 </span>
-                                <span className="text-xs leading-normal">{opsi}</span>
+                                <span className="text-xs leading-relaxed whitespace-pre-wrap">
+                                  <MathRenderer text={opsi} fontFamily="plus-jakarta" />
+                                </span>
                               </div>
                               {optImg && (
                                 <img
@@ -3290,7 +3293,9 @@ export const StudentDashboard: React.FC<Props> = ({
                               }`}>
                                 {optKey}
                               </span>
-                              <span className="text-xs leading-normal">{opsi}</span>
+                              <span className="text-xs leading-relaxed whitespace-pre-wrap">
+                                <MathRenderer text={opsi} fontFamily="plus-jakarta" />
+                              </span>
                             </div>
                             {optImg && (
                               <img
