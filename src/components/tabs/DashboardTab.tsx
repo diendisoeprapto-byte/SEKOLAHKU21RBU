@@ -343,7 +343,82 @@ export const DashboardTab: React.FC<Props> = ({
       </div>
 
       {/* ============================================================== */}
-      {/* 3. STATUS SISTEM & SINKRONISASI CLOUD MULTI-PERANGKAT          */}
+      {/* 3. DISTRIBUSI SISWA SELURUH 12 ROMBEL (KELAS 1A s.d. 6B)       */}
+      {/* ============================================================== */}
+      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div>
+            <h3 className="font-display font-black text-slate-800 text-base sm:text-lg flex items-center gap-2">
+              <Layers className="w-5 h-5 text-rose-600" /> Persebaran Peserta Didik per Rombongan Belajar (12 Rombel)
+            </h3>
+            <p className="text-xs text-slate-500">
+              Klik pada salah satu rombel di bawah untuk langsung mengganti rombel aktif yang sedang dianalisis.
+            </p>
+          </div>
+          <span className="text-xs font-extrabold bg-rose-50 text-rose-800 px-3 py-1 rounded-xl border border-rose-200 self-start sm:self-auto">
+            Total Sekolah: <strong>{totalSiswaAll} Siswa</strong>
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+          {CLASSES_LIST.map((cls) => {
+            const classStudents = students.filter((s) => s.kelas === cls);
+            const count = classStudents.length;
+            const lCount = classStudents.filter(
+              (s) => s.jenisKelamin === 'L' || s.jenisKelamin?.toUpperCase().startsWith('L')
+            ).length;
+            const pCount = classStudents.filter(
+              (s) => s.jenisKelamin === 'P' || s.jenisKelamin?.toUpperCase().startsWith('P')
+            ).length;
+            const isCurrent = cls === activeClass;
+            const wali = teachers.find((t) => t.penugasan === cls);
+
+            return (
+              <button
+                key={cls}
+                type="button"
+                onClick={() => {
+                  if (onSelectClass) onSelectClass(cls);
+                }}
+                className={`p-3.5 rounded-2xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                  isCurrent
+                    ? 'bg-rose-50 border-rose-400 shadow-sm ring-2 ring-rose-300'
+                    : 'bg-slate-50 hover:bg-white hover:border-slate-300 border-slate-200'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className={`text-xs font-black ${isCurrent ? 'text-rose-900' : 'text-slate-800'}`}>
+                      {cls}
+                    </span>
+                    {isCurrent && (
+                      <span className="text-[9px] font-black uppercase bg-rose-200 text-rose-950 px-1.5 py-0.5 rounded">
+                        Aktif
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xl font-display font-black text-slate-800 mt-1">
+                    {count} <span className="text-[11px] font-semibold text-slate-400">Siswa</span>
+                  </div>
+                </div>
+
+                <div className="mt-2 pt-2 border-t border-slate-200/60 text-[10.5px]">
+                  <div className="flex justify-between text-slate-500 font-medium">
+                    <span className="text-sky-700 font-bold">{lCount} L</span>
+                    <span className="text-rose-600 font-bold">{pCount} P</span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 truncate mt-0.5" title={wali?.nama || 'Belum ada wali'}>
+                    {wali ? wali.nama.split(',')[0] : '-'}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ============================================================== */}
+      {/* 4. STATUS SISTEM & SINKRONISASI CLOUD MULTI-PERANGKAT          */}
       {/* ============================================================== */}
       <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
@@ -473,81 +548,6 @@ export const DashboardTab: React.FC<Props> = ({
               💡 <strong>Solusi Multi-Perangkat:</strong> Data siswa yang dihapus atau ditambah di laptop langsung dikirim ke Cloud Firestore dan otomatis terupdate di tablet secara real-time.
             </p>
           </div>
-        </div>
-      </div>
-
-      {/* ============================================================== */}
-      {/* 4. DISTRIBUSI SISWA SELURUH 12 ROMBEL (KELAS 1A s.d. 6B)       */}
-      {/* ============================================================== */}
-      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
-          <div>
-            <h3 className="font-display font-black text-slate-800 text-base sm:text-lg flex items-center gap-2">
-              <Layers className="w-5 h-5 text-rose-600" /> Persebaran Peserta Didik per Rombongan Belajar (12 Rombel)
-            </h3>
-            <p className="text-xs text-slate-500">
-              Klik pada salah satu rombel di bawah untuk langsung mengganti rombel aktif yang sedang dianalisis.
-            </p>
-          </div>
-          <span className="text-xs font-extrabold bg-rose-50 text-rose-800 px-3 py-1 rounded-xl border border-rose-200 self-start sm:self-auto">
-            Total Sekolah: <strong>{totalSiswaAll} Siswa</strong>
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-          {CLASSES_LIST.map((cls) => {
-            const classStudents = students.filter((s) => s.kelas === cls);
-            const count = classStudents.length;
-            const lCount = classStudents.filter(
-              (s) => s.jenisKelamin === 'L' || s.jenisKelamin?.toUpperCase().startsWith('L')
-            ).length;
-            const pCount = classStudents.filter(
-              (s) => s.jenisKelamin === 'P' || s.jenisKelamin?.toUpperCase().startsWith('P')
-            ).length;
-            const isCurrent = cls === activeClass;
-            const wali = teachers.find((t) => t.penugasan === cls);
-
-            return (
-              <button
-                key={cls}
-                type="button"
-                onClick={() => {
-                  if (onSelectClass) onSelectClass(cls);
-                }}
-                className={`p-3.5 rounded-2xl border text-left transition cursor-pointer flex flex-col justify-between ${
-                  isCurrent
-                    ? 'bg-rose-50 border-rose-400 shadow-sm ring-2 ring-rose-300'
-                    : 'bg-slate-50 hover:bg-white hover:border-slate-300 border-slate-200'
-                }`}
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className={`text-xs font-black ${isCurrent ? 'text-rose-900' : 'text-slate-800'}`}>
-                      {cls}
-                    </span>
-                    {isCurrent && (
-                      <span className="text-[9px] font-black uppercase bg-rose-200 text-rose-950 px-1.5 py-0.5 rounded">
-                        Aktif
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xl font-display font-black text-slate-800 mt-1">
-                    {count} <span className="text-[11px] font-semibold text-slate-400">Siswa</span>
-                  </div>
-                </div>
-
-                <div className="mt-2 pt-2 border-t border-slate-200/60 text-[10.5px]">
-                  <div className="flex justify-between text-slate-500 font-medium">
-                    <span className="text-sky-700 font-bold">{lCount} L</span>
-                    <span className="text-rose-600 font-bold">{pCount} P</span>
-                  </div>
-                  <div className="text-[10px] text-slate-400 truncate mt-0.5" title={wali?.nama || 'Belum ada wali'}>
-                    {wali ? wali.nama.split(',')[0] : '-'}
-                  </div>
-                </div>
-              </button>
-            );
-          })}
         </div>
       </div>
 

@@ -12,11 +12,9 @@ import {
   Eye,
   EyeOff,
   AlertCircle,
-  RotateCcw,
-  KeyRound,
 } from 'lucide-react';
 import { SchoolProfile, Teacher, Student, ActiveUser } from '../types';
-import { getStoredAdminPassword, resetStoredAdminPassword } from '../utils/storage';
+import { getStoredAdminPassword } from '../utils/storage';
 
 interface Props {
   profile: SchoolProfile;
@@ -39,27 +37,6 @@ export const LoginScreen: React.FC<Props> = ({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState('');
-  const [isResetAdminOpen, setIsResetAdminOpen] = useState(false);
-  const [resetNpsnInput, setResetNpsnInput] = useState('');
-  const [resetError, setResetError] = useState('');
-
-  const handleResetAdminPassword = (e: React.FormEvent) => {
-    e.preventDefault();
-    setResetError('');
-    const inputNpsn = resetNpsnInput.trim();
-    const schoolNpsn = (profile.npsn || '').trim();
-    if (!inputNpsn || (schoolNpsn && inputNpsn !== schoolNpsn)) {
-      setResetError('NPSN sekolah tidak sesuai dengan data profil sekolah di SEKOLAHKU.');
-      return;
-    }
-    resetStoredAdminPassword();
-    setIsResetAdminOpen(false);
-    setResetNpsnInput('');
-    setUsername('admin');
-    setPassword('');
-    setLoginError('');
-    showToast('Password akun Administrator berhasil di-reset ke default ("admin").', 'success');
-  };
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -306,18 +283,6 @@ export const LoginScreen: React.FC<Props> = ({
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  setResetError('');
-                  setResetNpsnInput('');
-                  setIsResetAdminOpen(true);
-                }}
-                className="text-amber-700 font-bold hover:underline flex items-center gap-1 cursor-pointer"
-                title="Reset password akun Administrator ke setelan awal ('admin')"
-              >
-                <RotateCcw className="w-3.5 h-3.5" /> Reset Admin
-              </button>
-              <button
-                type="button"
                 onClick={onOpenGoogleSitesGuide}
                 className="text-rose-600 font-bold hover:underline flex items-center gap-1 cursor-pointer"
               >
@@ -327,77 +292,6 @@ export const LoginScreen: React.FC<Props> = ({
           </div>
         </div>
       </div>
-
-      {isResetAdminOpen && (
-        <div className="fixed inset-0 z-[950] bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white max-w-md w-full rounded-3xl p-6 shadow-2xl border-2 border-amber-200 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center">
-                  <KeyRound className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-display font-black text-base text-slate-800">
-                    Reset Password Admin
-                  </h3>
-                  <p className="text-[11px] text-slate-500">
-                    Kembalikan password akun Administrator ke default (<span className="font-mono font-bold">admin</span>)
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsResetAdminOpen(false)}
-                className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 flex items-center justify-center font-bold text-sm cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleResetAdminPassword} className="space-y-3">
-              {resetError && (
-                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-                  <span>{resetError}</span>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-extrabold text-slate-700 mb-1">
-                  Verifikasi NPSN Sekolah ({profile.name})
-                </label>
-                <input
-                  type="text"
-                  value={resetNpsnInput}
-                  onChange={(e) => {
-                    setResetNpsnInput(e.target.value);
-                    if (resetError) setResetError('');
-                  }}
-                  required
-                  placeholder="Masukkan NPSN resmi sekolah..."
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-slate-50 focus:bg-white focus:border-amber-500 outline-none"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setIsResetAdminOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-display font-extrabold text-xs shadow-xs cursor-pointer flex items-center gap-1.5"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" /> Reset ke Default (admin)
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </section>
   );
 };

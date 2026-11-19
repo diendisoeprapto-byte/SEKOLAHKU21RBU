@@ -17,6 +17,7 @@
     "@types/jsbarcode": "^3.11.4",
     "@types/katex": "^0.16.8",
     "@vitejs/plugin-react": "^6.1.1",
+    "@vladmandic/face-api": "^1.7.15",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "firebase": "^13.2.0",

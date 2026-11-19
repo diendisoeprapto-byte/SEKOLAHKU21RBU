@@ -1386,6 +1386,8 @@ export default function App() {
                 <KalenderTab
                   students={students}
                   activeClass={activeClass}
+                  activeYear={activeYear}
+                  activeSemester={activeSemester}
                   attendanceRecords={attendanceRecords}
                   selectedDateProp={selectedCalendarDate}
                   onChangeSelectedDate={setSelectedCalendarDate}
@@ -1495,7 +1497,7 @@ export default function App() {
               )}
 
               {/* Tab 4.4: CBT Exam (Bank Soal & Pengaturan untuk Guru/Admin) */}
-              {activeUser.role !== 'siswa' && activeTab === 'ujian' && (
+              {activeUser.role !== 'siswa' && (activeTab === 'ujian' || activeTab === 'pengaturan-cbt') && (
                 <CBTTab
                   activeUser={activeUser}
                   activeClass={activeClass}
@@ -1505,6 +1507,8 @@ export default function App() {
                   activeYear={activeYear}
                   activeSemester={activeSemester}
                   subjects={subjects}
+                  requestedSubTab={activeTab === 'pengaturan-cbt' ? 'pengaturan' : 'bank-soal'}
+                  onNavigateTab={setActiveTab}
                   onUpdateSubjects={(updated, targetClass) => {
                     const cls = targetClass || activeClass;
                     saveStoredSubjectsForClass(cls, updated);
@@ -1592,11 +1596,12 @@ export default function App() {
                 />
               )}
 
-              {/* Tab 5: Modul TKA (Siswa TKA, CP & TP TKA, Bank Soal TKA, Analisis Soal TKA) */}
+              {/* Tab 5: Modul TKA (Siswa TKA, CP & TP TKA, Bank Soal TKA, Pengaturan TKA, Analisis Soal TKA) */}
               {activeUser.role !== 'siswa' &&
                 (activeTab === 'siswa-tka' ||
                   activeTab === 'cp-tp-tka' ||
                   activeTab === 'bank-soal-tka' ||
+                  activeTab === 'pengaturan-tka' ||
                   activeTab === 'analisis-tka' ||
                   activeTab === 'hasil-tka' ||
                   activeTab === 'tes-tka-siswa') && (

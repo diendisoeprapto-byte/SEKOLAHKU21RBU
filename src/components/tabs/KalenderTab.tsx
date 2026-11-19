@@ -18,13 +18,20 @@ import {
 } from 'lucide-react';
 import { Student, KaldikDay } from '../../types';
 import { AttendanceRecordItem, CLASSES_LIST } from '../../utils/storage';
-import { DEFAULT_KALDIK_HOLIDAYS } from '../../data/defaultData';
 import { formatTanggalIndo, getLocalTodayStr, parseLocalDate } from '../../utils/dateUtils';
+import {
+  getDefaultMonthForSemester,
+  getSemesterDateRange,
+  getDefaultKaldikHolidaysForYear,
+  isDateInAcademicYear,
+} from '../../utils/semesterUtils';
 import { TabId } from '../Sidebar';
 
 interface Props {
   students: Student[];
   activeClass: string;
+  activeYear?: string;
+  activeSemester?: string;
   attendanceRecords: Record<string, AttendanceRecordItem>;
   selectedDateProp?: string;
   onChangeSelectedDate?: (date: string) => void;
@@ -41,6 +48,8 @@ interface Props {
 export const KalenderTab: React.FC<Props> = ({
   students,
   activeClass,
+  activeYear = '2026/2027',
+  activeSemester = 'Semester 1',
   attendanceRecords,
   selectedDateProp,
   onChangeSelectedDate,
@@ -54,17 +63,48 @@ export const KalenderTab: React.FC<Props> = ({
   showToast,
 }) => {
   const todayStr = liveTodayStr || getLocalTodayStr();
-  const [selectedDateInternal, setSelectedDateInternal] = useState(selectedDateProp || todayStr);
-  const selectedDate = selectedDateProp || selectedDateInternal;
+  const semesterRange = getSemesterDateRange(activeYear, activeSemester);
+  const defaultTermMonth = getDefaultMonthForSemester(activeYear, activeSemester, todayStr);
+  const initialTargetDate =
+    selectedDateProp && selectedDateProp >= semesterRange.startDate && selectedDateProp <= semesterRange.endDate
+      ? selectedDateProp
+      : todayStr.startsWith(defaultTermMonth)
+      ? todayStr
+      : `${defaultTermMonth}-01`;
+
+  const [selectedDateInternal, setSelectedDateInternal] = useState(initialTargetDate);
+  const selectedDate =
+    selectedDateProp && selectedDateProp >= semesterRange.startDate && selectedDateProp <= semesterRange.endDate
+      ? selectedDateProp
+      : selectedDateInternal;
   const setSelectedDate = (dateStr: string) => {
     setSelectedDateInternal(dateStr);
     if (onChangeSelectedDate) onChangeSelectedDate(dateStr);
   };
 
-  const initialYearMonth = (selectedDate || todayStr).slice(0, 7);
-  const [currentYearMonth, setCurrentYearMonth] = useState(initialYearMonth);
+  const [currentYearMonth, setCurrentYearMonth] = useState(
+    (selectedDate || defaultTermMonth).slice(0, 7)
+  );
 
-  const initialKaldik = kaldikDays.find((k) => k.date === selectedDate);
+  // Build effective kaldik combining year-specific defaults + stored/custom entries
+  const yearDefaultHolidays = React.useMemo(
+    () => getDefaultKaldikHolidaysForYear(activeYear),
+    [activeYear]
+  );
+  const effectiveKaldikDays = React.useMemo(() => {
+    const mergedMap: Record<string, KaldikDay> = {};
+    yearDefaultHolidays.forEach((h) => {
+      mergedMap[h.date] = h;
+    });
+    kaldikDays.forEach((k) => {
+      if (k.isCustom || isDateInAcademicYear(k.date, activeYear)) {
+        mergedMap[k.date] = k;
+      }
+    });
+    return Object.values(mergedMap);
+  }, [yearDefaultHolidays, kaldikDays, activeYear]);
+
+  const initialKaldik = effectiveKaldikDays.find((k) => k.date === selectedDate);
   const isInitialSun = parseLocalDate(selectedDate).getDay() === 0;
   const isInitialHol = isInitialSun || (initialKaldik ? initialKaldik.isHoliday : false);
 
@@ -84,12 +124,47 @@ export const KalenderTab: React.FC<Props> = ({
     }
   }, [activeClass]);
 
+  // Sinkronkan bulan & tanggal aktif ketika Tahun Ajaran atau Semester di header berubah
+  React.useEffect(() => {
+    const nextRange = getSemesterDateRange(activeYear, activeSemester);
+    const nextMonth = getDefaultMonthForSemester(activeYear, activeSemester, todayStr);
+    const nextDate = todayStr.startsWith(nextMonth)
+      ? todayStr
+      : `${nextMonth}-01`;
+    setCurrentYearMonth(nextMonth);
+    setSelectedDateInternal(nextDate);
+    if (
+      onChangeSelectedDate &&
+      (!selectedDateProp ||
+        selectedDateProp < nextRange.startDate ||
+        selectedDateProp > nextRange.endDate)
+    ) {
+      onChangeSelectedDate(nextDate);
+    }
+    const existing = effectiveKaldikDays.find((k) => k.date === nextDate);
+    const isSun = parseLocalDate(nextDate).getDay() === 0;
+    if (existing) {
+      setDateType(existing.isHoliday ? 'holiday' : 'effective');
+      setHolidayNote(existing.keterangan || '');
+    } else if (isSun) {
+      setDateType('holiday');
+      setHolidayNote('Hari Minggu (Libur Mingguan)');
+    } else {
+      setDateType('effective');
+      setHolidayNote('');
+    }
+  }, [activeYear, activeSemester]);
+
   // Sinkronkan bulan dan editor ketika tanggal aktif berubah dari luar (misal dari menu Absensi)
   React.useEffect(() => {
-    if (selectedDateProp) {
+    if (
+      selectedDateProp &&
+      selectedDateProp >= semesterRange.startDate &&
+      selectedDateProp <= semesterRange.endDate
+    ) {
       setSelectedDateInternal(selectedDateProp);
       setCurrentYearMonth(selectedDateProp.slice(0, 7));
-      const existing = kaldikDays.find((k) => k.date === selectedDateProp);
+      const existing = effectiveKaldikDays.find((k) => k.date === selectedDateProp);
       const isSun = parseLocalDate(selectedDateProp).getDay() === 0;
       if (existing) {
         setDateType(existing.isHoliday ? 'holiday' : 'effective');
@@ -105,8 +180,8 @@ export const KalenderTab: React.FC<Props> = ({
   }, [selectedDateProp]);
 
   const [yearStr, monthStr] = currentYearMonth.split('-');
-  const year = parseInt(yearStr) || 2026;
-  const month = parseInt(monthStr) || 8;
+  const year = parseInt(yearStr) || semesterRange.startYear;
+  const month = parseInt(monthStr) || (semesterRange.isSemester1 ? 7 : 1);
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const firstDayIndex = new Date(year, month - 1, 1).getDay(); // 0 is Sunday
@@ -120,7 +195,7 @@ export const KalenderTab: React.FC<Props> = ({
 
   // Build quick map of kaldik
   const kaldikMap: Record<string, KaldikDay> = {};
-  kaldikDays.forEach((k) => {
+  effectiveKaldikDays.forEach((k) => {
     kaldikMap[k.date] = k;
   });
 
@@ -195,9 +270,11 @@ export const KalenderTab: React.FC<Props> = ({
   };
 
   const handleConfirmResetKaldik = () => {
-    onSaveKaldik(DEFAULT_KALDIK_HOLIDAYS);
+    const otherYearsDays = kaldikDays.filter((d) => !isDateInAcademicYear(d.date, activeYear));
+    const resetYearDefaults = getDefaultKaldikHolidaysForYear(activeYear);
+    onSaveKaldik([...otherYearsDays, ...resetYearDefaults]);
     setIsResetKaldikModalOpen(false);
-    showToast('Kaldik DKI Jakarta berhasil di-reset ke standar', 'success');
+    showToast(`Kaldik Tahun Pelajaran ${activeYear} berhasil di-reset ke standar`, 'success');
   };
 
   // Month attendance records count
@@ -340,9 +417,9 @@ export const KalenderTab: React.FC<Props> = ({
         {/* Header Bar with Month Picker, Class Filter & Action Buttons */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-4">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-extrabold uppercase bg-rose-100 text-rose-700 px-3 py-1 rounded-full">
-                Kalender Pendidikan DKI Jakarta
+                Kalender Pendidikan • TA {activeYear} ({activeSemester})
               </span>
               <span className="text-xs font-extrabold bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full flex items-center gap-1">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />

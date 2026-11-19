@@ -129,6 +129,61 @@ export const normalizeDateToYmd = (raw?: string): string | null => {
   return null;
 };
 
+export const isDateInAcademicYear = (
+  dateStr: string | undefined,
+  activeYear: string = '2026/2027'
+): boolean => {
+  const ymd = normalizeDateToYmd(dateStr);
+  if (!ymd) return false;
+  const { startYear, endYear } = parseAcademicYear(activeYear);
+  return ymd >= `${startYear}-07-01` && ymd <= `${endYear}-06-30`;
+};
+
+export const getDefaultKaldikHolidaysForYear = (
+  activeYear: string = '2026/2027'
+): Array<{ date: string; isHoliday: boolean; keterangan: string }> => {
+  const { startYear, endYear } = parseAcademicYear(activeYear);
+  const fixedHolidays: Array<{ date: string; isHoliday: boolean; keterangan: string }> = [
+    { date: `${startYear}-08-17`, isHoliday: true, keterangan: `Hari Kemerdekaan Republik Indonesia` },
+    { date: `${startYear}-11-25`, isHoliday: true, keterangan: `Hari Guru Nasional` },
+    { date: `${startYear}-12-25`, isHoliday: true, keterangan: `Hari Raya Natal` },
+    { date: `${startYear}-12-26`, isHoliday: true, keterangan: `Cuti Bersama Hari Raya Natal` },
+    { date: `${startYear}-12-28`, isHoliday: true, keterangan: `Libur Akhir Semester Ganjil` },
+    { date: `${startYear}-12-29`, isHoliday: true, keterangan: `Libur Akhir Semester Ganjil` },
+    { date: `${startYear}-12-30`, isHoliday: true, keterangan: `Libur Akhir Semester Ganjil` },
+    { date: `${startYear}-12-31`, isHoliday: true, keterangan: `Libur Akhir Semester Ganjil` },
+    { date: `${endYear}-01-01`, isHoliday: true, keterangan: `Tahun Baru Masehi ${endYear}` },
+    { date: `${endYear}-05-01`, isHoliday: true, keterangan: `Hari Buruh Internasional` },
+    { date: `${endYear}-06-01`, isHoliday: true, keterangan: `Hari Lahir Pancasila` },
+  ];
+
+  if (startYear === 2026 && endYear === 2027) {
+    return [
+      { date: '2026-07-07', isHoliday: true, keterangan: 'Tahun Baru Islam 1448 H' },
+      { date: '2026-08-17', isHoliday: true, keterangan: 'Hari Kemerdekaan Republik Indonesia Ke-81' },
+      { date: '2026-09-04', isHoliday: true, keterangan: 'Maulid Nabi Muhammad SAW' },
+      { date: '2026-10-15', isHoliday: true, keterangan: 'Asesmen Sumatif Tengah Semester (ASTS)' },
+      { date: '2026-11-25', isHoliday: true, keterangan: 'Hari Guru Nasional' },
+      { date: '2026-12-25', isHoliday: true, keterangan: 'Hari Raya Natal' },
+      { date: '2026-12-26', isHoliday: true, keterangan: 'Cuti Bersama Hari Raya Natal' },
+      { date: '2026-12-28', isHoliday: true, keterangan: 'Libur Akhir Semester Ganjil' },
+      { date: '2026-12-29', isHoliday: true, keterangan: 'Libur Akhir Semester Ganjil' },
+      { date: '2026-12-30', isHoliday: true, keterangan: 'Libur Akhir Semester Ganjil' },
+      { date: '2026-12-31', isHoliday: true, keterangan: 'Libur Akhir Semester Ganjil' },
+      { date: '2027-01-01', isHoliday: true, keterangan: 'Tahun Baru Masehi 2027' },
+      { date: '2027-02-06', isHoliday: true, keterangan: 'Tahun Baru Imlek 2578 Kongzili' },
+      { date: '2027-03-09', isHoliday: true, keterangan: 'Hari Suci Nyepi Tahun Baru Saka 1949' },
+      { date: '2027-03-10', isHoliday: true, keterangan: 'Hari Raya Idul Fitri 1448 H' },
+      { date: '2027-03-11', isHoliday: true, keterangan: 'Hari Raya Idul Fitri 1448 H' },
+      { date: '2027-05-01', isHoliday: true, keterangan: 'Hari Buruh Internasional' },
+      { date: '2027-05-20', isHoliday: true, keterangan: 'Hari Raya Waisak 2571 BE' },
+      { date: '2027-06-01', isHoliday: true, keterangan: 'Hari Lahir Pancasila' },
+    ];
+  }
+
+  return fixedHolidays;
+};
+
 export const isDateInSemester = (
   dateStr: string | undefined,
   activeYear: string,
@@ -166,18 +221,41 @@ export const doesRecordMatchTerm = (
   activeSemester: string
 ): boolean => {
   const targetSem1 = isSemesterOneLabel(activeSemester);
+  const normalizedTargetYear = activeYear.trim();
 
-  if (record.tahunPelajaran && record.tahunPelajaran.trim() !== activeYear.trim()) {
-    return false;
+  if (record.tahunPelajaran && record.tahunPelajaran.trim()) {
+    if (record.tahunPelajaran.trim() !== normalizedTargetYear) {
+      return false;
+    }
+    if (record.semester) {
+      return isSemesterOneLabel(record.semester) === targetSem1;
+    }
+    const candidateDate = record.tanggal || record.tanggalUjian || record.date;
+    const ymd = normalizeDateToYmd(candidateDate);
+    if (ymd) {
+      return isDateInSemester(ymd, activeYear, activeSemester);
+    }
+    if (typeof record.recordedAt === 'number' && record.recordedAt > 0) {
+      const d = new Date(record.recordedAt);
+      const localYmd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+        d.getDate()
+      ).padStart(2, '0')}`;
+      return isDateInSemester(localYmd, activeYear, activeSemester);
+    }
+    return targetSem1;
   }
-  if (record.semester) {
-    return isSemesterOneLabel(record.semester) === targetSem1;
+
+  // Record tidak memiliki field tahunPelajaran eksplisit: cek semester + rentang tanggal tahun ajaran
+  if (record.semester && isSemesterOneLabel(record.semester) !== targetSem1) {
+    return false;
   }
 
   const candidateDate = record.tanggal || record.tanggalUjian || record.date;
   const ymd = normalizeDateToYmd(candidateDate);
   if (ymd) {
-    return isDateInSemester(ymd, activeYear, activeSemester);
+    return record.semester
+      ? isDateInAcademicYear(ymd, activeYear)
+      : isDateInSemester(ymd, activeYear, activeSemester);
   }
 
   if (typeof record.recordedAt === 'number' && record.recordedAt > 0) {
@@ -185,11 +263,13 @@ export const doesRecordMatchTerm = (
     const localYmd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
       d.getDate()
     ).padStart(2, '0')}`;
-    return isDateInSemester(localYmd, activeYear, activeSemester);
+    return record.semester
+      ? isDateInAcademicYear(localYmd, activeYear)
+      : isDateInSemester(localYmd, activeYear, activeSemester);
   }
 
-  // Legacy data without explicit term or date defaults to 2026/2027 Semester 1 only
-  return activeYear === '2026/2027' && targetSem1;
+  // Legacy data without explicit term or date defaults to 2026/2027 only
+  return normalizedTargetYear === '2026/2027' && (record.semester ? true : targetSem1);
 };
 
 export const countSemesterEffectiveDays = (

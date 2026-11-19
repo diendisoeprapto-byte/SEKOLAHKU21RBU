@@ -19,6 +19,10 @@ import {
   FileImage,
   SwitchCamera,
   Volume2,
+  ScanFace,
+  UserPlus,
+  Trash2,
+  ShieldCheck,
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import {
@@ -30,6 +34,23 @@ import {
   startHtml5QrScanner,
   stopHtml5QrScanner,
 } from '../../utils/cameraScanner';
+import {
+  StoredFaceProfile,
+  loadFaceRecognitionModels,
+  getStoredFaceProfiles,
+  saveStoredFaceProfiles,
+  subscribeFaceProfilesFromCloud,
+  extractSingleFaceDescriptor,
+  extractDescriptorFromImageUrl,
+  extractDescriptorFromFile,
+  averageFaceDescriptors,
+  matchDescriptorAgainstStudents,
+  detectAndMatchFacesOnVideo,
+  startFaceCameraStream,
+  stopFaceCameraStream,
+  cropFaceThumbnail,
+  isUsableRealPhotoUrl,
+} from '../../utils/faceRecognition';
 import { Student, KaldikDay } from '../../types';
 import { AttendanceRecordItem } from '../../utils/storage';
 import { formatTanggalIndo, getLocalTimeStr, parseLocalDate } from '../../utils/dateUtils';
@@ -87,6 +108,7 @@ export const AbsensiTab: React.FC<Props> = ({
     time: string;
     status: 'H' | 'S' | 'I' | 'A';
     alreadyPresent?: boolean;
+    methodLabel?: string;
   } | null>(null);
 
   const [manualCode, setManualCode] = useState('');
@@ -99,7 +121,116 @@ export const AbsensiTab: React.FC<Props> = ({
   const lastScannedRef = useRef<{ code: string; time: number }>({ code: '', time: 0 });
   const keyBufferRef = useRef<{ buffer: string; lastKeyTime: number }>({ buffer: '', lastKeyTime: 0 });
 
+  // Face Recognition Scan, Dual Verification Layer & Enrollment states
+  const [scanMode, setScanMode] = useState<'barcode' | 'face' | 'dual'>('barcode');
+  const [dualVerifyRule, setDualVerifyRule] = useState<'verify_barcode' | 'parallel'>('verify_barcode');
+  const [faceLayerCameraId, setFaceLayerCameraId] = useState<string>('');
+  const [usingSharedBarcodeFeed, setUsingSharedBarcodeFeed] = useState<boolean>(false);
+  const [faceProfiles, setFaceProfiles] = useState<Record<string, StoredFaceProfile>>(() =>
+    getStoredFaceProfiles()
+  );
+  const [faceModelsReady, setFaceModelsReady] = useState(false);
+  const [isLoadingFaceModels, setIsLoadingFaceModels] = useState(false);
+  const [faceCameraActive, setFaceCameraActive] = useState(false);
+  const [isInitializingFaceCam, setIsInitializingFaceCam] = useState(false);
+  const [faceStatusText, setFaceStatusText] = useState<string>(
+    'Aktifkan kamera wajah & arahkan wajah siswa ke bingkai'
+  );
+  const [liveDetectedFace, setLiveDetectedFace] = useState<{
+    studentId: string;
+    studentName: string;
+    confidence: number;
+    hasFace: boolean;
+    detectedAt: number;
+  } | null>(null);
+  const [faceThreshold, setFaceThreshold] = useState<number>(0.50);
+  const [autoSubmitFaceAttendance, setAutoSubmitFaceAttendance] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('sekolahku_auto_submit_face') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const [isScanningFaceFile, setIsScanningFaceFile] = useState(false);
+  const [isSyncingFromPhotos, setIsSyncingFromPhotos] = useState(false);
+
+  const handleToggleAutoSubmitFace = (nextVal: boolean) => {
+    setAutoSubmitFaceAttendance(nextVal);
+    try {
+      localStorage.setItem('sekolahku_auto_submit_face', String(nextVal));
+    } catch {
+      // Ignore storage quota errors
+    }
+    showToast(
+      nextVal
+        ? 'Auto-Submit Absen Wajah AKTIF: kehadiran otomatis disimpan saat kepercayaan > 90%.'
+        : 'Auto-Submit Absen Wajah NONAKTIF: guru konfirmasi manual saat wajah terdeteksi.',
+      'success'
+    );
+  };
+
+  // Face Enrollment Modal states
+  const [isFaceEnrollModalOpen, setIsFaceEnrollModalOpen] = useState(false);
+  const [enrollStudentId, setEnrollStudentId] = useState<string>('');
+  const [enrollSearch, setEnrollSearch] = useState<string>('');
+  const [isEnrollingCamera, setIsEnrollingCamera] = useState(false);
+  const [enrollProgressText, setEnrollProgressText] = useState<string>('');
+
+  const faceVideoRef = useRef<HTMLVideoElement | null>(null);
+  const faceCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const enrollVideoRef = useRef<HTMLVideoElement | null>(null);
+  const faceStreamRef = useRef<MediaStream | null>(null);
+  const enrollStreamRef = useRef<MediaStream | null>(null);
+  const faceFileInputRef = useRef<HTMLInputElement>(null);
+  const enrollFileInputRef = useRef<HTMLInputElement>(null);
+  const usingSharedFeedRef = useRef<boolean>(false);
+  const liveFaceDetectionRef = useRef<{
+    student: Student | null;
+    confidence: number;
+    hasFace: boolean;
+    detectedAt: number;
+  }>({
+    student: null,
+    confidence: 0,
+    hasFace: false,
+    detectedAt: 0,
+  });
+  const faceMatchStreakRef = useRef<{ studentId: string; count: number; lastTrigger: number }>({
+    studentId: '',
+    count: 0,
+    lastTrigger: 0,
+  });
+
   const filteredStudents = students.filter((s) => s.kelas === activeClass);
+
+  // Sync face profiles from local event & Cloud Firestore
+  useEffect(() => {
+    const syncLocal = () => setFaceProfiles(getStoredFaceProfiles());
+    window.addEventListener('sekolahku-face-profiles-updated', syncLocal);
+    const unsubCloud = subscribeFaceProfilesFromCloud((merged) => {
+      setFaceProfiles(merged);
+    });
+    return () => {
+      window.removeEventListener('sekolahku-face-profiles-updated', syncLocal);
+      unsubCloud();
+    };
+  }, []);
+
+  // Face recognition candidates (current class + school wide)
+  const faceCandidates = React.useMemo(() => {
+    return students
+      .map((student) => {
+        const prof = faceProfiles[student.id];
+        if (!prof || !Array.isArray(prof.descriptor) || prof.descriptor.length !== 128) return null;
+        return { student, descriptor: prof.descriptor };
+      })
+      .filter((x): x is { student: Student; descriptor: number[] } => x !== null);
+  }, [students, faceProfiles]);
+
+  const faceCandidatesRef = useRef(faceCandidates);
+  faceCandidatesRef.current = faceCandidates;
+
+  const classEnrolledCount = filteredStudents.filter((s) => Boolean(faceProfiles[s.id])).length;
 
   const activeDayKaldik = kaldikDays.find((k) => k.date === activeDate);
   const isSunday = parseLocalDate(activeDate).getDay() === 0;
@@ -121,6 +252,11 @@ export const AbsensiTab: React.FC<Props> = ({
         const candidate = preferExistingId || prev;
         if (candidate && cams.some((c) => c.id === candidate)) return candidate;
         return pickPreferredCameraId(cams);
+      });
+      setFaceLayerCameraId((prev) => {
+        if (prev && cams.some((c) => c.id === prev)) return prev;
+        const frontCam = cams.find((c) => !c.isBack);
+        return frontCam ? frontCam.id : cams[0].id;
       });
     }
     return cams;
@@ -192,7 +328,7 @@ export const AbsensiTab: React.FC<Props> = ({
   const recordAttendance = async (
     student: Student,
     status: 'H' | 'S' | 'I' | 'A' = 'H',
-    options?: { skipIfAlreadyRecorded?: boolean }
+    options?: { skipIfAlreadyRecorded?: boolean; methodLabel?: string }
   ) => {
     const key = `${activeDate}_${student.id}`;
     const existingRec = attendanceRecords[key];
@@ -218,6 +354,7 @@ export const AbsensiTab: React.FC<Props> = ({
         time: existingTime,
         status: existingRec.status,
         alreadyPresent: true,
+        methodLabel: options?.methodLabel,
       });
       playBeep('duplicate');
       try {
@@ -264,6 +401,7 @@ export const AbsensiTab: React.FC<Props> = ({
       time: timeStr,
       status,
       alreadyPresent: false,
+      methodLabel: options?.methodLabel,
     });
     playBeep('success');
 
@@ -319,12 +457,69 @@ export const AbsensiTab: React.FC<Props> = ({
     const studentAnywhere =
       filteredStudents.find(matchesStudent) || students.find(matchesStudent);
 
-    if (studentAnywhere) {
-      recordAttendance(studentAnywhere, 'H', { skipIfAlreadyRecorded: true });
-    } else {
+    if (!studentAnywhere) {
       playBeep('error');
       showToast(`Barcode "${rawCode}" tidak cocok dengan data siswa manapun!`, 'error');
+      return;
     }
+
+    // Check Face Verification Layer when Dual Mode is active
+    if (scanMode === 'dual' && faceCameraActive) {
+      const recent = liveFaceDetectionRef.current;
+      const isFresh = Date.now() - recent.detectedAt <= 4500;
+      const hasEnrolledFace = Boolean(faceProfiles[studentAnywhere.id]);
+
+      if (dualVerifyRule === 'verify_barcode' && hasEnrolledFace) {
+        if (!isFresh || !recent.hasFace) {
+          playBeep('error');
+          showToast(
+            `Verifikasi Wajah Diperlukan: Arahkan wajah ${studentAnywhere.nama} ke kamera verifikasi lalu pindai ulang barcode.`,
+            'error'
+          );
+          return;
+        }
+        if (recent.student && recent.student.id !== studentAnywhere.id) {
+          playBeep('error');
+          showToast(
+            `Verifikasi Wajah Ditolak! Barcode milik ${studentAnywhere.nama}, tetapi wajah di kamera terdeteksi sebagai ${recent.student.nama}.`,
+            'error'
+          );
+          return;
+        }
+        if (!recent.student) {
+          playBeep('error');
+          showToast(
+            `Wajah belum cocok dengan ${studentAnywhere.nama}. Posisikan wajah lebih jelas ke kamera verifikasi.`,
+            'error'
+          );
+          return;
+        }
+        recordAttendance(studentAnywhere, 'H', {
+          skipIfAlreadyRecorded: true,
+          methodLabel: `Barcode + Verifikasi Wajah ✓ (${recent.confidence}%)`,
+        });
+        return;
+      }
+
+      if (isFresh && recent.student?.id === studentAnywhere.id) {
+        recordAttendance(studentAnywhere, 'H', {
+          skipIfAlreadyRecorded: true,
+          methodLabel: `Barcode + Verifikasi Wajah ✓ (${recent.confidence}%)`,
+        });
+        return;
+      }
+
+      recordAttendance(studentAnywhere, 'H', {
+        skipIfAlreadyRecorded: true,
+        methodLabel: hasEnrolledFace ? 'Scan Barcode' : 'Scan Barcode (Wajah Belum Terdaftar)',
+      });
+      return;
+    }
+
+    recordAttendance(studentAnywhere, 'H', {
+      skipIfAlreadyRecorded: true,
+      methodLabel: 'Scan Barcode / QR',
+    });
   };
 
   const barcodeDetectedRef = useRef(handleBarcodeDetected);
@@ -388,9 +583,605 @@ export const AbsensiTab: React.FC<Props> = ({
   // Switch camera device smoothly while active
   const handleCameraChange = (cameraId: string) => {
     setSelectedCameraId(cameraId);
-    if (cameraActive) {
+    if ((scanMode === 'barcode' || scanMode === 'dual') && cameraActive) {
       startCameraScanner(cameraId);
+    } else if (scanMode === 'face' && faceCameraActive) {
+      startFaceScanner(cameraId);
     }
+  };
+
+  const handleFaceLayerCameraChange = (cameraId: string) => {
+    setFaceLayerCameraId(cameraId);
+    if ((scanMode === 'face' || scanMode === 'dual') && faceCameraActive) {
+      startFaceScanner(cameraId, { keepBarcodeRunning: scanMode === 'dual' });
+    }
+  };
+
+  // Stop Face Recognition camera
+  const stopFaceScanner = () => {
+    stopFaceCameraStream(faceStreamRef.current, faceVideoRef.current);
+    faceStreamRef.current = null;
+    usingSharedFeedRef.current = false;
+    setUsingSharedBarcodeFeed(false);
+    setFaceCameraActive(false);
+    setLiveDetectedFace(null);
+    liveFaceDetectionRef.current = {
+      student: null,
+      confidence: 0,
+      hasFace: false,
+      detectedAt: 0,
+    };
+    if (faceCanvasRef.current) {
+      const ctx = faceCanvasRef.current.getContext('2d');
+      ctx?.clearRect(0, 0, faceCanvasRef.current.width, faceCanvasRef.current.height);
+    }
+    setFaceStatusText('Kamera layer wajah dimatikan');
+  };
+
+  const ensureFaceModels = async (): Promise<boolean> => {
+    if (faceModelsReady) return true;
+    setIsLoadingFaceModels(true);
+    try {
+      await loadFaceRecognitionModels();
+      setFaceModelsReady(true);
+      return true;
+    } catch (err) {
+      console.error('Gagal memuat model AI wajah:', err);
+      showToast('Gagal memuat model deteksi wajah dari sistem.', 'error');
+      return false;
+    } finally {
+      setIsLoadingFaceModels(false);
+    }
+  };
+
+  // Start live Face Recognition camera via browser MediaDevices API (supports running alongside Barcode Scanner)
+  const startFaceScanner = async (
+    cameraId?: string,
+    options?: { keepBarcodeRunning?: boolean; silentToast?: boolean }
+  ) => {
+    if (!faceVideoRef.current) return;
+    setIsInitializingFaceCam(true);
+    setFaceStatusText('Memuat model pengenalan wajah & MediaDevices...');
+    try {
+      if (!options?.keepBarcodeRunning) {
+        await stopCameraScanner();
+      }
+      stopFaceCameraStream(faceStreamRef.current, faceVideoRef.current);
+      faceStreamRef.current = null;
+      usingSharedFeedRef.current = false;
+      setUsingSharedBarcodeFeed(false);
+
+      const modelsOk = await ensureFaceModels();
+      if (!modelsOk) {
+        setIsInitializingFaceCam(false);
+        return;
+      }
+
+      const preferredId =
+        cameraId ||
+        (scanMode === 'dual' ? faceLayerCameraId : selectedCameraId) ||
+        undefined;
+
+      try {
+        const { stream, activeCameraId } = await startFaceCameraStream(
+          faceVideoRef.current,
+          preferredId
+        );
+        faceStreamRef.current = stream;
+        await refreshAvailableCameras(
+          scanMode === 'dual' ? undefined : activeCameraId
+        );
+        setFaceCameraActive(true);
+        setFaceStatusText(
+          faceCandidatesRef.current.length === 0
+            ? 'Kamera wajah aktif! Daftarkan wajah siswa agar otomatis terverifikasi.'
+            : 'Layer Wajah aktif — arahkan wajah siswa ke bingkai...'
+        );
+        if (!options?.silentToast) {
+          showToast('Kamera layer deteksi wajah aktif!', 'success');
+        }
+      } catch (camErr) {
+        // Fallback for single-camera devices in Dual Mode: reuse MediaStream from the running barcode <video>
+        const barcodeVideo = document.querySelector('#html5qr-code-full-region video') as HTMLVideoElement | null;
+        if (options?.keepBarcodeRunning && barcodeVideo && barcodeVideo.srcObject) {
+          faceVideoRef.current.srcObject = barcodeVideo.srcObject;
+          await faceVideoRef.current.play().catch(() => {});
+          usingSharedFeedRef.current = true;
+          setUsingSharedBarcodeFeed(true);
+          setFaceCameraActive(true);
+          setFaceStatusText('Layer wajah aktif (berbagi feed kamera barcode tunggal)');
+          if (!options?.silentToast) {
+            showToast('Layer wajah aktif menggunakan feed kamera bersama!', 'success');
+          }
+        } else {
+          throw camErr;
+        }
+      }
+    } catch (err) {
+      console.error('Face camera startup error:', err);
+      setFaceCameraActive(false);
+      setFaceStatusText('Gagal mengakses kamera wajah');
+      showToast(`Gagal mengakses kamera wajah: ${formatCameraErrorIndonesian(err)}`, 'error');
+    } finally {
+      setIsInitializingFaceCam(false);
+    }
+  };
+
+  const toggleFaceCamera = () => {
+    if (faceCameraActive) {
+      stopFaceScanner();
+    } else {
+      startFaceScanner(
+        (scanMode === 'dual' ? faceLayerCameraId : selectedCameraId) || undefined,
+        { keepBarcodeRunning: scanMode === 'dual' }
+      );
+    }
+  };
+
+  const toggleDualScanners = async () => {
+    if (cameraActive && faceCameraActive) {
+      await stopCameraScanner();
+      stopFaceScanner();
+      return;
+    }
+    if (!cameraActive) {
+      await startCameraScanner(selectedCameraId || undefined);
+    }
+    if (!faceCameraActive) {
+      await startFaceScanner(faceLayerCameraId || undefined, {
+        keepBarcodeRunning: true,
+        silentToast: true,
+      });
+      showToast('Mode Dual aktif: Pemindai Barcode & Layer Wajah MediaDevices berjalan bersamaan!', 'success');
+    }
+  };
+
+  const handleSwitchScanMode = async (nextMode: 'barcode' | 'face' | 'dual') => {
+    if (nextMode === scanMode) return;
+    if (nextMode === 'face') {
+      await stopCameraScanner();
+    } else if (nextMode === 'barcode') {
+      stopFaceScanner();
+    } else if (nextMode === 'dual') {
+      // Switching to dual keeps whichever camera is running and lets user run both alongside
+    }
+    setScanMode(nextMode);
+  };
+
+  const recordAttendanceRef = useRef(recordAttendance);
+  recordAttendanceRef.current = recordAttendance;
+
+  // Real-time continuous face detection & matching loop (runs in Face mode AND alongside Barcode in Dual mode)
+  useEffect(() => {
+    if (!faceCameraActive || (scanMode !== 'face' && scanMode !== 'dual')) return;
+    let cancelled = false;
+    let timerId: number | null = null;
+
+    const runLoop = async () => {
+      if (cancelled) return;
+      const sharedVideo = usingSharedFeedRef.current
+        ? (document.querySelector('#html5qr-code-full-region video') as HTMLVideoElement | null)
+        : null;
+      const video = faceVideoRef.current || sharedVideo;
+      const canvas = faceCanvasRef.current;
+
+      if (video && canvas && video.readyState >= 2 && video.videoWidth > 0) {
+        try {
+          const matches = await detectAndMatchFacesOnVideo(
+            video,
+            faceCandidatesRef.current,
+            faceThreshold
+          );
+
+          if (cancelled) return;
+
+          if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+          }
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (matches.length === 0) {
+              liveFaceDetectionRef.current = {
+                student: null,
+                confidence: 0,
+                hasFace: false,
+                detectedAt: Date.now(),
+              };
+              setLiveDetectedFace(null);
+              setFaceStatusText(
+                faceCandidatesRef.current.length === 0
+                  ? 'Belum ada wajah terdaftar — klik "Daftarkan Wajah Siswa"'
+                  : 'Mencari wajah di depan kamera...'
+              );
+            } else {
+              for (const m of matches) {
+                const { x, y, width, height } = m.box;
+                const isMatched = Boolean(m.matchedStudent);
+
+                ctx.strokeStyle = isMatched ? '#10b981' : '#f59e0b';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(x, y, width, height);
+
+                const labelText = isMatched && m.matchedStudent
+                  ? `${m.matchedStudent.nama} (${m.confidence}%)`
+                  : 'Wajah Belum Terdaftar';
+                ctx.font = 'bold 14px sans-serif';
+                const textW = ctx.measureText(labelText).width;
+                const pillW = textW + 16;
+                const pillH = 26;
+                const pillY = Math.max(0, y - pillH - 4);
+
+                ctx.fillStyle = isMatched ? 'rgba(5, 150, 105, 0.92)' : 'rgba(217, 119, 6, 0.92)';
+                ctx.fillRect(x, pillY, pillW, pillH);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(labelText, x + 8, pillY + 18);
+              }
+
+              const bestMatched = matches.find((m) => m.matchedStudent !== null);
+              if (bestMatched && bestMatched.matchedStudent) {
+                const student = bestMatched.matchedStudent;
+                const now = Date.now();
+                liveFaceDetectionRef.current = {
+                  student,
+                  confidence: bestMatched.confidence,
+                  hasFace: true,
+                  detectedAt: now,
+                };
+                setLiveDetectedFace({
+                  studentId: student.id,
+                  studentName: student.nama,
+                  confidence: bestMatched.confidence,
+                  hasFace: true,
+                  detectedAt: now,
+                });
+
+                const streak = faceMatchStreakRef.current;
+                if (streak.studentId === student.id) {
+                  streak.count += 1;
+                } else {
+                  streak.studentId = student.id;
+                  streak.count = 1;
+                }
+
+                const meetsConfidenceThreshold = bestMatched.confidence > 90;
+
+                if (scanMode === 'dual' && dualVerifyRule === 'verify_barcode' && !autoSubmitFaceAttendance) {
+                  setFaceStatusText(
+                    `Siap Verifikasi Barcode: ${student.nama} (${bestMatched.confidence}%)`
+                  );
+                } else if (autoSubmitFaceAttendance) {
+                  setFaceStatusText(
+                    meetsConfidenceThreshold
+                      ? `Terdeteksi: ${student.nama} (${bestMatched.confidence}% > 90% • Auto-Submit)`
+                      : `Terdeteksi: ${student.nama} (${bestMatched.confidence}% • butuh > 90% untuk Auto-Submit)`
+                  );
+                } else {
+                  setFaceStatusText(
+                    `Terdeteksi: ${student.nama} (${bestMatched.confidence}%) — Auto-Submit Nonaktif`
+                  );
+                }
+
+                // Auto-submit attendance only when switch is ON, confidence > 90%, and cooldown elapsed
+                const canTriggerFaceMode =
+                  scanMode === 'face' ||
+                  (scanMode === 'dual' && (dualVerifyRule === 'parallel' || meetsConfidenceThreshold));
+
+                if (
+                  autoSubmitFaceAttendance &&
+                  canTriggerFaceMode &&
+                  meetsConfidenceThreshold &&
+                  now - streak.lastTrigger > 3500
+                ) {
+                  streak.lastTrigger = now;
+                  streak.count = 0;
+                  setLastScannedStudent(
+                    `${student.nama} (${student.barcodeId}) • Auto-Submit Wajah ${bestMatched.confidence}%`
+                  );
+                  await recordAttendanceRef.current(student, 'H', {
+                    skipIfAlreadyRecorded: true,
+                    methodLabel:
+                      scanMode === 'dual'
+                        ? `Dual Layer • Auto-Submit Wajah (${bestMatched.confidence}%)`
+                        : `Auto-Submit Wajah (${bestMatched.confidence}%)`,
+                  });
+                }
+              } else {
+                liveFaceDetectionRef.current = {
+                  student: null,
+                  confidence: 0,
+                  hasFace: true,
+                  detectedAt: Date.now(),
+                };
+                setLiveDetectedFace({
+                  studentId: '',
+                  studentName: '',
+                  confidence: 0,
+                  hasFace: true,
+                  detectedAt: Date.now(),
+                });
+                faceMatchStreakRef.current.studentId = '';
+                faceMatchStreakRef.current.count = 0;
+                setFaceStatusText(
+                  faceCandidatesRef.current.length === 0
+                    ? 'Wajah terdeteksi, tetapi belum ada data wajah siswa yang terdaftar'
+                    : 'Wajah terdeteksi tetapi belum cocok dengan data wajah terdaftar'
+                );
+              }
+            }
+          }
+        } catch {
+          // Skip transient frame errors silently
+        }
+      }
+
+      if (!cancelled) {
+        timerId = window.setTimeout(runLoop, 220);
+      }
+    };
+
+    runLoop();
+    return () => {
+      cancelled = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
+  }, [faceCameraActive, scanMode, faceThreshold, dualVerifyRule, autoSubmitFaceAttendance]);
+
+  // Scan Face from Uploaded Photo File
+  const handleScanFaceFromFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (faceCandidatesRef.current.length === 0) {
+      showToast('Belum ada data wajah siswa yang terdaftar. Daftarkan wajah terlebih dahulu.', 'error');
+      if (faceFileInputRef.current) faceFileInputRef.current.value = '';
+      return;
+    }
+
+    setIsScanningFaceFile(true);
+    try {
+      const extracted = await extractDescriptorFromFile(file);
+      if (!extracted) {
+        playBeep('error');
+        showToast('Tidak ada wajah yang terdeteksi jelas pada foto ini.', 'error');
+        return;
+      }
+      const match = matchDescriptorAgainstStudents(
+        extracted.descriptor,
+        faceCandidatesRef.current,
+        faceThreshold
+      );
+      if (match) {
+        await recordAttendance(match.student, 'H', { skipIfAlreadyRecorded: true });
+        setLastScannedStudent(
+          `${match.student.nama} (${match.student.barcodeId}) • Foto Wajah ${match.confidence}%`
+        );
+      } else {
+        playBeep('error');
+        showToast('Wajah pada foto tidak cocok dengan data wajah siswa yang terdaftar.', 'error');
+      }
+    } catch {
+      playBeep('error');
+      showToast('Gagal memproses foto wajah.', 'error');
+    } finally {
+      setIsScanningFaceFile(false);
+      if (faceFileInputRef.current) faceFileInputRef.current.value = '';
+    }
+  };
+
+  // Auto-index face descriptors from existing student profile photos
+  const handleSyncFacesFromStudentPhotos = async () => {
+    const candidatesToIndex = filteredStudents.filter(
+      (s) => !faceProfiles[s.id] && isUsableRealPhotoUrl(s.fotoUrl)
+    );
+    if (candidatesToIndex.length === 0) {
+      showToast(
+        `Seluruh siswa kelas ${activeClass} dengan foto asli sudah terindeks, atau siswa masih memakai avatar bawaan (gunakan rekam kamera / unggah foto wajah).`,
+        'error'
+      );
+      return;
+    }
+
+    setIsSyncingFromPhotos(true);
+    try {
+      const ok = await ensureFaceModels();
+      if (!ok) return;
+
+      const updated: Record<string, StoredFaceProfile> = { ...faceProfiles };
+      let addedCount = 0;
+
+      for (const s of candidatesToIndex) {
+        const desc = await extractDescriptorFromImageUrl(s.fotoUrl);
+        if (desc) {
+          updated[s.id] = {
+            studentId: s.id,
+            descriptor: desc,
+            sampleCount: 1,
+            source: 'photo',
+            updatedAt: new Date().toISOString(),
+          };
+          addedCount++;
+        }
+      }
+
+      if (addedCount > 0) {
+        setFaceProfiles(updated);
+        saveStoredFaceProfiles(updated);
+        showToast(
+          `Berhasil mendaftarkan wajah otomatis dari ${addedCount} foto profil siswa kelas ${activeClass}!`,
+          'success'
+        );
+      } else {
+        showToast(
+          'Tidak ada wajah yang terdeteksi jelas pada foto profil siswa. Gunakan tombol Rekam Kamera atau Unggah Foto.',
+          'error'
+        );
+      }
+    } finally {
+      setIsSyncingFromPhotos(false);
+    }
+  };
+
+  // Start / Stop Enrollment Modal preview stream
+  useEffect(() => {
+    let active = true;
+    const setupEnrollCam = async () => {
+      if (!isFaceEnrollModalOpen) {
+        stopFaceCameraStream(enrollStreamRef.current, enrollVideoRef.current);
+        enrollStreamRef.current = null;
+        return;
+      }
+      if (!enrollStudentId && filteredStudents.length > 0) {
+        setEnrollStudentId(filteredStudents[0].id);
+      }
+      // Pause main camera scanners while modal preview uses webcam
+      await stopCameraScanner();
+      stopFaceScanner();
+      await ensureFaceModels();
+      if (!active || !enrollVideoRef.current) return;
+      try {
+        const { stream } = await startFaceCameraStream(
+          enrollVideoRef.current,
+          selectedCameraId || undefined
+        );
+        if (!active) {
+          stopFaceCameraStream(stream);
+          return;
+        }
+        enrollStreamRef.current = stream;
+      } catch {
+        // User can still enroll via photo file upload if camera is unavailable
+      }
+    };
+    setupEnrollCam();
+    return () => {
+      active = false;
+      stopFaceCameraStream(enrollStreamRef.current, enrollVideoRef.current);
+      enrollStreamRef.current = null;
+    };
+  }, [isFaceEnrollModalOpen]);
+
+  // Capture 3 face samples from camera in Enrollment Modal and save averaged descriptor
+  const handleEnrollFaceFromCamera = async () => {
+    const target = students.find((s) => s.id === enrollStudentId);
+    if (!target) {
+      showToast('Pilih siswa terlebih dahulu.', 'error');
+      return;
+    }
+    const videoEl = enrollVideoRef.current;
+    if (!videoEl || videoEl.readyState < 2 || videoEl.videoWidth === 0) {
+      showToast('Kamera pendaftaran belum siap. Gunakan unggah foto jika perangkat tanpa kamera.', 'error');
+      return;
+    }
+
+    setIsEnrollingCamera(true);
+    try {
+      const ok = await ensureFaceModels();
+      if (!ok) return;
+
+      const samples: number[][] = [];
+      let thumbnailDataUrl = '';
+      for (let i = 1; i <= 3; i++) {
+        setEnrollProgressText(`Mengambil sampel wajah ${i}/3... Hadapkan wajah ke kamera`);
+        const detected = await extractSingleFaceDescriptor(videoEl, {
+          inputSize: 320,
+          scoreThreshold: 0.4,
+        });
+        if (detected) {
+          samples.push(detected.descriptor);
+          if (!thumbnailDataUrl) {
+            thumbnailDataUrl = cropFaceThumbnail(videoEl, detected.box);
+          }
+        }
+        if (i < 3) {
+          await new Promise((r) => setTimeout(r, 260));
+        }
+      }
+
+      if (samples.length === 0) {
+        playBeep('error');
+        showToast('Wajah tidak terdeteksi jelas di kamera. Pastikan pencahayaan cukup.', 'error');
+        return;
+      }
+
+      const averaged = averageFaceDescriptors(samples);
+      const nextMap: Record<string, StoredFaceProfile> = {
+        ...faceProfiles,
+        [target.id]: {
+          studentId: target.id,
+          descriptor: averaged,
+          sampleCount: samples.length,
+          source: 'camera',
+          updatedAt: new Date().toISOString(),
+          thumbnailDataUrl: thumbnailDataUrl || faceProfiles[target.id]?.thumbnailDataUrl,
+        },
+      };
+      setFaceProfiles(nextMap);
+      saveStoredFaceProfiles(nextMap);
+      playBeep('success');
+      showToast(
+        `Wajah ${target.nama} berhasil direkam (${samples.length} sampel) & tersinkron ke Cloud!`,
+        'success'
+      );
+    } finally {
+      setIsEnrollingCamera(false);
+      setEnrollProgressText('');
+    }
+  };
+
+  // Enroll student face from uploaded image file
+  const handleEnrollFaceFromFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const target = students.find((s) => s.id === enrollStudentId);
+    if (!target) {
+      showToast('Pilih siswa terlebih dahulu.', 'error');
+      if (enrollFileInputRef.current) enrollFileInputRef.current.value = '';
+      return;
+    }
+
+    setIsEnrollingCamera(true);
+    setEnrollProgressText('Mengekstrak fitur wajah dari foto...');
+    try {
+      const extracted = await extractDescriptorFromFile(file);
+      if (!extracted) {
+        playBeep('error');
+        showToast('Tidak ditemukan wajah yang jelas pada foto yang diunggah.', 'error');
+        return;
+      }
+      const nextMap: Record<string, StoredFaceProfile> = {
+        ...faceProfiles,
+        [target.id]: {
+          studentId: target.id,
+          descriptor: extracted.descriptor,
+          sampleCount: 1,
+          source: 'upload',
+          updatedAt: new Date().toISOString(),
+          thumbnailDataUrl: extracted.thumbnailDataUrl,
+        },
+      };
+      setFaceProfiles(nextMap);
+      saveStoredFaceProfiles(nextMap);
+      playBeep('success');
+      showToast(`Wajah ${target.nama} berhasil didaftarkan dari foto!`, 'success');
+    } catch {
+      playBeep('error');
+      showToast('Gagal memproses foto wajah siswa.', 'error');
+    } finally {
+      setIsEnrollingCamera(false);
+      setEnrollProgressText('');
+      if (enrollFileInputRef.current) enrollFileInputRef.current.value = '';
+    }
+  };
+
+  const handleDeleteFaceProfile = (studentId: string) => {
+    const target = students.find((s) => s.id === studentId);
+    const nextMap = { ...faceProfiles };
+    delete nextMap[studentId];
+    setFaceProfiles(nextMap);
+    saveStoredFaceProfiles(nextMap);
+    showToast(`Data wajah ${target?.nama || 'siswa'} dihapus.`, 'success');
   };
 
   // Scan from uploaded file / photo
@@ -447,11 +1238,15 @@ export const AbsensiTab: React.FC<Props> = ({
     };
   }, [filteredStudents, students, activeDate, attendanceRecords]);
 
-  // Clean up scanner on unmount
+  // Clean up scanner & face streams on unmount
   useEffect(() => {
     return () => {
       stopHtml5QrScanner(html5QrCodeRef.current);
       html5QrCodeRef.current = null;
+      stopFaceCameraStream(faceStreamRef.current, faceVideoRef.current);
+      faceStreamRef.current = null;
+      stopFaceCameraStream(enrollStreamRef.current, enrollVideoRef.current);
+      enrollStreamRef.current = null;
     };
   }, []);
 
@@ -554,7 +1349,7 @@ export const AbsensiTab: React.FC<Props> = ({
               Sub-Menu 2.2 • Terhubung ke Kalender, e-Rapor & Cloud
             </span>
             <h3 className="font-display font-black text-sm sm:text-base text-slate-800">
-              Scan Barcode & Presensi Harian ({activeClass})
+              Scan Barcode, Scan Wajah &amp; Presensi Harian ({activeClass})
             </h3>
           </div>
         </div>
@@ -581,21 +1376,86 @@ export const AbsensiTab: React.FC<Props> = ({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Camera Scanner & Input Tools */}
+        {/* Left Column: Camera Scanner (Barcode & Face ID) & Input Tools */}
         <div className="lg:col-span-5 bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-4">
           <div className="flex items-center justify-between gap-2">
             <div>
-              <span className="text-xs font-extrabold uppercase bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full">
-                Pemindai Barcode Otomatis
+              <span
+                className={`text-xs font-extrabold uppercase px-3 py-1 rounded-full ${
+                  scanMode === 'dual'
+                    ? 'bg-purple-100 text-purple-800'
+                    : scanMode === 'face'
+                    ? 'bg-indigo-100 text-indigo-800'
+                    : 'bg-emerald-100 text-emerald-800'
+                }`}
+              >
+                {scanMode === 'dual'
+                  ? 'Dual Mode: Barcode + Layer Wajah'
+                  : scanMode === 'face'
+                  ? 'Pemindai Wajah Otomatis (Face ID)'
+                  : 'Pemindai Barcode Otomatis'}
               </span>
               <h2 className="text-xl font-display font-black text-slate-800 mt-1.5 flex items-center gap-2">
-                Scan Kamera Siswa
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                {scanMode === 'dual'
+                  ? 'Barcode + Verifikasi Wajah'
+                  : scanMode === 'face'
+                  ? 'Scan Wajah Siswa'
+                  : 'Scan Kamera Siswa'}
+                <span
+                  className={`w-2.5 h-2.5 rounded-full animate-pulse ${
+                    scanMode === 'dual'
+                      ? 'bg-purple-500'
+                      : scanMode === 'face'
+                      ? 'bg-indigo-500'
+                      : 'bg-emerald-500'
+                  }`}
+                />
               </h2>
             </div>
             <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
               <LinkIcon className="w-3 h-3 text-emerald-600" /> Firestore Realtime
             </span>
+          </div>
+
+          {/* Mode Switcher: Scan Barcode vs Scan Wajah vs Dual Verification Layer */}
+          <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-2xl border border-slate-200">
+            <button
+              type="button"
+              onClick={() => handleSwitchScanMode('barcode')}
+              className={`py-2 px-2 rounded-xl text-[11px] font-display font-black flex items-center justify-center gap-1 transition cursor-pointer ${
+                scanMode === 'barcode'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+              }`}
+            >
+              <QrCode className="w-3.5 h-3.5 shrink-0" />
+              <span>Barcode</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSwitchScanMode('face')}
+              className={`py-2 px-2 rounded-xl text-[11px] font-display font-black flex items-center justify-center gap-1 transition cursor-pointer ${
+                scanMode === 'face'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+              }`}
+            >
+              <ScanFace className="w-3.5 h-3.5 shrink-0" />
+              <span>Wajah ({classEnrolledCount}/{filteredStudents.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSwitchScanMode('dual')}
+              className={`py-2 px-2 rounded-xl text-[11px] font-display font-black flex items-center justify-center gap-1 transition cursor-pointer ${
+                scanMode === 'dual'
+                  ? 'bg-purple-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+              }`}
+              title="Jalankan Layer Deteksi Wajah MediaDevices bersamaan dengan Scanner Barcode"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+              <span>Dual Layer</span>
+            </button>
           </div>
 
           {/* Date Picker & Kaldik Holiday Indicator */}
@@ -661,123 +1521,499 @@ export const AbsensiTab: React.FC<Props> = ({
 
           {/* Camera Controls & Selection */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between bg-slate-100 p-2.5 rounded-2xl border border-slate-200">
-              <div className="flex items-center gap-2">
-                <Camera className="w-4 h-4 text-emerald-700" />
-                <span className="text-xs font-bold text-slate-700">Kamera Scanner (CODE-128 & QR)</span>
+            {scanMode === 'barcode' ? (
+              <div className="flex items-center justify-between bg-slate-100 p-2.5 rounded-2xl border border-slate-200">
+                <div className="flex items-center gap-2">
+                  <Camera className="w-4 h-4 text-emerald-700" />
+                  <span className="text-xs font-bold text-slate-700">Kamera Scanner (CODE-128 &amp; QR)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleCamera}
+                  disabled={isInitializingCamera}
+                  className={`text-xs font-extrabold px-3.5 py-2 rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                    cameraActive
+                      ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                  }`}
+                >
+                  {isInitializingCamera ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Memuat...</span>
+                    </>
+                  ) : cameraActive ? (
+                    <>
+                      <VideoOff className="w-4 h-4" />
+                      <span>Matikan Kamera</span>
+                    </>
+                  ) : (
+                    <>
+                      <Video className="w-4 h-4" />
+                      <span>Aktifkan Kamera</span>
+                    </>
+                  )}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={toggleCamera}
-                disabled={isInitializingCamera}
-                className={`text-xs font-extrabold px-3.5 py-2 rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
-                  cameraActive
-                    ? 'bg-rose-600 hover:bg-rose-700 text-white'
-                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                }`}
-              >
-                {isInitializingCamera ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Memuat...</span>
-                  </>
-                ) : cameraActive ? (
-                  <>
-                    <VideoOff className="w-4 h-4" />
-                    <span>Matikan Kamera</span>
-                  </>
-                ) : (
-                  <>
-                    <Video className="w-4 h-4" />
-                    <span>Aktifkan Kamera</span>
-                  </>
-                )}
-              </button>
-            </div>
+            ) : scanMode === 'face' ? (
+              <div className="flex items-center justify-between bg-indigo-50 p-2.5 rounded-2xl border border-indigo-200">
+                <div className="flex items-center gap-2">
+                  <ScanFace className="w-4 h-4 text-indigo-700" />
+                  <span className="text-xs font-bold text-indigo-900">Kamera Scan Wajah (Face ID)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleFaceCamera}
+                  disabled={isInitializingFaceCam || isLoadingFaceModels}
+                  className={`text-xs font-extrabold px-3.5 py-2 rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                    faceCameraActive
+                      ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                      : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                  }`}
+                >
+                  {isInitializingFaceCam || isLoadingFaceModels ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Memuat AI...</span>
+                    </>
+                  ) : faceCameraActive ? (
+                    <>
+                      <VideoOff className="w-4 h-4" />
+                      <span>Matikan Kamera</span>
+                    </>
+                  ) : (
+                    <>
+                      <Video className="w-4 h-4" />
+                      <span>Aktifkan Kamera Wajah</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-purple-50 p-2.5 rounded-2xl border border-purple-200">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-purple-700" />
+                  <div>
+                    <span className="text-xs font-extrabold text-purple-950 block">
+                      Kamera Dual (Barcode + Layer Wajah)
+                    </span>
+                    <span className="text-[10px] text-purple-700 font-semibold">
+                      {cameraActive && faceCameraActive
+                        ? 'Keduanya aktif berjalan bersamaan'
+                        : 'Aktifkan pemindai barcode & layer wajah'}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleDualScanners}
+                  disabled={isInitializingCamera || isInitializingFaceCam || isLoadingFaceModels}
+                  className={`text-xs font-extrabold px-3.5 py-2 rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                    cameraActive && faceCameraActive
+                      ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                      : 'bg-purple-600 hover:bg-purple-700 text-white'
+                  }`}
+                >
+                  {isInitializingCamera || isInitializingFaceCam || isLoadingFaceModels ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Menyiapkan Dual...</span>
+                    </>
+                  ) : cameraActive && faceCameraActive ? (
+                    <>
+                      <VideoOff className="w-4 h-4" />
+                      <span>Matikan Dual Kamera</span>
+                    </>
+                  ) : (
+                    <>
+                      <Video className="w-4 h-4" />
+                      <span>Aktifkan Dual Kamera</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
 
             {/* Camera device selection & refresh control */}
             {availableCameras.length > 0 && (
-              <div className="flex items-center gap-2 px-1 text-xs">
-                <SwitchCamera className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                <span className="text-[11px] font-bold text-slate-600 shrink-0">Kamera:</span>
-                <select
-                  value={selectedCameraId}
-                  onChange={(e) => handleCameraChange(e.target.value)}
-                  className="flex-1 min-w-0 text-[11px] py-1 px-2 rounded-lg border border-slate-300 bg-white font-medium text-slate-700"
-                >
-                  {availableCameras.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => refreshAvailableCameras(selectedCameraId)}
-                  className="p-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-600 cursor-pointer shrink-0"
-                  title="Sinkronkan ulang daftar kamera perangkat"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                </button>
+              <div className="space-y-1.5 px-1 text-xs">
+                <div className="flex items-center gap-2">
+                  <SwitchCamera className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span className="text-[11px] font-bold text-slate-600 shrink-0">
+                    {scanMode === 'dual' ? 'Kamera Barcode:' : 'Kamera:'}
+                  </span>
+                  <select
+                    value={selectedCameraId}
+                    onChange={(e) => handleCameraChange(e.target.value)}
+                    className="flex-1 min-w-0 text-[11px] py-1 px-2 rounded-lg border border-slate-300 bg-white font-medium text-slate-700"
+                  >
+                    {availableCameras.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => refreshAvailableCameras(selectedCameraId)}
+                    className="p-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-600 cursor-pointer shrink-0"
+                    title="Sinkronkan ulang daftar kamera perangkat"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {scanMode === 'dual' && (
+                  <div className="flex items-center gap-2">
+                    <ScanFace className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                    <span className="text-[11px] font-bold text-purple-800 shrink-0">Kamera Wajah:</span>
+                    <select
+                      value={faceLayerCameraId}
+                      onChange={(e) => handleFaceLayerCameraChange(e.target.value)}
+                      className="flex-1 min-w-0 text-[11px] py-1 px-2 rounded-lg border border-purple-300 bg-white font-medium text-purple-900"
+                    >
+                      {availableCameras.map((c) => (
+                        <option key={`face_${c.id}`} value={c.id}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             )}
           </div>
 
-          {/* Camera Viewport Container */}
-          <div className="relative rounded-3xl overflow-hidden bg-slate-950 min-h-[250px] border-4 border-emerald-400 shadow-inner flex flex-col items-center justify-center text-white">
-            {/* Html5Qrcode target DOM element — kept mounted & visible while initializing/active so dimensions measure properly */}
-            <div
-              id="html5qr-code-full-region"
-              className={`w-full h-full min-h-[250px] ${
-                cameraActive || isInitializingCamera ? 'block' : 'hidden'
+          {/* Pengaturan Auto-Submit Absen Wajah (> 90%) — selalu terlihat di pengaturan AbsensiTab */}
+          <div className="p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-xs font-extrabold text-indigo-950 flex items-center gap-1.5">
+                <ScanFace className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
+                <span>Auto-Submit Absen Wajah</span>
+                <span className="px-1.5 py-0.5 rounded-md bg-indigo-100 text-indigo-800 text-[10px] font-black">
+                  &gt; 90%
+                </span>
+              </div>
+              <p className="text-[11px] text-indigo-800/80 mt-0.5 leading-snug">
+                {autoSubmitFaceAttendance
+                  ? 'Aktif — kehadiran otomatis disimpan saat kepercayaan deteksi wajah di atas 90%.'
+                  : 'Nonaktif — tampilkan tombol konfirmasi manual saat wajah siswa terdeteksi.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoSubmitFaceAttendance}
+              aria-label="Auto-Submit Absen Wajah"
+              onClick={() => handleToggleAutoSubmitFace(!autoSubmitFaceAttendance)}
+              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                autoSubmitFaceAttendance ? 'bg-indigo-600' : 'bg-slate-300'
               }`}
-            />
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${
+                  autoSubmitFaceAttendance ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
 
-            {/* Laser scanning beam overlay when camera is running */}
-            {cameraActive && (
-              <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between p-4">
-                <div className="flex justify-between items-center text-[10px] font-black uppercase text-emerald-400 tracking-wider bg-black/40 backdrop-blur-xs px-2.5 py-1 rounded-full w-fit">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping mr-1.5" />
-                  Mencari Barcode Siswa...
-                </div>
-                <div className="laser-line" />
-                <div className="text-center text-[11px] font-bold text-white/90 bg-black/50 backdrop-blur-xs py-1 px-3 rounded-xl mx-auto">
-                  Arahkan garis barcode (CODE-128) ke kotak pemindai
-                </div>
+          {/* Dual Verification Rule Config */}
+          {scanMode === 'dual' && (
+            <div className="p-3 rounded-2xl bg-purple-50/80 border border-purple-200 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-extrabold text-purple-950">Aturan Layer Wajah:</span>
+              <div className="flex items-center gap-1 bg-white p-0.5 rounded-xl border border-purple-200">
+                <button
+                  type="button"
+                  onClick={() => setDualVerifyRule('verify_barcode')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold transition cursor-pointer ${
+                    dualVerifyRule === 'verify_barcode'
+                      ? 'bg-purple-600 text-white'
+                      : 'text-slate-600 hover:text-purple-800'
+                  }`}
+                >
+                  Wajib Cocok Saat Scan Barcode
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDualVerifyRule('parallel')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold transition cursor-pointer ${
+                    dualVerifyRule === 'parallel'
+                      ? 'bg-purple-600 text-white'
+                      : 'text-slate-600 hover:text-purple-800'
+                  }`}
+                >
+                  Simultan (Barcode / Wajah)
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Camera Viewport Container (Barcode Mode vs Face Recognition Mode vs Dual Mode) */}
+          <div className="space-y-3">
+            {/* Barcode Viewport — shown in Barcode mode and Dual mode */}
+            {(scanMode === 'barcode' || scanMode === 'dual') && (
+              <div
+                className={`relative rounded-3xl overflow-hidden bg-slate-950 border-4 border-emerald-400 shadow-inner flex flex-col items-center justify-center text-white ${
+                  scanMode === 'dual' ? 'min-h-[195px]' : 'min-h-[250px]'
+                }`}
+              >
+                <div
+                  id="html5qr-code-full-region"
+                  className={`w-full h-full ${
+                    scanMode === 'dual' ? 'min-h-[195px]' : 'min-h-[250px]'
+                  } ${cameraActive || isInitializingCamera ? 'block' : 'hidden'}`}
+                />
+
+                {cameraActive && (
+                  <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between p-3">
+                    <div className="flex justify-between items-center text-[10px] font-black uppercase text-emerald-400 tracking-wider bg-black/45 backdrop-blur-xs px-2.5 py-1 rounded-full w-fit">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping mr-1.5" />
+                      Scanner Barcode Aktif
+                    </div>
+                    <div className="laser-line" />
+                    <div className="text-center text-[11px] font-bold text-white/90 bg-black/50 backdrop-blur-xs py-1 px-3 rounded-xl mx-auto">
+                      Arahkan garis barcode (CODE-128) ke kotak pemindai
+                    </div>
+                  </div>
+                )}
+
+                {!cameraActive && !isInitializingCamera && (
+                  <div className="relative z-10 text-center p-5 space-y-2.5">
+                    <div className="w-12 h-12 rounded-2xl bg-white/10 mx-auto flex items-center justify-center text-emerald-400 border border-white/10 shadow-lg">
+                      <QrCode className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <p className="font-display font-black text-sm text-white">
+                        {scanMode === 'dual' ? 'Layer Pemindai Barcode' : 'Pemindai Barcode Siap Digunakan'}
+                      </p>
+                      <p className="text-xs text-slate-300 max-w-xs mt-1">
+                        {scanMode === 'dual'
+                          ? 'Klik Aktifkan Dual Kamera di atas atau nyalakan barcode secara terpisah.'
+                          : 'Klik Aktifkan Kamera di atas untuk memindai kartu barcode siswa secara langsung.'}
+                      </p>
+                    </div>
+                    <div className="pt-1 flex flex-wrap justify-center gap-2">
+                      {scanMode === 'dual' && (
+                        <button
+                          type="button"
+                          onClick={toggleCamera}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Video className="w-3.5 h-3.5" />
+                          <span>Nyalakan Barcode</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isScanningFile}
+                        className="bg-white/10 hover:bg-white/20 text-emerald-300 text-xs font-bold px-3 py-1.5 rounded-xl border border-white/20 transition flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>{isScanningFile ? 'Menganalisis Foto...' : 'Unggah Foto Barcode'}</span>
+                      </button>
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        accept="image/*"
+                        onChange={handleFileUploadScan}
+                        className="hidden"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Inactive Camera State with Instructions */}
-            {!cameraActive && !isInitializingCamera && (
-              <div className="relative z-10 text-center p-6 space-y-3">
-                <div className="w-14 h-14 rounded-2xl bg-white/10 mx-auto flex items-center justify-center text-2xl text-emerald-400 border border-white/10 shadow-lg">
-                  <QrCode className="w-7 h-7" />
-                </div>
-                <div>
-                  <p className="font-display font-black text-sm text-white">
-                    Pemindai Kamera Siap Digunakan
-                  </p>
-                  <p className="text-xs text-slate-300 max-w-xs mt-1">
-                    Klik <strong>Aktifkan Kamera</strong> di atas untuk memindai kartu barcode siswa secara langsung.
-                  </p>
-                </div>
-                <div className="pt-2 flex flex-wrap justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isScanningFile}
-                    className="bg-white/10 hover:bg-white/20 text-emerald-300 text-xs font-bold px-3 py-1.5 rounded-xl border border-white/20 transition flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>{isScanningFile ? 'Menganalisis Foto...' : 'Unggah Foto Barcode'}</span>
-                  </button>
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    accept="image/*"
-                    onChange={handleFileUploadScan}
-                    className="hidden"
+            {/* Face Recognition Layer Viewport — shown in Face mode AND alongside Barcode in Dual mode */}
+            {(scanMode === 'face' || scanMode === 'dual') && (
+              <div className="space-y-3">
+                <div
+                  className={`relative rounded-3xl overflow-hidden bg-slate-950 border-4 ${
+                    scanMode === 'dual' ? 'border-purple-400 min-h-[205px]' : 'border-indigo-400 min-h-[270px]'
+                  } shadow-inner flex flex-col items-center justify-center text-white`}
+                >
+                  <video
+                    ref={faceVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`w-full object-cover ${
+                      scanMode === 'dual' ? 'h-[205px]' : 'h-[270px]'
+                    } ${faceCameraActive || isInitializingFaceCam ? 'block' : 'hidden'}`}
                   />
+                  <canvas
+                    ref={faceCanvasRef}
+                    className={`pointer-events-none absolute inset-0 w-full object-cover z-10 ${
+                      scanMode === 'dual' ? 'h-[205px]' : 'h-[270px]'
+                    } ${faceCameraActive ? 'block' : 'hidden'}`}
+                  />
+
+                  {faceCameraActive && (
+                    <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center text-[10px] font-black uppercase text-indigo-200 tracking-wider bg-black/55 backdrop-blur-xs px-2.5 py-1 rounded-full">
+                          <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping mr-1.5" />
+                          Layer Wajah MediaDevices • {faceCandidates.length} Profil
+                          {usingSharedBarcodeFeed ? ' (Kamera Bersama)' : ''}
+                        </div>
+                        {liveDetectedFace?.studentId && (
+                          <span className="bg-emerald-600/90 text-white text-[10px] font-black px-2.5 py-1 rounded-full shadow-xs">
+                            ✓ {liveDetectedFace.studentName.split(' ')[0]} ({liveDetectedFace.confidence}%)
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-center text-[11px] font-bold text-white/95 bg-black/60 backdrop-blur-xs py-1.5 px-3 rounded-xl mx-auto max-w-full truncate">
+                        {faceStatusText}
+                      </div>
+                    </div>
+                  )}
+
+                  {!faceCameraActive && !isInitializingFaceCam && (
+                    <div className="relative z-10 text-center p-5 space-y-2.5">
+                      <div className="w-12 h-12 rounded-2xl bg-indigo-500/20 mx-auto flex items-center justify-center text-indigo-300 border border-indigo-400/30 shadow-lg">
+                        <ScanFace className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <p className="font-display font-black text-sm text-white">
+                          {scanMode === 'dual'
+                            ? 'Layer Verifikasi Wajah (MediaDevices)'
+                            : 'Pemindai Wajah Siswa (Face ID)'}
+                        </p>
+                        <p className="text-xs text-slate-300 max-w-xs mt-1 mx-auto">
+                          {faceCandidates.length === 0
+                            ? 'Daftarkan wajah siswa terlebih dahulu (via kamera atau foto profil).'
+                            : scanMode === 'dual'
+                            ? `${faceCandidates.length} wajah siswa siap memverifikasi scan barcode secara bersamaan.`
+                            : `${faceCandidates.length} wajah siswa siap dipindai. Klik Aktifkan Kamera Wajah di atas.`}
+                        </p>
+                      </div>
+                      <div className="pt-1 flex flex-wrap justify-center gap-2">
+                        {scanMode === 'dual' && (
+                          <button
+                            type="button"
+                            onClick={toggleFaceCamera}
+                            className="bg-purple-600 hover:bg-purple-500 text-white text-xs font-extrabold px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                          >
+                            <Video className="w-3.5 h-3.5" />
+                            <span>Nyalakan Layer Wajah</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEnrollStudentId(filteredStudents[0]?.id || students[0]?.id || '');
+                            setIsFaceEnrollModalOpen(true);
+                          }}
+                          className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        >
+                          <UserPlus className="w-3.5 h-3.5" />
+                          <span>Daftarkan Wajah</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => faceFileInputRef.current?.click()}
+                          disabled={isScanningFaceFile}
+                          className="bg-white/10 hover:bg-white/20 text-indigo-200 text-xs font-bold px-3 py-1.5 rounded-xl border border-white/20 transition flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>{isScanningFaceFile ? 'Mengenali...' : 'Foto Wajah'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <input
+                  type="file"
+                  ref={faceFileInputRef}
+                  accept="image/*"
+                  onChange={handleScanFaceFromFile}
+                  className="hidden"
+                />
+
+                {/* Face Enrollment & Accuracy Controls Bar */}
+                <div className="p-3.5 rounded-2xl bg-indigo-50/80 border border-indigo-200 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-indigo-700 shrink-0" />
+                      <span className="text-xs font-extrabold text-indigo-950">
+                        Database Wajah {activeClass}: {classEnrolledCount}/{filteredStudents.length} Siswa
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-bold text-indigo-700">Akurasi:</span>
+                      <select
+                        value={String(faceThreshold)}
+                        onChange={(e) => setFaceThreshold(Number(e.target.value))}
+                        className="px-2 py-1 rounded-lg border border-indigo-300 bg-white text-[11px] font-bold text-indigo-900 outline-none"
+                        title="Tingkat kecocokan wajah"
+                      >
+                        <option value="0.44">Ketat (Sangat Mirip)</option>
+                        <option value="0.5">Normal (Disarankan)</option>
+                        <option value="0.56">Toleran (Cahaya Redup)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Manual Confirm Action when face is detected & auto-submit is OFF or <= 90% */}
+                  {faceCameraActive &&
+                    liveDetectedFace?.studentId &&
+                    (!autoSubmitFaceAttendance || liveDetectedFace.confidence <= 90) && (() => {
+                      const detectedStudent = students.find((s) => s.id === liveDetectedFace.studentId);
+                      if (!detectedStudent) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            recordAttendance(detectedStudent, 'H', {
+                              skipIfAlreadyRecorded: true,
+                              methodLabel: `Konfirmasi Wajah (${liveDetectedFace.confidence}%)`,
+                            })
+                          }
+                          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-display font-black px-3 py-2 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>
+                            Simpan Hadir: {detectedStudent.nama} ({liveDetectedFace.confidence}%)
+                          </span>
+                        </button>
+                      );
+                    })()}
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEnrollStudentId(filteredStudents[0]?.id || students[0]?.id || '');
+                        setIsFaceEnrollModalOpen(true);
+                      }}
+                      className="flex-1 min-w-[140px] bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold px-3 py-2 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" /> Kelola &amp; Rekam Wajah
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSyncFacesFromStudentPhotos}
+                      disabled={isSyncingFromPhotos}
+                      className="bg-white hover:bg-indigo-100 disabled:opacity-60 text-indigo-800 border border-indigo-300 text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                      title="Ekstrak wajah otomatis dari foto profil asli siswa di Data Siswa"
+                    >
+                      <Sparkles className={`w-3.5 h-3.5 ${isSyncingFromPhotos ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingFromPhotos ? 'Memindai Foto...' : 'Ambil dari Foto Profil'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => faceFileInputRef.current?.click()}
+                      disabled={isScanningFaceFile}
+                      className="bg-white hover:bg-indigo-100 text-indigo-800 border border-indigo-300 text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                      title="Pindai kehadiran dari file foto wajah"
+                    >
+                      <FileImage className="w-3.5 h-3.5" />
+                      <span>Scan File</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -931,7 +2167,7 @@ export const AbsensiTab: React.FC<Props> = ({
                 )}
 
                 <div
-                  className={`mt-3 pt-2.5 border-t flex items-center justify-between text-xs font-bold ${theme.footerBorderCls}`}
+                  className={`mt-3 pt-2.5 border-t flex flex-wrap items-center justify-between gap-2 text-xs font-bold ${theme.footerBorderCls}`}
                 >
                   <span className="flex items-center gap-2">
                     <span
@@ -940,6 +2176,11 @@ export const AbsensiTab: React.FC<Props> = ({
                       }`}
                     />
                     Status: <strong>{theme.statusText}</strong>
+                    {scannedSuccessItem.methodLabel && (
+                      <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-extrabold">
+                        {scannedSuccessItem.methodLabel}
+                      </span>
+                    )}
                   </span>
                   <span className={`font-mono px-3 py-1 rounded-xl border ${theme.timePillCls}`}>
                     {isDuplicate ? `Waktu Awal: ${scannedSuccessItem.time}` : `Waktu: ${scannedSuccessItem.time}`}
@@ -1206,8 +2447,33 @@ export const AbsensiTab: React.FC<Props> = ({
                             />
                             <div>
                               <div className="font-bold text-slate-800">{s.nama}</div>
-                              <div className="text-[10px] text-slate-500 font-mono">
-                                NISN: {s.nisn}
+                              <div className="text-[10px] text-slate-500 font-mono flex flex-wrap items-center gap-1.5 mt-0.5">
+                                <span>NISN: {s.nisn}</span>
+                                {faceProfiles[s.id] ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEnrollStudentId(s.id);
+                                      setIsFaceEnrollModalOpen(true);
+                                    }}
+                                    className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 font-sans font-extrabold text-[9px] hover:bg-indigo-200 transition cursor-pointer"
+                                    title="Wajah terdaftar — klik untuk perbarui"
+                                  >
+                                    Face ID ✓
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEnrollStudentId(s.id);
+                                      setIsFaceEnrollModalOpen(true);
+                                    }}
+                                    className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-sans font-bold text-[9px] hover:bg-indigo-100 hover:text-indigo-800 transition cursor-pointer"
+                                    title="Daftarkan wajah siswa ini"
+                                  >
+                                    + Daftar Wajah
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -1313,6 +2579,202 @@ export const AbsensiTab: React.FC<Props> = ({
           </div>
         </div>
       </div>
+
+      {/* Modal Pendaftaran & Pengelolaan Wajah Siswa (Face ID) */}
+      {isFaceEnrollModalOpen && (() => {
+        const selectedTarget = students.find((s) => s.id === enrollStudentId) || filteredStudents[0];
+        const selectedProf = selectedTarget ? faceProfiles[selectedTarget.id] : undefined;
+        const enrollList = filteredStudents.filter((s) =>
+          !enrollSearch.trim()
+            ? true
+            : s.nama.toLowerCase().includes(enrollSearch.trim().toLowerCase()) ||
+              s.nisn.includes(enrollSearch.trim())
+        );
+
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-3 bg-indigo-50/60">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-sm">
+                    <ScanFace className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-display font-black text-base text-slate-900">
+                      Pendaftaran Data Wajah Siswa ({activeClass})
+                    </h3>
+                    <p className="text-xs text-slate-600">
+                      Rekam 3 pose langsung dari kamera atau unggah foto wajah siswa. Data otomatis tersinkron ke Cloud Firestore.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsFaceEnrollModalOpen(false)}
+                  className="p-2 rounded-xl bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-5 overflow-y-auto grid grid-cols-1 md:grid-cols-12 gap-5">
+                {/* Left: Camera / Upload Capture for Selected Student */}
+                <div className="md:col-span-7 space-y-3">
+                  <div className="relative rounded-2xl overflow-hidden bg-slate-950 border-2 border-indigo-400 h-56 flex items-center justify-center">
+                    <video
+                      ref={enrollVideoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full h-full object-cover"
+                    />
+                    {enrollProgressText && (
+                      <div className="absolute inset-x-3 bottom-3 bg-indigo-900/90 text-white text-xs font-extrabold px-3 py-2 rounded-xl text-center shadow-lg">
+                        {enrollProgressText}
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedTarget && (
+                    <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <img
+                          src={selectedProf?.thumbnailDataUrl || selectedTarget.fotoUrl}
+                          alt={selectedTarget.nama}
+                          className="w-11 h-11 rounded-xl object-cover border border-slate-300 shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="font-display font-black text-sm text-slate-900 truncate">
+                            {selectedTarget.nama}
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-mono">
+                            {selectedTarget.kelas} • NISN {selectedTarget.nisn}
+                          </div>
+                        </div>
+                      </div>
+                      <span
+                        className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase shrink-0 ${
+                          selectedProf
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            : 'bg-amber-100 text-amber-800 border border-amber-300'
+                        }`}
+                      >
+                        {selectedProf ? 'Terdaftar ✓' : 'Belum Ada Data'}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleEnrollFaceFromCamera}
+                      disabled={isEnrollingCamera || !selectedTarget}
+                      className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-display font-black text-xs px-4 py-2.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      <Camera className="w-4 h-4" />
+                      <span>{isEnrollingCamera ? 'Memproses...' : 'Rekam Wajah dari Kamera'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => enrollFileInputRef.current?.click()}
+                      disabled={isEnrollingCamera || !selectedTarget}
+                      className="bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-800 border border-slate-300 font-display font-extrabold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Upload className="w-4 h-4 text-indigo-600" />
+                      <span>Unggah Foto</span>
+                    </button>
+                    <input
+                      type="file"
+                      ref={enrollFileInputRef}
+                      accept="image/*"
+                      onChange={handleEnrollFaceFromFile}
+                      className="hidden"
+                    />
+                    {selectedProf && selectedTarget && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteFaceProfile(selectedTarget.id)}
+                        className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs px-3 py-2.5 rounded-xl flex items-center gap-1 cursor-pointer"
+                        title="Hapus data wajah siswa ini"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Right: Student Selector List */}
+                <div className="md:col-span-5 flex flex-col border border-slate-200 rounded-2xl overflow-hidden bg-slate-50">
+                  <div className="p-2.5 bg-white border-b border-slate-200 space-y-2">
+                    <div className="text-xs font-extrabold text-slate-800 flex items-center justify-between">
+                      <span>Pilih Siswa ({classEnrolledCount}/{filteredStudents.length} Siap)</span>
+                    </div>
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={enrollSearch}
+                        onChange={(e) => setEnrollSearch(e.target.value)}
+                        placeholder="Cari nama / NISN siswa..."
+                        className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 text-xs bg-slate-50 focus:bg-white outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex-1 max-h-72 overflow-y-auto divide-y divide-slate-100 p-1.5 space-y-1">
+                    {enrollList.map((s) => {
+                      const prof = faceProfiles[s.id];
+                      const isSelected = selectedTarget?.id === s.id;
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setEnrollStudentId(s.id)}
+                          className={`w-full p-2 rounded-xl flex items-center justify-between gap-2 text-left transition cursor-pointer ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white shadow-xs'
+                              : 'bg-white hover:bg-indigo-50 text-slate-800'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <img
+                              src={prof?.thumbnailDataUrl || s.fotoUrl}
+                              alt={s.nama}
+                              className="w-7 h-7 rounded-lg object-cover shrink-0 border border-white/40"
+                            />
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold truncate">{s.nama}</div>
+                              <div
+                                className={`text-[10px] font-mono ${
+                                  isSelected ? 'text-indigo-100' : 'text-slate-500'
+                                }`}
+                              >
+                                {s.nisn}
+                              </div>
+                            </div>
+                          </div>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[9px] font-black shrink-0 ${
+                              prof
+                                ? isSelected
+                                  ? 'bg-white text-indigo-700'
+                                  : 'bg-emerald-100 text-emerald-800'
+                                : isSelected
+                                ? 'bg-indigo-500 text-indigo-100'
+                                : 'bg-slate-100 text-slate-500'
+                            }`}
+                          >
+                            {prof ? '✓ Siap' : 'Belum'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </section>
   );
 };

@@ -42,6 +42,7 @@ import {
   RotateCcw,
   ChevronDown,
   User,
+  Settings,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Student, TKACpTp, TKAQuestion, TKAJenis, ActiveUser, Teacher, SchoolProfile, isSiswaInklusi, isAbkExcludedFromTka, BenarSalahItem, MenjodohkanData } from '../../types';
@@ -92,7 +93,7 @@ import {
   TkaReportExportOptions,
   TkaReportRecordInput,
 } from '../../utils/tkaReportExport';
-import { doesRecordMatchTerm } from '../../utils/semesterUtils';
+import { doesRecordMatchTerm, isSemesterOneLabel } from '../../utils/semesterUtils';
 import {
   saveSingleTkaQuestionToFirestore,
   deleteTkaQuestionFromFirestore,
@@ -144,7 +145,7 @@ import {
 } from '../../utils/examDraft';
 
 interface Props {
-  subType: 'siswa-tka' | 'cp-tp-tka' | 'bank-soal-tka' | 'analisis-tka' | 'hasil-tka' | 'tes-tka-siswa';
+  subType: 'siswa-tka' | 'cp-tp-tka' | 'bank-soal-tka' | 'pengaturan-tka' | 'analisis-tka' | 'hasil-tka' | 'tes-tka-siswa';
   students: Student[];
   teachers?: Teacher[];
   profile?: SchoolProfile;
@@ -4107,7 +4108,53 @@ export const TKATabs: React.FC<Props> = ({
                   Belum ada butir soal pada filter ini. Gunakan form di atas untuk menambahkan butir soal TKA.
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
 
+      {/* ================= 3B. SUB-MENU PENGATURAN SOAL, WAKTU UJIAN & ACAK TKA ================= */}
+      {subType === 'pengaturan-tka' && (
+        <div className="space-y-6">
+          <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+              <div>
+                <span className="text-xs font-extrabold uppercase bg-amber-100 text-amber-900 px-3 py-1 rounded-full">
+                  Menu TKA • Pengaturan Soal &amp; Ujian TKA
+                </span>
+                <h2 className="text-xl font-display font-black text-slate-800 mt-1 flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-amber-600" /> Pengaturan Soal, Waktu Ujian &amp; Acak Soal TKA
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Kelola aktivasi paket soal TKA agar tampil di dashboard siswa, batas waktu pengerjaan (auto-submit), serta pengacakan soal dan pilihan jawaban.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={durPanelPaket}
+                  onChange={(e) => setDurPanelPaket(e.target.value)}
+                  className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                  title="Pilih Paket Target TKA"
+                >
+                  {TKA_JENIS_LIST.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+                <select
+                  value={durPanelMapel}
+                  onChange={(e) => setDurPanelMapel(e.target.value)}
+                  className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                  title="Pilih Mata Pelajaran TKA"
+                >
+                  <option value="all">Semua Mapel (Gabungan Paket)</option>
+                  {TKA_MAPEL_LIST.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-5">
               {/* Setting Aktivasi Paket Soal TKA (Wajib Diaktifkan Agar Muncul di Siswa) */}
               <div className="p-5 rounded-3xl bg-gradient-to-r from-sky-50 via-white to-purple-50 border-2 border-sky-300 shadow-xs space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -4451,8 +4498,6 @@ export const TKATabs: React.FC<Props> = ({
           return true;
         });
 
-        const totalAnalisis = filteredAnalisisQuestions.length;
-
         // Submissions matching selected term, package & excluding ABK set to Tidak Masuk TKA
         const relevantSubmissions = tkaSubmissions.filter((s) => {
           if (isExcludedTkaSubmission(s)) return false;
@@ -4465,8 +4510,14 @@ export const TKATabs: React.FC<Props> = ({
         });
 
         const totalPesertaSub = relevantSubmissions.length;
+        const isDefaultTkaTerm = activeYear === '2026/2027' && isSemesterOneLabel(activeSemester);
+        const rawAnalisisList =
+          !isDefaultTkaTerm && totalPesertaSub === 0
+            ? []
+            : filteredAnalisisQuestions;
+        const totalAnalisis = rawAnalisisList.length;
 
-        const analisisList = filteredAnalisisQuestions.map((q) => {
+        const analisisList = rawAnalisisList.map((q) => {
           const rawKesukaran = (q as any).tingkatKesukaran || 'Sedang';
           const qNormMapel = normalizeTkaMapelKey(q.mapel);
 
@@ -5224,6 +5275,8 @@ export const TKATabs: React.FC<Props> = ({
                         <td colSpan={9} className="p-8 text-center text-slate-400 italic">
                           {effectiveSelectedMapels.length === 0
                             ? 'Tidak ada mata pelajaran yang dipilih. Silakan centang minimal 1 mata pelajaran pada filter di atas.'
+                            : !isDefaultTkaTerm && totalPesertaSub === 0
+                            ? `Belum ada data analisis dan hasil tes TKA pada ${activeSemester} (${activeYear}).`
                             : 'Tidak ada butir soal TKA yang cocok dengan filter Mata Pelajaran & Paket yang dipilih.'}
                         </td>
                       </tr>

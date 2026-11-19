@@ -109,6 +109,7 @@ export interface NilaiAsajRecord {
   asajTertulisMapel?: Record<string, number>;
   asajPraktikMapel?: Record<string, number>;
   updatedAt?: string;
+  tahunPelajaran?: string;
 }
 
 const MAPEL_IJAZAH_SD = [
@@ -516,11 +517,18 @@ export const ManajemenASAJTab: React.FC<Props> = ({
     ...DEFAULT_KOSP,
     tahunPelajaran: activeYear || '2026/2027',
   });
+  const [allNilaiDocs, setAllNilaiDocs] = useState<NilaiAsajRecord[]>([]);
   const [nilaiMap, setNilaiMap] = useState<Record<string, NilaiAsajRecord>>({});
   const [firestoreLoaded, setFirestoreLoaded] = useState(false);
   const [hasAutoConnectedPrev, setHasAutoConnectedPrev] = useState(false);
   const [isSavingKosp, setIsSavingKosp] = useState(false);
   const [isSavingBatch, setIsSavingBatch] = useState(false);
+
+  // Sync activeYear into KOSP display & reset auto-connect flag on year change
+  useEffect(() => {
+    setKosp((prev) => ({ ...prev, tahunPelajaran: activeYear || '2026/2027' }));
+    setHasAutoConnectedPrev(false);
+  }, [activeYear]);
 
   // Modal Detail Nilai Mapel
   const [editingMapelStudentId, setEditingMapelStudentId] = useState<string | null>(null);
@@ -545,7 +553,11 @@ export const ManajemenASAJTab: React.FC<Props> = ({
       doc(db, 'settings_asaj', 'config'),
       (snap) => {
         if (snap.exists()) {
-          setKosp((prev) => ({ ...prev, ...(snap.data() as Partial<KospSettingsAsaj>) }));
+          setKosp((prev) => ({
+            ...prev,
+            ...(snap.data() as Partial<KospSettingsAsaj>),
+            tahunPelajaran: activeYear || prev.tahunPelajaran || '2026/2027',
+          }));
         }
       },
       (err) => console.warn('settings_asaj listener warning:', err)
@@ -554,11 +566,16 @@ export const ManajemenASAJTab: React.FC<Props> = ({
     const unsubNilai = onSnapshot(
       collection(db, 'nilai_asaj'),
       (snap) => {
-        const next: Record<string, NilaiAsajRecord> = {};
+        const docs: NilaiAsajRecord[] = [];
         snap.forEach((docSnap) => {
-          next[docSnap.id] = { ...(docSnap.data() as NilaiAsajRecord), studentId: docSnap.id };
+          const d = docSnap.data() as NilaiAsajRecord;
+          docs.push({
+            ...d,
+            studentId: d.studentId || docSnap.id,
+            tahunPelajaran: d.tahunPelajaran || '2026/2027',
+          });
         });
-        setNilaiMap(next);
+        setAllNilaiDocs(docs);
         setFirestoreLoaded(true);
       },
       (err) => {
@@ -572,6 +589,18 @@ export const ManajemenASAJTab: React.FC<Props> = ({
       unsubNilai();
     };
   }, []);
+
+  // Re-scope nilaiMap strictly by activeYear whenever activeYear or allNilaiDocs changes
+  useEffect(() => {
+    const targetYear = (activeYear || '2026/2027').trim();
+    const scoped: Record<string, NilaiAsajRecord> = {};
+    allNilaiDocs.forEach((d) => {
+      if ((d.tahunPelajaran || '2026/2027').trim() === targetYear) {
+        scoped[d.studentId] = d;
+      }
+    });
+    setNilaiMap(scoped);
+  }, [allNilaiDocs, activeYear]);
 
   // Live 1s clock for student countdown
   useEffect(() => {
@@ -721,6 +750,8 @@ export const ManajemenASAJTab: React.FC<Props> = ({
     return nextRec;
   };
 
+  const isDefaultAsajYear = (activeYear || '2026/2027').trim() === '2026/2027';
+
   const getRowRecord = (s: Student): NilaiAsajRecord => {
     const existing = nilaiMap[s.id];
     const baseRec: NilaiAsajRecord = existing || {
@@ -728,13 +759,14 @@ export const ManajemenASAJTab: React.FC<Props> = ({
       nama: s.nama,
       nisn: s.nisn,
       kelas: s.kelas,
-      nilaiRapor: 82,
-      nilaiTertulis: 78,
-      nilaiPraktik: 84,
+      tahunPelajaran: activeYear || '2026/2027',
+      nilaiRapor: isDefaultAsajYear ? 82 : 0,
+      nilaiTertulis: isDefaultAsajYear ? 78 : 0,
+      nilaiPraktik: isDefaultAsajYear ? 84 : 0,
       sikapP5: 'Baik',
-      nilaiAsaj: 81,
-      nilaiAkhir: 81.6,
-      status: 'LULUS',
+      nilaiAsaj: isDefaultAsajYear ? 81 : 0,
+      nilaiAkhir: isDefaultAsajYear ? 81.6 : 0,
+      status: isDefaultAsajYear ? 'LULUS' : 'TIDAK LULUS',
     };
     return recomputeRecordFromRapor(
       {
@@ -743,6 +775,7 @@ export const ManajemenASAJTab: React.FC<Props> = ({
         nama: s.nama,
         nisn: s.nisn,
         kelas: s.kelas,
+        tahunPelajaran: activeYear || '2026/2027',
       },
       kosp
     );
@@ -1073,13 +1106,15 @@ export const ManajemenASAJTab: React.FC<Props> = ({
 
       filteredStudents.forEach((s) => {
         const rec = recomputeRecordFromRapor(getRowRecord(s), kosp);
+        const docId = isDefaultAsajYear ? s.id : `${(activeYear || '2026/2027').replace('/', '-')}_${s.id}`;
         const payload: NilaiAsajRecord = {
           ...rec,
+          tahunPelajaran: activeYear || '2026/2027',
           mapelScores: rec.mapelScores || buildDefaultMapelScores(rec.nilaiAkhir),
           updatedAt: new Date().toISOString(),
         };
         savedRecords[s.id] = payload;
-        batch.set(doc(db, 'nilai_asaj', s.id), stripUndefined(payload), { merge: true });
+        batch.set(doc(db, 'nilai_asaj', docId), stripUndefined(payload), { merge: true });
       });
 
       await batch.commit();
@@ -1109,14 +1144,16 @@ export const ManajemenASAJTab: React.FC<Props> = ({
       targetList.forEach((s, idx) => {
         const rec = getRowRecord(s);
         const generatedSkl = generateNoSkl(kosp, idx);
+        const docId = isDefaultAsajYear ? s.id : `${(activeYear || '2026/2027').replace('/', '-')}_${s.id}`;
         const payload: NilaiAsajRecord = {
           ...rec,
+          tahunPelajaran: activeYear || '2026/2027',
           noSkl: generatedSkl,
           mapelScores: rec.mapelScores || buildDefaultMapelScores(rec.nilaiAkhir),
           updatedAt: new Date().toISOString(),
         };
         updatedRecords[s.id] = payload;
-        batch.set(doc(db, 'nilai_asaj', s.id), stripUndefined(payload), { merge: true });
+        batch.set(doc(db, 'nilai_asaj', docId), stripUndefined(payload), { merge: true });
       });
 
       batch.set(
@@ -1155,14 +1192,16 @@ export const ManajemenASAJTab: React.FC<Props> = ({
       targetList.forEach((s, idx) => {
         const rec = getRowRecord(s);
         const generatedNo = generateNoIjazah(kosp, idx);
+        const docId = isDefaultAsajYear ? s.id : `${(activeYear || '2026/2027').replace('/', '-')}_${s.id}`;
         const payload: NilaiAsajRecord = {
           ...rec,
+          tahunPelajaran: activeYear || '2026/2027',
           noIjazah: generatedNo,
           mapelScores: rec.mapelScores || buildDefaultMapelScores(rec.nilaiAkhir),
           updatedAt: new Date().toISOString(),
         };
         updatedRecords[s.id] = payload;
-        batch.set(doc(db, 'nilai_asaj', s.id), stripUndefined(payload), { merge: true });
+        batch.set(doc(db, 'nilai_asaj', docId), stripUndefined(payload), { merge: true });
       });
 
       batch.set(

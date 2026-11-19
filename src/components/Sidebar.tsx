@@ -55,6 +55,7 @@ export type TabId =
   | 'catatan'
   | 'leger'
   | 'ujian'
+  | 'pengaturan-cbt'
   | 'analisis-soal'
   | 'rapor'
   | 'rapor-kokurikuler'
@@ -62,6 +63,7 @@ export type TabId =
   | 'siswa-tka'
   | 'cp-tp-tka'
   | 'bank-soal-tka'
+  | 'pengaturan-tka'
   | 'analisis-tka'
   | 'hasil-tka'
   | 'tes-tka-siswa'
@@ -409,7 +411,7 @@ export const Sidebar: React.FC<Props> = ({
                       <span>Verifikasi Siswa Inklusi</span>
                     </button>
                   )}
-                  {(!searchQuery || 'scan absensi barcode kamera'.includes(searchQuery)) && (
+                  {(!searchQuery || 'scan absensi barcode wajah kamera face id'.includes(searchQuery)) && (
                     <button
                       onClick={() => onSelectTab('absensi')}
                       className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
@@ -419,7 +421,7 @@ export const Sidebar: React.FC<Props> = ({
                       }`}
                     >
                       <QrCode className="w-4 h-4" />
-                      <span>Scan Absensi Barcode</span>
+                      <span>Scan Absensi Barcode &amp; Wajah</span>
                     </button>
                   )}
                   {(!searchQuery || 'kalender pendidikan kaldik libur dki jakarta'.includes(searchQuery)) && (
@@ -642,6 +644,19 @@ export const Sidebar: React.FC<Props> = ({
                       <span>Bank Soal & Ujian CBT</span>
                     </button>
                   )}
+                  {(!searchQuery || 'pengaturan soal cbt aktivasi waktu ujian acak jawaban'.includes(searchQuery)) && (
+                    <button
+                      onClick={() => onSelectTab('pengaturan-cbt')}
+                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
+                        activeTab === 'pengaturan-cbt'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-700 hover:bg-emerald-50'
+                      }`}
+                    >
+                      <Settings className="w-4 h-4" />
+                      <span>Pengaturan Soal & Ujian CBT</span>
+                    </button>
+                  )}
                   {(!searchQuery || 'analisis butir soal grafik'.includes(searchQuery)) && (
                     <button
                       onClick={() => onSelectTab('analisis-soal')}
@@ -754,6 +769,19 @@ export const Sidebar: React.FC<Props> = ({
                     >
                       <FileQuestion className="w-4 h-4" />
                       <span>Bank Soal TKA & Simulasi</span>
+                    </button>
+                  )}
+                  {(!searchQuery || 'pengaturan soal tka aktivasi waktu ujian acak jawaban'.includes(searchQuery)) && (
+                    <button
+                      onClick={() => onSelectTab('pengaturan-tka')}
+                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
+                        activeTab === 'pengaturan-tka'
+                          ? 'bg-purple-600 text-white shadow-xs'
+                          : 'text-slate-700 hover:bg-purple-50'
+                      }`}
+                    >
+                      <Settings className="w-4 h-4" />
+                      <span>Pengaturan Soal & Ujian TKA</span>
                     </button>
                   )}
                   {(!searchQuery || 'analisis soal tka butir daya beda tingkat kesukaran'.includes(searchQuery)) && (

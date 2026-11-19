@@ -204,8 +204,13 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     });
   }, [termCbtResults, matchingExam, selectedPaket, selectedMapel]);
 
-  // Generate analysis rows: prefer real CBT questions/results when available, fallback to curriculum benchmark items
+  const isDefaultTerm = activeYear === '2026/2027' && isSemesterOneLabel(activeSemester);
+
+  // Generate analysis rows: prefer real CBT questions/results when available, fallback only for default initial term
   const questionsData = useMemo(() => {
+    if (matchingExamResults.length === 0 && !isDefaultTerm) {
+      return [];
+    }
     if (matchingExam && Array.isArray(matchingExam.soalList) && matchingExam.soalList.length > 0) {
       const typeLabelMap: Record<string, string> = {
         pg: 'Pilihan Ganda (PG)',
@@ -475,10 +480,11 @@ export const AnalisisSoalTab: React.FC<Props> = ({
         status: 'Diterima Tanpa Revisi',
       },
     ];
-  }, [selectedMapel, selectedPaket, matchingExam, matchingExamResults]);
+  }, [selectedMapel, selectedPaket, matchingExam, matchingExamResults, isDefaultTerm]);
 
   // Aggregate stats
-  const totalQuestions = Math.max(1, questionsData.length);
+  const questionCount = questionsData.length;
+  const totalQuestions = Math.max(1, questionCount);
   const mudahCount = questionsData.filter((q) => q.tkLabel === 'Mudah').length;
   const sedangCount = questionsData.filter((q) => q.tkLabel === 'Sedang').length;
   const sukarCount = questionsData.filter((q) => q.tkLabel === 'Sukar').length;
@@ -487,9 +493,9 @@ export const AnalisisSoalTab: React.FC<Props> = ({
   const baikCount = questionsData.filter((q) => q.dpValue >= 0.3 && q.dpValue < 0.4).length;
   const revisiCount = questionsData.filter((q) => q.dpValue < 0.3 || q.status.includes('Revisi')).length;
 
-  const avgKetuntasan = Math.round(
-    questionsData.reduce((acc, curr) => acc + curr.ketuntasanPct, 0) / totalQuestions
-  );
+  const avgKetuntasan = questionCount > 0
+    ? Math.round(questionsData.reduce((acc, curr) => acc + curr.ketuntasanPct, 0) / questionCount)
+    : 0;
 
   const rechartsQuestionData = useMemo(() => {
     return questionsData.map((q) => ({
@@ -557,8 +563,6 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     }
     return inClass.filter((s) => !isSiswaInklusi(s.kebutuhanKhusus));
   }, [propStudents, selectedClass, isInclusivePackage]);
-
-  const isDefaultTerm = activeYear === '2026/2027' && isSemesterOneLabel(activeSemester);
 
   const studentAnalysisRows = useMemo(() => {
     if (matchingExamResults.length === 0 && !isDefaultTerm) {
@@ -774,14 +778,18 @@ export const AnalisisSoalTab: React.FC<Props> = ({
         <div className="grid grid-cols-2 lg:grid-cols-4 print:grid-cols-4 gap-3.5 print:gap-2 print-avoid-break">
           <div className="p-4 print:p-3 rounded-2xl bg-emerald-50/70 border border-emerald-200">
             <span className="text-[11px] font-extrabold uppercase text-emerald-800">Total Butir Soal</span>
-            <div className="text-2xl print:text-xl font-display font-black text-emerald-950 mt-1 tabular-nums">{totalQuestions} Butir</div>
-            <span className="text-[10px] text-emerald-700">100% Teranalisis Sistem</span>
+            <div className="text-2xl print:text-xl font-display font-black text-emerald-950 mt-1 tabular-nums">{questionCount} Butir</div>
+            <span className="text-[10px] text-emerald-700">
+              {questionCount > 0 ? '100% Teranalisis Sistem' : `Belum ada data ${activeSemester} (${activeYear})`}
+            </span>
           </div>
 
           <div className="p-4 print:p-3 rounded-2xl bg-sky-50/70 border border-sky-200">
             <span className="text-[11px] font-extrabold uppercase text-sky-800">Rata-rata Ketuntasan</span>
             <div className="text-2xl print:text-xl font-display font-black text-sky-950 mt-1 tabular-nums">{avgKetuntasan}%</div>
-            <span className="text-[10px] text-sky-700 tabular-nums">Di atas KKTP Standar (75%)</span>
+            <span className="text-[10px] text-sky-700 tabular-nums">
+              {questionCount > 0 ? 'Di atas KKTP Standar (75%)' : 'Menunggu hasil asesmen'}
+            </span>
           </div>
 
           <div className="p-4 print:p-3 rounded-2xl bg-amber-50/70 border border-amber-200">
@@ -797,7 +805,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           <div className="p-4 print:p-3 rounded-2xl bg-purple-50/70 border border-purple-200">
             <span className="text-[11px] font-extrabold uppercase text-purple-800">Daya Pembeda (DP)</span>
             <div className="text-2xl print:text-xl font-display font-black text-purple-950 mt-1 tabular-nums">
-              {sangatBaikCount + baikCount}/{totalQuestions}
+              {sangatBaikCount + baikCount}/{questionCount}
             </div>
             <span className="text-[10px] text-purple-700">Butir Soal Valid &amp; Baik</span>
           </div>
@@ -1003,7 +1011,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                     />
                   </svg>
                   <div className="absolute text-center">
-                    <span className="text-xl font-display font-black text-slate-800">{totalQuestions}</span>
+                    <span className="text-xl font-display font-black text-slate-800">{questionCount}</span>
                     <span className="block text-[10px] font-bold text-slate-400">Butir Soal</span>
                   </div>
                 </div>
@@ -1260,7 +1268,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
               Tabel Rincian Analisis Butir Soal ({selectedPaket} • {selectedMapel})
             </h3>
             <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-xl border border-slate-200">
-              Total: {totalQuestions} Butir Soal
+              Total: {questionCount} Butir Soal
             </span>
           </div>
 
@@ -1280,7 +1288,15 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {questionsData.map((q) => (
+                {questionsData.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="p-6 text-center text-xs text-slate-500 bg-slate-50/60">
+                      Belum ada data analisis butir soal CBT untuk <strong>{selectedMapel}</strong> ({selectedPaket}) pada{' '}
+                      <strong>{activeSemester}</strong> Tahun Pelajaran <strong>{activeYear}</strong>.
+                    </td>
+                  </tr>
+                ) : (
+                  questionsData.map((q) => (
                   <tr key={q.no} className="hover:bg-slate-50 transition">
                     <td className="p-3 text-center font-bold text-slate-500">{q.no}</td>
                     <td className="p-3 font-medium text-slate-800 max-w-xs truncate" title={q.pertanyaan}>
@@ -1334,7 +1350,8 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                       </span>
                     </td>
                   </tr>
-                ))}
+                ))
+                )}
               </tbody>
             </table>
           </div>

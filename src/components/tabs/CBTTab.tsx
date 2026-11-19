@@ -37,7 +37,9 @@ import {
   Trophy,
   Award,
   Users,
+  Settings,
 } from 'lucide-react';
+import type { TabId } from '../Sidebar';
 import * as XLSX from 'xlsx';
 import {
   ResponsiveContainer,
@@ -138,6 +140,8 @@ interface Props {
   activeYear?: string;
   activeSemester?: string;
   subjects?: Subject[];
+  requestedSubTab?: 'bank-soal' | 'pengaturan' | 'ujian' | 'laporan-cbt';
+  onNavigateTab?: (tab: TabId) => void;
   onUpdateSubjects?: (updated: Subject[], targetClass?: string) => void;
   showToast: (msg: string, type?: 'success' | 'error') => void;
 }
@@ -151,6 +155,8 @@ export const CBTTab: React.FC<Props> = ({
   activeYear = '2026/2027',
   activeSemester = 'Ganjil',
   subjects,
+  requestedSubTab,
+  onNavigateTab,
   onUpdateSubjects,
   showToast,
 }) => {
@@ -197,8 +203,16 @@ export const CBTTab: React.FC<Props> = ({
     };
   }, []);
 
-  // Tab mode for teacher: "bank-soal" (default), "ujian", or "laporan-cbt"
-  const [subTab, setSubTab] = useState<'bank-soal' | 'ujian' | 'laporan-cbt'>('bank-soal');
+  // Tab mode for teacher: "bank-soal" (default), "pengaturan", "ujian", or "laporan-cbt"
+  const [subTab, setSubTab] = useState<'bank-soal' | 'pengaturan' | 'ujian' | 'laporan-cbt'>(
+    requestedSubTab || 'bank-soal'
+  );
+
+  useEffect(() => {
+    if (requestedSubTab) {
+      setSubTab(requestedSubTab);
+    }
+  }, [requestedSubTab]);
   const [cbtResultsList, setCbtResultsList] = useState<CBTExamResult[]>(() =>
     getStoredCBTResults().filter((r) => !isTkaResultEntry(r))
   );
@@ -1493,12 +1507,27 @@ export const CBTTab: React.FC<Props> = ({
             <div className="flex flex-wrap bg-slate-100 p-1 rounded-2xl border border-slate-200 gap-1">
               <button
                 type="button"
-                onClick={() => setSubTab('bank-soal')}
+                onClick={() => {
+                  setSubTab('bank-soal');
+                  onNavigateTab?.('ujian');
+                }}
                 className={`px-3.5 py-2 rounded-xl text-xs font-display font-black transition cursor-pointer whitespace-nowrap ${
                   subTab === 'bank-soal' ? 'bg-white text-emerald-800 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 Form Bank Soal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSubTab('pengaturan');
+                  onNavigateTab?.('pengaturan-cbt');
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-display font-black transition cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                  subTab === 'pengaturan' ? 'bg-white text-emerald-800 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Settings className="w-3.5 h-3.5" /> Pengaturan Soal &amp; Ujian
               </button>
               <button
                 type="button"
@@ -1516,7 +1545,7 @@ export const CBTTab: React.FC<Props> = ({
                   subTab === 'laporan-cbt' ? 'bg-emerald-700 text-white shadow-xs' : 'text-slate-700 hover:text-emerald-800'
                 }`}
               >
-                <Award className="w-3.5 h-3.5" /> Report &amp; Hasil CBT ({cbtResultsList.length})
+                <Award className="w-3.5 h-3.5" /> Report &amp; Hasil CBT ({cbtResultsList.filter((r) => doesRecordMatchTerm(r, activeYear, activeSemester)).length})
               </button>
             </div>
           )}
@@ -1736,60 +1765,6 @@ export const CBTTab: React.FC<Props> = ({
                     <option value="Kelas 1B">Kelas 1B</option>
                     <option value="Kelas 1A">Kelas 1A</option>
                   </select>
-                </div>
-
-                {/* 3b. Setting Timer Durasi Ujian */}
-                <div>
-                  <label className="block text-[11px] font-extrabold text-slate-700 mb-1">
-                    ⏱ Timer Ujian (Menit • Auto-Submit)
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="number"
-                      min={1}
-                      max={300}
-                      value={examDurationMinutes || ''}
-                      onChange={(e) => setExamDurationMinutes(Number(e.target.value))}
-                      onBlur={() => {
-                        const clamped = Math.max(1, Math.min(300, Math.round(Number(examDurationMinutes) || 60)));
-                        setExamDurationMinutes(clamped);
-                        handleSaveCbtDuration(
-                          selectedPaket,
-                          selectedMapel,
-                          clamped,
-                          false,
-                          exams.some((ex) => ex.id === activeExam.id) ? activeExam.id : undefined
-                        );
-                      }}
-                      className="w-20 px-2.5 py-2 rounded-2xl border-2 border-amber-400 bg-amber-50/60 text-xs font-black text-center text-amber-950 outline-none shadow-xs"
-                      title="Ketik durasi waktu ujian CBT (1-300 menit). Otomatis auto-submit saat waktu habis."
-                    />
-                    <select
-                      value={[15, 30, 45, 60, 90, 120].includes(examDurationMinutes) ? examDurationMinutes : ''}
-                      onChange={(e) => {
-                        if (!e.target.value) return;
-                        const mins = Number(e.target.value);
-                        setExamDurationMinutes(mins);
-                        handleSaveCbtDuration(
-                          selectedPaket,
-                          selectedMapel,
-                          mins,
-                          false,
-                          exams.some((ex) => ex.id === activeExam.id) ? activeExam.id : undefined
-                        );
-                      }}
-                      className="flex-1 px-2.5 py-2 rounded-2xl border-2 border-amber-400 bg-amber-50/60 text-xs font-black text-amber-950 outline-none shadow-xs cursor-pointer"
-                      title="Pilih durasi cepat ujian CBT"
-                    >
-                      <option value="">Kustom ({examDurationMinutes || 60}m)</option>
-                      <option value={15}>15 Menit</option>
-                      <option value={30}>30 Menit</option>
-                      <option value={45}>45 Menit</option>
-                      <option value={60}>60 Menit</option>
-                      <option value={90}>90 Menit</option>
-                      <option value={120}>120 Menit</option>
-                    </select>
-                  </div>
                 </div>
 
                 {/* 4. Pilih TP yang Diukur (Blue border matching Image 1) */}
@@ -2717,331 +2692,430 @@ export const CBTTab: React.FC<Props> = ({
                     Belum ada soal pada filter ini. Buat soal menggunakan form di atas!
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
 
-                {/* Setting Aktivasi Paket Soal CBT (Wajib Diaktifkan Agar Muncul di Siswa) */}
-                <div className="p-5 rounded-3xl bg-gradient-to-r from-sky-50 via-white to-indigo-50 border-2 border-sky-300 shadow-xs space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`w-10 h-10 rounded-2xl text-white flex items-center justify-center shadow-md shrink-0 ${
+        {/* ============================================================== */}
+        {/* SUBTAB 1B: PENGATURAN SOAL, WAKTU UJIAN & ACAK SOAL/JAWABAN CBT */}
+        {/* ============================================================== */}
+        {subTab === 'pengaturan' && activeUser.role !== 'siswa' && !isExamRunning && (
+          <div className="space-y-6">
+            {/* Quick Target Selector Banner */}
+            <div className="p-4 sm:p-5 rounded-3xl bg-slate-50 border border-slate-200 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-display font-black text-sm text-slate-800 flex items-center gap-2">
+                    <Settings className="w-4 h-4 text-emerald-600" />
+                    Pengaturan Soal, Waktu Ujian &amp; Acak Soal CBT
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Pilih paket soal CBT untuk mengaktifkan/menonaktifkan tampilannya di ruang siswa, mengatur durasi timer auto-submit, dan mengacak soal/jawaban.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSubTab('bank-soal');
+                    onNavigateTab?.('ujian');
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-extrabold cursor-pointer transition"
+                >
+                  ← Kembali ke Bank Soal CBT
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+                <div>
+                  <label className="block text-[11px] font-extrabold text-slate-700 mb-1">Jenis / Asesmen CBT</label>
+                  <select
+                    value={selectedPaket}
+                    onChange={(e) => setSelectedPaket(e.target.value)}
+                    className="w-full px-3 py-2 rounded-2xl border-2 border-rose-400 bg-white text-xs font-extrabold text-rose-800 outline-none"
+                  >
+                    {paketList.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-extrabold text-slate-700 mb-1">Paket Soal</label>
+                  <select
+                    value={selectedSubPaket}
+                    onChange={(e) => setSelectedSubPaket(e.target.value)}
+                    className="w-full px-3 py-2 rounded-2xl border-2 border-indigo-400 bg-white text-xs font-extrabold text-indigo-900 outline-none"
+                  >
+                    {subPaketList.map((sp) => (
+                      <option key={sp} value={sp}>{sp}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-extrabold text-slate-700 mb-1">Mata Pelajaran</label>
+                  <select
+                    value={selectedMapel}
+                    onChange={(e) => handleMapelChange(e.target.value)}
+                    className="w-full px-3 py-2 rounded-2xl border border-slate-300 bg-white text-xs font-extrabold text-slate-800 outline-none"
+                  >
+                    <option value="Pendidikan Agama Islam">Pendidikan Agama Islam</option>
+                    <option value="Pendidikan Pancasila">Pendidikan Pancasila</option>
+                    <option value="Bahasa Indonesia">Bahasa Indonesia</option>
+                    <option value="Matematika">Matematika</option>
+                    <option value="Ilmu Pengetahuan Alam dan Sosial (IPAS)">IPAS</option>
+                    <option value="Seni Rupa">Seni Rupa</option>
+                    <option value="Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)">PJOK</option>
+                    <option value="Bahasa Inggris">Bahasa Inggris</option>
+                    <option value="Muatan Lokal (PLBJ)">Muatan Lokal (PLBJ)</option>
+                    <option value="Koding dan Kecerdasan Artifisial (KKA)">Koding &amp; Kecerdasan Artifisial (KKA)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-extrabold text-slate-700 mb-1">Target Kelas</label>
+                  <select
+                    value={targetKelas}
+                    onChange={(e) => setTargetKelas(e.target.value)}
+                    className="w-full px-3 py-2 rounded-2xl border border-slate-300 bg-white text-xs font-extrabold text-slate-800 outline-none"
+                  >
+                    <option value="Kelas 6B">Kelas 6B</option>
+                    <option value="Kelas 6A">Kelas 6A</option>
+                    <option value="Kelas 5B">Kelas 5B</option>
+                    <option value="Kelas 5A">Kelas 5A</option>
+                    <option value="Kelas 4B">Kelas 4B</option>
+                    <option value="Kelas 4A">Kelas 4A</option>
+                    <option value="Kelas 3B">Kelas 3B</option>
+                    <option value="Kelas 3A">Kelas 3A</option>
+                    <option value="Kelas 2B">Kelas 2B</option>
+                    <option value="Kelas 2A">Kelas 2A</option>
+                    <option value="Kelas 1B">Kelas 1B</option>
+                    <option value="Kelas 1A">Kelas 1A</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* 1. Setting Aktivasi Paket Soal CBT */}
+            <div className="p-5 rounded-3xl bg-gradient-to-r from-sky-50 via-white to-indigo-50 border-2 border-sky-300 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-10 h-10 rounded-2xl text-white flex items-center justify-center shadow-md shrink-0 ${
+                      activeExam.aktif && activeExam.soalList.length > 0
+                        ? 'bg-emerald-600 shadow-emerald-500/20'
+                        : 'bg-slate-700 shadow-slate-500/20'
+                    }`}
+                  >
+                    <Power className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex flex-wrap items-center gap-2">
+                      <span>Pengaturan Aktivasi Paket Soal CBT</span>
+                      <span
+                        className={`text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full ${
                           activeExam.aktif && activeExam.soalList.length > 0
-                            ? 'bg-emerald-600 shadow-emerald-500/20'
-                            : 'bg-slate-700 shadow-slate-500/20'
+                            ? 'bg-emerald-100 text-emerald-900'
+                            : 'bg-amber-100 text-amber-900'
                         }`}
                       >
-                        <Power className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex flex-wrap items-center gap-2">
-                          <span>Pengaturan Aktivasi Paket Soal CBT</span>
-                          <span
-                            className={`text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full ${
-                              activeExam.aktif && activeExam.soalList.length > 0
-                                ? 'bg-emerald-100 text-emerald-900'
-                                : 'bg-amber-100 text-amber-900'
-                            }`}
-                          >
-                            {activeExam.aktif && activeExam.soalList.length > 0
-                              ? 'Aktif di Siswa'
-                              : 'Belum Diaktifkan'}
-                          </span>
-                        </h4>
-                        <p className="text-[11px] text-slate-600 mt-0.5">
-                          Paket soal yang belum diaktifkan tidak akan muncul di halaman ujian siswa. Aktifkan saat ujian siap dilaksanakan.
-                        </p>
-                      </div>
-                    </div>
+                        {activeExam.aktif && activeExam.soalList.length > 0
+                          ? 'Aktif di Siswa'
+                          : 'Belum Diaktifkan'}
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      Paket soal yang belum diaktifkan tidak akan muncul di halaman ujian siswa. Aktifkan saat ujian siap dilaksanakan.
+                    </p>
+                  </div>
+                </div>
 
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleExamActive(activeExam)}
+                    className={`px-4 py-2.5 rounded-2xl text-xs font-display font-black inline-flex items-center gap-2 transition cursor-pointer shadow-xs whitespace-nowrap ${
+                      activeExam.aktif && activeExam.soalList.length > 0
+                        ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    }`}
+                  >
+                    {activeExam.aktif && activeExam.soalList.length > 0 ? (
+                      <>
+                        <EyeOff className="w-4 h-4" />
+                        <span>Nonaktifkan Paket Ini</span>
+                      </>
+                    ) : (
+                      <>
+                        <Power className="w-4 h-4" />
+                        <span>Aktifkan Paket Ini</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Daftar Status Paket Soal CBT Tersimpan */}
+              {savedExamBuckets.length > 0 && (
+                <div className="pt-3 border-t border-sky-200/80 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-extrabold text-slate-700">
+                      Kelola Status Tampil Paket Soal CBT ({savedExamBuckets.filter((e) => e.aktif).length}/{savedExamBuckets.length} Aktif):
+                    </span>
+                    <div className="flex items-center gap-1.5">
                       <button
                         type="button"
-                        onClick={() => handleToggleExamActive(activeExam)}
-                        className={`px-4 py-2.5 rounded-2xl text-xs font-display font-black inline-flex items-center gap-2 transition cursor-pointer shadow-xs whitespace-nowrap ${
-                          activeExam.aktif && activeExam.soalList.length > 0
-                            ? 'bg-rose-600 hover:bg-rose-700 text-white'
-                            : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                        }`}
+                        onClick={() => handleSetAllSavedExamsActive(true)}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 text-[11px] font-bold transition cursor-pointer"
                       >
-                        {activeExam.aktif && activeExam.soalList.length > 0 ? (
-                          <>
-                            <EyeOff className="w-4 h-4" />
-                            <span>Nonaktifkan Paket Ini</span>
-                          </>
-                        ) : (
-                          <>
-                            <Power className="w-4 h-4" />
-                            <span>Aktifkan Paket Ini</span>
-                          </>
-                        )}
+                        Aktifkan Semua
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSetAllSavedExamsActive(false)}
+                        className="px-2.5 py-1 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 text-[11px] font-bold transition cursor-pointer"
+                      >
+                        Nonaktifkan Semua
                       </button>
                     </div>
                   </div>
 
-                  {/* Daftar Status Paket Soal CBT Tersimpan */}
-                  {savedExamBuckets.length > 0 && (
-                    <div className="pt-3 border-t border-sky-200/80 space-y-2.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-[11px] font-extrabold text-slate-700">
-                          Kelola Status Tampil Paket Soal CBT ({savedExamBuckets.filter((e) => e.aktif).length}/{savedExamBuckets.length} Aktif):
-                        </span>
-                        <div className="flex items-center gap-1.5">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {savedExamBuckets.map((ex) => {
+                      const exPaket = inferPaketFromExam(ex);
+                      const exSub = ex.subPaket || 'Paket 1';
+                      return (
+                        <div
+                          key={`act_${ex.id}`}
+                          className={`px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs ${
+                            ex.aktif
+                              ? 'bg-emerald-50/70 border-emerald-300'
+                              : 'bg-white border-slate-200'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="font-bold text-slate-900 truncate">
+                              {exPaket} · {ex.mapel}
+                            </div>
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {exSub} · {ex.kelas} · {ex.soalList.length} Soal · {ex.durasiMenit} Menit
+                            </div>
+                          </div>
                           <button
                             type="button"
-                            onClick={() => handleSetAllSavedExamsActive(true)}
-                            className="px-2.5 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 text-[11px] font-bold transition cursor-pointer"
+                            onClick={() => handleToggleExamActive(ex)}
+                            className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold shrink-0 whitespace-nowrap cursor-pointer transition ${
+                              ex.aktif
+                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                            }`}
                           >
-                            Aktifkan Semua
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSetAllSavedExamsActive(false)}
-                            className="px-2.5 py-1 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 text-[11px] font-bold transition cursor-pointer"
-                          >
-                            Nonaktifkan Semua
+                            {ex.aktif ? 'Aktif ✓' : 'Nonaktif'}
                           </button>
                         </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        {savedExamBuckets.map((ex) => {
-                          const exPaket = inferPaketFromExam(ex);
-                          const exSub = ex.subPaket || 'Paket 1';
-                          return (
-                            <div
-                              key={`act_${ex.id}`}
-                              className={`px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs ${
-                                ex.aktif
-                                  ? 'bg-emerald-50/70 border-emerald-300'
-                                  : 'bg-white border-slate-200'
-                              }`}
-                            >
-                              <div className="min-w-0">
-                                <div className="font-bold text-slate-900 truncate">
-                                  {exPaket} · {ex.mapel}
-                                </div>
-                                <div className="text-[11px] text-slate-500 truncate">
-                                  {exSub} · {ex.kelas} · {ex.soalList.length} Soal · {ex.durasiMenit} Menit
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => handleToggleExamActive(ex)}
-                                className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold shrink-0 whitespace-nowrap cursor-pointer transition ${
-                                  ex.aktif
-                                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                    : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
-                                }`}
-                              >
-                                {ex.aktif ? 'Aktif ✓' : 'Nonaktif'}
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Paket Contoh Bawaan CBT */}
-                  <div className="pt-2 border-t border-sky-200/70 space-y-2">
-                    <span className="text-[11px] font-bold text-slate-600 block">
-                      Paket Soal Contoh Bawaan (Default Nonaktif agar tidak muncul sebelum diaktifkan):
-                    </span>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {SAMPLE_CBT_DEFAULTS_META.map((smp) => {
-                        const isSampleOn = Boolean(cbtActivePackages[smp.id]);
-                        const sampleMins = getCBTDurationMinutes(cbtDurations, {
-                          examId: smp.id,
-                          paket: smp.paket,
-                          mapel: smp.mapel,
-                          fallback: smp.defaultDurasi,
-                        });
-                        return (
-                          <div
-                            key={smp.id}
-                            className={`px-3 py-1.5 rounded-xl border flex items-center justify-between gap-2 text-[11px] ${
-                              isSampleOn
-                                ? 'bg-emerald-50/70 border-emerald-300'
-                                : 'bg-white/80 border-slate-200'
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <span className="font-semibold text-slate-700 truncate block">{smp.label}</span>
-                              <span className="text-[10px] font-bold text-amber-700">⏱ {sampleMins} Menit</span>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => handleToggleSampleCbtActive(smp.id, smp.label)}
-                              className={`px-2.5 py-1 rounded-lg font-extrabold shrink-0 cursor-pointer transition ${
-                                isSampleOn
-                                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                  : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
-                              }`}
-                            >
-                              {isSampleOn ? 'Aktif ✓' : 'Nonaktif'}
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
+                      );
+                    })}
                   </div>
                 </div>
+              )}
 
-                {/* Setting Waktu Pengerjaan Ujian CBT (Auto-Submit) */}
-                <div className="p-5 rounded-3xl bg-gradient-to-r from-rose-50 via-white to-amber-50 border-2 border-rose-300 shadow-xs space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-md shadow-rose-500/20 shrink-0">
-                        <Clock className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex items-center gap-2">
-                          Pengaturan Waktu Pengerjaan Ujian CBT
-                          <span className="text-[10px] font-extrabold uppercase bg-rose-100 text-rose-900 px-2 py-0.5 rounded-full">
-                            Auto-Submit Timer
-                          </span>
-                        </h4>
-                        <p className="text-[11px] text-slate-500">
-                          Atur batas waktu pengerjaan per jenis asesmen dan mata pelajaran CBT (tersinkron otomatis ke ruang ujian siswa).
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end pt-1">
-                    <div className="sm:col-span-4">
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Paket / Asesmen CBT</label>
-                      <select
-                        value={durPanelPaket}
-                        onChange={(e) => setDurPanelPaket(e.target.value)}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none focus:border-rose-500"
-                      >
-                        {paketList.map((p) => (
-                          <option key={p} value={p}>
-                            {p}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="sm:col-span-4">
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Mata Pelajaran</label>
-                      <select
-                        value={durPanelMapel}
-                        onChange={(e) => setDurPanelMapel(e.target.value)}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none focus:border-rose-500"
-                      >
-                        <option value="all">Semua Mapel (Paket Ini)</option>
-                        <option value="Pendidikan Agama Islam">Pendidikan Agama Islam</option>
-                        <option value="Pendidikan Pancasila">Pendidikan Pancasila</option>
-                        <option value="Bahasa Indonesia">Bahasa Indonesia</option>
-                        <option value="Matematika">Matematika</option>
-                        <option value="Ilmu Pengetahuan Alam dan Sosial (IPAS)">IPAS</option>
-                        <option value="Seni Rupa">Seni Rupa</option>
-                        <option value="Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)">PJOK</option>
-                        <option value="Bahasa Inggris">Bahasa Inggris</option>
-                        <option value="Muatan Lokal (PLBJ)">Muatan Lokal (PLBJ)</option>
-                        <option value="Koding dan Kecerdasan Artifisial (KKA)">
-                          Koding &amp; Kecerdasan Artifisial (KKA)
-                        </option>
-                      </select>
-                    </div>
-
-                    <div className="sm:col-span-2">
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Durasi (Menit)</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={300}
-                        value={durPanelMinutes || ''}
-                        onChange={(e) => setDurPanelMinutes(Number(e.target.value))}
-                        className="w-full px-3 py-2 rounded-xl border-2 border-amber-400 bg-white text-xs font-black text-center text-slate-900 outline-none focus:border-rose-500"
-                      />
-                    </div>
-
-                    <div className="sm:col-span-2">
-                      <button
-                        type="button"
-                        onClick={() => handleSaveCbtDuration(durPanelPaket, durPanelMapel, durPanelMinutes)}
-                        className="w-full py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs shadow-xs cursor-pointer transition"
-                      >
-                        Simpan Waktu
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                    <span className="text-[11px] font-bold text-slate-500 mr-1">Pilihan Cepat:</span>
-                    {[15, 30, 45, 60, 90, 120].map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => {
-                          setDurPanelMinutes(m);
-                          handleSaveCbtDuration(durPanelPaket, durPanelMapel, m);
-                        }}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer transition ${
-                          durPanelMinutes === m
-                            ? 'bg-rose-600 text-white border-rose-700'
-                            : 'bg-white text-slate-700 border-slate-200 hover:bg-rose-50'
+              {/* Paket Contoh Bawaan CBT */}
+              <div className="pt-2 border-t border-sky-200/70 space-y-2">
+                <span className="text-[11px] font-bold text-slate-600 block">
+                  Paket Soal Contoh Bawaan (Default Nonaktif agar tidak muncul sebelum diaktifkan):
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {SAMPLE_CBT_DEFAULTS_META.map((smp) => {
+                    const isSampleOn = Boolean(cbtActivePackages[smp.id]);
+                    const sampleMins = getCBTDurationMinutes(cbtDurations, {
+                      examId: smp.id,
+                      paket: smp.paket,
+                      mapel: smp.mapel,
+                      fallback: smp.defaultDurasi,
+                    });
+                    return (
+                      <div
+                        key={smp.id}
+                        className={`px-3 py-1.5 rounded-xl border flex items-center justify-between gap-2 text-[11px] ${
+                          isSampleOn
+                            ? 'bg-emerald-50/70 border-emerald-300'
+                            : 'bg-white/80 border-slate-200'
                         }`}
                       >
-                        {m} Menit
-                      </button>
+                        <div className="min-w-0">
+                          <span className="font-semibold text-slate-700 truncate block">{smp.label}</span>
+                          <span className="text-[10px] font-bold text-amber-700">⏱ {sampleMins} Menit</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleSampleCbtActive(smp.id, smp.label)}
+                          className={`px-2.5 py-1 rounded-lg font-extrabold shrink-0 cursor-pointer transition ${
+                            isSampleOn
+                              ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                              : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                          }`}
+                        >
+                          {isSampleOn ? 'Aktif ✓' : 'Nonaktif'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Setting Waktu Pengerjaan Ujian CBT (Auto-Submit) */}
+            <div className="p-5 rounded-3xl bg-gradient-to-r from-rose-50 via-white to-amber-50 border-2 border-rose-300 shadow-xs space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-md shadow-rose-500/20 shrink-0">
+                    <Clock className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex items-center gap-2">
+                      Pengaturan Waktu Pengerjaan Ujian CBT
+                      <span className="text-[10px] font-extrabold uppercase bg-rose-100 text-rose-900 px-2 py-0.5 rounded-full">
+                        Auto-Submit Timer
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Atur batas waktu pengerjaan per jenis asesmen dan mata pelajaran CBT (tersinkron otomatis ke ruang ujian siswa).
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end pt-1">
+                <div className="sm:col-span-4">
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">Paket / Asesmen CBT</label>
+                  <select
+                    value={durPanelPaket}
+                    onChange={(e) => setDurPanelPaket(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none focus:border-rose-500"
+                  >
+                    {paketList.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
                     ))}
-                  </div>
+                  </select>
                 </div>
 
-                {/* Setting Acak Soal & Acak Jawaban */}
-                <div className="p-5 rounded-3xl bg-gradient-to-r from-emerald-50 via-white to-teal-50 border-2 border-emerald-300 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-md shadow-emerald-500/20 shrink-0">
-                      <Shuffle className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex items-center gap-2">
-                        Pengaturan Acak Soal & Pilihan Jawaban CBT
-                        <span className="text-[10px] font-extrabold uppercase bg-emerald-200 text-emerald-950 px-2 py-0.5 rounded-full">
-                          Siswa CBT
-                        </span>
-                      </h4>
-                      <p className="text-[11px] text-slate-500">
-                        Ketika diaktifkan guru/admin, soal dan opsi pilihan jawaban otomatis teracak secara unik saat dikerjakan oleh siswa.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <label className={`px-4 py-2.5 rounded-2xl border-2 text-xs font-display font-extrabold flex items-center gap-2 cursor-pointer transition select-none shadow-2xs ${
-                      acakSoal ? 'bg-emerald-600 border-emerald-700 text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
-                    }`}>
-                      <input
-                        type="checkbox"
-                        checked={acakSoal}
-                        onChange={(e) => {
-                          setAcakSoal(e.target.checked);
-                          showToast(`Setting Acak Soal CBT: ${e.target.checked ? 'AKTIF' : 'NONAKTIF'}`, 'success');
-                        }}
-                        className="w-4 h-4 rounded accent-emerald-500 cursor-pointer"
-                      />
-                      <span>Acak Soal</span>
-                    </label>
-
-                    <label className={`px-4 py-2.5 rounded-2xl border-2 text-xs font-display font-extrabold flex items-center gap-2 cursor-pointer transition select-none shadow-2xs ${
-                      acakJawaban ? 'bg-emerald-600 border-emerald-700 text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
-                    }`}>
-                      <input
-                        type="checkbox"
-                        checked={acakJawaban}
-                        onChange={(e) => {
-                          setAcakJawaban(e.target.checked);
-                          showToast(`Setting Acak Jawaban CBT: ${e.target.checked ? 'AKTIF' : 'NONAKTIF'}`, 'success');
-                        }}
-                        className="w-4 h-4 rounded accent-emerald-500 cursor-pointer"
-                      />
-                      <span>Acak Jawaban</span>
-                    </label>
-                  </div>
+                <div className="sm:col-span-4">
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">Mata Pelajaran</label>
+                  <select
+                    value={durPanelMapel}
+                    onChange={(e) => setDurPanelMapel(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none focus:border-rose-500"
+                  >
+                    <option value="all">Semua Mapel (Paket Ini)</option>
+                    <option value="Pendidikan Agama Islam">Pendidikan Agama Islam</option>
+                    <option value="Pendidikan Pancasila">Pendidikan Pancasila</option>
+                    <option value="Bahasa Indonesia">Bahasa Indonesia</option>
+                    <option value="Matematika">Matematika</option>
+                    <option value="Ilmu Pengetahuan Alam dan Sosial (IPAS)">IPAS</option>
+                    <option value="Seni Rupa">Seni Rupa</option>
+                    <option value="Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)">PJOK</option>
+                    <option value="Bahasa Inggris">Bahasa Inggris</option>
+                    <option value="Muatan Lokal (PLBJ)">Muatan Lokal (PLBJ)</option>
+                    <option value="Koding dan Kecerdasan Artifisial (KKA)">
+                      Koding &amp; Kecerdasan Artifisial (KKA)
+                    </option>
+                  </select>
                 </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">Durasi (Menit)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={300}
+                    value={durPanelMinutes || ''}
+                    onChange={(e) => setDurPanelMinutes(Number(e.target.value))}
+                    className="w-full px-3 py-2 rounded-xl border-2 border-amber-400 bg-white text-xs font-black text-center text-slate-900 outline-none focus:border-rose-500"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <button
+                    type="button"
+                    onClick={() => handleSaveCbtDuration(durPanelPaket, durPanelMapel, durPanelMinutes)}
+                    className="w-full py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs shadow-xs cursor-pointer transition"
+                  >
+                    Simpan Waktu
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                <span className="text-[11px] font-bold text-slate-500 mr-1">Pilihan Cepat:</span>
+                {[15, 30, 45, 60, 90, 120].map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => {
+                      setDurPanelMinutes(m);
+                      handleSaveCbtDuration(durPanelPaket, durPanelMapel, m);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer transition ${
+                      durPanelMinutes === m
+                        ? 'bg-rose-600 text-white border-rose-700'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-rose-50'
+                    }`}
+                  >
+                    {m} Menit
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 3. Setting Acak Soal & Acak Jawaban */}
+            <div className="p-5 rounded-3xl bg-gradient-to-r from-emerald-50 via-white to-teal-50 border-2 border-emerald-300 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-md shadow-emerald-500/20 shrink-0">
+                  <Shuffle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex items-center gap-2">
+                    Pengaturan Acak Soal &amp; Pilihan Jawaban CBT
+                    <span className="text-[10px] font-extrabold uppercase bg-emerald-200 text-emerald-950 px-2 py-0.5 rounded-full">
+                      Siswa CBT
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    Ketika diaktifkan guru/admin, soal dan opsi pilihan jawaban otomatis teracak secara unik saat dikerjakan oleh siswa.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <label className={`px-4 py-2.5 rounded-2xl border-2 text-xs font-display font-extrabold flex items-center gap-2 cursor-pointer transition select-none shadow-2xs ${
+                  acakSoal ? 'bg-emerald-600 border-emerald-700 text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                }`}>
+                  <input
+                    type="checkbox"
+                    checked={acakSoal}
+                    onChange={(e) => {
+                      setAcakSoal(e.target.checked);
+                      showToast(`Setting Acak Soal CBT: ${e.target.checked ? 'AKTIF' : 'NONAKTIF'}`, 'success');
+                    }}
+                    className="w-4 h-4 rounded accent-emerald-500 cursor-pointer"
+                  />
+                  <span>Acak Soal</span>
+                </label>
+
+                <label className={`px-4 py-2.5 rounded-2xl border-2 text-xs font-display font-extrabold flex items-center gap-2 cursor-pointer transition select-none shadow-2xs ${
+                  acakJawaban ? 'bg-emerald-600 border-emerald-700 text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                }`}>
+                  <input
+                    type="checkbox"
+                    checked={acakJawaban}
+                    onChange={(e) => {
+                      setAcakJawaban(e.target.checked);
+                      showToast(`Setting Acak Jawaban CBT: ${e.target.checked ? 'AKTIF' : 'NONAKTIF'}`, 'success');
+                    }}
+                    className="w-4 h-4 rounded accent-emerald-500 cursor-pointer"
+                  />
+                  <span>Acak Jawaban</span>
+                </label>
               </div>
             </div>
           </div>
