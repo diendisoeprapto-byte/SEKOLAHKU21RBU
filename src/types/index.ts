@@ -282,6 +282,30 @@ export interface ExamResultsResetMeta {
   cbtClearedAt?: number;
   tkaClearedAt?: number;
   paketClearedAt?: Record<string, number>;
+  deletedTkaIds?: Record<string, number>;
+  deletedCbtKeys?: Record<string, number>;
+}
+
+export interface ExamDeletionLogEntry {
+  logId: string;
+  category: 'tka' | 'cbt';
+  actionType: 'single' | 'paket' | 'all';
+  studentId: string;
+  studentName: string;
+  nisn?: string;
+  kelas?: string;
+  paket: string;
+  mapel?: string;
+  skorRingkas?: number;
+  deletedAt: number;
+  deletedAtIso: string;
+  deletedBy?: string;
+  targetKey: string;
+  restoredAt?: number;
+  restoredBy?: string;
+  snapshotTkaSubmission?: Record<string, any>;
+  snapshotTkaResults?: CBTExamResult[];
+  snapshotCbtResult?: CBTExamResult;
 }
 
 export interface ActiveUser {

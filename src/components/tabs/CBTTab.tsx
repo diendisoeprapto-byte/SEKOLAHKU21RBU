@@ -77,6 +77,7 @@ import {
   saveStoredCBTActivePackages,
   getStoredCBTResults,
   saveStoredCBTResults,
+  deleteSingleCbtResultFromStorage,
   getStoredAssessments,
   saveStoredAssessments,
   getActiveFilters,
@@ -222,16 +223,19 @@ export const CBTTab: React.FC<Props> = ({
   const [reportStatusFilter, setReportStatusFilter] = useState<'all' | 'Tuntas' | 'Remedial'>('all');
   const [reportSearch, setReportSearch] = useState<string>('');
   const [selectedCbtReportRow, setSelectedCbtReportRow] = useState<any | null>(null);
+  const [confirmDeleteCbtRowId, setConfirmDeleteCbtRowId] = useState<string | null>(null);
 
   useEffect(() => {
     const syncResults = () => {
       setCbtResultsList(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)));
     };
     window.addEventListener('sekolahku-cbt-results-updated', syncResults);
+    window.addEventListener('sekolahku-exam-results-updated', syncResults);
     window.addEventListener('sekolahku-cloud-sync-updated', syncResults);
     window.addEventListener('storage', syncResults);
     return () => {
       window.removeEventListener('sekolahku-cbt-results-updated', syncResults);
+      window.removeEventListener('sekolahku-exam-results-updated', syncResults);
       window.removeEventListener('sekolahku-cloud-sync-updated', syncResults);
       window.removeEventListener('storage', syncResults);
     };
@@ -3586,6 +3590,29 @@ export const CBTTab: React.FC<Props> = ({
             showToast(`Rapor CBT "${row.nama}" (.PDF) berhasil diunduh.`, 'success');
           };
 
+          const handleDeleteSingleCbtRow = (row: (typeof filteredCbtRows)[number]) => {
+            const remaining = deleteSingleCbtResultFromStorage({
+              examId: row.raw.examId,
+              studentId: row.raw.studentId,
+              recordedAt: row.raw.recordedAt,
+              tanggal: row.raw.tanggal,
+              waktuSelesai: row.raw.waktuSelesai,
+              studentName: row.nama,
+              mapel: row.mapel,
+              paketName: row.paket,
+            });
+            setCbtResultsList(remaining.filter((r) => !isTkaResultEntry(r)));
+            setConfirmDeleteCbtRowId(null);
+            if (selectedCbtReportRow?.id === row.id) {
+              setSelectedCbtReportRow(null);
+            }
+            syncAllLocalToCloud(activeUser.name || 'admin').catch(() => {});
+            showToast(
+              `Data nilai CBT milik "${row.nama}" (${row.mapel}) berhasil dihapus!`,
+              'success'
+            );
+          };
+
           return (
             <div className="space-y-6">
               {/* Formal Kop Surat Sekolah (Khusus Cetak / PDF) */}
@@ -3990,6 +4017,34 @@ export const CBTTab: React.FC<Props> = ({
                                   >
                                     <Eye className="w-3 h-3" /> Rapor CBT
                                   </button>
+                                  {confirmDeleteCbtRowId === row.id ? (
+                                    <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-xl px-2 py-1">
+                                      <span className="text-[10px] font-black text-rose-700">Hapus?</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteSingleCbtRow(row)}
+                                        className="px-2 py-0.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-black cursor-pointer"
+                                      >
+                                        Ya
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmDeleteCbtRowId(null)}
+                                        className="px-2 py-0.5 rounded-lg bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-bold cursor-pointer"
+                                      >
+                                        Batal
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmDeleteCbtRowId(row.id)}
+                                      className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                                      title={`Hapus data nilai CBT milik ${row.nama}`}
+                                    >
+                                      <Trash2 className="w-3 h-3" /> Hapus
+                                    </button>
+                                  )}
                                 </div>
                               </td>
                             </tr>

@@ -654,19 +654,27 @@ export default function App() {
     );
 
     // Realtime listener langsung untuk koleksi 'tka_submissions' (Analisis & Rekap Hasil TKA real-time lintas perangkat)
+    let tkaEmptyReconcileAttempted = false;
     const unsubTkaSubmissions = subscribeToTkaSubmissionsCollection(
       async (firestoreSubs) => {
         await idbHydrationPromise;
         if (!isMounted) return;
-        const alreadySeeded = localStorage.getItem('sekolahku_tka_submissions_seeded') === 'true';
         const resetMeta = getStoredExamResultsResetMeta();
         const tkaClearedAt = Number(resetMeta?.tkaClearedAt || 0);
-        const validPending = getPendingTkaSubmissions().filter((item) => {
+        const deletedTkaIds = resetMeta?.deletedTkaIds || {};
+
+        const isNotResetDeleted = (item: { id?: string; updatedAt?: string }) => {
           const ts = item.updatedAt ? Date.parse(item.updatedAt) : 0;
-          if (tkaClearedAt > 0 && (!Number.isFinite(ts) || ts <= tkaClearedAt)) return false;
+          const safeTs = Number.isFinite(ts) ? ts : 0;
+          if (tkaClearedAt > 0 && safeTs <= tkaClearedAt) return false;
+          const delTs = item.id ? Number(deletedTkaIds[item.id] || 0) : 0;
+          if (delTs > 0 && safeTs <= delTs) return false;
           return true;
-        });
-        const mergedSubs = mergeTkaSubmissionLists(firestoreSubs, validPending);
+        };
+
+        const validFirestoreSubs = firestoreSubs.filter(isNotResetDeleted);
+        const validPending = getPendingTkaSubmissions().filter(isNotResetDeleted);
+        const mergedSubs = mergeTkaSubmissionLists(validFirestoreSubs, validPending);
 
         const liveStudentList = studentsCollectionLoadedRef.current ? getStoredStudents() : [];
         const alignedMerged =
@@ -684,27 +692,50 @@ export default function App() {
           if (validPending.length > 0) {
             flushPendingTkaSubmissionsToFirestore().catch(() => {});
           }
-        } else if (
-          !tkaSubmissionsCollectionLoadedRef.current &&
-          !resetMeta.tkaClearedAt &&
-          activeUserRef.current?.role !== 'siswa'
-        ) {
-          const localSubs = getStoredTKASubmissions();
-          if (localSubs.length > 0) {
-            tkaSubmissionsCollectionLoadedRef.current = true;
-            safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
-            saveTkaSubmissionsBatchToFirestore(localSubs).catch((err) =>
-              console.warn('Initial TKA submissions seed warning:', err)
-            );
-          } else if (!alreadySeeded) {
-            tkaSubmissionsCollectionLoadedRef.current = true;
-          } else if (studentsCollectionLoadedRef.current) {
-            reconcileAndSyncLocalTkaSubmissions(getStoredStudents()).catch(() => {});
-          }
-        } else {
+          return;
+        }
+
+        // Jangan hapus data lokal apabila user tidak melakukan Kosongkan Data TKA secara eksplisit
+        const localSubs = getStoredTKASubmissions().filter(isNotResetDeleted);
+        const alignedLocal =
+          liveStudentList.length > 0 && localSubs.length > 0
+            ? alignTkaSubmissionsWithStudents(localSubs, liveStudentList).alignedSubmissions
+            : localSubs;
+
+        if (alignedLocal.length > 0) {
           tkaSubmissionsCollectionLoadedRef.current = true;
           markLargeCollectionHydratedFromCloud('sekolahku_tka_submissions');
           safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
+          runWithoutStorageSync(() => {
+            saveStoredTKASubmissions(alignedLocal);
+          });
+          if (activeUserRef.current?.role !== 'siswa') {
+            saveTkaSubmissionsBatchToFirestore(alignedLocal).catch((err) =>
+              console.warn('TKA submissions restore sync warning:', err)
+            );
+          }
+          return;
+        }
+
+        if (!tkaEmptyReconcileAttempted) {
+          tkaEmptyReconcileAttempted = true;
+          try {
+            const rec = await reconcileTkaFromCloudBackup();
+            if (rec.syncedCount > 0) {
+              tkaSubmissionsCollectionLoadedRef.current = true;
+              markLargeCollectionHydratedFromCloud('sekolahku_tka_submissions');
+              return;
+            }
+          } catch {}
+          if (studentsCollectionLoadedRef.current) {
+            reconcileAndSyncLocalTkaSubmissions(getStoredStudents()).catch(() => {});
+          }
+        }
+
+        tkaSubmissionsCollectionLoadedRef.current = true;
+        markLargeCollectionHydratedFromCloud('sekolahku_tka_submissions');
+        safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
+        if (tkaClearedAt > 0 || firestoreSubs.length === 0) {
           runWithoutStorageSync(() => {
             saveStoredTKASubmissions([]);
           });
@@ -1625,6 +1656,7 @@ export default function App() {
               {activeTab === 'backup' && (
                 <BackupTab
                   profile={profile}
+                  students={students}
                   onSaveProfile={handleSaveProfile}
                   showToast={showToast}
                   onResetAll={handleResetAll}

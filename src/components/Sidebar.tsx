@@ -845,7 +845,7 @@ export const Sidebar: React.FC<Props> = ({
               </button>
               {(openGroups.group5 || Boolean(searchQuery)) && (
                 <div className="p-2 space-y-1 bg-white/80 border-t border-slate-200">
-                  {(!searchQuery || 'backup logo restore kemendikbud monas'.includes(searchQuery)) && (
+                  {(!searchQuery || 'backup logo restore kemendikbud monas pemulihan data hapus riwayat tka cbt'.includes(searchQuery)) && (
                     <button
                       onClick={() => onSelectTab('backup')}
                       className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${

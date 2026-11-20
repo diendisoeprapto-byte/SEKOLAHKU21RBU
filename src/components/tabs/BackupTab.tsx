@@ -14,24 +14,38 @@ import {
   Radio,
   KeyRound,
   Camera,
+  History,
+  Search,
+  UserCheck,
+  ShieldCheck,
+  AlertCircle,
 } from 'lucide-react';
-import { SchoolProfile } from '../../types';
-import { exportFullSystemJSON, resetStoredAdminPassword } from '../../utils/storage';
+import { ExamDeletionLogEntry, SchoolProfile, Student } from '../../types';
+import {
+  exportFullSystemJSON,
+  getStoredExamDeletionLog,
+  getStoredStudents,
+  resetStoredAdminPassword,
+} from '../../utils/storage';
 import { compressQuestionImage } from '../../utils/imageUtils';
 import { testConnection, handleFirestoreError, OperationType } from '../../utils/firebase';
 import {
   CloudBackupDocMeta,
   CloudSyncPayload,
   pullBackupFromCloudRealtime,
+  recoverDeletedExamDataByStudentId,
   restoreBackupJsonToCloudRealtime,
+  restoreDeletionLogEntryFromLog,
   subscribeToCloudBackupDoc,
   subscribeToCloudChanges,
   syncAllLocalToCloud,
+  syncDeletionLogFromCloud,
 } from '../../utils/cloudSync';
 import firebaseConfig from '../../../firebase-applet-config.json';
 
 interface Props {
   profile: SchoolProfile;
+  students?: Student[];
   onSaveProfile: (profile: SchoolProfile) => void;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onResetAll: () => void;
@@ -53,6 +67,7 @@ function formatIsoTime(iso?: string): string {
 
 export const BackupTab: React.FC<Props> = ({
   profile,
+  students: propStudents,
   onSaveProfile,
   showToast,
   onResetAll,
@@ -71,8 +86,37 @@ export const BackupTab: React.FC<Props> = ({
   const [lastRestoreSummary, setLastRestoreSummary] = useState<string>('');
   const [confirmResetAdminPass, setConfirmResetAdminPass] = useState(false);
 
+  // Pemulihan Data & Log Riwayat Penghapusan TKA / CBT
+  const [deletionLogs, setDeletionLogs] = useState<ExamDeletionLogEntry[]>(() =>
+    getStoredExamDeletionLog()
+  );
+  const [recoveryStudentIdInput, setRecoveryStudentIdInput] = useState<string>('');
+  const [recoveryCategory, setRecoveryCategory] = useState<'all' | 'tka' | 'cbt'>('all');
+  const [isRecoveringById, setIsRecoveringById] = useState<boolean>(false);
+  const [isSyncingDeletionLog, setIsSyncingDeletionLog] = useState<boolean>(false);
+  const [restoringLogId, setRestoringLogId] = useState<string | null>(null);
+  const [recoveryFeedbackBanner, setRecoveryFeedbackBanner] = useState<string>('');
+  const [logSearchQuery, setLogSearchQuery] = useState<string>('');
+  const [logCategoryFilter, setLogCategoryFilter] = useState<'all' | 'tka' | 'cbt'>('all');
+  const [logStatusFilter, setLogStatusFilter] = useState<'all' | 'pending' | 'restored'>('all');
+
+  const activeStudentsList = React.useMemo(() => {
+    const list = propStudents && propStudents.length > 0 ? propStudents : getStoredStudents();
+    return list.slice().sort((a, b) => {
+      const cmpCls = (a.kelas || '').localeCompare(b.kelas || '', 'id', { numeric: true });
+      if (cmpCls !== 0) return cmpCls;
+      return (a.nama || '').localeCompare(b.nama || '', 'id');
+    });
+  }, [propStudents]);
+
   // Realtime listeners (onSnapshot) for backups/latest & school_data/primary_data
   useEffect(() => {
+    const refreshLogs = () => {
+      setDeletionLogs(getStoredExamDeletionLog());
+    };
+    window.addEventListener('sekolahku-deletion-log-updated', refreshLogs);
+    window.addEventListener('sekolahku-cloud-sync-updated', refreshLogs);
+
     const unsubBackup = subscribeToCloudBackupDoc(
       (meta) => {
         setCloudBackupMeta(meta);
@@ -89,6 +133,8 @@ export const BackupTab: React.FC<Props> = ({
     });
 
     return () => {
+      window.removeEventListener('sekolahku-deletion-log-updated', refreshLogs);
+      window.removeEventListener('sekolahku-cloud-sync-updated', refreshLogs);
       unsubBackup();
       unsubSync();
     };
@@ -222,6 +268,127 @@ export const BackupTab: React.FC<Props> = ({
     };
     reader.readAsText(file);
   };
+
+  const handleSyncDeletionLog = async () => {
+    if (isSyncingDeletionLog) return;
+    setIsSyncingDeletionLog(true);
+    try {
+      const merged = await syncDeletionLogFromCloud();
+      setDeletionLogs(merged);
+      showToast(
+        `Log riwayat penghapusan disegarkan (${merged.length} catatan tercatat).`,
+        'success'
+      );
+    } finally {
+      setIsSyncingDeletionLog(false);
+    }
+  };
+
+  const handleRestoreLogEntry = async (entry: ExamDeletionLogEntry) => {
+    if (restoringLogId) return;
+    setRestoringLogId(entry.logId);
+    try {
+      const result = await restoreDeletionLogEntryFromLog(entry.logId, activeUserName);
+      setDeletionLogs(getStoredExamDeletionLog());
+      if (result.ok) {
+        onBackupRestored?.();
+        setRecoveryFeedbackBanner(result.message);
+        showToast(result.message, 'success');
+      } else {
+        showToast(result.message, 'error');
+      }
+    } finally {
+      setRestoringLogId(null);
+    }
+  };
+
+  const handleRecoverSpecificStudentById = async () => {
+    const trimmedId = recoveryStudentIdInput.trim();
+    if (!trimmedId) {
+      showToast('Masukkan atau pilih ID Siswa yang datanya ingin dipulihkan terlebih dahulu.', 'error');
+      return;
+    }
+    if (isRecoveringById) return;
+    setIsRecoveringById(true);
+    try {
+      const res = await recoverDeletedExamDataByStudentId({
+        studentId: trimmedId,
+        category: recoveryCategory,
+        actorName: activeUserName,
+      });
+      setDeletionLogs(getStoredExamDeletionLog());
+      const totalRestored = res.recoveredTkaCount + res.recoveredCbtCount;
+      if (totalRestored > 0) {
+        onBackupRestored?.();
+        const label = res.studentName ? `${res.studentName} (${trimmedId})` : `ID ${trimmedId}`;
+        const msg = `Berhasil memulihkan ${res.recoveredTkaCount} nilai TKA & ${res.recoveredCbtCount} nilai CBT untuk ${label}.`;
+        setRecoveryFeedbackBanner(msg);
+        showToast(msg, 'success');
+      } else {
+        const msg = `Tidak ditemukan data terhapus untuk ID "${trimmedId}" yang belum aktif, atau data siswa tersebut saat ini sudah utuh.`;
+        setRecoveryFeedbackBanner(msg);
+        showToast(msg, 'error');
+      }
+    } finally {
+      setIsRecoveringById(false);
+    }
+  };
+
+  const filteredDeletionLogs = React.useMemo(() => {
+    const q = logSearchQuery.trim().toLowerCase();
+    return deletionLogs.filter((entry) => {
+      if (logCategoryFilter !== 'all' && entry.category !== logCategoryFilter) return false;
+      if (logStatusFilter === 'pending' && entry.restoredAt) return false;
+      if (logStatusFilter === 'restored' && !entry.restoredAt) return false;
+      if (q) {
+        const hay = [
+          entry.studentId,
+          entry.studentName,
+          entry.nisn,
+          entry.kelas,
+          entry.paket,
+          entry.mapel,
+          entry.deletedBy,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [deletionLogs, logSearchQuery, logCategoryFilter, logStatusFilter]);
+
+  const pendingDeletionCount = React.useMemo(
+    () => deletionLogs.filter((l) => !l.restoredAt).length,
+    [deletionLogs]
+  );
+  const restoredDeletionCount = React.useMemo(
+    () => deletionLogs.filter((l) => Boolean(l.restoredAt)).length,
+    [deletionLogs]
+  );
+
+  const matchedRecoveryStudent = React.useMemo(() => {
+    const q = recoveryStudentIdInput.trim().toLowerCase();
+    if (!q) return null;
+    return (
+      activeStudentsList.find(
+        (s) => s.id.toLowerCase() === q || (s.nisn && s.nisn.toLowerCase() === q)
+      ) || null
+    );
+  }, [recoveryStudentIdInput, activeStudentsList]);
+
+  const matchingLogsForInputIdCount = React.useMemo(() => {
+    const q = recoveryStudentIdInput.trim().toLowerCase();
+    if (!q) return 0;
+    const targetId = (matchedRecoveryStudent?.id || q).toLowerCase();
+    return deletionLogs.filter(
+      (l) =>
+        !l.restoredAt &&
+        l.studentId.toLowerCase() === targetId &&
+        (recoveryCategory === 'all' || l.category === recoveryCategory)
+    ).length;
+  }, [recoveryStudentIdInput, matchedRecoveryStudent, deletionLogs, recoveryCategory]);
 
   return (
     <section className="space-y-6">
@@ -499,6 +666,301 @@ export const BackupTab: React.FC<Props> = ({
                 <CloudDownload className="w-4 h-4 text-sky-700" />
                 <span>{isPulling ? 'Memulihkan...' : 'Pulihkan dari Cloud Realtime'}</span>
               </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Panel Khusus Pemulihan Data & Log Riwayat Penghapusan Nilai (TKA & CBT) */}
+        <div className="p-6 rounded-3xl bg-gradient-to-br from-emerald-50/80 via-white to-teal-50/70 border-2 border-emerald-200 space-y-5 shadow-xs">
+          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-emerald-200/70 pb-4">
+            <div className="flex items-start gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <History className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full">
+                    Pemulihan Data Spesifik
+                  </span>
+                  <span className="text-[10px] font-bold bg-white border border-slate-200 text-slate-600 px-2.5 py-0.5 rounded-full">
+                    {deletionLogs.length} Total Log · {pendingDeletionCount} Belum Dipulihkan · {restoredDeletionCount} Pulih
+                  </span>
+                </div>
+                <h3 className="font-display font-black text-base text-slate-900">
+                  Pemulihan Data &amp; Log Riwayat Penghapusan Nilai (TKA / CBT)
+                </h3>
+                <p className="text-xs text-slate-600 leading-relaxed max-w-3xl">
+                  Pantau seluruh riwayat penghapusan nilai TKA dan CBT. Jika ada nilai anak yang tidak sengaja terhapus, pulihkan langsung dari log atau pindai cadangan Cloud secara spesifik berdasarkan <strong>ID Siswa</strong>.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              disabled={isSyncingDeletionLog}
+              onClick={() => void handleSyncDeletionLog()}
+              className="bg-white hover:bg-emerald-50 disabled:opacity-60 text-emerald-800 border border-emerald-300 font-display font-black px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-2xs transition cursor-pointer shrink-0"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingDeletionLog ? 'animate-spin' : ''}`} />
+              <span>{isSyncingDeletionLog ? 'Menyegarkan...' : 'Segarkan Log Cloud'}</span>
+            </button>
+          </div>
+
+          {/* Pencarian & Pemulihan Spesifik Berdasarkan ID Siswa */}
+          <div className="bg-white p-4 sm:p-5 rounded-2xl border border-emerald-200/90 shadow-2xs space-y-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="font-display font-black text-xs sm:text-sm text-slate-800 flex items-center gap-2">
+                <UserCheck className="w-4 h-4 text-emerald-600" />
+                <span>Pemulihan Data Spesifik Berdasarkan ID Siswa</span>
+              </h4>
+              {matchedRecoveryStudent && (
+                <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">
+                  Teridentifikasi: <strong>{matchedRecoveryStudent.nama}</strong> ({matchedRecoveryStudent.kelas}) · {matchingLogsForInputIdCount} catatan terhapus di log
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+              <div className="md:col-span-4">
+                <label className="block text-[11px] font-black text-slate-600 mb-1">
+                  Pilih Siswa (Isi Otomatis ID Siswa):
+                </label>
+                <select
+                  value={matchedRecoveryStudent?.id || ''}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      setRecoveryStudentIdInput(e.target.value);
+                    }
+                  }}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 focus:bg-white text-xs font-bold text-slate-800 outline-none focus:border-emerald-600 cursor-pointer"
+                >
+                  <option value="">-- Pilih dari Daftar Siswa ({activeStudentsList.length}) --</option>
+                  {activeStudentsList.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.id} · {s.nama} ({s.kelas})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="md:col-span-3">
+                <label className="block text-[11px] font-black text-slate-600 mb-1">
+                  Atau Ketik ID Siswa:
+                </label>
+                <input
+                  type="text"
+                  value={recoveryStudentIdInput}
+                  onChange={(e) => setRecoveryStudentIdInput(e.target.value)}
+                  placeholder="cth: s_6a_01"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono text-xs font-bold text-slate-900 outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-[11px] font-black text-slate-600 mb-1">
+                  Target Data:
+                </label>
+                <select
+                  value={recoveryCategory}
+                  onChange={(e) => setRecoveryCategory(e.target.value as 'all' | 'tka' | 'cbt')}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none focus:border-emerald-600 cursor-pointer"
+                >
+                  <option value="all">Semua (TKA &amp; CBT)</option>
+                  <option value="tka">Khusus TKA</option>
+                  <option value="cbt">Khusus CBT</option>
+                </select>
+              </div>
+
+              <div className="md:col-span-3">
+                <button
+                  type="button"
+                  disabled={isRecoveringById || !recoveryStudentIdInput.trim()}
+                  onClick={() => void handleRecoverSpecificStudentById()}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-display font-black px-4 py-2 rounded-xl text-xs shadow-sm flex items-center justify-center gap-1.5 cursor-pointer transition"
+                >
+                  <RotateCcw className={`w-3.5 h-3.5 ${isRecoveringById ? 'animate-spin' : ''}`} />
+                  <span>{isRecoveringById ? 'Memindai & Memulihkan...' : 'Pulihkan Data ID Ini'}</span>
+                </button>
+              </div>
+            </div>
+
+            {recoveryFeedbackBanner && (
+              <div className="text-xs text-emerald-950 bg-emerald-50 border border-emerald-200 rounded-xl px-3.5 py-2.5 flex items-start gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <span>{recoveryFeedbackBanner}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Filter & Tabel Log Riwayat Penghapusan Nilai */}
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+            <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="relative flex-1 max-w-md">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  value={logSearchQuery}
+                  onChange={(e) => setLogSearchQuery(e.target.value)}
+                  placeholder="Cari ID Siswa, nama, NISN, kelas, paket, mapel..."
+                  className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs outline-none focus:border-emerald-600"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={logCategoryFilter}
+                  onChange={(e) => setLogCategoryFilter(e.target.value as 'all' | 'tka' | 'cbt')}
+                  className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-700 outline-none focus:border-emerald-600 cursor-pointer"
+                >
+                  <option value="all">Semua Kategori</option>
+                  <option value="tka">TKA Saja</option>
+                  <option value="cbt">CBT Saja</option>
+                </select>
+                <select
+                  value={logStatusFilter}
+                  onChange={(e) => setLogStatusFilter(e.target.value as 'all' | 'pending' | 'restored')}
+                  className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-700 outline-none focus:border-emerald-600 cursor-pointer"
+                >
+                  <option value="all">Semua Status ({deletionLogs.length})</option>
+                  <option value="pending">Belum Dipulihkan ({pendingDeletionCount})</option>
+                  <option value="restored">Sudah Dipulihkan ({restoredDeletionCount})</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto max-h-96">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead className="bg-slate-100 text-slate-700 sticky top-0 z-10 border-b border-slate-200">
+                  <tr>
+                    <th className="p-3 font-black whitespace-nowrap">Waktu Hapus</th>
+                    <th className="p-3 font-black whitespace-nowrap">Kategori</th>
+                    <th className="p-3 font-black">ID Siswa &amp; Peserta Didik</th>
+                    <th className="p-3 font-black">Paket / Mapel</th>
+                    <th className="p-3 font-black text-center">Nilai</th>
+                    <th className="p-3 font-black text-right">Status &amp; Pemulihan</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredDeletionLogs.map((entry) => {
+                    const isRestored = Boolean(entry.restoredAt);
+                    const actionLabel =
+                      entry.actionType === 'single'
+                        ? 'Hapus Satuan'
+                        : entry.actionType === 'paket'
+                        ? 'Kosongkan Paket'
+                        : 'Kosongkan Semua';
+                    return (
+                      <tr key={entry.logId} className="hover:bg-slate-50/90 transition">
+                        <td className="p-3 whitespace-nowrap">
+                          <div className="font-semibold text-slate-800">
+                            {formatIsoTime(entry.deletedAtIso)}
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            Oleh: {entry.deletedBy || 'Admin/Guru'}
+                          </div>
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          <div className="flex flex-col items-start gap-1">
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase ${
+                                entry.category === 'tka'
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : 'bg-indigo-100 text-indigo-800'
+                              }`}
+                            >
+                              {entry.category.toUpperCase()}
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-medium">
+                              {actionLabel}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRecoveryStudentIdInput(entry.studentId);
+                                setRecoveryCategory(entry.category);
+                              }}
+                              title="Klik untuk mengisi ID Siswa ke kotak Pemulihan Spesifik"
+                              className="font-mono text-[10px] font-bold bg-slate-100 hover:bg-emerald-100 text-slate-700 hover:text-emerald-800 border border-slate-200 px-1.5 py-0.5 rounded cursor-pointer transition"
+                            >
+                              ID: {entry.studentId || '-'}
+                            </button>
+                            {entry.kelas && (
+                              <span className="text-[10px] font-bold text-slate-500">
+                                {entry.kelas}
+                              </span>
+                            )}
+                          </div>
+                          <div className="font-bold text-slate-900">{entry.studentName}</div>
+                          {entry.nisn && (
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              NISN: {entry.nisn}
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-3">
+                          <div className="font-bold text-slate-800">{entry.paket}</div>
+                          {entry.mapel && entry.mapel !== '-' && (
+                            <div className="text-[11px] text-slate-500">{entry.mapel}</div>
+                          )}
+                        </td>
+                        <td className="p-3 text-center font-display font-black text-sm tabular-nums text-slate-900">
+                          {typeof entry.skorRingkas === 'number' ? entry.skorRingkas : '—'}
+                        </td>
+                        <td className="p-3 text-right whitespace-nowrap">
+                          {isRestored ? (
+                            <div className="inline-flex flex-col items-end gap-1">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black">
+                                <CheckCircle2 className="w-3 h-3" /> Sudah Dipulihkan
+                              </span>
+                              <button
+                                type="button"
+                                disabled={restoringLogId === entry.logId}
+                                onClick={() => void handleRestoreLogEntry(entry)}
+                                className="text-[10px] font-bold text-slate-500 hover:text-emerald-700 underline cursor-pointer"
+                              >
+                                Pulihkan Lagi
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={restoringLogId === entry.logId}
+                              onClick={() => void handleRestoreLogEntry(entry)}
+                              className="inline-flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-display font-black px-3 py-1.5 rounded-xl text-[11px] shadow-2xs cursor-pointer transition"
+                            >
+                              <RotateCcw
+                                className={`w-3 h-3 ${
+                                  restoringLogId === entry.logId ? 'animate-spin' : ''
+                                }`}
+                              />
+                              <span>
+                                {restoringLogId === entry.logId ? 'Memulihkan...' : 'Pulihkan'}
+                              </span>
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filteredDeletionLogs.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="p-8 text-center text-slate-400">
+                        <div className="inline-flex items-center gap-2 text-xs font-medium text-slate-500">
+                          <AlertCircle className="w-4 h-4 text-slate-400" />
+                          <span>
+                            {deletionLogs.length === 0
+                              ? 'Belum ada riwayat penghapusan nilai TKA atau CBT yang tercatat. Setiap penghapusan nilai di menu Report TKA maupun CBT akan otomatis dicatat di sini.'
+                              : 'Tidak ada catatan log penghapusan yang cocok dengan pencarian atau filter Anda.'}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

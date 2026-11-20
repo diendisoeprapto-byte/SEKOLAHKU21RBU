@@ -20,6 +20,7 @@ import {
   getStoredCBTResults,
   getStoredTKAResults,
   getStoredExamResultsResetMeta,
+  saveStoredExamResultsResetMeta,
   getStoredStudents,
   filterExamResultsByResetMeta,
   isKelas6Class,
@@ -578,7 +579,7 @@ export function subscribeToTkaQuestionsCollection(
 // TKA SUBMISSIONS (ANALISIS & REKAP HASIL TKA REAL-TIME FIRESTORE)
 // ============================================================================
 
-function makeSubmissionDocId(studentId: string, basePaket: string, fallbackId?: string): string {
+export function makeSubmissionDocId(studentId: string, basePaket: string, fallbackId?: string): string {
   const cleanStudent = (studentId || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '_');
   const cleanPaket = (basePaket || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '_');
   if (cleanStudent && cleanPaket) {
@@ -785,6 +786,20 @@ export function mergeTkaSubmissionLists(
 export async function saveTkaSubmissionToFirestore(submission: TKASubmissionItem): Promise<boolean> {
   const cleanBase = sanitizeSubmissionForStorage(submission);
   const docId = cleanBase.id;
+  try {
+    const meta = getStoredExamResultsResetMeta();
+    if (meta?.deletedTkaIds && docId in meta.deletedTkaIds) {
+      const nextDeleted = { ...meta.deletedTkaIds };
+      delete nextDeleted[docId];
+      const nextMeta: ExamResultsResetMeta = { ...meta, deletedTkaIds: nextDeleted };
+      if (Object.keys(nextDeleted).length === 0) {
+        delete nextMeta.deletedTkaIds;
+      }
+      runWithoutStorageSync(() => {
+        saveStoredExamResultsResetMeta(nextMeta);
+      });
+    }
+  } catch {}
   enqueuePendingTkaSubmission(cleanBase as TKASubmissionItem);
   try {
     await setDoc(
@@ -841,14 +856,39 @@ export async function saveTkaSubmissionsBatchToFirestore(
     const MAX_DOCS_PER_BATCH = 40;
     const MAX_BYTES_PER_BATCH = 2_500_000;
     const nowIso = new Date().toISOString();
+    const cleanedSubmissions = submissions.map((sub, i) =>
+      sanitizeSubmissionForStorage(sub, sub.id || `sim_${i}`)
+    );
+
+    try {
+      const meta = getStoredExamResultsResetMeta();
+      if (meta?.deletedTkaIds) {
+        const nextDeleted = { ...meta.deletedTkaIds };
+        let changed = false;
+        cleanedSubmissions.forEach((cleanSub) => {
+          if (cleanSub.id in nextDeleted) {
+            delete nextDeleted[cleanSub.id];
+            changed = true;
+          }
+        });
+        if (changed) {
+          const nextMeta: ExamResultsResetMeta = { ...meta, deletedTkaIds: nextDeleted };
+          if (Object.keys(nextDeleted).length === 0) {
+            delete nextMeta.deletedTkaIds;
+          }
+          runWithoutStorageSync(() => {
+            saveStoredExamResultsResetMeta(nextMeta);
+          });
+        }
+      }
+    } catch {}
 
     let batch = writeBatch(db);
     let batchDocs = 0;
     let batchBytes = 0;
 
-    for (let i = 0; i < submissions.length; i++) {
-      const sub = submissions[i];
-      const cleanSub = sanitizeSubmissionForStorage(sub, sub.id || `sim_${i}`);
+    for (let i = 0; i < cleanedSubmissions.length; i++) {
+      const cleanSub = cleanedSubmissions[i];
       const approxBytes = estimateJsonBytes(cleanSub) + 512;
 
       if (
@@ -997,6 +1037,19 @@ export async function deleteTkaSubmissionsByPaketInFirestore(paketName: string):
     return true;
   } catch (error) {
     console.error(`Gagal menghapus submission paket ${paketName} di Firestore:`, error);
+    return false;
+  }
+}
+
+export async function deleteSingleTkaSubmissionFromFirestore(docId: string): Promise<boolean> {
+  if (!docId) return false;
+  try {
+    removePendingTkaSubmission(docId);
+    await deleteDoc(doc(db, TKA_SUBMISSIONS_COLLECTION, docId));
+    safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
+    return true;
+  } catch (error) {
+    console.error(`Gagal menghapus submission TKA (${docId}) di Firestore:`, error);
     return false;
   }
 }
@@ -1264,6 +1317,11 @@ export function reconcileTkaResultsToSubmissions(options: {
       'Simulasi 1';
     const basePaket = extractBaseTkaPaket(rawPaket);
     const docId = makeSubmissionDocId(sid, basePaket);
+    const deletedTs = Number(activeMeta?.deletedTkaIds?.[docId] || 0);
+    const resTs = typeof res.recordedAt === 'number' && Number.isFinite(res.recordedAt) ? res.recordedAt : 0;
+    if (deletedTs > 0 && resTs <= deletedTs) {
+      return;
+    }
     const mapelKey = normalizeTkaMapelKey(res.mapel || res.judul || 'Bahasa Indonesia');
     const numericGrade = Number.isFinite(Number(res.nilai)) ? Math.round(Number(res.nilai)) : 0;
 

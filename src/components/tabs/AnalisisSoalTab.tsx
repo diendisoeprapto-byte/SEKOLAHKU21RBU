@@ -36,6 +36,7 @@ import {
   getStoredCBTExams,
   getStoredCBTResults,
   clearCBTResultsFromStorage,
+  deleteSingleCbtResultFromStorage,
   doesExamResultMatchTarget,
   isTkaResultEntry,
 } from '../../utils/storage';
@@ -103,6 +104,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
   const [selectedClass, setSelectedClass] = useState<string>(propActiveClass || 'Kelas 6A');
   const [activeChartTab, setActiveChartTab] = useState<'kesukaran' | 'pembeda' | 'ketuntasan'>('kesukaran');
   const [isClearModalOpen, setIsClearModalOpen] = useState<boolean>(false);
+  const [confirmDeleteStudentRowKey, setConfirmDeleteStudentRowKey] = useState<string | null>(null);
   const [cbtExams, setCbtExams] = useState<CBTExam[]>(() => getStoredCBTExams());
   const [cbtResults, setCbtResults] = useState<CBTExamResult[]>(
     () => getStoredCBTResults().filter((r) => !isTkaResultEntry(r))
@@ -295,6 +297,23 @@ export const AnalisisSoalTab: React.FC<Props> = ({
       'Seluruh data hasil & analisis CBT berhasil dikosongkan dan status performa siswa direset!',
       'success'
     );
+  };
+
+  const handleDeleteSingleAnalisisCbtRow = (studentName: string, res: CBTExamResult) => {
+    const remaining = deleteSingleCbtResultFromStorage({
+      examId: res.examId,
+      studentId: res.studentId,
+      recordedAt: res.recordedAt,
+      tanggal: res.tanggal,
+      waktuSelesai: res.waktuSelesai,
+      studentName: studentName || res.studentName,
+      mapel: res.mapel || selectedMapel,
+      paketName: res.paketName || selectedPaket,
+    });
+    setCbtResults(remaining.filter((r) => !isTkaResultEntry(r)));
+    setConfirmDeleteStudentRowKey(null);
+    syncAllLocalToCloud('admin').catch(() => {});
+    showToast?.(`Data nilai CBT milik "${studentName}" berhasil dihapus!`, 'success');
   };
 
   // Matching real student results for active mapel, paket, and class
@@ -788,6 +807,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
             student: s,
             score,
             isTuntas,
+            matchedResult: matched,
             rekomendasi: isTuntas
               ? 'Tuntas - Memiliki penguasaan kompetensi yang baik pada materi ini'
               : isInclusivePackage
@@ -831,6 +851,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           student: fallbackStudent,
           score,
           isTuntas,
+          matchedResult: res,
           rekomendasi: isTuntas
             ? 'Tuntas - Memiliki penguasaan kompetensi yang baik pada materi ini'
             : isInclusivePackage
@@ -849,6 +870,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
         student: s,
         score,
         isTuntas,
+        matchedResult: undefined as CBTExamResult | undefined,
         rekomendasi: isTuntas
           ? 'Tuntas - Memiliki penguasaan kompetensi yang baik pada materi ini'
           : isInclusivePackage
@@ -1745,12 +1767,13 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                   <th className="p-3 text-center">Nilai Asesmen</th>
                   <th className="p-3 text-center">Ketuntasan</th>
                   <th className="p-3">Rekomendasi & Tindak Lanjut</th>
+                  <th className="no-print p-3 text-right">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {studentAnalysisRows.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="p-6 text-center text-slate-500 font-medium">
+                    <td colSpan={8} className="p-6 text-center text-slate-500 font-medium">
                       {!isDefaultTerm && matchingExamResults.length === 0
                         ? `Belum ada data hasil asesmen CBT pada ${activeSemester} (${activeYear}) untuk ${selectedClass}.`
                         : isInclusivePackage
@@ -1759,8 +1782,12 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                     </td>
                   </tr>
                 ) : (
-                  studentAnalysisRows.map((row, idx) => (
-                    <tr key={row.student.id} className="hover:bg-slate-50 transition">
+                  studentAnalysisRows.map((row, idx) => {
+                    const rowDelKey = row.matchedResult
+                      ? `${row.student.id}_${row.matchedResult.examId}_${row.matchedResult.recordedAt || idx}`
+                      : row.student.id;
+                    return (
+                    <tr key={rowDelKey} className="hover:bg-slate-50 transition">
                       <td className="p-3 text-center font-bold text-slate-500">{idx + 1}</td>
                       <td className="p-3 font-display font-black text-slate-800">
                         <div className="flex items-center gap-2">
@@ -1801,8 +1828,43 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                       <td className="p-3 text-slate-700 text-[11px] font-medium leading-relaxed">
                         {row.rekomendasi}
                       </td>
+                      <td className="no-print p-3 text-right">
+                        {row.matchedResult ? (
+                          confirmDeleteStudentRowKey === rowDelKey ? (
+                            <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-xl px-2 py-1">
+                              <span className="text-[10px] font-black text-rose-700">Hapus?</span>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSingleAnalisisCbtRow(row.student.nama, row.matchedResult!)}
+                                className="px-2 py-0.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-black cursor-pointer"
+                              >
+                                Ya
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteStudentRowKey(null)}
+                                className="px-2 py-0.5 rounded-lg bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-bold cursor-pointer"
+                              >
+                                Batal
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteStudentRowKey(rowDelKey)}
+                              className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                              title={`Hapus data nilai CBT milik ${row.student.nama}`}
+                            >
+                              <Trash2 className="w-3 h-3" /> Hapus
+                            </button>
+                          )
+                        ) : (
+                          <span className="text-[10px] text-slate-400 font-semibold">Simulasi</span>
+                        )}
+                      </td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>

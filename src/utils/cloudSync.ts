@@ -15,6 +15,8 @@ import {
   KaldikDay,
   StudentReportNotes,
   ExamResultsResetMeta,
+  ExamDeletionLogEntry,
+  CBTExamResult,
 } from '../types';
 import {
   getStoredProfile,
@@ -46,8 +48,17 @@ import {
   getStoredExamResultsResetMeta,
   mergeExamResultsResetMeta,
   filterExamResultsByResetMeta,
+  clearTkaResetMetaFromStorage,
   extractBaseTkaPaket,
   saveStoredExamResultsResetMeta,
+  getStoredExamDeletionLog,
+  saveStoredExamDeletionLog,
+  mergeExamDeletionLogArrays,
+  markExamDeletionLogRestored,
+  clearDeletionResetSuppressions,
+  restoreSingleTkaSubmissionToStorage,
+  restoreSingleCbtResultToStorage,
+  isTkaResultEntry,
   runWithoutStorageSync,
   safeSetLocalStorage,
   safeRemoveLocalStorage,
@@ -69,6 +80,7 @@ import {
   fetchTkaQuestionsFromFirestore,
   replaceTkaSubmissionsInFirestore,
   fetchTkaSubmissionsFromFirestore,
+  saveTkaSubmissionToFirestore,
   saveTkaSubmissionsBatchToFirestore,
   mergeTkaSubmissionLists,
   reconcileTkaResultsToSubmissions,
@@ -506,6 +518,13 @@ export function applyBackupMapToLocalStorage(
           count++;
           return;
         }
+
+        if (key === 'sekolahku_exam_deletion_log' && Array.isArray(val)) {
+          const mergedLog = mergeExamDeletionLogArrays(getStoredExamDeletionLog(), val);
+          saveStoredExamDeletionLog(mergedLog);
+          count++;
+          return;
+        }
       }
 
       if (key === 'sekolahku_tka_questions' && Array.isArray(val)) {
@@ -882,8 +901,6 @@ export function scheduleRealtimeModuleSync(username?: string) {
             return 'admin';
           }
         })();
-      const slimBackupMap = collectPersistentLocalBackup({ excludeLargeCollections: true });
-      await writeCloudBackupDocs(slimBackupMap, actor);
       await pushSnapshotAndPrimaryDocs(actor);
     } catch (err) {
       console.warn('Auto module realtime sync warning:', err);
@@ -1159,13 +1176,24 @@ function filterTkaSubmissionsByResetMeta(
   const list = Array.isArray(subs) ? subs : [];
   const tkaClearedAt = Number(resetMeta?.tkaClearedAt || 0);
   const paketEntries = Object.entries(resetMeta?.paketClearedAt || {});
-  if (!tkaClearedAt && paketEntries.length === 0) return list;
+  const deletedTkaIds = resetMeta?.deletedTkaIds || {};
+  if (
+    !tkaClearedAt &&
+    paketEntries.length === 0 &&
+    Object.keys(deletedTkaIds).length === 0
+  ) {
+    return list;
+  }
 
   return list.filter((sub) => {
     if (!sub || typeof sub !== 'object') return false;
     const parsedTs = sub.updatedAt ? Date.parse(sub.updatedAt) : 0;
     const ts = Number.isFinite(parsedTs) ? parsedTs : 0;
     if (tkaClearedAt > 0 && ts <= tkaClearedAt) {
+      return false;
+    }
+    const deletedTs = sub.id ? Number(deletedTkaIds[sub.id] || 0) : 0;
+    if (deletedTs > 0 && ts <= deletedTs) {
       return false;
     }
     const basePaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
@@ -1184,13 +1212,22 @@ function filterTkaSubmissionsByResetMeta(
 /**
  * Memulihkan & menggabungkan hasil pengerjaan TKA siswa yang mungkin tersimpan
  * di `backups/latest`, `school_data` snapshot, antrean pending lokal, atau `sekolahku_cbt_results`
- * ke koleksi dedicated `tka_submissions` di Firestore (tetap mematuhi timestamp pengosongan data).
+ * ke koleksi dedicated `tka_submissions` di Firestore.
  */
-export async function reconcileTkaFromCloudBackup(): Promise<{
+export async function reconcileTkaFromCloudBackup(options?: {
+  ignoreResetMeta?: boolean;
+}): Promise<{
   recoveredCount: number;
   syncedCount: number;
 }> {
+  const ignoreResetMeta = Boolean(options?.ignoreResetMeta);
   try {
+    if (ignoreResetMeta) {
+      runWithoutStorageSync(() => {
+        clearTkaResetMetaFromStorage();
+      });
+    }
+
     await flushPendingTkaSubmissionsToFirestore().catch(() => 0);
 
     const [backupSnap, primaryCloud, firestoreTkaSubs, firestoreStudents] = await Promise.all([
@@ -1221,35 +1258,42 @@ export async function reconcileTkaFromCloudBackup(): Promise<{
       snapshotMap = await pullSnapshotChunksFromCloud(primaryCloud.snapshotChunkCount);
     }
 
-    let effectiveResetMeta = mergeExamResultsResetMeta(
-      getStoredExamResultsResetMeta(),
-      primaryCloud?.examResultsResetMeta
-    );
-    if (snapshotMap?.sekolahku_exam_results_reset_meta) {
+    let effectiveResetMeta: ExamResultsResetMeta = {};
+    if (!ignoreResetMeta) {
       effectiveResetMeta = mergeExamResultsResetMeta(
-        effectiveResetMeta,
-        snapshotMap.sekolahku_exam_results_reset_meta
+        getStoredExamResultsResetMeta(),
+        primaryCloud?.examResultsResetMeta
       );
-    }
-    if (parsedBackup?.sekolahku_exam_results_reset_meta) {
-      effectiveResetMeta = mergeExamResultsResetMeta(
-        effectiveResetMeta,
-        parsedBackup.sekolahku_exam_results_reset_meta
-      );
-    }
-    if (Object.keys(effectiveResetMeta).length > 0) {
-      runWithoutStorageSync(() => {
-        saveStoredExamResultsResetMeta(effectiveResetMeta);
-      });
+      if (snapshotMap?.sekolahku_exam_results_reset_meta) {
+        effectiveResetMeta = mergeExamResultsResetMeta(
+          effectiveResetMeta,
+          snapshotMap.sekolahku_exam_results_reset_meta
+        );
+      }
+      if (parsedBackup?.sekolahku_exam_results_reset_meta) {
+        effectiveResetMeta = mergeExamResultsResetMeta(
+          effectiveResetMeta,
+          parsedBackup.sekolahku_exam_results_reset_meta
+        );
+      }
+      if (Object.keys(effectiveResetMeta).length > 0) {
+        runWithoutStorageSync(() => {
+          saveStoredExamResultsResetMeta(effectiveResetMeta);
+        });
+      }
     }
 
     const studentsList = firestoreStudents.length > 0 ? firestoreStudents : getStoredStudents();
 
-    const allCbtResults = [
-      ...getStoredCBTResults(),
+    const rawCbtPool = [
+      ...(ignoreResetMeta ? [] : getStoredCBTResults()),
       ...(Array.isArray(parsedBackup?.sekolahku_cbt_results) ? parsedBackup!.sekolahku_cbt_results : []),
       ...(Array.isArray(snapshotMap?.sekolahku_cbt_results) ? snapshotMap!.sekolahku_cbt_results : []),
     ];
+    if (ignoreResetMeta) {
+      rawCbtPool.push(...getStoredCBTResults());
+    }
+
     const allTkaResults = [
       ...getStoredTKAResults(),
       ...(Array.isArray(parsedBackup?.sekolahku_tka_results) ? parsedBackup!.sekolahku_tka_results : []),
@@ -1262,20 +1306,22 @@ export async function reconcileTkaFromCloudBackup(): Promise<{
       ...(Array.isArray(parsedBackup?.sekolahku_tka_submissions) ? parsedBackup!.sekolahku_tka_submissions : []),
       ...(Array.isArray(snapshotMap?.sekolahku_tka_submissions) ? snapshotMap!.sekolahku_tka_submissions : []),
     ];
-    const validBackupSubs = filterTkaSubmissionsByResetMeta(candidateBackupSubs, effectiveResetMeta);
+    const validBackupSubs = ignoreResetMeta
+      ? candidateBackupSubs
+      : filterTkaSubmissionsByResetMeta(candidateBackupSubs, effectiveResetMeta);
 
     const { recoveredItems } = reconcileTkaResultsToSubmissions({
-      cbtResults: allCbtResults,
+      cbtResults: rawCbtPool,
       tkaResults: allTkaResults,
       existingSubmissions: firestoreTkaSubs,
       students: studentsList,
-      resetMeta: effectiveResetMeta,
+      resetMeta: ignoreResetMeta ? {} : effectiveResetMeta,
     });
 
-    const mergedRaw = mergeTkaSubmissionLists(firestoreTkaSubs, [
-      ...validBackupSubs,
-      ...recoveredItems,
-    ]);
+    const mergedRaw = mergeTkaSubmissionLists(
+      ignoreResetMeta ? firestoreTkaSubs : filterTkaSubmissionsByResetMeta(firestoreTkaSubs, effectiveResetMeta),
+      [...validBackupSubs, ...recoveredItems]
+    );
     const { alignedSubmissions: mergedAll, staleDocIds } = alignTkaSubmissionsWithStudents(
       mergedRaw,
       studentsList
@@ -1314,6 +1360,9 @@ export async function reconcileTkaFromCloudBackup(): Promise<{
         saveStoredTKASubmissions(mergedAll);
       });
       safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
+      if (ignoreResetMeta) {
+        await pushSnapshotAndPrimaryDocs('admin').catch(() => 0);
+      }
       dispatchCloudSyncEvents();
     }
 
@@ -1325,6 +1374,378 @@ export async function reconcileTkaFromCloudBackup(): Promise<{
     console.warn('Reconcile TKA from cloud backup warning:', err);
     return { recoveredCount: 0, syncedCount: 0 };
   }
+}
+
+/**
+ * Menarik & menggabungkan log riwayat penghapusan nilai TKA/CBT dari Cloud Snapshot & Backup.
+ */
+export async function syncDeletionLogFromCloud(): Promise<ExamDeletionLogEntry[]> {
+  try {
+    const [backupSnap, primaryCloud] = await Promise.all([
+      getDoc(doc(db, BACKUP_DOC_PATH, BACKUP_DOC_ID)),
+      pullAllDataFromCloud(),
+    ]);
+
+    let incomingLogs: ExamDeletionLogEntry[] = [];
+    if (backupSnap.exists()) {
+      const bData = backupSnap.data() as CloudBackupDocMeta;
+      let parsedBackup: Record<string, any> | null = null;
+      if (bData?.chunkCount && bData.chunkCount > 0) {
+        parsedBackup = await readChunkedJsonDocs(
+          BACKUP_DOC_PATH,
+          BACKUP_CHUNK_PREFIX,
+          bData.chunkCount
+        );
+      } else if (bData?.dataJson) {
+        try {
+          parsedBackup = JSON.parse(bData.dataJson);
+        } catch {}
+      }
+      if (Array.isArray(parsedBackup?.sekolahku_exam_deletion_log)) {
+        incomingLogs = [...incomingLogs, ...parsedBackup!.sekolahku_exam_deletion_log];
+      }
+    }
+
+    if (primaryCloud?.snapshotChunkCount && primaryCloud.snapshotChunkCount > 0) {
+      const snapshotMap = await pullSnapshotChunksFromCloud(primaryCloud.snapshotChunkCount);
+      if (Array.isArray(snapshotMap?.sekolahku_exam_deletion_log)) {
+        incomingLogs = [...incomingLogs, ...snapshotMap!.sekolahku_exam_deletion_log];
+      }
+    }
+
+    if (incomingLogs.length > 0) {
+      const merged = mergeExamDeletionLogArrays(getStoredExamDeletionLog(), incomingLogs);
+      runWithoutStorageSync(() => {
+        saveStoredExamDeletionLog(merged);
+      });
+      return merged;
+    }
+    return getStoredExamDeletionLog();
+  } catch {
+    return getStoredExamDeletionLog();
+  }
+}
+
+/**
+ * Memulihkan satu entri nilai TKA atau CBT yang terhapus dari log riwayat penghapusan.
+ */
+export async function restoreDeletionLogEntryFromLog(
+  logId: string,
+  actorName: string = 'Admin/Guru'
+): Promise<{ ok: boolean; category?: 'tka' | 'cbt'; message: string }> {
+  const logs = getStoredExamDeletionLog();
+  const entry = logs.find((item) => item.logId === logId);
+  if (!entry) {
+    return { ok: false, message: 'Entri log penghapusan tidak ditemukan.' };
+  }
+
+  if (entry.category === 'tka') {
+    let restoredSub: TKASubmissionItem | null = null;
+    if (entry.snapshotTkaSubmission) {
+      restoredSub = restoreSingleTkaSubmissionToStorage(
+        entry.snapshotTkaSubmission as TKASubmissionItem,
+        entry.snapshotTkaResults
+      );
+    } else if (Array.isArray(entry.snapshotTkaResults) && entry.snapshotTkaResults.length > 0) {
+      const rec = reconcileTkaResultsToSubmissions({
+        cbtResults: [],
+        tkaResults: entry.snapshotTkaResults,
+        existingSubmissions: getStoredTKASubmissions(),
+        students: getStoredStudents(),
+        resetMeta: {},
+      });
+      if (rec.recoveredItems.length > 0) {
+        restoredSub = restoreSingleTkaSubmissionToStorage(
+          rec.recoveredItems[0],
+          entry.snapshotTkaResults
+        );
+      }
+    }
+
+    if (!restoredSub) {
+      // Fallback: pindai cloud backup berdasarkan studentId
+      const byId = await recoverDeletedExamDataByStudentId({
+        studentId: entry.studentId,
+        category: 'tka',
+        actorName,
+      });
+      if (byId.recoveredTkaCount > 0) {
+        return {
+          ok: true,
+          category: 'tka',
+          message: `Berhasil memulihkan ${byId.recoveredTkaCount} data TKA untuk ${entry.studentName} (${entry.studentId}).`,
+        };
+      }
+      return {
+        ok: false,
+        category: 'tka',
+        message: 'Snapshot nilai TKA untuk entri ini tidak tersedia di log maupun cadangan cloud.',
+      };
+    }
+
+    await saveTkaSubmissionToFirestore(restoredSub).catch(() => false);
+    markExamDeletionLogRestored((item) => item.logId === logId, actorName);
+    await syncAllLocalToCloud(actorName).catch(() => false);
+    dispatchCloudSyncEvents();
+    return {
+      ok: true,
+      category: 'tka',
+      message: `Nilai TKA "${entry.studentName}" (${entry.paket}) berhasil dipulihkan!`,
+    };
+  }
+
+  // CBT recovery
+  if (!entry.snapshotCbtResult) {
+    const byId = await recoverDeletedExamDataByStudentId({
+      studentId: entry.studentId,
+      category: 'cbt',
+      actorName,
+    });
+    if (byId.recoveredCbtCount > 0) {
+      return {
+        ok: true,
+        category: 'cbt',
+        message: `Berhasil memulihkan ${byId.recoveredCbtCount} data CBT untuk ${entry.studentName} (${entry.studentId}).`,
+      };
+    }
+    return {
+      ok: false,
+      category: 'cbt',
+      message: 'Snapshot nilai CBT untuk entri ini tidak tersedia.',
+    };
+  }
+
+  restoreSingleCbtResultToStorage(entry.snapshotCbtResult);
+  markExamDeletionLogRestored((item) => item.logId === logId, actorName);
+  await syncAllLocalToCloud(actorName).catch(() => false);
+  dispatchCloudSyncEvents();
+  return {
+    ok: true,
+    category: 'cbt',
+    message: `Nilai CBT "${entry.studentName}" (${entry.mapel || entry.paket}) berhasil dipulihkan!`,
+  };
+}
+
+/**
+ * Memulihkan secara spesifik nilai TKA &/atau CBT milik satu siswa berdasarkan ID Siswa
+ * dari kombinasi Log Penghapusan lokal/cloud, Cloud Backup (`backups/latest`), Snapshot, & koleksi Firestore.
+ */
+export async function recoverDeletedExamDataByStudentId(params: {
+  studentId: string;
+  category?: 'all' | 'tka' | 'cbt';
+  actorName?: string;
+}): Promise<{
+  recoveredTkaCount: number;
+  recoveredCbtCount: number;
+  studentName?: string;
+}> {
+  const rawInputId = (params.studentId || '').trim();
+  const category = params.category || 'all';
+  const actorName = params.actorName || 'Admin/Guru';
+  if (!rawInputId) {
+    return { recoveredTkaCount: 0, recoveredCbtCount: 0 };
+  }
+
+  const studentsList = getStoredStudents();
+  const matchedStudent = studentsList.find(
+    (s) =>
+      s.id === rawInputId ||
+      s.id.toLowerCase() === rawInputId.toLowerCase() ||
+      (s.nisn && s.nisn === rawInputId)
+  );
+  const targetStudentId = matchedStudent?.id || rawInputId;
+  const studentName = matchedStudent?.nama;
+
+  clearDeletionResetSuppressions({ studentId: targetStudentId });
+
+  const logs = getStoredExamDeletionLog();
+  const matchingLogs = logs.filter(
+    (entry) =>
+      (entry.studentId === targetStudentId ||
+        entry.studentId.toLowerCase() === rawInputId.toLowerCase()) &&
+      (category === 'all' || entry.category === category)
+  );
+
+  let recoveredTkaCount = 0;
+  let recoveredCbtCount = 0;
+  const uploadedTkaSubs: TKASubmissionItem[] = [];
+
+  // 1. Pulihkan dari Log Penghapusan lokal terlebih dahulu
+  const activeTkaBefore = getStoredTKASubmissions();
+  const activeTkaKeys = new Set(
+    activeTkaBefore
+      .filter((s) => s.studentId === targetStudentId)
+      .map((s) => `${s.id}::${s.paketDasar || extractBaseTkaPaket(s.paket)}`)
+  );
+
+  if (category === 'all' || category === 'tka') {
+    matchingLogs
+      .filter((l) => l.category === 'tka')
+      .forEach((entry) => {
+        if (entry.snapshotTkaSubmission) {
+          const restored = restoreSingleTkaSubmissionToStorage(
+            entry.snapshotTkaSubmission as TKASubmissionItem,
+            entry.snapshotTkaResults
+          );
+          uploadedTkaSubs.push(restored);
+          recoveredTkaCount++;
+          activeTkaKeys.add(
+            `${restored.id}::${restored.paketDasar || extractBaseTkaPaket(restored.paket)}`
+          );
+        }
+      });
+  }
+
+  if (category === 'all' || category === 'cbt') {
+    matchingLogs
+      .filter((l) => l.category === 'cbt' && l.snapshotCbtResult)
+      .forEach((entry) => {
+        if (entry.snapshotCbtResult) {
+          restoreSingleCbtResultToStorage(entry.snapshotCbtResult);
+          recoveredCbtCount++;
+        }
+      });
+  }
+
+  // 2. Pindai Cloud Backup, Snapshot, & Firestore untuk data milik studentId tersebut yang mungkin terhapus sebelum pencatatan log
+  try {
+    const [backupSnap, primaryCloud, firestoreTkaSubs] = await Promise.all([
+      getDoc(doc(db, BACKUP_DOC_PATH, BACKUP_DOC_ID)),
+      pullAllDataFromCloud(),
+      category === 'all' || category === 'tka'
+        ? fetchTkaSubmissionsFromFirestore()
+        : Promise.resolve([] as TKASubmissionItem[]),
+    ]);
+
+    let parsedBackup: Record<string, any> | null = null;
+    if (backupSnap.exists()) {
+      const bData = backupSnap.data() as CloudBackupDocMeta;
+      if (bData?.chunkCount && bData.chunkCount > 0) {
+        parsedBackup = await readChunkedJsonDocs(
+          BACKUP_DOC_PATH,
+          BACKUP_CHUNK_PREFIX,
+          bData.chunkCount
+        );
+      } else if (bData?.dataJson) {
+        try {
+          parsedBackup = JSON.parse(bData.dataJson);
+        } catch {}
+      }
+    }
+
+    let snapshotMap: Record<string, any> | null = null;
+    if (primaryCloud?.snapshotChunkCount && primaryCloud.snapshotChunkCount > 0) {
+      snapshotMap = await pullSnapshotChunksFromCloud(primaryCloud.snapshotChunkCount);
+    }
+
+    if (category === 'all' || category === 'tka') {
+      const isForTargetStudent = (s: { studentId?: string; nisn?: string }) =>
+        s.studentId === targetStudentId ||
+        (s.studentId || '').toLowerCase() === rawInputId.toLowerCase() ||
+        Boolean(matchedStudent?.nisn && s.nisn === matchedStudent.nisn);
+
+      const candidateSubs: TKASubmissionItem[] = [
+        ...firestoreTkaSubs.filter(isForTargetStudent),
+        ...(Array.isArray(parsedBackup?.sekolahku_tka_submissions)
+          ? parsedBackup!.sekolahku_tka_submissions.filter(isForTargetStudent)
+          : []),
+        ...(Array.isArray(snapshotMap?.sekolahku_tka_submissions)
+          ? snapshotMap!.sekolahku_tka_submissions.filter(isForTargetStudent)
+          : []),
+      ];
+
+      const candidateCbtTka = [
+        ...(Array.isArray(parsedBackup?.sekolahku_cbt_results)
+          ? parsedBackup!.sekolahku_cbt_results.filter(isForTargetStudent)
+          : []),
+        ...(Array.isArray(snapshotMap?.sekolahku_cbt_results)
+          ? snapshotMap!.sekolahku_cbt_results.filter(isForTargetStudent)
+          : []),
+      ];
+      const candidateTkaResults = [
+        ...(Array.isArray(parsedBackup?.sekolahku_tka_results)
+          ? parsedBackup!.sekolahku_tka_results.filter(isForTargetStudent)
+          : []),
+        ...(Array.isArray(snapshotMap?.sekolahku_tka_results)
+          ? snapshotMap!.sekolahku_tka_results.filter(isForTargetStudent)
+          : []),
+      ];
+
+      const { recoveredItems } = reconcileTkaResultsToSubmissions({
+        cbtResults: candidateCbtTka,
+        tkaResults: candidateTkaResults,
+        existingSubmissions: candidateSubs,
+        students: studentsList,
+        resetMeta: {},
+      });
+
+      const mergedStudentSubs = mergeTkaSubmissionLists(candidateSubs, recoveredItems);
+      mergedStudentSubs.forEach((sub) => {
+        const key = `${sub.id}::${sub.paketDasar || extractBaseTkaPaket(sub.paket)}`;
+        if (!activeTkaKeys.has(key)) {
+          const restored = restoreSingleTkaSubmissionToStorage(sub);
+          uploadedTkaSubs.push(restored);
+          activeTkaKeys.add(key);
+          recoveredTkaCount++;
+        }
+      });
+    }
+
+    if (category === 'all' || category === 'cbt') {
+      const currentCbt = getStoredCBTResults().filter((r) => !isTkaResultEntry(r));
+      const cbtSig = (r: CBTExamResult) =>
+        `${r.examId || ''}__${r.studentId || ''}__${r.mapel || ''}__${r.tanggal || ''}__${r.waktuSelesai || ''}`;
+      const existingCbtSigs = new Set(currentCbt.map(cbtSig));
+
+      const isForTargetCbt = (r: CBTExamResult) =>
+        !isTkaResultEntry(r) &&
+        (r.studentId === targetStudentId ||
+          (r.studentId || '').toLowerCase() === rawInputId.toLowerCase() ||
+          Boolean(matchedStudent?.nisn && r.nisn === matchedStudent.nisn));
+
+      const cloudCbtCandidates: CBTExamResult[] = [
+        ...(Array.isArray(parsedBackup?.sekolahku_cbt_results)
+          ? parsedBackup!.sekolahku_cbt_results.filter(isForTargetCbt)
+          : []),
+        ...(Array.isArray(snapshotMap?.sekolahku_cbt_results)
+          ? snapshotMap!.sekolahku_cbt_results.filter(isForTargetCbt)
+          : []),
+      ];
+
+      cloudCbtCandidates.forEach((res) => {
+        const s = cbtSig(res);
+        if (!existingCbtSigs.has(s)) {
+          restoreSingleCbtResultToStorage(res);
+          existingCbtSigs.add(s);
+          recoveredCbtCount++;
+        }
+      });
+    }
+  } catch (err) {
+    console.warn('Recover by studentId cloud scan warning:', err);
+  }
+
+  if (uploadedTkaSubs.length > 0) {
+    await saveTkaSubmissionsBatchToFirestore(uploadedTkaSubs).catch(() => false);
+  }
+
+  if (recoveredTkaCount > 0 || recoveredCbtCount > 0) {
+    markExamDeletionLogRestored(
+      (entry) =>
+        (entry.studentId === targetStudentId ||
+          entry.studentId.toLowerCase() === rawInputId.toLowerCase()) &&
+        (category === 'all' || entry.category === category),
+      actorName
+    );
+    await syncAllLocalToCloud(actorName).catch(() => false);
+    dispatchCloudSyncEvents();
+  }
+
+  return {
+    recoveredTkaCount,
+    recoveredCbtCount,
+    studentName,
+  };
 }
 
 /**

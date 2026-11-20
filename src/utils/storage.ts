@@ -1,4 +1,4 @@
-import { SchoolProfile, Teacher, Student, Subject, KaldikDay, AssessmentData, CBTExam, CBTExamResult, ExamResultsResetMeta, ActiveUser, StudentReportNotes, TKACpTp, TKAQuestion } from '../types';
+import { SchoolProfile, Teacher, Student, Subject, KaldikDay, AssessmentData, CBTExam, CBTExamResult, ExamResultsResetMeta, ExamDeletionLogEntry, ActiveUser, StudentReportNotes, TKACpTp, TKAQuestion } from '../types';
 import { DEFAULT_SCHOOL_PROFILE, DEFAULT_TEACHERS, DEFAULT_STUDENTS, DEFAULT_SUBJECTS, DEFAULT_KALDIK_HOLIDAYS, DEFAULT_CBT_EXAM, DEFAULT_TKA_CP_TP, DEFAULT_TKA_QUESTIONS } from '../data/defaultData';
 import { getDefaultSubjectsForGrade, getGradeNumberFromClass } from '../data/classCurriculumData';
 import { getLocalTodayStr } from './dateUtils';
@@ -27,6 +27,7 @@ const STORAGE_KEYS = {
   TKA_RESULTS: 'sekolahku_tka_results',
   TKA_SUBMISSIONS: 'sekolahku_tka_submissions',
   EXAM_RESET_META: 'sekolahku_exam_results_reset_meta',
+  EXAM_DELETION_LOG: 'sekolahku_exam_deletion_log',
   ACTIVE_USER: 'sekolahku_active_user',
   ACTIVE_YEAR: 'sekolahku_active_year',
   ACTIVE_SEMESTER: 'sekolahku_active_semester',
@@ -41,7 +42,7 @@ export const DEFAULT_STUDENT_AVATAR_URL =
 export const isKelas6Class = (kelas?: string): boolean => {
   const k = String(kelas || '').trim().toUpperCase();
   if (!k) return false;
-  return /^(KELAS\s*)?6(\s*[A-Z0-9-]+)?$/i.test(k) || /\bVI\s*[A-Z]?\b/.test(k);
+  return /^(KELAS\s*)?6(\s*[-.]?\s*[A-Z0-9]+)?$/i.test(k) || /\bVI(\s*[-.]?\s*[A-Z0-9]+)?\b/.test(k);
 };
 
 export const sanitizeSubmissionFotoUrl = (fotoUrl?: string): string => {
@@ -731,6 +732,264 @@ export const saveStoredExamResultsResetMeta = (meta: ExamResultsResetMeta) => {
   notifyStorageMutation(STORAGE_KEYS.EXAM_RESET_META);
 };
 
+export const getCbtResultDeleteKey = (
+  res: Partial<Pick<CBTExamResult, 'examId' | 'studentId' | 'recordedAt' | 'tanggal' | 'waktuSelesai'>>
+): string => {
+  return `${res.examId || ''}__${res.studentId || ''}__${res.recordedAt || `${res.tanggal || ''}_${res.waktuSelesai || ''}`}`;
+};
+
+const MAX_DELETION_LOG_ENTRIES = 160;
+const MAX_DELETION_LOG_CHARS = 220_000;
+
+const getActiveActorNameForLog = (): string => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.ACTIVE_USER);
+    if (!raw) return 'Admin/Guru';
+    const parsed = JSON.parse(raw);
+    return String(parsed?.name || parsed?.username || 'Admin/Guru');
+  } catch {
+    return 'Admin/Guru';
+  }
+};
+
+const trimSnapshotAnswersForLog = (answers?: Record<string, any>): Record<string, any> => {
+  if (!answers || typeof answers !== 'object') return {};
+  const out: Record<string, any> = {};
+  Object.entries(answers).forEach(([k, v]) => {
+    if (v === undefined) return;
+    if (typeof v === 'string' && v.length > 500) {
+      out[k] = v.slice(0, 500);
+    } else {
+      out[k] = v;
+    }
+  });
+  return out;
+};
+
+const makeLeanTkaSnapshot = (sub: TKASubmissionItem): Record<string, any> => ({
+  ...sub,
+  fotoUrl: sanitizeSubmissionFotoUrl(sub.fotoUrl),
+  answers: trimSnapshotAnswersForLog(sub.answers),
+});
+
+const makeLeanCbtSnapshot = (res: CBTExamResult): CBTExamResult => ({
+  ...res,
+  jawabanSiswa: trimSnapshotAnswersForLog(res.jawabanSiswa),
+});
+
+export const getStoredExamDeletionLog = (): ExamDeletionLogEntry[] => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.EXAM_DELETION_LOG);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveStoredExamDeletionLog = (entries: ExamDeletionLogEntry[]): void => {
+  const sorted = (Array.isArray(entries) ? entries : [])
+    .slice()
+    .sort((a, b) => Number(b.deletedAt || 0) - Number(a.deletedAt || 0))
+    .slice(0, MAX_DELETION_LOG_ENTRIES);
+
+  let trimmed = sorted;
+  try {
+    let serialized = JSON.stringify(trimmed);
+    while (serialized.length > MAX_DELETION_LOG_CHARS && trimmed.length > 10) {
+      trimmed = trimmed.slice(0, Math.max(10, Math.floor(trimmed.length * 0.8)));
+      serialized = JSON.stringify(trimmed);
+    }
+    safeSetLocalStorage(STORAGE_KEYS.EXAM_DELETION_LOG, serialized);
+  } catch {
+    safeSetLocalStorage(STORAGE_KEYS.EXAM_DELETION_LOG, JSON.stringify(trimmed.slice(0, 40)));
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-deletion-log-updated'));
+  }
+  notifyStorageMutation(STORAGE_KEYS.EXAM_DELETION_LOG);
+};
+
+export const mergeExamDeletionLogArrays = (
+  localList: ExamDeletionLogEntry[],
+  incomingList: ExamDeletionLogEntry[]
+): ExamDeletionLogEntry[] => {
+  const map = new Map<string, ExamDeletionLogEntry>();
+  [...(Array.isArray(localList) ? localList : []), ...(Array.isArray(incomingList) ? incomingList : [])].forEach(
+    (entry) => {
+      if (!entry || !entry.logId) return;
+      const prev = map.get(entry.logId);
+      if (!prev) {
+        map.set(entry.logId, entry);
+      } else {
+        const prevRestored = Number(prev.restoredAt || 0);
+        const curRestored = Number(entry.restoredAt || 0);
+        map.set(entry.logId, {
+          ...prev,
+          ...entry,
+          snapshotTkaSubmission: entry.snapshotTkaSubmission || prev.snapshotTkaSubmission,
+          snapshotTkaResults: entry.snapshotTkaResults || prev.snapshotTkaResults,
+          snapshotCbtResult: entry.snapshotCbtResult || prev.snapshotCbtResult,
+          restoredAt: curRestored >= prevRestored ? entry.restoredAt : prev.restoredAt,
+          restoredBy: curRestored >= prevRestored ? entry.restoredBy : prev.restoredBy,
+        });
+      }
+    }
+  );
+  return Array.from(map.values())
+    .sort((a, b) => Number(b.deletedAt || 0) - Number(a.deletedAt || 0))
+    .slice(0, MAX_DELETION_LOG_ENTRIES);
+};
+
+export const appendExamDeletionLogEntries = (newEntries: ExamDeletionLogEntry[]): void => {
+  if (!Array.isArray(newEntries) || newEntries.length === 0) return;
+  const merged = mergeExamDeletionLogArrays(getStoredExamDeletionLog(), newEntries);
+  saveStoredExamDeletionLog(merged);
+};
+
+export const markExamDeletionLogRestored = (
+  matcher: (entry: ExamDeletionLogEntry) => boolean,
+  restoredBy: string = getActiveActorNameForLog()
+): ExamDeletionLogEntry[] => {
+  const now = Date.now();
+  const next = getStoredExamDeletionLog().map((entry) =>
+    matcher(entry)
+      ? {
+          ...entry,
+          restoredAt: now,
+          restoredBy,
+        }
+      : entry
+  );
+  saveStoredExamDeletionLog(next);
+  return next;
+};
+
+export const clearDeletionResetSuppressions = (params: {
+  tkaIds?: string[];
+  cbtKeys?: string[];
+  studentId?: string;
+}): ExamResultsResetMeta => {
+  const prev = getStoredExamResultsResetMeta();
+  const next: ExamResultsResetMeta = { ...prev };
+
+  if (next.deletedTkaIds) {
+    const nextTka = { ...next.deletedTkaIds };
+    (params.tkaIds || []).forEach((id) => {
+      if (id) delete nextTka[id];
+    });
+    if (params.studentId) {
+      const cleanStudent = params.studentId.trim().replace(/[^a-zA-Z0-9_-]+/g, '_');
+      Object.keys(nextTka).forEach((k) => {
+        if (k.startsWith(`sub_${cleanStudent}_`) || k.includes(`_${params.studentId}_`)) {
+          delete nextTka[k];
+        }
+      });
+    }
+    if (Object.keys(nextTka).length > 0) {
+      next.deletedTkaIds = nextTka;
+    } else {
+      delete next.deletedTkaIds;
+    }
+  }
+
+  if (next.deletedCbtKeys) {
+    const nextCbt = { ...next.deletedCbtKeys };
+    (params.cbtKeys || []).forEach((key) => {
+      if (key) delete nextCbt[key];
+    });
+    if (params.studentId) {
+      const token = `__${params.studentId}__`;
+      Object.keys(nextCbt).forEach((k) => {
+        if (k.includes(token)) {
+          delete nextCbt[k];
+        }
+      });
+    }
+    if (Object.keys(nextCbt).length > 0) {
+      next.deletedCbtKeys = nextCbt;
+    } else {
+      delete next.deletedCbtKeys;
+    }
+  }
+
+  saveStoredExamResultsResetMeta(next);
+  return next;
+};
+
+export const restoreSingleTkaSubmissionToStorage = (
+  sub: TKASubmissionItem,
+  extraTkaResults?: CBTExamResult[]
+): TKASubmissionItem => {
+  const basePaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
+  const restoredItem: TKASubmissionItem = {
+    ...sub,
+    paket: basePaket,
+    paketDasar: basePaket,
+    fotoUrl: sanitizeSubmissionFotoUrl(sub.fotoUrl),
+    updatedAt: new Date().toISOString(),
+  };
+
+  clearDeletionResetSuppressions({
+    tkaIds: [restoredItem.id],
+    studentId: restoredItem.studentId,
+  });
+
+  const existingSubs = getStoredTKASubmissions();
+  const filteredSubs = existingSubs.filter((item) => {
+    if (item.id === restoredItem.id) return false;
+    const itemBase = item.paketDasar || extractBaseTkaPaket(item.paket);
+    if (item.studentId === restoredItem.studentId && itemBase === basePaket) return false;
+    return true;
+  });
+  saveStoredTKASubmissions([restoredItem, ...filteredSubs]);
+
+  if (Array.isArray(extraTkaResults) && extraTkaResults.length > 0) {
+    const now = Date.now();
+    const bumped = extraTkaResults.map((r) => ({
+      ...r,
+      recordedAt: Math.max(Number(r.recordedAt || 0), now),
+    }));
+    const existingRes = getStoredTKAResults();
+    const sig = (r: CBTExamResult) =>
+      `${r.examId || ''}__${r.studentId || ''}__${r.mapel || ''}__${r.paketName || ''}`;
+    const incomingSigs = new Set(bumped.map(sig));
+    const keptRes = existingRes.filter((r) => !incomingSigs.has(sig(r)));
+    saveStoredTKAResults([...bumped, ...keptRes]);
+  }
+
+  return restoredItem;
+};
+
+export const restoreSingleCbtResultToStorage = (res: CBTExamResult): CBTExamResult => {
+  const oldDeleteKey = getCbtResultDeleteKey(res);
+  clearDeletionResetSuppressions({
+    cbtKeys: [oldDeleteKey],
+    studentId: res.studentId,
+  });
+
+  const now = Date.now();
+  const restored: CBTExamResult = {
+    ...res,
+    recordedAt: Math.max(Number(res.recordedAt || 0), now),
+  };
+
+  const existing = getStoredCBTResults();
+  const isSameRecord = (item: CBTExamResult) =>
+    !isTkaResultEntry(item) &&
+    item.studentId === restored.studentId &&
+    item.examId === restored.examId &&
+    (item.mapel || '') === (restored.mapel || '') &&
+    (item.tanggal || '') === (restored.tanggal || '') &&
+    (item.waktuSelesai || '') === (restored.waktuSelesai || '');
+
+  const kept = existing.filter((item) => !isSameRecord(item));
+  saveStoredCBTResults([restored, ...kept]);
+  return restored;
+};
+
 export const mergeExamResultsResetMeta = (
   a?: ExamResultsResetMeta,
   b?: ExamResultsResetMeta
@@ -741,19 +1000,32 @@ export const mergeExamResultsResetMeta = (
   const tkaTs = Math.max(Number(a?.tkaClearedAt || 0), Number(b?.tkaClearedAt || 0));
   if (tkaTs > 0) merged.tkaClearedAt = tkaTs;
 
-  const paketMap: Record<string, number> = {};
-  [a?.paketClearedAt, b?.paketClearedAt].forEach((src) => {
-    if (!src || typeof src !== 'object') return;
-    Object.entries(src).forEach(([k, v]) => {
-      const ts = Number(v || 0);
-      if (ts > 0) {
-        paketMap[k] = Math.max(paketMap[k] || 0, ts);
-      }
+  const mergeTimestampMap = (
+    mapA?: Record<string, number>,
+    mapB?: Record<string, number>
+  ): Record<string, number> | undefined => {
+    const out: Record<string, number> = {};
+    [mapA, mapB].forEach((src) => {
+      if (!src || typeof src !== 'object') return;
+      Object.entries(src).forEach(([k, v]) => {
+        const ts = Number(v || 0);
+        if (ts > 0) {
+          out[k] = Math.max(out[k] || 0, ts);
+        }
+      });
     });
-  });
-  if (Object.keys(paketMap).length > 0) {
-    merged.paketClearedAt = paketMap;
-  }
+    return Object.keys(out).length > 0 ? out : undefined;
+  };
+
+  const paketMap = mergeTimestampMap(a?.paketClearedAt, b?.paketClearedAt);
+  if (paketMap) merged.paketClearedAt = paketMap;
+
+  const deletedTkaMap = mergeTimestampMap(a?.deletedTkaIds, b?.deletedTkaIds);
+  if (deletedTkaMap) merged.deletedTkaIds = deletedTkaMap;
+
+  const deletedCbtMap = mergeTimestampMap(a?.deletedCbtKeys, b?.deletedCbtKeys);
+  if (deletedCbtMap) merged.deletedCbtKeys = deletedCbtMap;
+
   return merged;
 };
 
@@ -761,6 +1033,8 @@ export const markExamResultsResetMeta = (update: {
   clearAllCbt?: boolean;
   clearAllTka?: boolean;
   paketKeys?: Array<{ category: 'cbt' | 'tka'; paket: string; mapel?: string }>;
+  deletedTkaIds?: string[];
+  deletedCbtKeys?: string[];
   timestamp?: number;
 }): ExamResultsResetMeta => {
   const now = update.timestamp || Date.now();
@@ -768,6 +1042,8 @@ export const markExamResultsResetMeta = (update: {
   const next: ExamResultsResetMeta = {
     ...prev,
     paketClearedAt: { ...(prev.paketClearedAt || {}) },
+    deletedTkaIds: { ...(prev.deletedTkaIds || {}) },
+    deletedCbtKeys: { ...(prev.deletedCbtKeys || {}) },
   };
   if (update.clearAllCbt) {
     next.cbtClearedAt = Math.max(Number(next.cbtClearedAt || 0), now);
@@ -782,8 +1058,50 @@ export const markExamResultsResetMeta = (update: {
       next.paketClearedAt![key] = Math.max(Number(next.paketClearedAt![key] || 0), now);
     });
   }
+  if (update.deletedTkaIds && update.deletedTkaIds.length > 0) {
+    update.deletedTkaIds.forEach((id) => {
+      if (id) {
+        next.deletedTkaIds![id] = Math.max(Number(next.deletedTkaIds![id] || 0), now);
+      }
+    });
+  }
+  if (update.deletedCbtKeys && update.deletedCbtKeys.length > 0) {
+    update.deletedCbtKeys.forEach((key) => {
+      if (key) {
+        next.deletedCbtKeys![key] = Math.max(Number(next.deletedCbtKeys![key] || 0), now);
+      }
+    });
+  }
   if (Object.keys(next.paketClearedAt || {}).length === 0) {
     delete next.paketClearedAt;
+  }
+  if (Object.keys(next.deletedTkaIds || {}).length === 0) {
+    delete next.deletedTkaIds;
+  }
+  if (Object.keys(next.deletedCbtKeys || {}).length === 0) {
+    delete next.deletedCbtKeys;
+  }
+  saveStoredExamResultsResetMeta(next);
+  return next;
+};
+
+export const clearTkaResetMetaFromStorage = (): ExamResultsResetMeta => {
+  const prev = getStoredExamResultsResetMeta();
+  const next: ExamResultsResetMeta = { ...prev };
+  delete next.tkaClearedAt;
+  delete next.deletedTkaIds;
+  if (next.paketClearedAt) {
+    const kept: Record<string, number> = {};
+    Object.entries(next.paketClearedAt).forEach(([k, v]) => {
+      if (!k.startsWith('tka::')) {
+        kept[k] = v;
+      }
+    });
+    if (Object.keys(kept).length > 0) {
+      next.paketClearedAt = kept;
+    } else {
+      delete next.paketClearedAt;
+    }
   }
   saveStoredExamResultsResetMeta(next);
   return next;
@@ -799,8 +1117,14 @@ export const filterExamResultsByResetMeta = (
   const cbtClearedAt = Number(meta.cbtClearedAt || 0);
   const tkaClearedAt = Number(meta.tkaClearedAt || 0);
   const paketEntries = Object.entries(meta.paketClearedAt || {});
+  const deletedCbtKeys = meta.deletedCbtKeys || {};
 
-  if (!cbtClearedAt && !tkaClearedAt && paketEntries.length === 0) {
+  if (
+    !cbtClearedAt &&
+    !tkaClearedAt &&
+    paketEntries.length === 0 &&
+    Object.keys(deletedCbtKeys).length === 0
+  ) {
     return list;
   }
 
@@ -815,6 +1139,14 @@ export const filterExamResultsByResetMeta = (
     }
     if (!isTka && cbtClearedAt > 0 && ts <= cbtClearedAt) {
       return false;
+    }
+
+    if (!isTka) {
+      const delKey = getCbtResultDeleteKey(res);
+      const deletedTs = Number(deletedCbtKeys[delKey] || 0);
+      if (deletedTs > 0 && ts <= deletedTs) {
+        return false;
+      }
     }
 
     for (const [key, clearedTs] of paketEntries) {
@@ -843,6 +1175,7 @@ export const saveStoredCBTResults = (results: CBTExamResult[]) => {
   saveHeavyCollection(STORAGE_KEYS.CBT_RESULTS, Array.isArray(results) ? results : []);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
+    window.dispatchEvent(new Event('sekolahku-cbt-results-updated'));
   }
   notifyStorageMutation(STORAGE_KEYS.CBT_RESULTS);
 };
@@ -1071,21 +1404,53 @@ export const clearTKAResultsFromStorage = (options?: {
   const scope = options?.scope || 'all';
   const targetPaket = options?.targetPaket || 'all';
   const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const actor = getActiveActorNameForLog();
+
+  const currentSubs = getStoredTKASubmissions();
+  const currentTkaRes = getStoredTKAResults();
 
   if (scope === 'paket' && targetPaket && targetPaket !== 'all') {
     const baseTarget = extractBaseTkaPaket(targetPaket);
+    const removedSubs = currentSubs.filter((s) => {
+      const subBase = s.paketDasar || extractBaseTkaPaket(s.paket);
+      return subBase === baseTarget || s.paket === targetPaket;
+    });
+    const removedTkaRes = currentTkaRes.filter((r) => doesExamResultMatchTarget(r, targetPaket));
+
+    const logs: ExamDeletionLogEntry[] = removedSubs.map((sub, idx) => ({
+      logId: `del_tka_${now}_${idx}_${sub.studentId || 'unknown'}`,
+      category: 'tka',
+      actionType: 'paket',
+      studentId: sub.studentId || '',
+      studentName: sub.studentName || '-',
+      nisn: sub.nisn || '',
+      kelas: sub.kelas || '-',
+      paket: sub.paketDasar || extractBaseTkaPaket(sub.paket),
+      skorRingkas: sub.skorTotal,
+      deletedAt: now,
+      deletedAtIso: nowIso,
+      deletedBy: actor,
+      targetKey: sub.id,
+      snapshotTkaSubmission: makeLeanTkaSnapshot(sub),
+      snapshotTkaResults: removedTkaRes
+        .filter((r) => r.studentId === sub.studentId)
+        .map(makeLeanCbtSnapshot),
+    }));
+    appendExamDeletionLogEntries(logs);
+
     markExamResultsResetMeta({
       paketKeys: [{ category: 'tka', paket: baseTarget }],
       timestamp: now,
     });
 
-    const remainingSubs = getStoredTKASubmissions().filter((s) => {
+    const remainingSubs = currentSubs.filter((s) => {
       const subBase = s.paketDasar || extractBaseTkaPaket(s.paket);
       return subBase !== baseTarget && s.paket !== targetPaket;
     });
     saveStoredTKASubmissions(remainingSubs);
 
-    const remainingTkaRes = getStoredTKAResults().filter(
+    const remainingTkaRes = currentTkaRes.filter(
       (r) => !doesExamResultMatchTarget(r, targetPaket)
     );
     saveStoredTKAResults(remainingTkaRes);
@@ -1096,6 +1461,27 @@ export const clearTKAResultsFromStorage = (options?: {
     saveStoredCBTResults(remainingCbtRes);
     return remainingSubs;
   }
+
+  const allLogs: ExamDeletionLogEntry[] = currentSubs.map((sub, idx) => ({
+    logId: `del_tka_all_${now}_${idx}_${sub.studentId || 'unknown'}`,
+    category: 'tka',
+    actionType: 'all',
+    studentId: sub.studentId || '',
+    studentName: sub.studentName || '-',
+    nisn: sub.nisn || '',
+    kelas: sub.kelas || '-',
+    paket: sub.paketDasar || extractBaseTkaPaket(sub.paket),
+    skorRingkas: sub.skorTotal,
+    deletedAt: now,
+    deletedAtIso: nowIso,
+    deletedBy: actor,
+    targetKey: sub.id,
+    snapshotTkaSubmission: makeLeanTkaSnapshot(sub),
+    snapshotTkaResults: currentTkaRes
+      .filter((r) => r.studentId === sub.studentId)
+      .map(makeLeanCbtSnapshot),
+  }));
+  appendExamDeletionLogEntries(allLogs);
 
   markExamResultsResetMeta({ clearAllTka: true, timestamp: now });
   clearStoredTKASubmissions();
@@ -1118,6 +1504,29 @@ export const clearCBTResultsFromStorage = (options?: {
   const studentIdSet =
     options?.studentIds && options.studentIds.length > 0 ? new Set(options.studentIds) : null;
   const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const actor = getActiveActorNameForLog();
+
+  const logRemovedCbt = (removed: CBTExamResult[], actionType: 'paket' | 'all') => {
+    const logs: ExamDeletionLogEntry[] = removed.map((res, idx) => ({
+      logId: `del_cbt_${actionType}_${now}_${idx}_${res.studentId || 'unknown'}`,
+      category: 'cbt',
+      actionType,
+      studentId: res.studentId || '',
+      studentName: res.studentName || '-',
+      nisn: res.nisn || '',
+      kelas: res.kelas || '-',
+      paket: res.paketName || res.judul || 'CBT',
+      mapel: res.mapel || '-',
+      skorRingkas: typeof res.nilai === 'number' ? res.nilai : res.skor,
+      deletedAt: now,
+      deletedAtIso: nowIso,
+      deletedBy: actor,
+      targetKey: getCbtResultDeleteKey(res),
+      snapshotCbtResult: makeLeanCbtSnapshot(res),
+    }));
+    appendExamDeletionLogEntries(logs);
+  };
 
   if (scope === 'paket' && targetPaket && targetPaket !== 'all') {
     if (!studentIdSet) {
@@ -1127,11 +1536,15 @@ export const clearCBTResultsFromStorage = (options?: {
       });
     }
     const existing = getStoredCBTResults();
+    const removed: CBTExamResult[] = [];
     const remaining = existing.filter((r) => {
       if (isTkaResultEntry(r)) return true;
       if (studentIdSet && !studentIdSet.has(r.studentId)) return true;
-      return !doesExamResultMatchTarget(r, targetPaket, targetMapel);
+      const shouldRemove = doesExamResultMatchTarget(r, targetPaket, targetMapel);
+      if (shouldRemove) removed.push(r);
+      return !shouldRemove;
     });
+    logRemovedCbt(removed, 'paket');
     saveStoredCBTResults(remaining);
     return remaining;
   }
@@ -1140,14 +1553,179 @@ export const clearCBTResultsFromStorage = (options?: {
     markExamResultsResetMeta({ clearAllCbt: true, timestamp: now });
   }
   const existing = getStoredCBTResults();
+  const removed: CBTExamResult[] = [];
   const remaining = existing.filter((r) => {
     if (isTkaResultEntry(r)) return true;
     if (studentIdSet && !studentIdSet.has(r.studentId)) return true;
     if (targetMapel && targetMapel !== 'all') {
-      return !doesExamResultMatchTarget(r, 'all', targetMapel);
+      const shouldRemove = doesExamResultMatchTarget(r, 'all', targetMapel);
+      if (shouldRemove) removed.push(r);
+      return !shouldRemove;
     }
+    removed.push(r);
     return false;
   });
+  logRemovedCbt(removed, 'all');
+  saveStoredCBTResults(remaining);
+  return remaining;
+};
+
+export const deleteSingleTkaSubmissionFromStorage = (target: {
+  id?: string;
+  studentId?: string;
+  nisn?: string;
+  studentName?: string;
+  paket?: string;
+}): TKASubmissionItem[] => {
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const actor = getActiveActorNameForLog();
+  const baseTargetPaket = target.paket ? extractBaseTkaPaket(target.paket) : '';
+  const targetName = String(target.studentName || '').trim().toLowerCase();
+
+  const isMatchingSubmission = (sub: TKASubmissionItem): boolean => {
+    if (target.id && sub.id === target.id) return true;
+    const sameStudent =
+      (target.studentId && sub.studentId === target.studentId) ||
+      (target.nisn && target.nisn !== '-' && sub.nisn === target.nisn) ||
+      (targetName && String(sub.studentName || '').trim().toLowerCase() === targetName);
+    if (!sameStudent) return false;
+    if (!baseTargetPaket) return true;
+    const subBase = sub.paketDasar || extractBaseTkaPaket(sub.paket);
+    return subBase === baseTargetPaket || sub.paket === target.paket;
+  };
+
+  const isMatchingTkaRes = (r: CBTExamResult): boolean => {
+    if (!isTkaResultEntry(r)) return false;
+    const sameStudent =
+      (target.studentId && r.studentId === target.studentId) ||
+      (target.nisn && target.nisn !== '-' && r.nisn === target.nisn) ||
+      (targetName && String(r.studentName || '').trim().toLowerCase() === targetName);
+    if (!sameStudent) return false;
+    return !baseTargetPaket || doesExamResultMatchTarget(r, baseTargetPaket);
+  };
+
+  const currentSubs = getStoredTKASubmissions();
+  const matchedSubs = currentSubs.filter((s) => isMatchingSubmission(s));
+  const tkaResults = getStoredTKAResults();
+  const matchedTkaRes = tkaResults.filter((r) => isMatchingTkaRes(r));
+
+  const deletedIds: string[] = [];
+  if (target.id) deletedIds.push(target.id);
+  matchedSubs.forEach((s) => {
+    if (s.id) deletedIds.push(s.id);
+  });
+  if (deletedIds.length > 0) {
+    markExamResultsResetMeta({ deletedTkaIds: Array.from(new Set(deletedIds)), timestamp: now });
+  }
+
+  if (matchedSubs.length > 0) {
+    const logs: ExamDeletionLogEntry[] = matchedSubs.map((sub, idx) => ({
+      logId: `del_tka_single_${now}_${idx}_${sub.studentId || target.studentId || 'unknown'}`,
+      category: 'tka',
+      actionType: 'single',
+      studentId: sub.studentId || target.studentId || '',
+      studentName: sub.studentName || target.studentName || '-',
+      nisn: sub.nisn || target.nisn || '',
+      kelas: sub.kelas || '-',
+      paket: sub.paketDasar || extractBaseTkaPaket(sub.paket),
+      skorRingkas: sub.skorTotal,
+      deletedAt: now,
+      deletedAtIso: nowIso,
+      deletedBy: actor,
+      targetKey: sub.id,
+      snapshotTkaSubmission: makeLeanTkaSnapshot(sub),
+      snapshotTkaResults: matchedTkaRes.map(makeLeanCbtSnapshot),
+    }));
+    appendExamDeletionLogEntries(logs);
+  }
+
+  const remainingSubs = currentSubs.filter((s) => !isMatchingSubmission(s));
+  saveStoredTKASubmissions(remainingSubs);
+
+  const remainingTkaRes = tkaResults.filter((r) => !isMatchingTkaRes(r));
+  if (remainingTkaRes.length !== tkaResults.length) {
+    saveStoredTKAResults(remainingTkaRes);
+  }
+
+  const cbtResults = getStoredCBTResults();
+  const remainingCbtRes = cbtResults.filter((r) => !isMatchingTkaRes(r));
+  if (remainingCbtRes.length !== cbtResults.length) {
+    saveStoredCBTResults(remainingCbtRes);
+  }
+
+  return remainingSubs;
+};
+
+export const deleteSingleCbtResultFromStorage = (target: {
+  examId?: string;
+  studentId?: string;
+  recordedAt?: number;
+  tanggal?: string;
+  waktuSelesai?: string;
+  studentName?: string;
+  mapel?: string;
+  paketName?: string;
+}): CBTExamResult[] => {
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const actor = getActiveActorNameForLog();
+  const current = getStoredCBTResults();
+  const deletedKeys: string[] = [];
+  const removedItems: CBTExamResult[] = [];
+  let removedOnce = false;
+
+  const targetName = String(target.studentName || '').trim().toLowerCase();
+
+  const remaining = current.filter((res) => {
+    if (isTkaResultEntry(res)) return true;
+
+    const exactKey =
+      target.examId !== undefined && target.studentId !== undefined
+        ? getCbtResultDeleteKey(res) === getCbtResultDeleteKey(target)
+        : false;
+
+    const fallbackMatch =
+      !exactKey &&
+      !removedOnce &&
+      (!target.examId || res.examId === target.examId) &&
+      ((target.studentId && res.studentId === target.studentId) ||
+        (targetName && String(res.studentName || '').trim().toLowerCase() === targetName)) &&
+      (!target.mapel || !res.mapel || res.mapel === target.mapel) &&
+      (!target.paketName || doesExamResultMatchTarget(res, target.paketName, target.mapel));
+
+    if (exactKey || fallbackMatch) {
+      removedOnce = true;
+      deletedKeys.push(getCbtResultDeleteKey(res));
+      removedItems.push(res);
+      return false;
+    }
+    return true;
+  });
+
+  if (deletedKeys.length > 0) {
+    markExamResultsResetMeta({ deletedCbtKeys: deletedKeys, timestamp: now });
+  }
+  if (removedItems.length > 0) {
+    const logs: ExamDeletionLogEntry[] = removedItems.map((res, idx) => ({
+      logId: `del_cbt_single_${now}_${idx}_${res.studentId || target.studentId || 'unknown'}`,
+      category: 'cbt',
+      actionType: 'single',
+      studentId: res.studentId || target.studentId || '',
+      studentName: res.studentName || target.studentName || '-',
+      nisn: res.nisn || '',
+      kelas: res.kelas || '-',
+      paket: res.paketName || res.judul || target.paketName || 'CBT',
+      mapel: res.mapel || target.mapel || '-',
+      skorRingkas: typeof res.nilai === 'number' ? res.nilai : res.skor,
+      deletedAt: now,
+      deletedAtIso: nowIso,
+      deletedBy: actor,
+      targetKey: getCbtResultDeleteKey(res),
+      snapshotCbtResult: makeLeanCbtSnapshot(res),
+    }));
+    appendExamDeletionLogEntries(logs);
+  }
   saveStoredCBTResults(remaining);
   return remaining;
 };
