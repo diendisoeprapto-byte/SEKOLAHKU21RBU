@@ -1234,7 +1234,7 @@ export const exportFullSystemJSON = () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `BACKUP_SEKOLAHKU_SDN_RBU_21_${getLocalTodayStr()}.json`;
+  a.download = `BACKUP_SERBU_21_SDN_RBU_21_${getLocalTodayStr()}.json`;
   a.click();
   URL.revokeObjectURL(url);
 };

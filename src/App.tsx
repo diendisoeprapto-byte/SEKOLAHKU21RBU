@@ -1063,7 +1063,7 @@ export default function App() {
     localStorage.removeItem('userName');
     localStorage.removeItem('userNisn');
     localStorage.removeItem('userUid');
-    showToast('Anda telah keluar dari aplikasi SEKOLAHKU', 'success');
+    showToast('Anda telah keluar dari aplikasi SERBU 21', 'success');
   };
 
   // Refresh seluruh React state secara langsung setelah restore realtime tanpa reload paksa
@@ -1187,7 +1187,7 @@ export default function App() {
               <li>Buka <strong>Google Sites</strong> sekolah Anda, lalu pilih menu <strong>Sisipkan (Insert) &rarr; Sematkan (Embed)</strong>.</li>
               <li>Pilih tab <strong>Sematkan URL (Embed URL)</strong> atau salin URL aplikasi ini.</li>
               <li>Atur ukuran bingkai secara penuh agar tampilan responsif di HP, Tablet, maupun Laptop.</li>
-              <li>Aplikasi SEKOLAHKU siap digunakan oleh seluruh guru, murid, dan wali murid!</li>
+              <li>Aplikasi SERBU 21 siap digunakan oleh seluruh guru, murid, dan wali murid!</li>
             </ol>
             <div className="flex justify-end pt-2">
               <button

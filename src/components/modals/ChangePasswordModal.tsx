@@ -90,7 +90,7 @@ export const ChangePasswordModal: React.FC<Props> = ({ isOpen, onClose, showToas
                 Rubah Password Administrator
               </h3>
               <p className="text-[11px] text-slate-500">
-                Perbarui kata sandi akun Administrator aplikasi SEKOLAHKU
+                Perbarui kata sandi akun Administrator aplikasi SERBU 21
               </p>
             </div>
           </div>

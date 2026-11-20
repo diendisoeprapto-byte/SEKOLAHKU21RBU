@@ -46,7 +46,7 @@ export const LoginScreen: React.FC<Props> = ({
     const p = password.trim();
 
     if (!u || !p) {
-      const msg = 'Username dan password wajib diisi sesuai data aplikasi SEKOLAHKU.';
+      const msg = 'Username dan password wajib diisi sesuai data aplikasi SERBU 21.';
       setLoginError(msg);
       showToast(msg, 'error');
       return;
@@ -67,7 +67,7 @@ export const LoginScreen: React.FC<Props> = ({
         showToast('Berhasil masuk sebagai Administrator!', 'success');
         return;
       }
-      const msg = 'Password Administrator tidak sesuai dengan data aplikasi SEKOLAHKU.';
+      const msg = 'Password Administrator tidak sesuai dengan data aplikasi SERBU 21.';
       setLoginError(msg);
       showToast(msg, 'error');
       return;
@@ -93,7 +93,7 @@ export const LoginScreen: React.FC<Props> = ({
         showToast(`Selamat datang, ${matchedTeacherByUsername.nama}!`, 'success');
         return;
       }
-      const msg = 'Password Guru/Pegawai tidak sesuai dengan data aplikasi SEKOLAHKU.';
+      const msg = 'Password Guru/Pegawai tidak sesuai dengan data aplikasi SERBU 21.';
       setLoginError(msg);
       showToast(msg, 'error');
       return;
@@ -124,14 +124,14 @@ export const LoginScreen: React.FC<Props> = ({
         showToast(`Selamat datang, ${validStudent.nama}!`, 'success');
         return;
       }
-      const msg = 'Password Siswa tidak sesuai dengan data aplikasi SEKOLAHKU.';
+      const msg = 'Password Siswa tidak sesuai dengan data aplikasi SERBU 21.';
       setLoginError(msg);
       showToast(msg, 'error');
       return;
     }
 
-    // Tidak ada akun yang terdaftar di data aplikasi SEKOLAHKU -> Tolak login
-    const msg = 'Login ditolak! Username atau password tidak terdaftar di data aplikasi SEKOLAHKU.';
+    // Tidak ada akun yang terdaftar di data aplikasi SERBU 21 -> Tolak login
+    const msg = 'Login ditolak! Username atau password tidak terdaftar di data aplikasi SERBU 21.';
     setLoginError(msg);
     showToast(msg, 'error');
   };
@@ -159,7 +159,10 @@ export const LoginScreen: React.FC<Props> = ({
                 <div className="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase border border-white/30">
                   <ShieldCheck className="w-3.5 h-3.5 text-yellow-300" /> DKI Jakarta • Monas Edition
                 </div>
-                <h1 className="text-3xl sm:text-4xl font-display font-black leading-tight mt-1">SEKOLAHKU</h1>
+                <h1 className="text-3xl sm:text-4xl font-display font-black leading-tight mt-1">SERBU 21</h1>
+                <p className="text-[11px] font-bold text-yellow-200 leading-snug">
+                  Sistem Edukasi, Rapor, dan Basis Data Utama
+                </p>
               </div>
             </div>
 
@@ -171,8 +174,8 @@ export const LoginScreen: React.FC<Props> = ({
             </div>
 
             <p className="text-rose-100 text-xs leading-relaxed font-medium">
-              Sistem Informasi Penilaian Pembelajaran Kurikulum Merdeka (Sumatif AS1-ASn, Remedial, ASTS & ASAS),
-              Leger Nilai Kelas, Pembuatan e-Rapor, Kartu Absensi Barcode, serta Ujian CBT Terintegrasi.
+              Sistem Edukasi, Rapor, dan Basis Data Utama {profile.name} — Penilaian Pembelajaran Kurikulum Merdeka
+              (Sumatif AS1-ASn, Remedial, ASTS &amp; ASAS), Leger Nilai, e-Rapor, Absensi Barcode &amp; Wajah, serta Ujian CBT.
             </p>
           </div>
 
@@ -203,7 +206,7 @@ export const LoginScreen: React.FC<Props> = ({
               Portal Masuk Resmi
             </span>
             <h2 className="text-2xl font-display font-black text-slate-800 mt-2">
-              Selamat Datang di SEKOLAHKU
+              Selamat Datang di SERBU 21
             </h2>
             <p className="text-xs text-slate-500 mt-1">
               Silakan masuk menggunakan akun Administrator, Guru / Wali Kelas, atau Akun Siswa{' '}
@@ -271,7 +274,7 @@ export const LoginScreen: React.FC<Props> = ({
               type="submit"
               className="w-full bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-700 hover:to-red-700 text-white font-display font-black py-3.5 rounded-2xl shadow-lg shadow-rose-500/30 transition flex items-center justify-center gap-2 text-sm cursor-pointer"
             >
-              <span>Masuk ke Aplikasi SEKOLAHKU</span>
+              <span>Masuk ke Aplikasi SERBU 21</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>

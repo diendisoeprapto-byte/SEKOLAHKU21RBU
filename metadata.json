@@ -1,6 +1,6 @@
 {
-  "name": "SEKOLAHKU - SDN Rawa Badak Utara 21",
-  "description": "Sistem Informasi Penilaian Pembelajaran Kurikulum Merdeka (Sumatif AS, Remedial, ASTS, ASAS), Leger Nilai, e-Rapor, Absensi Barcode & CBT.",
+  "name": "SERBU 21 - SDN Rawa Badak Utara 21",
+  "description": "Sistem Edukasi, Rapor, dan Basis Data Utama SDN Rawa Badak Utara 21 — Penilaian Kurikulum Merdeka, e-Rapor, Absensi Barcode & Wajah, serta Ujian CBT.",
   "requestFramePermissions": [
     "camera"
   ],

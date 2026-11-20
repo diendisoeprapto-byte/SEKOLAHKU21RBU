@@ -589,7 +589,7 @@ export const downloadTemplateStudentsXLSX = () => {
   const ws = XLSX.utils.json_to_sheet(templateData);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Template Siswa');
-  XLSX.writeFile(wb, 'Template_Import_Siswa_SEKOLAHKU.xlsx');
+  XLSX.writeFile(wb, 'Template_Import_Siswa_SERBU_21.xlsx');
 };
 
 export const exportStudentsToXLSX = (students: Student[]) => {
@@ -616,7 +616,7 @@ export const exportStudentsToXLSX = (students: Student[]) => {
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Data Siswa');
-  XLSX.writeFile(wb, `Data_Siswa_SEKOLAHKU_${getLocalTodayStr()}.xlsx`);
+  XLSX.writeFile(wb, `Data_Siswa_SERBU_21_${getLocalTodayStr()}.xlsx`);
 };
 
 export const downloadTemplateTeachersXLSX = () => {
@@ -650,7 +650,7 @@ export const downloadTemplateTeachersXLSX = () => {
   const ws = XLSX.utils.json_to_sheet(templateData);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Template Guru');
-  XLSX.writeFile(wb, 'Template_Import_Guru_SEKOLAHKU.xlsx');
+  XLSX.writeFile(wb, 'Template_Import_Guru_SERBU_21.xlsx');
 };
 
 export const exportTeachersToXLSX = (teachers: Teacher[]) => {
@@ -671,7 +671,7 @@ export const exportTeachersToXLSX = (teachers: Teacher[]) => {
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Data Guru');
-  XLSX.writeFile(wb, `Data_Guru_SEKOLAHKU_${getLocalTodayStr()}.xlsx`);
+  XLSX.writeFile(wb, `Data_Guru_SERBU_21_${getLocalTodayStr()}.xlsx`);
 };
 
 export const exportMonthlyMatrixToXLSX = (

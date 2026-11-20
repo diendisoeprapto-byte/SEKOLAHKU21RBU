@@ -97,14 +97,14 @@ export const Header: React.FC<Props> = ({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-display font-black text-lg sm:text-xl tracking-tight">
-                SEKOLAHKU • {profile.name}
+                SERBU 21 • {profile.name}
               </span>
               <span className="bg-yellow-300 text-slate-900 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase">
                 {activeUser.role}
               </span>
             </div>
             <p className="text-xs text-rose-100">
-              {profile.name} • {profile.provinsi} • Kurikulum Merdeka
+              Sistem Edukasi, Rapor, dan Basis Data Utama • {profile.provinsi} • Kurikulum Merdeka
             </p>
           </div>
         </div>

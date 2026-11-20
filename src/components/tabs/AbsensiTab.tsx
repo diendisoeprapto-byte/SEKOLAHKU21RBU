@@ -23,6 +23,12 @@ import {
   UserPlus,
   Trash2,
   ShieldCheck,
+  Send,
+  Bell,
+  Copy,
+  ExternalLink,
+  Settings2,
+  History,
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import {
@@ -51,6 +57,22 @@ import {
   cropFaceThumbnail,
   isUsableRealPhotoUrl,
 } from '../../utils/faceRecognition';
+import {
+  AttendanceNotificationConfig,
+  AttendanceNotificationLog,
+  NotificationChannelMode,
+  buildWhatsAppDirectUrl,
+  dispatchFaceAttendanceNotification,
+  formatFaceAttendanceMessage,
+  getStoredNotificationConfig,
+  getStoredNotificationLogs,
+  retryNotificationLog,
+  saveNotificationConfig,
+  saveNotificationLogs,
+  sendTestAttendanceNotification,
+  subscribeNotificationConfigFromCloud,
+  subscribeNotificationLogsFromCloud,
+} from '../../utils/attendanceNotifier';
 import { Student, KaldikDay } from '../../types';
 import { AttendanceRecordItem } from '../../utils/storage';
 import { formatTanggalIndo, getLocalTimeStr, parseLocalDate } from '../../utils/dateUtils';
@@ -74,6 +96,22 @@ interface Props {
 }
 
 type CameraDevice = DeviceCameraInfo;
+
+interface FaceDetectionHistoryItem {
+  id: string;
+  studentId: string;
+  studentName: string;
+  studentClass: string;
+  nisn: string;
+  confidence: number;
+  timestamp: string;
+  date: string;
+  outcome: 'saved' | 'already_recorded' | 'detected';
+  methodLabel: string;
+  snapshotUrl: string;
+}
+
+const FACE_HISTORY_STORAGE_KEY = 'sekolahku_face_detection_history_v1';
 
 export const AbsensiTab: React.FC<Props> = ({
   students,
@@ -154,6 +192,112 @@ export const AbsensiTab: React.FC<Props> = ({
   const [isScanningFaceFile, setIsScanningFaceFile] = useState(false);
   const [isSyncingFromPhotos, setIsSyncingFromPhotos] = useState(false);
 
+  // Telegram / WhatsApp Automatic Notification & Status Log states
+  const [notifConfig, setNotifConfig] = useState<AttendanceNotificationConfig>(() =>
+    getStoredNotificationConfig()
+  );
+  const [notifDraft, setNotifDraft] = useState<AttendanceNotificationConfig>(() =>
+    getStoredNotificationConfig()
+  );
+  const [notifLogs, setNotifLogs] = useState<AttendanceNotificationLog[]>(() =>
+    getStoredNotificationLogs()
+  );
+  const [isNotifSettingsOpen, setIsNotifSettingsOpen] = useState(false);
+  const [isSendingTestNotif, setIsSendingTestNotif] = useState(false);
+  const [retryingLogId, setRetryingLogId] = useState<string>('');
+  const notifConfigRef = useRef<AttendanceNotificationConfig>(notifConfig);
+  notifConfigRef.current = notifConfig;
+
+  const [faceDetectionHistory, setFaceDetectionHistory] = useState<FaceDetectionHistoryItem[]>(() => {
+    try {
+      const raw = localStorage.getItem(FACE_HISTORY_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.slice(0, 5) : [];
+    } catch {
+      return [];
+    }
+  });
+  const lastHistoryStampRef = useRef<Record<string, number>>({});
+
+  const pushFaceDetectionHistory = (params: {
+    student: Student;
+    confidence: number;
+    outcome: 'saved' | 'already_recorded' | 'detected';
+    methodLabel: string;
+    snapshotUrl?: string;
+    force?: boolean;
+  }) => {
+    const nowMs = Date.now();
+    const lastForStudent = lastHistoryStampRef.current[params.student.id] || 0;
+    if (!params.force && params.outcome === 'detected' && nowMs - lastForStudent < 5000) {
+      return;
+    }
+    lastHistoryStampRef.current[params.student.id] = nowMs;
+
+    const timeStr = getLocalTimeStr(new Date(), true);
+    const fallbackThumb =
+      faceProfiles[params.student.id]?.thumbnailDataUrl || params.student.fotoUrl || '';
+    const resolvedSnap = params.snapshotUrl || fallbackThumb;
+
+    setFaceDetectionHistory((prev) => {
+      const newest = prev[0];
+      let next: FaceDetectionHistoryItem[];
+
+      // If the same student was just logged as 'detected' within 4s, upgrade that item instead of duplicating
+      if (
+        newest &&
+        newest.studentId === params.student.id &&
+        params.outcome !== 'detected' &&
+        newest.outcome === 'detected'
+      ) {
+        const upgraded: FaceDetectionHistoryItem = {
+          ...newest,
+          confidence: params.confidence || newest.confidence,
+          timestamp: timeStr,
+          date: activeDate,
+          outcome: params.outcome,
+          methodLabel: params.methodLabel,
+          snapshotUrl: params.snapshotUrl || newest.snapshotUrl || resolvedSnap,
+        };
+        next = [upgraded, ...prev.slice(1)].slice(0, 5);
+      } else {
+        const entry: FaceDetectionHistoryItem = {
+          id: `fh_${nowMs}_${Math.random().toString(36).slice(2, 6)}`,
+          studentId: params.student.id,
+          studentName: params.student.nama,
+          studentClass: params.student.kelas,
+          nisn: params.student.nisn || '-',
+          confidence: params.confidence,
+          timestamp: timeStr,
+          date: activeDate,
+          outcome: params.outcome,
+          methodLabel: params.methodLabel,
+          snapshotUrl: resolvedSnap,
+        };
+        next = [entry, ...prev].slice(0, 5);
+      }
+
+      try {
+        localStorage.setItem(FACE_HISTORY_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage quota errors
+      }
+      return next;
+    });
+  };
+
+  const handleClearFaceDetectionHistory = () => {
+    setFaceDetectionHistory([]);
+    lastHistoryStampRef.current = {};
+    try {
+      localStorage.removeItem(FACE_HISTORY_STORAGE_KEY);
+    } catch {
+      // Ignore storage error
+    }
+    showToast('Histori 5 deteksi wajah terakhir dibersihkan.', 'success');
+  };
+
   const handleToggleAutoSubmitFace = (nextVal: boolean) => {
     setAutoSubmitFaceAttendance(nextVal);
     try {
@@ -167,6 +311,84 @@ export const AbsensiTab: React.FC<Props> = ({
         : 'Auto-Submit Absen Wajah NONAKTIF: guru konfirmasi manual saat wajah terdeteksi.',
       'success'
     );
+  };
+
+  const handleToggleAutoNotif = (nextEnabled: boolean) => {
+    const updated = { ...notifConfig, enabled: nextEnabled };
+    setNotifConfig(updated);
+    setNotifDraft(updated);
+    saveNotificationConfig(updated);
+    showToast(
+      nextEnabled
+        ? 'Notifikasi & Log Otomatis Telegram/WA untuk Absen Wajah AKTIF.'
+        : 'Notifikasi & Log Otomatis Telegram/WA dinonaktifkan.',
+      'success'
+    );
+  };
+
+  const handleSaveNotifSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    setNotifConfig(notifDraft);
+    saveNotificationConfig(notifDraft);
+    setIsNotifSettingsOpen(false);
+    showToast('Pengaturan notifikasi Telegram & WhatsApp berhasil disimpan!', 'success');
+  };
+
+  const handleSendTestNotif = async () => {
+    setIsSendingTestNotif(true);
+    try {
+      const result = await sendTestAttendanceNotification(notifDraft, activeClass);
+      setNotifLogs(getStoredNotificationLogs());
+      if (result.overallStatus === 'SENT') {
+        showToast('Uji kirim notifikasi berhasil terkirim ke kanal aktif!', 'success');
+      } else if (result.overallStatus === 'FAILED') {
+        showToast(
+          `Uji kirim gagal: ${result.telegramStatus === 'FAILED' ? result.telegramDetail : result.whatsappDetail}`,
+          'error'
+        );
+      } else {
+        showToast('Uji log berhasil dicatat (isi Bot Token / Webhook WA untuk pengiriman API otomatis).', 'success');
+      }
+    } finally {
+      setIsSendingTestNotif(false);
+    }
+  };
+
+  const handleRetryLogEntry = async (entry: AttendanceNotificationLog) => {
+    setRetryingLogId(entry.id);
+    try {
+      const updated = await retryNotificationLog(entry, notifConfigRef.current);
+      setNotifLogs(getStoredNotificationLogs());
+      if (updated.overallStatus === 'SENT') {
+        showToast(`Notifikasi ${entry.studentName} berhasil dikirim ulang!`, 'success');
+      } else if (updated.overallStatus === 'FAILED') {
+        showToast(
+          `Pengiriman ulang gagal: ${
+            updated.telegramStatus === 'FAILED' ? updated.telegramDetail : updated.whatsappDetail
+          }`,
+          'error'
+        );
+      } else {
+        showToast('Status diperbarui pada log lokal (kanal API belum dikonfigurasi).', 'success');
+      }
+    } finally {
+      setRetryingLogId('');
+    }
+  };
+
+  const handleCopyNotifText = async (text: string, successMsg = 'Teks notifikasi berhasil disalin!') => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast(successMsg, 'success');
+    } catch {
+      showToast('Gagal menyalin ke clipboard browser.', 'error');
+    }
+  };
+
+  const handleClearNotifLogs = () => {
+    saveNotificationLogs([]);
+    setNotifLogs([]);
+    showToast('Log status notifikasi Telegram/WhatsApp telah dibersihkan.', 'success');
   };
 
   // Face Enrollment Modal states
@@ -210,9 +432,30 @@ export const AbsensiTab: React.FC<Props> = ({
     const unsubCloud = subscribeFaceProfilesFromCloud((merged) => {
       setFaceProfiles(merged);
     });
+
+    const syncNotifCfg = () => {
+      const latest = getStoredNotificationConfig();
+      setNotifConfig(latest);
+      setNotifDraft(latest);
+    };
+    const syncNotifLogs = () => setNotifLogs(getStoredNotificationLogs());
+    window.addEventListener('sekolahku-notif-config-updated', syncNotifCfg);
+    window.addEventListener('sekolahku-notif-logs-updated', syncNotifLogs);
+    const unsubNotifCfg = subscribeNotificationConfigFromCloud((cfg) => {
+      setNotifConfig(cfg);
+      setNotifDraft(cfg);
+    });
+    const unsubNotifLogs = subscribeNotificationLogsFromCloud((logs) => {
+      setNotifLogs(logs);
+    });
+
     return () => {
       window.removeEventListener('sekolahku-face-profiles-updated', syncLocal);
+      window.removeEventListener('sekolahku-notif-config-updated', syncNotifCfg);
+      window.removeEventListener('sekolahku-notif-logs-updated', syncNotifLogs);
       unsubCloud();
+      unsubNotifCfg();
+      unsubNotifLogs();
     };
   }, []);
 
@@ -328,7 +571,13 @@ export const AbsensiTab: React.FC<Props> = ({
   const recordAttendance = async (
     student: Student,
     status: 'H' | 'S' | 'I' | 'A' = 'H',
-    options?: { skipIfAlreadyRecorded?: boolean; methodLabel?: string }
+    options?: {
+      skipIfAlreadyRecorded?: boolean;
+      methodLabel?: string;
+      isFaceAttendance?: boolean;
+      confidence?: number;
+      snapshotUrl?: string;
+    }
   ) => {
     const key = `${activeDate}_${student.id}`;
     const existingRec = attendanceRecords[key];
@@ -371,6 +620,16 @@ export const AbsensiTab: React.FC<Props> = ({
         }
       } catch {
         // Abaikan jika SpeechSynthesis tidak tersedia
+      }
+      if (options?.isFaceAttendance || (options?.methodLabel || '').toLowerCase().includes('wajah')) {
+        pushFaceDetectionHistory({
+          student,
+          confidence: options?.confidence || liveFaceDetectionRef.current.confidence || 0,
+          outcome: 'already_recorded',
+          methodLabel: options?.methodLabel || 'Absensi Wajah',
+          snapshotUrl: options?.snapshotUrl,
+          force: true,
+        });
       }
       showToast(
         existingRec.status === 'H'
@@ -417,6 +676,47 @@ export const AbsensiTab: React.FC<Props> = ({
           `✓ ${student.nama} tercatat ${statusLabel} & tersinkron ke Kalender Pendidikan!`,
           'success'
         );
+      }
+
+      const isFaceTriggered =
+        Boolean(options?.isFaceAttendance) ||
+        Boolean(options?.methodLabel && options.methodLabel.toLowerCase().includes('wajah'));
+
+      if (isFaceTriggered) {
+        pushFaceDetectionHistory({
+          student,
+          confidence: options?.confidence || liveFaceDetectionRef.current.confidence || 0,
+          outcome: 'saved',
+          methodLabel: options?.methodLabel || 'Absensi Wajah',
+          snapshotUrl: options?.snapshotUrl,
+          force: true,
+        });
+      }
+
+      if (isFaceTriggered && notifConfigRef.current.enabled) {
+        dispatchFaceAttendanceNotification({
+          student,
+          date: activeDate,
+          time: timeStr,
+          status,
+          methodLabel: options?.methodLabel || 'Absensi Wajah',
+          confidence: options?.confidence,
+          config: notifConfigRef.current,
+        })
+          .then((logEntry) => {
+            setNotifLogs(getStoredNotificationLogs());
+            if (logEntry.overallStatus === 'SENT') {
+              showToast(`Notifikasi Telegram/WA terkirim untuk ${student.nama}.`, 'success');
+            } else if (logEntry.overallStatus === 'FAILED') {
+              showToast(
+                `Notifikasi ${student.nama} gagal terkirim ke API (tersimpan di Log Status).`,
+                'error'
+              );
+            }
+          })
+          .catch((err) => {
+            console.warn('Notification dispatch error:', err);
+          });
       }
     } catch (error) {
       console.error('Gagal menyimpan presensi ke Firestore:', error);
@@ -497,6 +797,8 @@ export const AbsensiTab: React.FC<Props> = ({
         recordAttendance(studentAnywhere, 'H', {
           skipIfAlreadyRecorded: true,
           methodLabel: `Barcode + Verifikasi Wajah ✓ (${recent.confidence}%)`,
+          isFaceAttendance: true,
+          confidence: recent.confidence,
         });
         return;
       }
@@ -505,6 +807,8 @@ export const AbsensiTab: React.FC<Props> = ({
         recordAttendance(studentAnywhere, 'H', {
           skipIfAlreadyRecorded: true,
           methodLabel: `Barcode + Verifikasi Wajah ✓ (${recent.confidence}%)`,
+          isFaceAttendance: true,
+          confidence: recent.confidence,
         });
         return;
       }
@@ -824,6 +1128,7 @@ export const AbsensiTab: React.FC<Props> = ({
               if (bestMatched && bestMatched.matchedStudent) {
                 const student = bestMatched.matchedStudent;
                 const now = Date.now();
+                const liveSnapshot = cropFaceThumbnail(video, bestMatched.box);
                 liveFaceDetectionRef.current = {
                   student,
                   confidence: bestMatched.confidence,
@@ -836,6 +1141,17 @@ export const AbsensiTab: React.FC<Props> = ({
                   confidence: bestMatched.confidence,
                   hasFace: true,
                   detectedAt: now,
+                });
+
+                pushFaceDetectionHistory({
+                  student,
+                  confidence: bestMatched.confidence,
+                  outcome: 'detected',
+                  methodLabel:
+                    scanMode === 'dual'
+                      ? `Dual Layer • Deteksi Wajah (${bestMatched.confidence}%)`
+                      : `Deteksi Wajah (${bestMatched.confidence}%)`,
+                  snapshotUrl: liveSnapshot,
                 });
 
                 const streak = faceMatchStreakRef.current;
@@ -886,6 +1202,9 @@ export const AbsensiTab: React.FC<Props> = ({
                       scanMode === 'dual'
                         ? `Dual Layer • Auto-Submit Wajah (${bestMatched.confidence}%)`
                         : `Auto-Submit Wajah (${bestMatched.confidence}%)`,
+                    isFaceAttendance: true,
+                    confidence: bestMatched.confidence,
+                    snapshotUrl: liveSnapshot,
                   });
                 }
               } else {
@@ -953,7 +1272,13 @@ export const AbsensiTab: React.FC<Props> = ({
         faceThreshold
       );
       if (match) {
-        await recordAttendance(match.student, 'H', { skipIfAlreadyRecorded: true });
+        await recordAttendance(match.student, 'H', {
+          skipIfAlreadyRecorded: true,
+          methodLabel: `Foto Wajah (${match.confidence}%)`,
+          isFaceAttendance: true,
+          confidence: match.confidence,
+          snapshotUrl: extracted.thumbnailDataUrl,
+        });
         setLastScannedStudent(
           `${match.student.nama} (${match.student.barcodeId}) • Foto Wajah ${match.confidence}%`
         );
@@ -1718,6 +2043,53 @@ export const AbsensiTab: React.FC<Props> = ({
             </button>
           </div>
 
+          {/* Pengaturan Notifikasi & Log Otomatis Telegram / WhatsApp (Absen Wajah) */}
+          <div className="p-3 rounded-2xl bg-sky-50/80 border border-sky-200 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-xs font-extrabold text-sky-950 flex items-center gap-1.5">
+                <Send className="w-3.5 h-3.5 text-sky-700 shrink-0" />
+                <span>Notifikasi Otomatis Telegram / WA</span>
+              </div>
+              <p className="text-[11px] text-sky-800/85 mt-0.5 leading-snug">
+                {notifConfig.enabled
+                  ? notifConfig.telegramBotToken || notifConfig.whatsappWebhookUrl
+                    ? `Aktif — otomatis kirim & catat log saat absen wajah (${notifConfig.channelMode === 'both' ? 'Telegram & WA' : notifConfig.channelMode === 'telegram' ? 'Telegram' : notifConfig.channelMode === 'whatsapp' ? 'WhatsApp' : 'Log Saja'}).`
+                    : 'Aktif — otomatis catat log status & siap kirim WA/Telegram.'
+                  : 'Nonaktif — notifikasi otomatis dimatikan.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setNotifDraft(notifConfig);
+                  setIsNotifSettingsOpen(true);
+                }}
+                className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-sky-100 text-sky-800 border border-sky-300 text-[11px] font-extrabold flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                title="Konfigurasi Bot Telegram & Webhook WhatsApp"
+              >
+                <Settings2 className="w-3.5 h-3.5" />
+                <span>Atur</span>
+              </button>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={notifConfig.enabled}
+                aria-label="Notifikasi Otomatis Telegram dan WhatsApp"
+                onClick={() => handleToggleAutoNotif(!notifConfig.enabled)}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  notifConfig.enabled ? 'bg-sky-600' : 'bg-slate-300'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition duration-200 ease-in-out ${
+                    notifConfig.enabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
           {/* Dual Verification Rule Config */}
           {scanMode === 'dual' && (
             <div className="p-3 rounded-2xl bg-purple-50/80 border border-purple-200 flex flex-wrap items-center justify-between gap-2">
@@ -1970,6 +2342,8 @@ export const AbsensiTab: React.FC<Props> = ({
                             recordAttendance(detectedStudent, 'H', {
                               skipIfAlreadyRecorded: true,
                               methodLabel: `Konfirmasi Wajah (${liveDetectedFace.confidence}%)`,
+                              isFaceAttendance: true,
+                              confidence: liveDetectedFace.confidence,
                             })
                           }
                           className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-display font-black px-3 py-2 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition"
@@ -2014,6 +2388,101 @@ export const AbsensiTab: React.FC<Props> = ({
                       <span>Scan File</span>
                     </button>
                   </div>
+                </div>
+
+                {/* Panel Histori 5 Deteksi Wajah Terakhir (Bukti Verifikasi Visual) */}
+                <div className="p-3.5 rounded-2xl bg-white border border-indigo-200 space-y-2.5 shadow-2xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                        <History className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="font-display font-black text-xs text-slate-800 truncate">
+                          Histori 5 Deteksi Wajah Terakhir ({faceDetectionHistory.length}/5)
+                        </h4>
+                        <p className="text-[10px] text-slate-500 truncate">
+                          Bukti verifikasi visual real-time beserta nama siswa &amp; timestamp
+                        </p>
+                      </div>
+                    </div>
+                    {faceDetectionHistory.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleClearFaceDetectionHistory}
+                        className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 text-[10px] font-extrabold cursor-pointer transition whitespace-nowrap shrink-0"
+                      >
+                        Bersihkan
+                      </button>
+                    )}
+                  </div>
+
+                  {faceDetectionHistory.length === 0 ? (
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-500 text-center">
+                      Belum ada histori deteksi wajah. Arahkan wajah siswa ke kamera atau unggah foto wajah untuk mencatat bukti visual.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {faceDetectionHistory.map((item, idx) => {
+                        const outcomeLabel =
+                          item.outcome === 'saved'
+                            ? '✓ Hadir Tercatat'
+                            : item.outcome === 'already_recorded'
+                            ? '• Sudah Hadir'
+                            : '• Terdeteksi';
+                        const outcomeCls =
+                          item.outcome === 'saved'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : item.outcome === 'already_recorded'
+                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                            : 'bg-indigo-50 text-indigo-800 border-indigo-200';
+                        return (
+                          <div
+                            key={item.id}
+                            className="p-2 rounded-xl border border-slate-200 bg-slate-50/70 flex items-center justify-between gap-2.5 text-xs"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span className="text-[10px] font-mono font-bold text-slate-400 w-4 text-center shrink-0">
+                                {idx + 1}.
+                              </span>
+                              {item.snapshotUrl ? (
+                                <img
+                                  src={item.snapshotUrl}
+                                  alt={`Snapshot wajah ${item.studentName}`}
+                                  referrerPolicy="no-referrer"
+                                  onClick={() =>
+                                    onOpenZoom(
+                                      item.snapshotUrl,
+                                      `${item.studentName} • ${item.date} ${item.timestamp}`
+                                    )
+                                  }
+                                  className="w-10 h-10 rounded-xl object-cover border border-indigo-200 shrink-0 cursor-zoom-in shadow-2xs"
+                                  title="Klik untuk memperbesar bukti visual deteksi wajah"
+                                />
+                              ) : (
+                                <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                                  <ScanFace className="w-5 h-5" />
+                                </div>
+                              )}
+                              <div className="min-w-0">
+                                <div className="font-display font-black text-slate-800 truncate">
+                                  {item.studentName}
+                                </div>
+                                <div className="text-[10px] text-slate-500 font-mono tabular-nums truncate">
+                                  {item.studentClass} · {item.date} <strong className="text-slate-700">{item.timestamp}</strong> · Akurasi {item.confidence}%
+                                </div>
+                              </div>
+                            </div>
+                            <span
+                              className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold shrink-0 whitespace-nowrap ${outcomeCls}`}
+                            >
+                              {outcomeLabel}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -2310,6 +2779,165 @@ export const AbsensiTab: React.FC<Props> = ({
                 );
               })}
             </div>
+          </div>
+
+          {/* Automated Telegram / WhatsApp Notification & Status Log Panel */}
+          <div className="pt-3 border-t border-slate-200 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-xl bg-sky-100 text-sky-700 flex items-center justify-center shrink-0">
+                  <Bell className="w-3.5 h-3.5" />
+                </div>
+                <div className="min-w-0">
+                  <h4 className="font-display font-black text-xs text-slate-800 truncate">
+                    Log Status Notifikasi Telegram / WhatsApp ({notifLogs.length})
+                  </h4>
+                  <p className="text-[10px] text-slate-500 truncate">
+                    Tercatat otomatis setiap kali absensi wajah berhasil mendeteksi siswa
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNotifDraft(notifConfig);
+                    setIsNotifSettingsOpen(true);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 text-[10px] font-extrabold flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                >
+                  <Settings2 className="w-3 h-3" />
+                  <span>Pengaturan</span>
+                </button>
+                {notifLogs.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleCopyNotifText(
+                          notifLogs
+                            .slice(0, 20)
+                            .map(
+                              (l, idx) =>
+                                `${idx + 1}. ${l.studentName} (${l.studentClass}) - HADIR ${l.time.slice(0, 5)} WIB [${l.methodLabel}]`
+                            )
+                            .join('\n'),
+                          'Rekap log absensi wajah disalin untuk Telegram/WA!'
+                        )
+                      }
+                      className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-extrabold flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      title="Salin ringkasan log untuk ditempel ke grup WhatsApp / Telegram"
+                    >
+                      <Copy className="w-3 h-3" />
+                      <span>Salin Rekap</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearNotifLogs}
+                      className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-[10px] font-extrabold cursor-pointer whitespace-nowrap"
+                      title="Hapus semua log notifikasi"
+                    >
+                      Bersihkan
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {notifLogs.length === 0 ? (
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-[11px] text-slate-500 text-center">
+                Belum ada log notifikasi absen wajah. Lakukan scan wajah siswa atau klik Uji Kirim di Pengaturan.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {notifLogs.slice(0, 25).map((log) => {
+                  const statusBadgeCls =
+                    log.overallStatus === 'SENT'
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : log.overallStatus === 'FAILED'
+                      ? 'bg-rose-50 text-rose-800 border-rose-200'
+                      : 'bg-amber-50 text-amber-800 border-amber-200';
+                  const statusText =
+                    log.overallStatus === 'SENT'
+                      ? '✓ Terkirim'
+                      : log.overallStatus === 'FAILED'
+                      ? '✕ Gagal API'
+                      : '• Log Siap Kirim';
+                  const waHref = buildWhatsAppDirectUrl(
+                    notifConfig.whatsappTargetPhone,
+                    log.messageText
+                  );
+                  return (
+                    <div
+                      key={log.id}
+                      className="p-2.5 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-1.5 text-xs"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-display font-black text-slate-800 truncate">
+                            {log.studentName}
+                          </div>
+                          <div className="text-[10px] text-slate-500 font-mono truncate">
+                            {log.studentClass} · {log.date} {log.time.slice(0, 5)} · {log.methodLabel}
+                          </div>
+                        </div>
+                        <span
+                          className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold shrink-0 whitespace-nowrap ${statusBadgeCls}`}
+                        >
+                          {statusText}
+                        </span>
+                      </div>
+
+                      <div className="text-[10px] text-slate-600 space-y-0.5">
+                        {log.telegramStatus !== 'SKIPPED' && (
+                          <div className="truncate">
+                            <strong>Telegram:</strong> {log.telegramDetail}
+                          </div>
+                        )}
+                        {log.whatsappStatus !== 'SKIPPED' && (
+                          <div className="truncate">
+                            <strong>WhatsApp:</strong> {log.whatsappDetail}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                        <a
+                          href={waHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold inline-flex items-center gap-1 whitespace-nowrap"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          <span>Kirim WA</span>
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyNotifText(log.messageText)}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span>Salin Pesan</span>
+                        </button>
+                        {(notifConfig.telegramBotToken || notifConfig.whatsappWebhookUrl) && (
+                          <button
+                            type="button"
+                            onClick={() => handleRetryLogEntry(log)}
+                            disabled={retryingLogId === log.id}
+                            className="px-2 py-1 rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white text-[10px] font-extrabold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                          >
+                            <RefreshCw
+                              className={`w-3 h-3 ${retryingLogId === log.id ? 'animate-spin' : ''}`}
+                            />
+                            <span>{retryingLogId === log.id ? 'Mengirim...' : 'Kirim Ulang'}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
@@ -2775,6 +3403,228 @@ export const AbsensiTab: React.FC<Props> = ({
           </div>
         );
       })()}
+      {/* Modal Pengaturan Notifikasi Otomatis Telegram & WhatsApp */}
+      {isNotifSettingsOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-3 bg-sky-50/70">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-sky-600 text-white flex items-center justify-center shadow-sm">
+                  <Send className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-display font-black text-base text-slate-900">
+                    Pengaturan Notifikasi &amp; Log Otomatis (Telegram / WhatsApp)
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    Dikirim otomatis saat siswa terdeteksi melalui Absensi Wajah SERBU 21
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsNotifSettingsOpen(false)}
+                className="p-2 rounded-xl bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveNotifSettings} className="p-5 overflow-y-auto space-y-4 text-xs">
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                <div>
+                  <div className="font-extrabold text-slate-800">Aktifkan Notifikasi &amp; Log Otomatis</div>
+                  <div className="text-[11px] text-slate-500">
+                    Setiap absensi wajah berhasil langsung tercatat di log dan dikirim ke kanal aktif.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={notifDraft.enabled}
+                  onChange={(e) => setNotifDraft((prev) => ({ ...prev, enabled: e.target.checked }))}
+                  className="w-4 h-4 accent-sky-600 cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <label className="block font-extrabold text-slate-700 mb-1.5">Mode Kanal Pengiriman</label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                  {(
+                    [
+                      { id: 'both', label: 'Telegram & WA' },
+                      { id: 'telegram', label: 'Telegram Saja' },
+                      { id: 'whatsapp', label: 'WhatsApp Saja' },
+                      { id: 'log_only', label: 'Log Status Saja' },
+                    ] as Array<{ id: NotificationChannelMode; label: string }>
+                  ).map((mode) => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => setNotifDraft((prev) => ({ ...prev, channelMode: mode.id }))}
+                      className={`px-3 py-2 rounded-xl font-extrabold border text-[11px] transition cursor-pointer whitespace-nowrap ${
+                        notifDraft.channelMode === mode.id
+                          ? 'bg-sky-600 text-white border-sky-600 shadow-xs'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Telegram Config */}
+                <div className="p-3.5 rounded-2xl border border-sky-200 bg-sky-50/40 space-y-2.5">
+                  <div className="font-display font-black text-sky-950 text-xs">
+                    Konfigurasi Telegram Bot API
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Bot Token Telegram (@BotFather)
+                    </label>
+                    <input
+                      type="password"
+                      value={notifDraft.telegramBotToken}
+                      onChange={(e) =>
+                        setNotifDraft((prev) => ({ ...prev, telegramBotToken: e.target.value }))
+                      }
+                      placeholder="123456789:AAF..."
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono text-[11px] outline-none focus:border-sky-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Chat ID / ID Grup Tujuan
+                    </label>
+                    <input
+                      type="text"
+                      value={notifDraft.telegramChatId}
+                      onChange={(e) =>
+                        setNotifDraft((prev) => ({ ...prev, telegramChatId: e.target.value }))
+                      }
+                      placeholder="-1001234567890 atau 987654321"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono text-[11px] outline-none focus:border-sky-500"
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-500 leading-snug">
+                    Masukkan Bot Token &amp; Chat ID untuk pengiriman otomatis langsung ke grup/akun Telegram tanpa server tambahan.
+                  </p>
+                </div>
+
+                {/* WhatsApp Config */}
+                <div className="p-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/40 space-y-2.5">
+                  <div className="font-display font-black text-emerald-950 text-xs">
+                    Konfigurasi WhatsApp (Webhook / Direct)
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Nomor WA Tujuan (Wali Kelas / Grup)
+                    </label>
+                    <input
+                      type="text"
+                      value={notifDraft.whatsappTargetPhone}
+                      onChange={(e) =>
+                        setNotifDraft((prev) => ({ ...prev, whatsappTargetPhone: e.target.value }))
+                      }
+                      placeholder="6281234567890"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono text-[11px] outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      URL Webhook Gateway WA (Opsional)
+                    </label>
+                    <input
+                      type="url"
+                      value={notifDraft.whatsappWebhookUrl}
+                      onChange={(e) =>
+                        setNotifDraft((prev) => ({ ...prev, whatsappWebhookUrl: e.target.value }))
+                      }
+                      placeholder="https://api.fonnte.com/send atau webhook n8n/GAS"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono text-[11px] outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Token Header Authorization (Opsional)
+                    </label>
+                    <input
+                      type="password"
+                      value={notifDraft.whatsappWebhookHeaderToken}
+                      onChange={(e) =>
+                        setNotifDraft((prev) => ({
+                          ...prev,
+                          whatsappWebhookHeaderToken: e.target.value,
+                        }))
+                      }
+                      placeholder="Token gateway bila diperlukan"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono text-[11px] outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={notifDraft.includeConfidence}
+                  onChange={(e) =>
+                    setNotifDraft((prev) => ({ ...prev, includeConfidence: e.target.checked }))
+                  }
+                  className="w-4 h-4 accent-sky-600"
+                />
+                <span>Sertakan skor akurasi deteksi wajah (%) pada pesan notifikasi</span>
+              </label>
+
+              {/* Message Preview */}
+              <div className="p-3 rounded-2xl bg-slate-900 text-slate-100 font-mono text-[11px] whitespace-pre-wrap leading-relaxed">
+                {formatFaceAttendanceMessage({
+                  student: filteredStudents[0] || {
+                    nama: 'Ahmad Fauzan',
+                    kelas: activeClass,
+                    nisn: '0151234567',
+                    barcodeId: 'RBU21-001',
+                  },
+                  date: activeDate,
+                  time: liveClock,
+                  status: 'H',
+                  methodLabel: 'Auto-Submit Wajah (95%)',
+                  confidence: 95,
+                  includeConfidence: notifDraft.includeConfidence,
+                })}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={handleSendTestNotif}
+                  disabled={isSendingTestNotif}
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white font-display font-black text-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{isSendingTestNotif ? 'Menguji...' : 'Uji Kirim & Catat Log'}</span>
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsNotifSettingsOpen(false)}
+                    className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer whitespace-nowrap"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-display font-black text-xs cursor-pointer shadow-xs whitespace-nowrap"
+                  >
+                    Simpan Pengaturan
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </section>
   );
 };
