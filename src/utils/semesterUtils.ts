@@ -70,33 +70,42 @@ export const getSemesterDateRange = (
 
 const ID_MONTH_MAP: Record<string, string> = {
   januari: '01',
+  january: '01',
   jan: '01',
   februari: '02',
+  february: '02',
   feb: '02',
   pebruari: '02',
   maret: '03',
+  march: '03',
   mar: '03',
   april: '04',
   apr: '04',
   mei: '05',
   may: '05',
   juni: '06',
+  june: '06',
   jun: '06',
   juli: '07',
+  july: '07',
   jul: '07',
   agustus: '08',
+  august: '08',
   agu: '08',
   ags: '08',
   aug: '08',
   september: '09',
+  sept: '09',
   sep: '09',
   oktober: '10',
+  october: '10',
   okt: '10',
   oct: '10',
   november: '11',
   nov: '11',
   nopember: '11',
   desember: '12',
+  december: '12',
   des: '12',
   dec: '12',
 };
@@ -117,12 +126,21 @@ export const normalizeDateToYmd = (raw?: string): string | null => {
     return `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
   }
 
-  // Indonesian long date e.g. "04 November 2026"
+  // Indonesian or English long date e.g. "04 November 2026"
   const indoMatch = s.toLowerCase().match(/(\d{1,2})\s+([a-z]+)\s+(\d{4})/);
   if (indoMatch) {
     const mm = ID_MONTH_MAP[indoMatch[2]];
     if (mm) {
       return `${indoMatch[3]}-${mm}-${indoMatch[1].padStart(2, '0')}`;
+    }
+  }
+
+  // English format e.g. "November 04, 2026"
+  const engMatch = s.toLowerCase().match(/([a-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
+  if (engMatch) {
+    const mm = ID_MONTH_MAP[engMatch[1]];
+    if (mm) {
+      return `${engMatch[3]}-${mm}-${engMatch[2].padStart(2, '0')}`;
     }
   }
 
@@ -215,6 +233,7 @@ export const doesRecordMatchTerm = (
     tanggal?: string;
     tanggalUjian?: string;
     date?: string;
+    updatedAt?: string;
     recordedAt?: number;
   },
   activeYear: string,
@@ -230,7 +249,7 @@ export const doesRecordMatchTerm = (
     if (record.semester) {
       return isSemesterOneLabel(record.semester) === targetSem1;
     }
-    const candidateDate = record.tanggal || record.tanggalUjian || record.date;
+    const candidateDate = record.tanggal || record.tanggalUjian || record.date || record.updatedAt;
     const ymd = normalizeDateToYmd(candidateDate);
     if (ymd) {
       return isDateInSemester(ymd, activeYear, activeSemester);
@@ -245,12 +264,19 @@ export const doesRecordMatchTerm = (
     return targetSem1;
   }
 
-  // Record tidak memiliki field tahunPelajaran eksplisit: cek semester + rentang tanggal tahun ajaran
+  // Record tidak memiliki field tahunPelajaran eksplisit: cek semester terlebih dahulu
   if (record.semester && isSemesterOneLabel(record.semester) !== targetSem1) {
     return false;
   }
 
-  const candidateDate = record.tanggal || record.tanggalUjian || record.date;
+  // Data ujian historis/lama (yang belum memiliki field tahunPelajaran saat siswa submit)
+  // tetap ditampilkan pada semester awal default (2026/2027 Semester 1) meskipun jam perangkat
+  // siswa berada pada tanggal kalender di luar rentang Juli–Desember 2026.
+  if (normalizedTargetYear === '2026/2027' && targetSem1) {
+    return true;
+  }
+
+  const candidateDate = record.tanggal || record.tanggalUjian || record.date || record.updatedAt;
   const ymd = normalizeDateToYmd(candidateDate);
   if (ymd) {
     return record.semester
@@ -268,8 +294,7 @@ export const doesRecordMatchTerm = (
       : isDateInSemester(localYmd, activeYear, activeSemester);
   }
 
-  // Legacy data without explicit term or date defaults to 2026/2027 only
-  return normalizedTargetYear === '2026/2027' && (record.semester ? true : targetSem1);
+  return false;
 };
 
 export const countSemesterEffectiveDays = (

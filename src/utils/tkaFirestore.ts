@@ -459,6 +459,8 @@ export function mergeTwoTkaSubmissions(
     skorTotal: avgTotal,
     predikat,
     status,
+    tahunPelajaran: newer.tahunPelajaran || older.tahunPelajaran,
+    semester: newer.semester || older.semester,
     updatedAt:
       (newer.updatedAt || '') >= (older.updatedAt || '')
         ? newer.updatedAt || new Date().toISOString()
@@ -756,6 +758,8 @@ export interface UpsertTkaSubmissionParams {
   completedMapelKeys: TKAMapelScoreKey[];
   questionAnswers: Record<string, any>;
   durasiMenitUsed: number;
+  tahunPelajaran?: string;
+  semester?: string;
 }
 
 function buildMergedTkaSubmissionState(
@@ -766,7 +770,7 @@ function buildMergedTkaSubmissionState(
   mergedSub: TKASubmissionItem;
   updatedList: TKASubmissionItem[];
 } {
-  const { student, paketName, mapelScores, completedMapelKeys, questionAnswers, durasiMenitUsed } = params;
+  const { student, paketName, mapelScores, completedMapelKeys, questionAnswers, durasiMenitUsed, tahunPelajaran, semester } = params;
   const basePaket = extractBaseTkaPaket(paketName);
   const stableStudentId = student.id || student.nisn || 'siswa_anon';
 
@@ -838,6 +842,12 @@ function buildMergedTkaSubmissionState(
       year: 'numeric',
     }),
     durasiPengerjaan: `${Math.max(1, durasiMenitUsed)} Menit`,
+    ...(tahunPelajaran || prevSub?.tahunPelajaran
+      ? { tahunPelajaran: tahunPelajaran || prevSub?.tahunPelajaran }
+      : {}),
+    ...(semester || prevSub?.semester
+      ? { semester: semester || prevSub?.semester }
+      : {}),
     updatedAt: new Date().toISOString(),
   };
 
@@ -990,6 +1000,12 @@ export function reconcileTkaResultsToSubmissions(options: {
         skorTotal: avg,
         predikat: avg >= 88 ? 'A' : avg >= 78 ? 'B' : avg >= 68 ? 'C' : 'D',
         status: avg >= 75 ? 'Tuntas' : 'Remedial',
+        ...(res.tahunPelajaran || existing.tahunPelajaran
+          ? { tahunPelajaran: res.tahunPelajaran || existing.tahunPelajaran }
+          : {}),
+        ...(res.semester || existing.semester
+          ? { semester: res.semester || existing.semester }
+          : {}),
         updatedAt: res.recordedAt ? new Date(res.recordedAt).toISOString() : new Date().toISOString(),
       };
       subMap.set(docId, updatedItem);
@@ -1023,6 +1039,8 @@ export function reconcileTkaResultsToSubmissions(options: {
         res.tanggal ||
         new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }),
       durasiPengerjaan: '45 Menit',
+      ...(res.tahunPelajaran ? { tahunPelajaran: res.tahunPelajaran } : {}),
+      ...(res.semester ? { semester: res.semester } : {}),
       updatedAt: res.recordedAt ? new Date(res.recordedAt).toISOString() : new Date().toISOString(),
     };
     subMap.set(docId, newItem);

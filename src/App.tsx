@@ -677,7 +677,6 @@ export default function App() {
           }
         } else if (
           !tkaSubmissionsCollectionLoadedRef.current &&
-          !alreadySeeded &&
           !resetMeta.tkaClearedAt &&
           activeUserRef.current?.role !== 'siswa'
         ) {
@@ -688,8 +687,10 @@ export default function App() {
             saveTkaSubmissionsBatchToFirestore(localSubs).catch((err) =>
               console.warn('Initial TKA submissions seed warning:', err)
             );
-          } else {
+          } else if (!alreadySeeded) {
             tkaSubmissionsCollectionLoadedRef.current = true;
+          } else {
+            reconcileAndSyncLocalTkaSubmissions(getStoredStudents()).catch(() => {});
           }
         } else {
           tkaSubmissionsCollectionLoadedRef.current = true;
@@ -747,7 +748,7 @@ export default function App() {
     idbHydrationPromise.then(() => {
       if (!isMounted) return;
       flushPendingTkaSubmissionsToFirestore().catch(() => {});
-      reconcileAndSyncLocalTkaSubmissions().catch(() => {});
+      reconcileAndSyncLocalTkaSubmissions(getStoredStudents()).catch(() => {});
     });
 
     const handleOnlineSync = () => {

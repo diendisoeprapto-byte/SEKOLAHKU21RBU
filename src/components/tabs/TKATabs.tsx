@@ -63,6 +63,7 @@ import {
   saveStoredTKAResults,
   getStoredTKASubmissions,
   saveStoredTKASubmissions,
+  getStoredCBTResults,
   clearTKAResultsFromStorage,
   notifyStorageMutation,
   TKASubmissionItem,
@@ -106,6 +107,8 @@ import {
   flushPendingTkaSubmissionsToFirestore,
   mergeTkaSubmissionLists,
   getPendingTkaSubmissions,
+  reconcileTkaResultsToSubmissions,
+  reconcileAndSyncLocalTkaSubmissions,
 } from '../../utils/tkaFirestore';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxImporter';
@@ -370,9 +373,22 @@ export const TKATabs: React.FC<Props> = ({
 
   useEffect(() => {
     if (subType === 'analisis-tka' || subType === 'hasil-tka' || subType === 'tes-tka-siswa') {
-      setTkaSubmissions(getStoredTKASubmissions());
+      const existingSubs = getStoredTKASubmissions();
+      const { mergedSubmissions, recoveredItems } = reconcileTkaResultsToSubmissions({
+        cbtResults: getStoredCBTResults(),
+        tkaResults: getStoredTKAResults(),
+        existingSubmissions: existingSubs,
+        students,
+      });
+      if (recoveredItems.length > 0) {
+        saveStoredTKASubmissions(mergedSubmissions);
+        setTkaSubmissions(mergedSubmissions);
+        reconcileAndSyncLocalTkaSubmissions(students).catch(() => {});
+      } else {
+        setTkaSubmissions(existingSubs);
+      }
     }
-  }, [subType]);
+  }, [subType, students]);
 
   useEffect(() => {
     setDurPanelMinutes(getTKADurationMinutes(tkaDurations, durPanelPaket, durPanelMapel));
@@ -1065,6 +1081,8 @@ export const TKATabs: React.FC<Props> = ({
           status,
           tanggalUjian: '04 November 2026',
           durasiPengerjaan: '45 Menit',
+          tahunPelajaran: activeYear,
+          semester: activeSemester,
           updatedAt: nowIso,
         };
       });
@@ -4488,9 +4506,17 @@ export const TKATabs: React.FC<Props> = ({
         const availableAnalisisMapels = Array.from(
           new Set([...TKA_MAPEL_LIST, ...questionsForSelectedPaket.map((q) => q.mapel)])
         ).filter((m) => questionsForSelectedPaket.some((q) => q.mapel === m));
-        const effectiveSelectedMapels = selectedAnalisisMapels.filter((m) =>
-          availableAnalisisMapels.includes(m)
+        const selectedNormalizedSet = new Set(
+          selectedAnalisisMapels.map((m) => normalizeTkaMapelKey(m))
         );
+        const effectiveSelectedMapels =
+          selectedAnalisisMapels.length === 0
+            ? []
+            : availableAnalisisMapels.filter(
+                (m) =>
+                  selectedAnalisisMapels.includes(m) ||
+                  selectedNormalizedSet.has(normalizeTkaMapelKey(m))
+              );
 
         const filteredAnalisisQuestions = questionsForSelectedPaket.filter((q) => {
           if (effectiveSelectedMapels.length === 0) return false;
@@ -4793,8 +4819,13 @@ export const TKATabs: React.FC<Props> = ({
                               type="checkbox"
                               checked={isChecked}
                               onChange={() => {
+                                const normM = normalizeTkaMapelKey(m);
                                 if (isChecked) {
-                                  setSelectedAnalisisMapels(selectedAnalisisMapels.filter((x) => x !== m));
+                                  setSelectedAnalisisMapels(
+                                    selectedAnalisisMapels.filter(
+                                      (x) => x !== m && normalizeTkaMapelKey(x) !== normM
+                                    )
+                                  );
                                 } else {
                                   setSelectedAnalisisMapels([...selectedAnalisisMapels, m]);
                                 }
@@ -5297,10 +5328,11 @@ export const TKATabs: React.FC<Props> = ({
       {/* ============================================================== */}
       {subType === 'hasil-tka' && (() => {
         // Read directly from real student test submissions for active term, excluding ABK set to Tidak Masuk TKA
-        const recordsForPaket = tkaSubmissions
+        const termTkaSubmissions = tkaSubmissions.filter(
+          (sub) => !isExcludedTkaSubmission(sub) && doesRecordMatchTerm(sub, activeYear, activeSemester)
+        );
+        const recordsForPaket = termTkaSubmissions
           .filter((sub) => {
-            if (isExcludedTkaSubmission(sub)) return false;
-            if (!doesRecordMatchTerm(sub, activeYear, activeSemester)) return false;
             if (hasilPaketTka === 'all') return true;
             const baseSubPaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
             return baseSubPaket === hasilPaketTka || sub.paket === hasilPaketTka;
@@ -5813,7 +5845,7 @@ export const TKATabs: React.FC<Props> = ({
                     onChange={(e) => setHasilPaketTka(e.target.value)}
                     className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-slate-50 focus:bg-white focus:border-purple-600 outline-none cursor-pointer"
                   >
-                    <option value="all">Semua Paket TKA ({tkaSubmissions.filter((s) => !isExcludedTkaSubmission(s)).length} Data)</option>
+                    <option value="all">Semua Paket TKA ({termTkaSubmissions.length} Data)</option>
                     {TKA_JENIS_LIST.map((j) => (
                       <option key={j} value={j}>
                         {j}
@@ -6902,6 +6934,8 @@ export const TKATabs: React.FC<Props> = ({
             completedMapelKeys,
             questionAnswers: studentAnswers,
             durasiMenitUsed: durationUsedMinutes,
+            tahunPelajaran: activeYear,
+            semester: activeSemester,
           });
           setTkaSubmissions(updatedList);
 

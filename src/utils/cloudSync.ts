@@ -257,8 +257,6 @@ export function collectPersistentLocalBackup(options?: {
     'sekolahku_cbt_exams',
     'sekolahku_tka_questions',
     'sekolahku_tka_submissions',
-    'sekolahku_cbt_results',
-    'sekolahku_tka_results',
   ]);
 
   for (let i = 0; i < localStorage.length; i++) {
@@ -278,6 +276,9 @@ export function collectPersistentLocalBackup(options?: {
     }
   }
 
+  backupData.sekolahku_cbt_results = getStoredCBTResults();
+  backupData.sekolahku_tka_results = getStoredTKAResults();
+
   if (!options?.excludeLargeCollections) {
     backupData.sekolahku_students = getStoredStudents();
     backupData.sekolahku_teachers = getStoredTeachers();
@@ -285,8 +286,6 @@ export function collectPersistentLocalBackup(options?: {
     backupData.sekolahku_cbt_exams = getStoredCBTExams();
     backupData.sekolahku_tka_questions = getStoredTKAQuestions();
     backupData.sekolahku_tka_submissions = getStoredTKASubmissions();
-    backupData.sekolahku_cbt_results = getStoredCBTResults();
-    backupData.sekolahku_tka_results = getStoredTKAResults();
   }
 
   return backupData;

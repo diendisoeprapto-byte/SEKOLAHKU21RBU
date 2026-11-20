@@ -107,6 +107,37 @@ export const AnalisisSoalTab: React.FC<Props> = ({
   const [cbtResults, setCbtResults] = useState<CBTExamResult[]>(
     () => getStoredCBTResults().filter((r) => !isTkaResultEntry(r))
   );
+  const hasManualFilterRef = React.useRef<boolean>(false);
+
+  const allStudents = useMemo(
+    () => (propStudents && propStudents.length > 0 ? propStudents : getStoredStudents()),
+    [propStudents]
+  );
+
+  const studentById = useMemo(() => {
+    const m = new Map<string, Student>();
+    allStudents.forEach((s) => {
+      if (s.id) m.set(s.id, s);
+    });
+    return m;
+  }, [allStudents]);
+
+  const studentByName = useMemo(() => {
+    const m = new Map<string, Student>();
+    allStudents.forEach((s) => {
+      if (s.nama) m.set(s.nama.trim().toLowerCase(), s);
+    });
+    return m;
+  }, [allStudents]);
+
+  const examById = useMemo(() => {
+    const m = new Map<string, CBTExam>();
+    cbtExams.forEach((ex) => {
+      if (ex.id) m.set(ex.id, ex);
+    });
+    return m;
+  }, [cbtExams]);
+
   const termCbtResults = useMemo(
     () => cbtResults.filter((r) => doesRecordMatchTerm(r, activeYear, activeSemester)),
     [cbtResults, activeYear, activeSemester]
@@ -129,6 +160,111 @@ export const AnalisisSoalTab: React.FC<Props> = ({
       window.removeEventListener('storage', refreshData);
     };
   }, []);
+
+  const submittedExamBuckets = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        mapel: string;
+        paket: string;
+        kelas: string;
+        count: number;
+        latestRecordedAt: number;
+        tanggal: string;
+      }
+    >();
+
+    termCbtResults.forEach((r) => {
+      const linkedExam = examById.get(r.examId);
+      const linkedStudent =
+        studentById.get(r.studentId) ||
+        (r.studentName ? studentByName.get(r.studentName.trim().toLowerCase()) : undefined);
+      const mapel = (r.mapel || linkedExam?.mapel || 'Ilmu Pengetahuan Alam dan Sosial (IPAS)').trim();
+      const paket = (
+        r.paketName ||
+        linkedExam?.paketName ||
+        linkedExam?.subPaket ||
+        linkedExam?.judul ||
+        'Sumatif 1 (AS 1)'
+      ).trim();
+      const kelas = (linkedStudent?.kelas || linkedExam?.kelas || propActiveClass || 'Kelas 6A').trim();
+      const key = `${mapel}::${paket}::${kelas}`;
+      const existing = map.get(key);
+      const recAt = Number(r.recordedAt || 0);
+      if (existing) {
+        existing.count += 1;
+        if (recAt > existing.latestRecordedAt) {
+          existing.latestRecordedAt = recAt;
+          if (r.tanggal) existing.tanggal = r.tanggal;
+        }
+      } else {
+        map.set(key, {
+          mapel,
+          paket,
+          kelas,
+          count: 1,
+          latestRecordedAt: recAt,
+          tanggal: r.tanggal || '-',
+        });
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => b.latestRecordedAt - a.latestRecordedAt);
+  }, [termCbtResults, examById, studentById, studentByName, propActiveClass]);
+
+  const availableMapels = useMemo(() => {
+    const extra = [
+      ...cbtExams.map((e) => e.mapel),
+      ...submittedExamBuckets.map((b) => b.mapel),
+    ].filter((v): v is string => Boolean(v && v.trim()));
+    return Array.from(new Set([...MAPEL_LIST, ...extra]));
+  }, [cbtExams, submittedExamBuckets]);
+
+  const availablePakets = useMemo(() => {
+    const extra = [
+      ...cbtExams.map((e) => e.paketName || e.subPaket || e.judul),
+      ...submittedExamBuckets.map((b) => b.paket),
+    ].filter((v): v is string => Boolean(v && v.trim()));
+    return Array.from(new Set([...PAKET_SOAL_LIST, ...extra]));
+  }, [cbtExams, submittedExamBuckets]);
+
+  const availableClasses = useMemo(() => {
+    const extra = [
+      ...cbtExams.map((e) => e.kelas),
+      ...submittedExamBuckets.map((b) => b.kelas),
+    ].filter((v): v is string => Boolean(v && v.trim()));
+    return Array.from(new Set([...CLASSES_LIST, ...extra]));
+  }, [cbtExams, submittedExamBuckets]);
+
+  const getResultClass = (r: CBTExamResult): string => {
+    const linkedStudent =
+      studentById.get(r.studentId) ||
+      (r.studentName ? studentByName.get(r.studentName.trim().toLowerCase()) : undefined);
+    const linkedExam = examById.get(r.examId);
+    return (linkedStudent?.kelas || linkedExam?.kelas || '').trim();
+  };
+
+  // Auto-select real exam bucket on load/sync if current filter has no real submissions
+  React.useEffect(() => {
+    if (hasManualFilterRef.current || submittedExamBuckets.length === 0) return;
+
+    const currentHasReal = termCbtResults.some((r) => {
+      const rCls = getResultClass(r);
+      const classOk = selectedClass === 'all' || !rCls || rCls === selectedClass;
+      return classOk && doesExamResultMatchTarget(r, selectedPaket, selectedMapel);
+    });
+
+    if (!currentHasReal) {
+      const preferred =
+        (propActiveClass && submittedExamBuckets.find((b) => b.kelas === propActiveClass)) ||
+        submittedExamBuckets[0];
+      if (preferred) {
+        setSelectedMapel(preferred.mapel);
+        setSelectedPaket(preferred.paket);
+        setSelectedClass(preferred.kelas);
+      }
+    }
+  }, [submittedExamBuckets, termCbtResults, selectedMapel, selectedPaket, selectedClass, propActiveClass]);
 
   const executeClearCbtData = (scope: 'paket' | 'all') => {
     if (scope === 'paket') {
@@ -157,8 +293,35 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     );
   };
 
-  // Matching real CBT exam & student results (if created in Bank Soal CBT)
+  // Matching real student results for active mapel, paket, and class
+  const matchingExamResults = useMemo(() => {
+    const mapelLower = selectedMapel.trim().toLowerCase();
+    return termCbtResults.filter((r) => {
+      const rCls = getResultClass(r);
+      if (selectedClass !== 'all' && rCls && rCls !== selectedClass) {
+        return false;
+      }
+      if (r.mapel) {
+        const rMapel = r.mapel.trim().toLowerCase();
+        if (rMapel && !(rMapel === mapelLower || rMapel.includes(mapelLower) || mapelLower.includes(rMapel))) {
+          return false;
+        }
+      }
+      return doesExamResultMatchTarget(r, selectedPaket, selectedMapel);
+    });
+  }, [termCbtResults, selectedPaket, selectedMapel, selectedClass, studentById, studentByName, examById]);
+
+  // Matching real CBT exam (prioritize exact examId from real student submissions, then Mapel/Paket/Class match)
   const matchingExam = useMemo(() => {
+    if (matchingExamResults.length > 0) {
+      for (const r of matchingExamResults) {
+        const byId = examById.get(r.examId);
+        if (byId && Array.isArray(byId.soalList) && byId.soalList.length > 0) {
+          return byId;
+        }
+      }
+    }
+
     const mapelLower = selectedMapel.trim().toLowerCase();
     const paketLower = selectedPaket.trim().toLowerCase();
     const classLower = selectedClass.trim().toLowerCase();
@@ -183,26 +346,13 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     });
 
     if (candidates.length === 0) return null;
+    if (selectedClass === 'all') return candidates[0];
     return (
       candidates.find((c) => (c.kelas || '').toLowerCase() === classLower) ||
       candidates.find((c) => gradeMatch && (c.kelas || '').includes(gradeMatch)) ||
       candidates[0]
     );
-  }, [cbtExams, selectedMapel, selectedPaket, selectedClass]);
-
-  const matchingExamResults = useMemo(() => {
-    const mapelLower = selectedMapel.trim().toLowerCase();
-    return termCbtResults.filter((r) => {
-      if (r.mapel) {
-        const rMapel = r.mapel.trim().toLowerCase();
-        if (rMapel && !(rMapel === mapelLower || rMapel.includes(mapelLower) || mapelLower.includes(rMapel))) {
-          return false;
-        }
-      }
-      if (matchingExam && r.examId === matchingExam.id) return true;
-      return doesExamResultMatchTarget(r, selectedPaket, selectedMapel);
-    });
-  }, [termCbtResults, matchingExam, selectedPaket, selectedMapel]);
+  }, [cbtExams, examById, matchingExamResults, selectedMapel, selectedPaket, selectedClass]);
 
   const isDefaultTerm = activeYear === '2026/2027' && isSemesterOneLabel(activeSemester);
 
@@ -556,19 +706,20 @@ export const AnalisisSoalTab: React.FC<Props> = ({
   // - Paket Sumatif Inklusi, Remedial Inklusi, ASTS Inklusi, ASAS Inklusi: HANYA menampilkan siswa inklusi
   // - Paket Sumatif reguler, ASTS, ASAS: nama siswa inklusi TIDAK dimasukkan
   const targetStudents = useMemo(() => {
-    const all = propStudents && propStudents.length > 0 ? propStudents : getStoredStudents();
-    const inClass = all.filter((s) => s.kelas === selectedClass);
+    const inClass =
+      selectedClass === 'all' ? allStudents : allStudents.filter((s) => s.kelas === selectedClass);
     if (isInclusivePackage) {
       return inClass.filter((s) => isSiswaInklusi(s.kebutuhanKhusus));
     }
     return inClass.filter((s) => !isSiswaInklusi(s.kebutuhanKhusus));
-  }, [propStudents, selectedClass, isInclusivePackage]);
+  }, [allStudents, selectedClass, isInclusivePackage]);
 
   const studentAnalysisRows = useMemo(() => {
     if (matchingExamResults.length === 0 && !isDefaultTerm) {
       return [];
     }
     if (matchingExamResults.length > 0) {
+      const matchedResultIds = new Set<CBTExamResult>();
       const rows = targetStudents
         .map((s) => {
           const matched = matchingExamResults.find(
@@ -577,6 +728,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
               (r.studentName && r.studentName.trim().toLowerCase() === s.nama.trim().toLowerCase())
           );
           if (!matched) return null;
+          matchedResultIds.add(matched);
           const score = Number.isFinite(Number(matched.nilai)) ? Math.round(Number(matched.nilai)) : 0;
           const isTuntas = score >= 75;
           return {
@@ -591,9 +743,48 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           };
         })
         .filter((item): item is NonNullable<typeof item> => item !== null);
-      if (rows.length > 0 || !isDefaultTerm) {
-        return rows;
-      }
+
+      // Pastikan hasil pengerjaan nyata yang belum masuk ke targetStudents (mis. siswa inklusi/mutasi ID) tetap tampil
+      matchingExamResults.forEach((res, idx) => {
+        if (matchedResultIds.has(res)) return;
+        const knownStudent =
+          studentById.get(res.studentId) ||
+          (res.studentName ? studentByName.get(res.studentName.trim().toLowerCase()) : undefined);
+        const fallbackStudent: Student = knownStudent || {
+          id: res.studentId || `res_${idx}`,
+          barcodeId: '',
+          nama: res.studentName || 'Peserta Didik',
+          jenisKelamin: 'L',
+          tempatLahir: '',
+          tanggalLahir: '',
+          nik: '',
+          nisn: '-',
+          kebutuhanKhusus: 'Tidak Ada (Reguler)',
+          namaAyah: '',
+          namaIbu: '',
+          alamat: '',
+          agama: 'Islam',
+          kelas: selectedClass === 'all' ? '-' : selectedClass,
+          tahunPelajaran: activeYear,
+          username: '',
+          password: '',
+          fotoUrl: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150',
+        };
+        const score = Number.isFinite(Number(res.nilai)) ? Math.round(Number(res.nilai)) : 0;
+        const isTuntas = score >= 75;
+        rows.push({
+          student: fallbackStudent,
+          score,
+          isTuntas,
+          rekomendasi: isTuntas
+            ? 'Tuntas - Memiliki penguasaan kompetensi yang baik pada materi ini'
+            : isInclusivePackage
+            ? 'Perlu Penguatan Pendampingan Individual / Remedial Adaptif'
+            : 'Diberikan Pendampingan Remedial Terarah pada TP yang Belum Tercapai',
+        });
+      });
+
+      return rows;
     }
     return targetStudents.map((s, idx) => {
       const seed = ((s.nama.charCodeAt(0) * 3 + idx * 7 + selectedPaket.length * 5) % 25) + 75;
@@ -610,7 +801,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           : 'Diberikan Pendampingan Remedial Terarah pada TP yang Belum Tercapai',
       };
     });
-  }, [targetStudents, selectedPaket, isInclusivePackage, matchingExamResults, isDefaultTerm]);
+  }, [targetStudents, selectedPaket, selectedClass, isInclusivePackage, matchingExamResults, isDefaultTerm, studentById, studentByName, activeYear]);
 
   const kepsekAnalisis = resolveKepalaSekolah(teachers, profile);
   const waliAnalisis = resolveWaliKelas(teachers, selectedClass);
@@ -720,6 +911,57 @@ export const AnalisisSoalTab: React.FC<Props> = ({
       </div>
 
       <div className="bg-white p-6 print:p-0 rounded-3xl print:rounded-none shadow-md print:shadow-none border border-slate-100 print:border-0 space-y-6">
+        {/* Quick-Jump Submitted CBT Exams Bar */}
+        {submittedExamBuckets.length > 0 && (
+          <div className="no-print p-4 rounded-2xl bg-emerald-50/80 border border-emerald-200 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-black text-emerald-900">
+                <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Data Hasil Ujian CBT Siswa Tersedia ({cbtResultCount} Pengerjaan)</span>
+              </div>
+              <span className="text-[11px] font-semibold text-emerald-800">
+                Klik paket ujian di bawah untuk menampilkan analisis hasil nyatanya:
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {submittedExamBuckets.map((bucket) => {
+                const isSelected =
+                  bucket.mapel === selectedMapel &&
+                  bucket.paket === selectedPaket &&
+                  (selectedClass === 'all' || bucket.kelas === selectedClass);
+                return (
+                  <button
+                    key={`${bucket.mapel}_${bucket.paket}_${bucket.kelas}`}
+                    type="button"
+                    onClick={() => {
+                      hasManualFilterRef.current = true;
+                      setSelectedMapel(bucket.mapel);
+                      setSelectedPaket(bucket.paket);
+                      setSelectedClass(bucket.kelas);
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs'
+                        : 'bg-white text-slate-700 border-emerald-200 hover:border-emerald-400 hover:bg-emerald-50'
+                    }`}
+                  >
+                    <span className="truncate max-w-[260px]">
+                      {bucket.mapel} · {bucket.paket} · {bucket.kelas}
+                    </span>
+                    <span
+                      className={`px-1.5 py-0.5 rounded-md text-[10px] font-black tabular-nums ${
+                        isSelected ? 'bg-emerald-800 text-emerald-50' : 'bg-emerald-100 text-emerald-800'
+                      }`}
+                    >
+                      {bucket.count} Siswa
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Filter Bar: Dropdown Mapel & Dropdown Jenis Soal */}
         <div className="no-print p-4 rounded-2xl bg-slate-50 border border-slate-200 grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
           <div className="md:col-span-5">
@@ -728,10 +970,13 @@ export const AnalisisSoalTab: React.FC<Props> = ({
             </label>
             <select
               value={selectedMapel}
-              onChange={(e) => setSelectedMapel(e.target.value)}
+              onChange={(e) => {
+                hasManualFilterRef.current = true;
+                setSelectedMapel(e.target.value);
+              }}
               className="w-full px-3.5 py-2.5 rounded-xl border-2 border-emerald-500 bg-white text-xs font-black text-slate-800 outline-none shadow-2xs cursor-pointer focus:ring-2 focus:ring-emerald-200"
             >
-              {MAPEL_LIST.map((m) => (
+              {availableMapels.map((m) => (
                 <option key={m} value={m}>
                   {m}
                 </option>
@@ -745,10 +990,13 @@ export const AnalisisSoalTab: React.FC<Props> = ({
             </label>
             <select
               value={selectedPaket}
-              onChange={(e) => setSelectedPaket(e.target.value)}
+              onChange={(e) => {
+                hasManualFilterRef.current = true;
+                setSelectedPaket(e.target.value);
+              }}
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none shadow-2xs cursor-pointer focus:border-emerald-500"
             >
-              {PAKET_SOAL_LIST.map((p) => (
+              {availablePakets.map((p) => (
                 <option key={p} value={p}>
                   {p}
                 </option>
@@ -762,10 +1010,14 @@ export const AnalisisSoalTab: React.FC<Props> = ({
             </label>
             <select
               value={selectedClass}
-              onChange={(e) => setSelectedClass(e.target.value)}
+              onChange={(e) => {
+                hasManualFilterRef.current = true;
+                setSelectedClass(e.target.value);
+              }}
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none shadow-2xs cursor-pointer focus:border-emerald-500"
             >
-              {CLASSES_LIST.map((c) => (
+              <option value="all">Semua Kelas</option>
+              {availableClasses.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>

@@ -1530,6 +1530,7 @@ export const StudentDashboard: React.FC<Props> = ({
     }
 
     // Rekam ke CBT Results di storage (beserta metadata ujian untuk Statistik Performa)
+    const activeFilters = getActiveFilters();
     const storedRes = getStoredCBTResults();
     storedRes.push({
       examId: finishedExam.id,
@@ -1545,6 +1546,8 @@ export const StudentDashboard: React.FC<Props> = ({
       paketName: finishedExam.paketName,
       tanggal: getLocalTodayStr(),
       recordedAt: Date.now(),
+      tahunPelajaran: activeFilters.year,
+      semester: activeFilters.semester,
     });
     saveStoredCBTResults(storedRes);
 
@@ -1562,6 +1565,8 @@ export const StudentDashboard: React.FC<Props> = ({
           completedMapelKeys: [normMapelKey],
           questionAnswers: answers,
           durasiMenitUsed: durationUsed,
+          tahunPelajaran: activeFilters.year,
+          semester: activeFilters.semester,
         });
         const tkaRes = await Promise.race([
           tkaPromise,
