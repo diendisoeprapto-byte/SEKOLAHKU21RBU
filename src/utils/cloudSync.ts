@@ -74,6 +74,8 @@ import {
   reconcileTkaResultsToSubmissions,
   getPendingTkaSubmissions,
   flushPendingTkaSubmissionsToFirestore,
+  alignTkaSubmissionsWithStudents,
+  deleteTkaSubmissionDocsInFirestore,
 } from './tkaFirestore';
 import {
   replaceCbtExamsInFirestore,
@@ -1270,15 +1272,27 @@ export async function reconcileTkaFromCloudBackup(): Promise<{
       resetMeta: effectiveResetMeta,
     });
 
-    const mergedAll = mergeTkaSubmissionLists(firestoreTkaSubs, [
+    const mergedRaw = mergeTkaSubmissionLists(firestoreTkaSubs, [
       ...validBackupSubs,
       ...recoveredItems,
     ]);
+    const { alignedSubmissions: mergedAll, staleDocIds } = alignTkaSubmissionsWithStudents(
+      mergedRaw,
+      studentsList
+    );
 
     const firestoreMap = new Map(firestoreTkaSubs.map((s) => [s.id, s]));
     const itemsToUpload = mergedAll.filter((item) => {
       const existing = firestoreMap.get(item.id);
       if (!existing) return true;
+      if (
+        existing.kelas !== item.kelas ||
+        existing.studentName !== item.studentName ||
+        (existing.nisn || '') !== (item.nisn || '') ||
+        existing.studentId !== item.studentId
+      ) {
+        return true;
+      }
       const existingCompletedLen = Array.isArray(existing.completedMapels) ? existing.completedMapels.length : 0;
       const newCompletedLen = Array.isArray(item.completedMapels) ? item.completedMapels.length : 0;
       if (newCompletedLen > existingCompletedLen) return true;
@@ -1288,6 +1302,9 @@ export async function reconcileTkaFromCloudBackup(): Promise<{
       return false;
     });
 
+    if (staleDocIds.length > 0) {
+      await deleteTkaSubmissionDocsInFirestore(staleDocIds);
+    }
     if (itemsToUpload.length > 0) {
       await saveTkaSubmissionsBatchToFirestore(itemsToUpload);
     }

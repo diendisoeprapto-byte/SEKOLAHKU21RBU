@@ -46,6 +46,7 @@ import { stripQuestionTags } from '../../utils/questionFormat';
 import { syncAllLocalToCloud } from '../../utils/cloudSync';
 import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
 import { doesRecordMatchTerm, isSemesterOneLabel } from '../../utils/semesterUtils';
+import { findLiveStudentForRecord } from '../../utils/tkaFirestore';
 
 export const PAKET_SOAL_LIST = [
   'Sumatif 1 (AS 1)',
@@ -176,9 +177,11 @@ export const AnalisisSoalTab: React.FC<Props> = ({
 
     termCbtResults.forEach((r) => {
       const linkedExam = examById.get(r.examId);
-      const linkedStudent =
-        studentById.get(r.studentId) ||
-        (r.studentName ? studentByName.get(r.studentName.trim().toLowerCase()) : undefined);
+      const linkedStudent = findLiveStudentForRecord(allStudents, {
+        studentId: r.studentId,
+        nisn: r.nisn,
+        studentName: r.studentName,
+      });
       const mapel = (r.mapel || linkedExam?.mapel || 'Ilmu Pengetahuan Alam dan Sosial (IPAS)').trim();
       const paket = (
         r.paketName ||
@@ -237,11 +240,13 @@ export const AnalisisSoalTab: React.FC<Props> = ({
   }, [cbtExams, submittedExamBuckets]);
 
   const getResultClass = (r: CBTExamResult): string => {
-    const linkedStudent =
-      studentById.get(r.studentId) ||
-      (r.studentName ? studentByName.get(r.studentName.trim().toLowerCase()) : undefined);
+    const linkedStudent = findLiveStudentForRecord(allStudents, {
+      studentId: r.studentId,
+      nisn: r.nisn,
+      studentName: r.studentName,
+    });
     const linkedExam = examById.get(r.examId);
-    return (linkedStudent?.kelas || linkedExam?.kelas || '').trim();
+    return (linkedStudent?.kelas || r.kelas || linkedExam?.kelas || '').trim();
   };
 
   // Auto-select real exam bucket on load/sync if current filter has no real submissions
@@ -747,9 +752,11 @@ export const AnalisisSoalTab: React.FC<Props> = ({
       // Pastikan hasil pengerjaan nyata yang belum masuk ke targetStudents (mis. siswa inklusi/mutasi ID) tetap tampil
       matchingExamResults.forEach((res, idx) => {
         if (matchedResultIds.has(res)) return;
-        const knownStudent =
-          studentById.get(res.studentId) ||
-          (res.studentName ? studentByName.get(res.studentName.trim().toLowerCase()) : undefined);
+        const knownStudent = findLiveStudentForRecord(allStudents, {
+          studentId: res.studentId,
+          nisn: res.nisn,
+          studentName: res.studentName,
+        });
         const fallbackStudent: Student = knownStudent || {
           id: res.studentId || `res_${idx}`,
           barcodeId: '',

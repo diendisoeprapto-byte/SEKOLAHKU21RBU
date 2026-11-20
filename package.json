@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "build:gas": "node scripts/build-gas.cjs",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "validate:students": "tsx scripts/validate-student-classes.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

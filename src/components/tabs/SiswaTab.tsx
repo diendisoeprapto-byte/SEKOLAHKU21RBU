@@ -19,12 +19,16 @@ import {
   ArrowDown,
   AlertTriangle,
   GraduationCap,
+  Phone,
+  ShieldAlert,
+  Sparkles,
+  MessageCircle,
 } from 'lucide-react';
 import { collection, doc, getDocs, writeBatch } from 'firebase/firestore';
 import { db } from '../../utils/firebase';
 import { Student, SchoolProfile, ReligionType, KEBUTUHAN_KHUSUS_OPTIONS, isSiswaInklusi } from '../../types';
 import { MAPEL_LIST } from '../../data/defaultData';
-import { getLocalTodayStr } from '../../utils/dateUtils';
+import { getLocalTodayStr, getLocalTimeStr } from '../../utils/dateUtils';
 import {
   downloadTemplateStudentsXLSX,
   exportStudentsToXLSX,
@@ -33,13 +37,24 @@ import {
 } from '../../utils/excel';
 import { renderBarcodeToCanvas } from '../../utils/barcode';
 import { BarcodePrintModal } from '../BarcodePrintModal';
-import { CLASSES_LIST, ACADEMIC_YEARS, isKelas6Class } from '../../utils/storage';
+import {
+  CLASSES_LIST,
+  ACADEMIC_YEARS,
+  isKelas6Class,
+  AttendanceRecordItem,
+  getStoredAttendance,
+} from '../../utils/storage';
+import { buildParentAttendanceWhatsAppLink } from '../../utils/attendanceNotifier';
 import {
   saveStudentsToFirestoreBatch,
   saveSingleStudentToFirestore,
   deleteStudentFromFirestore,
   deleteMultipleStudentsFromFirestore,
 } from '../../utils/studentFirestore';
+import {
+  validateStudentsAgainstKelasConfig,
+  applyAutoFixStudentClassDiscrepancies,
+} from '../../utils/studentClassValidation';
 
 export type StudentSortOption =
   | 'nama-asc'
@@ -58,6 +73,8 @@ interface Props {
   profile: SchoolProfile;
   activeClass: string;
   activeYear: string;
+  attendanceRecords?: Record<string, AttendanceRecordItem>;
+  liveTodayStr?: string;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onOpenZoom: (url: string, title: string) => void;
   onSelectClass?: (kelas: string) => void;
@@ -69,6 +86,8 @@ export const SiswaTab: React.FC<Props> = ({
   profile,
   activeClass,
   activeYear,
+  attendanceRecords,
+  liveTodayStr,
   showToast,
   onOpenZoom,
   onSelectClass,
@@ -83,6 +102,7 @@ export const SiswaTab: React.FC<Props> = ({
   const [newKebutuhanKhusus, setNewKebutuhanKhusus] = useState<string>('Tidak Ada (Reguler)');
   const [newNamaAyah, setNewNamaAyah] = useState('');
   const [newNamaIbu, setNewNamaIbu] = useState('');
+  const [newNoTelpOrtu, setNewNoTelpOrtu] = useState('');
   const [newAlamat, setNewAlamat] = useState('');
   const [newUser, setNewUser] = useState('');
   const [newPass, setNewPass] = useState('123');
@@ -92,10 +112,12 @@ export const SiswaTab: React.FC<Props> = ({
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [importStatusMessage, setImportStatusMessage] = useState<string>('');
 
-  // Filter kelas, pencarian & pengurutan siswa (default A -> Z)
+  // Filter kelas, pencarian, auto-flag validasi kelas & pengurutan siswa (default A -> Z)
   const [selectedFilterClass, setSelectedFilterClass] = useState<string>(activeClass);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [sortBy, setSortBy] = useState<StudentSortOption>('nama-asc');
+  const [onlyShowFlagged, setOnlyShowFlagged] = useState<boolean>(false);
+  const [isAutoFixingClasses, setIsAutoFixingClasses] = useState<boolean>(false);
 
   // State konfirmasi hapus (menghindari window.confirm yang diblokir iframe)
   const [deletingStudent, setDeletingStudent] = useState<Student | null>(null);
@@ -144,8 +166,53 @@ export const SiswaTab: React.FC<Props> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const todayDateStr = liveTodayStr || getLocalTodayStr();
+  const resolvedAttendanceMap = useMemo(
+    () => attendanceRecords || getStoredAttendance(),
+    [attendanceRecords]
+  );
+
+  // Validasi otomatis keselarasan array students terhadap konfigurasi kelas resmi
+  const classValidationReport = useMemo(
+    () =>
+      validateStudentsAgainstKelasConfig(students, {
+        allowedClasses: CLASSES_LIST,
+      }),
+    [students]
+  );
+
+  const handleAutoFixFlaggedClasses = async () => {
+    const { updatedStudents, fixedCount } = applyAutoFixStudentClassDiscrepancies(
+      students,
+      classValidationReport
+    );
+    if (fixedCount === 0) {
+      showToast(
+        'Ketidaksesuaian yang ter-flag memerlukan peninjauan manual (mis. duplikasi identitas lintas kelas).',
+        'error'
+      );
+      return;
+    }
+    setIsAutoFixingClasses(true);
+    try {
+      await saveStudentsToFirestoreBatch(updatedStudents);
+      onSaveStudents(updatedStudents, true);
+      showToast(
+        `Berhasil memperbaiki & menyinkronkan ${fixedCount} data kelas/barcode siswa ke Firestore!`,
+        'success'
+      );
+    } catch (err: any) {
+      showToast(`Gagal menyimpan perbaikan otomatis: ${err?.message || 'Kendala koneksi'}`, 'error');
+    } finally {
+      setIsAutoFixingClasses(false);
+    }
+  };
+
   const filteredStudents = useMemo(() => {
     const filtered = students.filter((s) => {
+      if (onlyShowFlagged && !classValidationReport.flaggedStudentMap[s.id]) {
+        return false;
+      }
       const matchesClass = selectedFilterClass === 'SEMUA' ? true : s.kelas === selectedFilterClass;
       if (!matchesClass) return false;
       if (!searchQuery.trim()) return true;
@@ -154,6 +221,7 @@ export const SiswaTab: React.FC<Props> = ({
         s.nama.toLowerCase().includes(q) ||
         s.nisn.toLowerCase().includes(q) ||
         (s.nik && s.nik.toLowerCase().includes(q)) ||
+        (s.noTelpOrtu && s.noTelpOrtu.toLowerCase().includes(q)) ||
         s.barcodeId.toLowerCase().includes(q) ||
         s.kelas.toLowerCase().includes(q)
       );
@@ -201,7 +269,7 @@ export const SiswaTab: React.FC<Props> = ({
           return compareName();
       }
     });
-  }, [students, selectedFilterClass, searchQuery, sortBy]);
+  }, [students, selectedFilterClass, searchQuery, sortBy, onlyShowFlagged, classValidationReport]);
 
   const handleToggleColumnSort = (col: 'nama' | 'nisn' | 'jk' | 'kelas') => {
     setSortBy((prev) => {
@@ -572,6 +640,7 @@ export const SiswaTab: React.FC<Props> = ({
       kebutuhanKhusus: newKebutuhanKhusus,
       namaAyah: newNamaAyah || '-',
       namaIbu: newNamaIbu || '-',
+      noTelpOrtu: newNoTelpOrtu.trim(),
       alamat: newAlamat || 'Jakarta Utara',
       agama: newAgama,
       kelas: activeClass,
@@ -591,6 +660,7 @@ export const SiswaTab: React.FC<Props> = ({
       setNewNisn('');
       setNewNamaAyah('');
       setNewNamaIbu('');
+      setNewNoTelpOrtu('');
       setNewAlamat('');
       setNewUser('');
       setNewPass('123');
@@ -908,7 +978,20 @@ export const SiswaTab: React.FC<Props> = ({
               />
             </div>
 
-            <div className="lg:col-span-2">
+            <div>
+              <label className="text-[11px] font-extrabold text-emerald-700 block mb-1">
+                No. Telpon / WA Orang Tua
+              </label>
+              <input
+                type="tel"
+                value={newNoTelpOrtu}
+                onChange={(e) => setNewNoTelpOrtu(e.target.value)}
+                placeholder="0812xxxxxxxx / 62812..."
+                className="w-full px-3.5 py-2 rounded-xl border border-emerald-400 text-xs font-mono font-bold bg-emerald-50/40"
+              />
+            </div>
+
+            <div>
               <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Alamat Lengkap</label>
               <input
                 type="text"
@@ -1073,6 +1156,57 @@ export const SiswaTab: React.FC<Props> = ({
           </div>
         </div>
 
+        {/* Panel Peringatan Validasi Otomatis Ketidaksesuaian Kelas Siswa */}
+        {classValidationReport.summary.flaggedStudents > 0 && (
+          <div className="p-4 rounded-2xl border-2 border-amber-300 bg-amber-50/80 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div className="text-xs space-y-1">
+                <div className="font-display font-black text-amber-950">
+                  Validasi Otomatis Kelas: {classValidationReport.summary.flaggedStudents} Siswa Ter-Flag Memiliki Ketidaksesuaian Data Kelas/Barcode
+                </div>
+                <p className="text-amber-900">
+                  Ditemukan {classValidationReport.summary.errorCount} error &amp; {classValidationReport.summary.warningCount} peringatan terhadap konfigurasi kelas resmi. Contoh:{' '}
+                  <strong>{classValidationReport.discrepancies[0]?.message}</strong>
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setOnlyShowFlagged((prev) => !prev);
+                  if (!onlyShowFlagged) {
+                    setSelectedFilterClass('SEMUA');
+                  }
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border transition cursor-pointer ${
+                  onlyShowFlagged
+                    ? 'bg-amber-600 text-white border-amber-700'
+                    : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-100'
+                }`}
+              >
+                {onlyShowFlagged
+                  ? 'Tampilkan Semua Siswa'
+                  : `Filter Siswa Ter-Flag (${classValidationReport.summary.flaggedStudents})`}
+              </button>
+              {classValidationReport.discrepancies.some((d) => d.autoFixable) && (
+                <button
+                  type="button"
+                  onClick={handleAutoFixFlaggedClasses}
+                  disabled={isAutoFixingClasses}
+                  className="px-3.5 py-1.5 rounded-xl text-xs font-display font-black bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>{isAutoFixingClasses ? 'Menyinkronkan...' : 'Perbaiki Otomatis'}</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs sm:text-sm">
             <thead>
@@ -1191,8 +1325,31 @@ export const SiswaTab: React.FC<Props> = ({
                   </td>
                 </tr>
               ) : (
-                filteredStudents.map((s) => (
-                  <tr key={s.id} className="hover:bg-slate-50">
+                filteredStudents.map((s) => {
+                  const studentFlag = classValidationReport.flaggedStudentMap[s.id];
+                  const todayRec = resolvedAttendanceMap[`${todayDateStr}_${s.id}`];
+                  const attendanceStatusForWa: 'H' | 'S' | 'I' | 'A' =
+                    todayRec?.status || 'H';
+                  const waProofLink = buildParentAttendanceWhatsAppLink({
+                    student: s,
+                    date: todayDateStr,
+                    time: todayRec?.time || getLocalTimeStr(new Date(), false),
+                    status: attendanceStatusForWa,
+                    methodLabel: todayRec
+                      ? 'Presensi Harian Tercatat'
+                      : 'Konfirmasi Kehadiran (Data Siswa)',
+                  });
+                  return (
+                  <tr
+                    key={s.id}
+                    className={
+                      studentFlag
+                        ? studentFlag.highestSeverity === 'error'
+                          ? 'bg-rose-50/70 hover:bg-rose-50'
+                          : 'bg-amber-50/60 hover:bg-amber-50'
+                        : 'hover:bg-slate-50'
+                    }
+                  >
                     <td className="p-3">
                       <div className="flex items-center gap-2.5">
                         <img
@@ -1202,8 +1359,27 @@ export const SiswaTab: React.FC<Props> = ({
                           className="w-10 h-10 rounded-xl object-cover border border-slate-200 cursor-zoom-in"
                         />
                         <div>
-                          <div className="font-bold text-slate-800">{s.nama}</div>
+                          <div className="font-bold text-slate-800 flex flex-wrap items-center gap-1.5">
+                            <span>{s.nama}</span>
+                            {studentFlag && (
+                              <span
+                                title={studentFlag.reasons.join(' | ')}
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${
+                                  studentFlag.highestSeverity === 'error'
+                                    ? 'bg-rose-600 text-white'
+                                    : 'bg-amber-500 text-white'
+                                }`}
+                              >
+                                <AlertTriangle className="w-2.5 h-2.5" /> Ter-Flag
+                              </span>
+                            )}
+                          </div>
                           <div className="text-[11px] font-mono text-rose-700 font-bold">{s.barcodeId}</div>
+                          {studentFlag && (
+                            <div className="text-[10px] font-semibold text-rose-700 mt-0.5 max-w-[240px]">
+                              {studentFlag.reasons[0]}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -1230,11 +1406,19 @@ export const SiswaTab: React.FC<Props> = ({
                         {s.kebutuhanKhusus || 'Tidak Ada (Reguler)'}
                       </span>
                     </td>
-                    <td className="p-3 max-w-[180px]">
+                    <td className="p-3 max-w-[210px]">
                       <div className="text-xs text-slate-700 font-semibold truncate">
                         Ayah: {s.namaAyah || '-'} | Ibu: {s.namaIbu || '-'}
                       </div>
-                      <div className="text-[11px] text-slate-500 truncate" title={s.alamat}>
+                      <div className="mt-0.5 flex items-center gap-1 text-[11px] font-mono">
+                        <Phone className="w-3 h-3 text-emerald-600 shrink-0" />
+                        {s.noTelpOrtu ? (
+                          <span className="font-bold text-emerald-700">{s.noTelpOrtu}</span>
+                        ) : (
+                          <span className="text-slate-400 italic font-sans">No. WA Ortu belum diisi</span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-500 truncate mt-0.5" title={s.alamat}>
                         {s.alamat || '-'}
                       </div>
                     </td>
@@ -1257,6 +1441,40 @@ export const SiswaTab: React.FC<Props> = ({
                     </td>
                     <td className="p-3 text-right">
                       <div className="flex items-center justify-end gap-1">
+                        {waProofLink.url ? (
+                          <a
+                            href={waProofLink.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() =>
+                              showToast(
+                                `Membuka WhatsApp konfirmasi kehadiran untuk ${s.nama} (${s.noTelpOrtu})`,
+                                'success'
+                              )
+                            }
+                            className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold inline-flex items-center gap-1 shadow-2xs transition whitespace-nowrap"
+                            title={`Kirim WhatsApp konfirmasi kehadiran ke orang tua (${s.noTelpOrtu})`}
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            <span>Kirim WA</span>
+                          </a>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingStudent({ ...s });
+                              showToast(
+                                `No. Telpon / WA orang tua ${s.nama} belum diisi. Silakan lengkapi di form edit.`,
+                                'error'
+                              );
+                            }}
+                            className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-amber-50 text-slate-500 hover:text-amber-700 border border-slate-200 text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                            title="No. Telpon / WA Orang Tua belum diisi — klik untuk mengisi"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            <span>Kirim WA</span>
+                          </button>
+                        )}
                         {isKelas6Class(s.kelas) && (
                           <button
                             type="button"
@@ -1286,7 +1504,8 @@ export const SiswaTab: React.FC<Props> = ({
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -1771,6 +1990,19 @@ export const SiswaTab: React.FC<Props> = ({
                     value={editingStudent.namaIbu || ''}
                     onChange={(e) => setEditingStudent({ ...editingStudent, namaIbu: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="font-bold text-emerald-700 block mb-1">
+                    No. Telpon / WhatsApp Orang Tua (untuk Bukti Kehadiran WA)
+                  </label>
+                  <input
+                    type="tel"
+                    value={editingStudent.noTelpOrtu || ''}
+                    onChange={(e) => setEditingStudent({ ...editingStudent, noTelpOrtu: e.target.value })}
+                    placeholder="0812xxxxxxxx atau 62812xxxxxxxx"
+                    className="w-full px-3 py-2 rounded-xl border border-emerald-400 bg-emerald-50/40 font-mono font-bold"
                   />
                 </div>
 

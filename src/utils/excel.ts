@@ -356,9 +356,28 @@ export const parseImportStudentsXLSX = (
             'jeniskebutuhankhusus'
           ]) || 'Tidak Ada (Reguler)';
 
-          // Ekstraksi Orang Tua & Alamat
+          // Ekstraksi Orang Tua, No. Telpon WA & Alamat
           const namaAyah = getRowVal(rowDict, ['namaayah', 'ayah', 'bapak', 'namabapak']) || '-';
           const namaIbu = getRowVal(rowDict, ['namaibu', 'ibu']) || '-';
+          const noTelpOrtu = getRowVal(rowDict, [
+            'notelponortu',
+            'notelportu',
+            'notelponwaorangtua',
+            'notelponwa',
+            'notelponorangtua',
+            'teleponorangtua',
+            'telponorangtua',
+            'nowaortu',
+            'nowaorangtua',
+            'nohportu',
+            'nohporangtua',
+            'nohp',
+            'nowa',
+            'whatsapp',
+            'notelp',
+            'notelpon',
+            'telepon',
+          ]);
           const alamat = getRowVal(rowDict, [
             'alamat',
             'alamatrumah',
@@ -431,6 +450,7 @@ export const parseImportStudentsXLSX = (
             kebutuhanKhusus,
             namaAyah,
             namaIbu,
+            noTelpOrtu,
             alamat,
             agama,
             kelas,
@@ -561,6 +581,7 @@ export const downloadTemplateStudentsXLSX = () => {
       'Kebutuhan Khusus': 'Tidak Ada (Reguler)',
       'Nama Ayah': 'Budi Pratama',
       'Nama Ibu': 'Siti Nurjanah',
+      'No. Telpon / WA Orang Tua': '081234567890',
       'Alamat': 'Jl. Rawa Badak Utara No. 12, Koja, Jakarta Utara',
       'Kelas': 'Kelas 6A',
       'Tahun Pelajaran': '2026/2027',
@@ -578,6 +599,7 @@ export const downloadTemplateStudentsXLSX = () => {
       'Kebutuhan Khusus': 'Tidak Ada (Reguler)',
       'Nama Ayah': 'Ahmad Zaki',
       'Nama Ibu': 'Fatimah Hanum',
+      'No. Telpon / WA Orang Tua': '081298765432',
       'Alamat': 'Jl. Lorong 102 No. 5, Rawa Badak Utara, Koja',
       'Kelas': 'Kelas 6A',
       'Tahun Pelajaran': '2026/2027',
@@ -606,6 +628,7 @@ export const exportStudentsToXLSX = (students: Student[]) => {
     'Kebutuhan Khusus': s.kebutuhanKhusus || 'Tidak Ada (Reguler)',
     'Nama Ayah': s.namaAyah || '-',
     'Nama Ibu': s.namaIbu || '-',
+    'No. Telpon / WA Orang Tua': s.noTelpOrtu || '-',
     'Alamat': s.alamat || '-',
     'Kelas': s.kelas,
     'Tahun Pelajaran': s.tahunPelajaran,

@@ -15,6 +15,7 @@ export interface AttendanceNotificationConfig {
   whatsappWebhookHeaderToken: string;
   whatsappTargetPhone: string;
   includeConfidence: boolean;
+  sendToParentWa?: boolean;
 }
 
 export interface AttendanceNotificationLog {
@@ -27,6 +28,7 @@ export interface AttendanceNotificationLog {
   studentClass: string;
   nisn: string;
   barcodeId: string;
+  parentPhone?: string;
   status: 'H' | 'S' | 'I' | 'A';
   methodLabel: string;
   confidence?: number;
@@ -35,6 +37,8 @@ export interface AttendanceNotificationLog {
   telegramDetail?: string;
   whatsappStatus: NotificationDeliveryStatus | 'SKIPPED';
   whatsappDetail?: string;
+  parentWaStatus?: NotificationDeliveryStatus | 'SKIPPED';
+  parentWaDetail?: string;
   overallStatus: NotificationDeliveryStatus;
 }
 
@@ -54,6 +58,7 @@ export const DEFAULT_NOTIFICATION_CONFIG: AttendanceNotificationConfig = {
   whatsappWebhookHeaderToken: '',
   whatsappTargetPhone: '',
   includeConfidence: true,
+  sendToParentWa: true,
 };
 
 export const normalizeIndonesianPhone = (raw: string): string => {
@@ -92,6 +97,7 @@ export const saveNotificationConfig = (
     whatsappWebhookHeaderToken: (config.whatsappWebhookHeaderToken || '').trim(),
     whatsappTargetPhone: (config.whatsappTargetPhone || '').trim(),
     includeConfidence: config.includeConfidence !== false,
+    sendToParentWa: config.sendToParentWa !== false,
   };
 
   try {
@@ -260,6 +266,46 @@ export const formatFaceAttendanceMessage = (params: {
   ].join('\n');
 };
 
+export const formatParentAttendanceProofMessage = (params: {
+  student: Pick<Student, 'nama' | 'kelas' | 'nisn' | 'barcodeId' | 'namaAyah' | 'namaIbu'>;
+  date: string;
+  time: string;
+  status: 'H' | 'S' | 'I' | 'A';
+  methodLabel?: string;
+  confidence?: number;
+  includeConfidence?: boolean;
+}): string => {
+  const statusText =
+    params.status === 'H'
+      ? 'HADIR'
+      : params.status === 'S'
+      ? 'SAKIT'
+      : params.status === 'I'
+      ? 'IZIN'
+      : 'ALPA';
+
+  const confidenceLine =
+    params.includeConfidence !== false && typeof params.confidence === 'number' && params.confidence > 0
+      ? `\n• Akurasi Verifikasi: ${params.confidence}%`
+      : '';
+
+  return [
+    `*[SERBU 21 • SDN Rawa Badak Utara 21]*`,
+    `Bukti Kehadiran Peserta Didik`,
+    ``,
+    `Yth. Bapak/Ibu Orang Tua/Wali dari *${params.student.nama}*,`,
+    `Kami informasikan bahwa ananda telah tercatat absensinya di sekolah:`,
+    `• Nama Siswa : ${params.student.nama}`,
+    `• Kelas / NISN : ${params.student.kelas} / ${params.student.nisn || '-'}`,
+    `• Status : *${statusText}*`,
+    `• Tanggal : ${params.date}`,
+    `• Jam Tercatat : ${params.time} WIB`,
+    `• Metode : ${params.methodLabel || 'Absensi Sekolah'}${confidenceLine}`,
+    ``,
+    `Terima kasih atas kerja sama Bapak/Ibu.`,
+  ].join('\n');
+};
+
 export const formatTelegramHtmlMessage = (params: {
   student: Pick<Student, 'nama' | 'kelas' | 'nisn' | 'barcodeId'>;
   date: string;
@@ -295,10 +341,66 @@ export const formatTelegramHtmlMessage = (params: {
   );
 };
 
+export interface BuildParentAttendanceWhatsAppLinkParams {
+  student: Pick<
+    Student,
+    'nama' | 'kelas' | 'nisn' | 'barcodeId' | 'namaAyah' | 'namaIbu' | 'noTelpOrtu'
+  >;
+  date?: string;
+  time?: string;
+  status?: 'H' | 'S' | 'I' | 'A';
+  methodLabel?: string;
+  confidence?: number;
+  includeConfidence?: boolean;
+  customPhone?: string;
+}
+
+/**
+ * Menyusun tautan WhatsApp API (api.whatsapp.com/send) lengkap dengan pesan
+ * konfirmasi kehadiran siswa berdasarkan nomor telpon/WA orang tua yang terdata.
+ */
+export const buildParentAttendanceWhatsAppLink = (
+  params: BuildParentAttendanceWhatsAppLinkParams
+): { url: string | null; phone: string; message: string } => {
+  const rawPhone = params.customPhone ?? params.student.noTelpOrtu ?? '';
+  const normalizedPhone = normalizeIndonesianPhone(rawPhone);
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const hh = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+
+  const resolvedDate = params.date || `${yyyy}-${mm}-${dd}`;
+  const resolvedTime = params.time || `${hh}:${min}`;
+  const resolvedStatus = params.status || 'H';
+
+  const message = formatParentAttendanceProofMessage({
+    student: params.student,
+    date: resolvedDate,
+    time: resolvedTime,
+    status: resolvedStatus,
+    methodLabel: params.methodLabel || 'Konfirmasi Kehadiran Sekolah',
+    confidence: params.confidence,
+    includeConfidence: params.includeConfidence,
+  });
+
+  if (!normalizedPhone) {
+    return { url: null, phone: '', message };
+  }
+
+  const url = `https://api.whatsapp.com/send?phone=${normalizedPhone}&text=${encodeURIComponent(
+    message
+  )}`;
+  return { url, phone: normalizedPhone, message };
+};
+
 export const buildWhatsAppDirectUrl = (targetPhone: string, message: string): string => {
   const normalized = normalizeIndonesianPhone(targetPhone);
   const encoded = encodeURIComponent(message);
-  return normalized ? `https://wa.me/${normalized}?text=${encoded}` : `https://wa.me/?text=${encoded}`;
+  return normalized
+    ? `https://api.whatsapp.com/send?phone=${normalized}&text=${encoded}`
+    : `https://api.whatsapp.com/send?text=${encoded}`;
 };
 
 async function sendTelegramDelivery(
@@ -360,17 +462,22 @@ async function sendWhatsAppWebhookDelivery(
     status: string;
     methodLabel: string;
     confidence?: number;
+    targetPhoneOverride?: string;
+    recipientType?: 'teacher_group' | 'parent';
   }
 ): Promise<{ status: NotificationDeliveryStatus; detail: string }> {
   const webhookUrl = config.whatsappWebhookUrl.trim();
-  const targetPhone = normalizeIndonesianPhone(config.whatsappTargetPhone);
+  const targetPhone = normalizeIndonesianPhone(
+    payload.targetPhoneOverride ?? config.whatsappTargetPhone
+  );
+  const label = payload.recipientType === 'parent' ? 'WA Ortu' : 'WA';
 
   if (!webhookUrl) {
     return {
       status: 'LOGGED',
       detail: targetPhone
-        ? `Webhook WA belum diisi — siap kirim ke ${targetPhone} via tombol Kirim WA.`
-        : 'Webhook WA belum diisi — tersimpan di log untuk kirim manual.',
+        ? `Webhook ${label} belum diisi — siap kirim ke ${targetPhone} via tombol Kirim WA.`
+        : `Webhook ${label} belum diisi — tersimpan di log untuk kirim manual.`,
     };
   }
 
@@ -388,7 +495,11 @@ async function sendWhatsAppWebhookDelivery(
       body: JSON.stringify({
         app: 'SERBU 21',
         school: 'SDN Rawa Badak Utara 21',
-        event: 'face_attendance_detected',
+        event:
+          payload.recipientType === 'parent'
+            ? 'parent_attendance_proof'
+            : 'face_attendance_detected',
+        recipientType: payload.recipientType || 'teacher_group',
         phone: targetPhone,
         target: targetPhone,
         message: payload.message,
@@ -419,27 +530,25 @@ async function sendWhatsAppWebhookDelivery(
 
     return {
       status: 'SENT',
-      detail: targetPhone ? `Terkirim via Webhook WA (${targetPhone})` : 'Terkirim via Webhook WA',
+      detail: targetPhone ? `Terkirim ke ${label} (${targetPhone})` : `Terkirim via Webhook ${label}`,
     };
   } catch (err) {
     return {
       status: 'FAILED',
-      detail: err instanceof Error ? err.message : 'Gagal menghubungi Webhook WhatsApp',
+      detail: err instanceof Error ? err.message : `Gagal menghubungi Webhook ${label}`,
     };
   }
 }
 
 function computeOverallStatus(
   tg: NotificationDeliveryStatus | 'SKIPPED',
-  wa: NotificationDeliveryStatus | 'SKIPPED'
+  wa: NotificationDeliveryStatus | 'SKIPPED',
+  parentWa?: NotificationDeliveryStatus | 'SKIPPED'
 ): NotificationDeliveryStatus {
-  if (tg === 'SENT' || wa === 'SENT') {
-    if (tg === 'FAILED' || wa === 'FAILED') {
-      return 'SENT';
-    }
+  if (tg === 'SENT' || wa === 'SENT' || parentWa === 'SENT') {
     return 'SENT';
   }
-  if (tg === 'FAILED' || wa === 'FAILED') {
+  if (tg === 'FAILED' || wa === 'FAILED' || parentWa === 'FAILED') {
     return 'FAILED';
   }
   return 'LOGGED';
@@ -474,12 +583,24 @@ export async function dispatchFaceAttendanceNotification(params: {
     includeConfidence: config.includeConfidence,
   });
 
+  const parentPhoneNormalized = normalizeIndonesianPhone(params.student.noTelpOrtu || '');
+  const parentProofMessage = formatParentAttendanceProofMessage({
+    student: params.student,
+    date: params.date,
+    time: params.time,
+    status: params.status,
+    methodLabel: params.methodLabel,
+    confidence: params.confidence,
+    includeConfidence: config.includeConfidence,
+  });
+
   const useTelegram =
     config.channelMode === 'both' || config.channelMode === 'telegram';
   const useWhatsApp =
     config.channelMode === 'both' || config.channelMode === 'whatsapp';
+  const useParentWa = useWhatsApp && config.sendToParentWa !== false;
 
-  const [tgResult, waResult] = await Promise.all([
+  const [tgResult, waResult, parentWaResult] = await Promise.all([
     useTelegram
       ? sendTelegramDelivery(config, tgHtml)
       : Promise.resolve<{ status: 'SKIPPED'; detail: string }>({
@@ -495,10 +616,31 @@ export async function dispatchFaceAttendanceNotification(params: {
           status: params.status,
           methodLabel: params.methodLabel,
           confidence: params.confidence,
+          recipientType: 'teacher_group',
         })
       : Promise.resolve<{ status: 'SKIPPED'; detail: string }>({
           status: 'SKIPPED',
           detail: 'Kanal WhatsApp dinonaktifkan pada mode pilihan',
+        }),
+    useParentWa && parentPhoneNormalized
+      ? sendWhatsAppWebhookDelivery(config, {
+          message: parentProofMessage,
+          student: params.student,
+          date: params.date,
+          time: params.time,
+          status: params.status,
+          methodLabel: params.methodLabel,
+          confidence: params.confidence,
+          targetPhoneOverride: parentPhoneNormalized,
+          recipientType: 'parent',
+        })
+      : Promise.resolve<{ status: 'SKIPPED'; detail: string }>({
+          status: 'SKIPPED',
+          detail: !useWhatsApp
+            ? 'Kanal WhatsApp tidak aktif'
+            : config.sendToParentWa === false
+            ? 'Pengiriman WA ke Orang Tua dinonaktifkan'
+            : 'No. Telpon/WA Orang Tua belum diisi di Data Siswa',
         }),
   ]);
 
@@ -512,6 +654,7 @@ export async function dispatchFaceAttendanceNotification(params: {
     studentClass: params.student.kelas,
     nisn: params.student.nisn || '',
     barcodeId: params.student.barcodeId || '',
+    parentPhone: parentPhoneNormalized || undefined,
     status: params.status,
     methodLabel: params.methodLabel,
     confidence: params.confidence,
@@ -520,7 +663,9 @@ export async function dispatchFaceAttendanceNotification(params: {
     telegramDetail: tgResult.detail,
     whatsappStatus: waResult.status,
     whatsappDetail: waResult.detail,
-    overallStatus: computeOverallStatus(tgResult.status, waResult.status),
+    parentWaStatus: parentWaResult.status,
+    parentWaDetail: parentWaResult.detail,
+    overallStatus: computeOverallStatus(tgResult.status, waResult.status, parentWaResult.status),
   };
 
   const existingLogs = getStoredNotificationLogs();
@@ -530,9 +675,13 @@ export async function dispatchFaceAttendanceNotification(params: {
 
 export async function retryNotificationLog(
   logEntry: AttendanceNotificationLog,
-  config?: AttendanceNotificationConfig
+  config?: AttendanceNotificationConfig,
+  liveParentPhone?: string
 ): Promise<AttendanceNotificationLog> {
   const cfg = config || getStoredNotificationConfig();
+  const resolvedParentPhone = normalizeIndonesianPhone(
+    liveParentPhone || logEntry.parentPhone || ''
+  );
   const fakeStudent: Student = {
     id: logEntry.studentId,
     barcodeId: logEntry.barcodeId,
@@ -545,6 +694,7 @@ export async function retryNotificationLog(
     kebutuhanKhusus: 'Tidak Ada (Reguler)',
     namaAyah: '',
     namaIbu: '',
+    noTelpOrtu: resolvedParentPhone,
     alamat: '',
     agama: 'Islam',
     kelas: logEntry.studentClass,
@@ -564,10 +714,21 @@ export async function retryNotificationLog(
     includeConfidence: cfg.includeConfidence,
   });
 
+  const parentProofMessage = formatParentAttendanceProofMessage({
+    student: fakeStudent,
+    date: logEntry.date,
+    time: logEntry.time,
+    status: logEntry.status,
+    methodLabel: logEntry.methodLabel,
+    confidence: logEntry.confidence,
+    includeConfidence: cfg.includeConfidence,
+  });
+
   const useTelegram = cfg.channelMode === 'both' || cfg.channelMode === 'telegram';
   const useWhatsApp = cfg.channelMode === 'both' || cfg.channelMode === 'whatsapp';
+  const useParentWa = useWhatsApp && cfg.sendToParentWa !== false && Boolean(resolvedParentPhone);
 
-  const [tgResult, waResult] = await Promise.all([
+  const [tgResult, waResult, parentWaResult] = await Promise.all([
     useTelegram
       ? sendTelegramDelivery(cfg, tgHtml)
       : Promise.resolve<{ status: 'SKIPPED'; detail: string }>({
@@ -583,21 +744,43 @@ export async function retryNotificationLog(
           status: logEntry.status,
           methodLabel: logEntry.methodLabel,
           confidence: logEntry.confidence,
+          recipientType: 'teacher_group',
         })
       : Promise.resolve<{ status: 'SKIPPED'; detail: string }>({
           status: 'SKIPPED',
           detail: 'Kanal WhatsApp tidak aktif',
         }),
+    useParentWa
+      ? sendWhatsAppWebhookDelivery(cfg, {
+          message: parentProofMessage,
+          student: fakeStudent,
+          date: logEntry.date,
+          time: logEntry.time,
+          status: logEntry.status,
+          methodLabel: logEntry.methodLabel,
+          confidence: logEntry.confidence,
+          targetPhoneOverride: resolvedParentPhone,
+          recipientType: 'parent',
+        })
+      : Promise.resolve<{ status: 'SKIPPED'; detail: string }>({
+          status: 'SKIPPED',
+          detail: !useWhatsApp
+            ? 'Kanal WhatsApp tidak aktif'
+            : 'No. Telpon/WA Orang Tua belum tersedia',
+        }),
   ]);
 
   const updatedEntry: AttendanceNotificationLog = {
     ...logEntry,
+    parentPhone: resolvedParentPhone || logEntry.parentPhone,
     createdAt: new Date().toISOString(),
     telegramStatus: tgResult.status,
     telegramDetail: tgResult.detail,
     whatsappStatus: waResult.status,
     whatsappDetail: waResult.detail,
-    overallStatus: computeOverallStatus(tgResult.status, waResult.status),
+    parentWaStatus: parentWaResult.status,
+    parentWaDetail: parentWaResult.detail,
+    overallStatus: computeOverallStatus(tgResult.status, waResult.status, parentWaResult.status),
   };
 
   const currentLogs = getStoredNotificationLogs().map((item) =>

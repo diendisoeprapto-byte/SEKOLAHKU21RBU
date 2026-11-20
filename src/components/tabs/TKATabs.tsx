@@ -109,6 +109,9 @@ import {
   getPendingTkaSubmissions,
   reconcileTkaResultsToSubmissions,
   reconcileAndSyncLocalTkaSubmissions,
+  findLiveStudentForRecord,
+  alignTkaSubmissionsWithStudents,
+  syncTkaSubmissionsWithLiveStudents,
 } from '../../utils/tkaFirestore';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxImporter';
@@ -380,10 +383,16 @@ export const TKATabs: React.FC<Props> = ({
         existingSubmissions: existingSubs,
         students,
       });
-      if (recoveredItems.length > 0) {
-        saveStoredTKASubmissions(mergedSubmissions);
-        setTkaSubmissions(mergedSubmissions);
-        reconcileAndSyncLocalTkaSubmissions(students).catch(() => {});
+      const candidateSubs = recoveredItems.length > 0 ? mergedSubmissions : existingSubs;
+      const aligned = alignTkaSubmissionsWithStudents(candidateSubs, students);
+      if (recoveredItems.length > 0 || aligned.hasChanges) {
+        saveStoredTKASubmissions(aligned.alignedSubmissions);
+        setTkaSubmissions(aligned.alignedSubmissions);
+        if (recoveredItems.length > 0) {
+          reconcileAndSyncLocalTkaSubmissions(students).catch(() => {});
+        } else {
+          syncTkaSubmissionsWithLiveStudents(students).catch(() => {});
+        }
       } else {
         setTkaSubmissions(existingSubs);
       }
@@ -4524,8 +4533,13 @@ export const TKATabs: React.FC<Props> = ({
           return true;
         });
 
-        // Submissions matching selected term, package & excluding ABK set to Tidak Masuk TKA
-        const relevantSubmissions = tkaSubmissions.filter((s) => {
+        // Submissions matching selected term, aligned with live Data Siswa, package & excluding ABK set to Tidak Masuk TKA
+        const alignedAllSubmissions = alignTkaSubmissionsWithStudents(tkaSubmissions, students).alignedSubmissions;
+        const relevantSubmissions = alignedAllSubmissions.filter((s) => {
+          const liveStudent = findLiveStudentForRecord(students, s);
+          if (liveStudent && (isAbkExcludedFromTka(liveStudent) || !isKelas6Class(liveStudent.kelas))) {
+            return false;
+          }
           if (isExcludedTkaSubmission(s)) return false;
           if (!doesRecordMatchTerm(s, activeYear, activeSemester)) return false;
           if (analisisPaketTka !== 'all') {
@@ -5327,10 +5341,15 @@ export const TKATabs: React.FC<Props> = ({
       {/* 5. MENU REPORT & HASIL TKA SISWA                               */}
       {/* ============================================================== */}
       {subType === 'hasil-tka' && (() => {
-        // Read directly from real student test submissions for active term, excluding ABK set to Tidak Masuk TKA
-        const termTkaSubmissions = tkaSubmissions.filter(
-          (sub) => !isExcludedTkaSubmission(sub) && doesRecordMatchTerm(sub, activeYear, activeSemester)
-        );
+        // Align & sinkronkan submission dengan Data Siswa live (nama, NISN, kelas/rombel) agar selalu akurat
+        const alignedSubmissions = alignTkaSubmissionsWithStudents(tkaSubmissions, students).alignedSubmissions;
+        const termTkaSubmissions = alignedSubmissions.filter((sub) => {
+          const liveStudent = findLiveStudentForRecord(students, sub);
+          if (liveStudent && (isAbkExcludedFromTka(liveStudent) || !isKelas6Class(liveStudent.kelas))) {
+            return false;
+          }
+          return !isExcludedTkaSubmission(sub) && doesRecordMatchTerm(sub, activeYear, activeSemester);
+        });
         const recordsForPaket = termTkaSubmissions
           .filter((sub) => {
             if (hasilPaketTka === 'all') return true;
@@ -5338,6 +5357,11 @@ export const TKATabs: React.FC<Props> = ({
             return baseSubPaket === hasilPaketTka || sub.paket === hasilPaketTka;
           })
           .map((sub) => {
+            const liveStudent = findLiveStudentForRecord(students, sub);
+            const resolvedStudentId = liveStudent?.id || sub.studentId;
+            const resolvedNama = liveStudent?.nama || sub.studentName;
+            const resolvedNisn = liveStudent?.nisn ?? sub.nisn;
+            const resolvedKelas = liveStudent?.kelas || sub.kelas || '-';
             const completed = Array.isArray(sub.completedMapels)
               ? sub.completedMapels.map((m) => normalizeTkaMapelKey(m))
               : [];
@@ -5346,17 +5370,19 @@ export const TKATabs: React.FC<Props> = ({
               return Number(sub.scoresPerMapel?.[key] ?? 0) > 0;
             };
             const resolvedFoto =
+              liveStudent?.fotoUrl ||
               sub.fotoUrl ||
-              studentPhotoMap.get(sub.studentId) ||
-              studentPhotoMap.get(sub.nisn) ||
+              studentPhotoMap.get(resolvedStudentId) ||
+              studentPhotoMap.get(resolvedNisn) ||
               DEFAULT_STUDENT_AVATAR_URL;
             return {
               ...sub,
               id: sub.id,
-              studentId: sub.studentId,
-              nama: sub.studentName,
-              nisn: sub.nisn,
-              kelas: sub.kelas,
+              studentId: resolvedStudentId,
+              nama: resolvedNama,
+              studentName: resolvedNama,
+              nisn: resolvedNisn,
+              kelas: resolvedKelas,
               fotoUrl: resolvedFoto,
               paket: sub.paketDasar || extractBaseTkaPaket(sub.paket),
               completedMapels: completed,
@@ -6749,11 +6775,12 @@ export const TKATabs: React.FC<Props> = ({
       {subType === 'tes-tka-siswa' && (() => {
         // Active student context
         const matchedActiveStudent = activeUser.role === 'siswa' && activeUser.studentData
-          ? students.find(
-              (s) =>
-                (activeUser.studentData?.id && s.id === activeUser.studentData.id) ||
-                (activeUser.studentData?.nisn && s.nisn === activeUser.studentData.nisn)
-            ) || activeUser.studentData
+          ? findLiveStudentForRecord(students, {
+              studentId: activeUser.studentData.id,
+              nisn: activeUser.studentData.nisn,
+              studentName: activeUser.studentData.nama,
+              username: activeUser.username,
+            }) || activeUser.studentData
           : null;
 
         if (activeUser.role === 'siswa' && matchedActiveStudent && isAbkExcludedFromTka(matchedActiveStudent)) {

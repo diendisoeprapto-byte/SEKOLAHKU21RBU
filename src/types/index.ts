@@ -93,6 +93,7 @@ export interface Student {
   ikutTka?: boolean; // Khusus siswa ABK/Inklusi: true/undefined = ikut TKA, false = tidak masuk TKA
   namaAyah: string;
   namaIbu: string;
+  noTelpOrtu?: string; // Nomor Telepon / WhatsApp Orang Tua / Wali
   alamat: string;
   agama: ReligionType;
   kelas: string; // e.g. "Kelas 6A"
@@ -261,6 +262,8 @@ export interface CBTExamResult {
   examId: string;
   studentId: string;
   studentName: string;
+  nisn?: string;
+  kelas?: string;
   skor: number;
   nilai: number; // 0-100
   waktuSelesai: string;

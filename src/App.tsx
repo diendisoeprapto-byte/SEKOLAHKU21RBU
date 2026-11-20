@@ -138,6 +138,8 @@ import {
   mergeTkaSubmissionLists,
   flushPendingTkaSubmissionsToFirestore,
   reconcileAndSyncLocalTkaSubmissions,
+  alignTkaSubmissionsWithStudents,
+  syncTkaSubmissionsWithLiveStudents,
 } from './utils/tkaFirestore';
 import {
   subscribeToCbtExamsCollection,
@@ -504,6 +506,8 @@ export default function App() {
         safeSetLocalStorage('sekolahku_students_seeded', 'true');
         setStudents(firestoreStudents);
         saveStoredStudents(firestoreStudents);
+        syncTkaSubmissionsWithLiveStudents(firestoreStudents).catch(() => {});
+        reconcileAndSyncLocalTkaSubmissions(firestoreStudents).catch(() => {});
       } else if (!studentsCollectionLoadedRef.current && !alreadySeeded) {
         const localStudents = getStoredStudents();
         if (localStudents.length > 0) {
@@ -665,12 +669,18 @@ export default function App() {
         });
         const mergedSubs = mergeTkaSubmissionLists(firestoreSubs, validPending);
 
-        if (mergedSubs.length > 0) {
+        const liveStudentList = studentsCollectionLoadedRef.current ? getStoredStudents() : [];
+        const alignedMerged =
+          liveStudentList.length > 0
+            ? alignTkaSubmissionsWithStudents(mergedSubs, liveStudentList).alignedSubmissions
+            : mergedSubs;
+
+        if (alignedMerged.length > 0) {
           tkaSubmissionsCollectionLoadedRef.current = true;
           markLargeCollectionHydratedFromCloud('sekolahku_tka_submissions');
           safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
           runWithoutStorageSync(() => {
-            saveStoredTKASubmissions(mergedSubs);
+            saveStoredTKASubmissions(alignedMerged);
           });
           if (validPending.length > 0) {
             flushPendingTkaSubmissionsToFirestore().catch(() => {});
@@ -689,7 +699,7 @@ export default function App() {
             );
           } else if (!alreadySeeded) {
             tkaSubmissionsCollectionLoadedRef.current = true;
-          } else {
+          } else if (studentsCollectionLoadedRef.current) {
             reconcileAndSyncLocalTkaSubmissions(getStoredStudents()).catch(() => {});
           }
         } else {
@@ -940,6 +950,7 @@ export default function App() {
     const sorted = sortStudentsAlphabetically(newStudents);
     setStudents(sorted);
     saveStoredStudents(sorted);
+    syncTkaSubmissionsWithLiveStudents(sorted).catch(() => {});
     if (!skipCloudWrite) {
       saveStudentsToFirestoreBatch(sorted, activeUser?.name || 'admin').catch((e) =>
         console.warn('saveStudentsToFirestoreBatch background sync warning:', e)
@@ -1348,6 +1359,8 @@ export default function App() {
                   profile={profile}
                   activeClass={activeClass}
                   activeYear={activeYear}
+                  attendanceRecords={attendanceRecords}
+                  liveTodayStr={liveTodayStr}
                   showToast={showToast}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
                   onSelectClass={setActiveClass}

@@ -11,6 +11,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { CBTExamResult, ExamResultsResetMeta, Student, TKAQuestion } from '../types';
+import { DEFAULT_STUDENTS } from '../data/defaultData';
 import {
   runWithoutStorageSync,
   saveStoredTKAQuestions,
@@ -21,6 +22,7 @@ import {
   getStoredExamResultsResetMeta,
   getStoredStudents,
   filterExamResultsByResetMeta,
+  isKelas6Class,
   isTkaResultEntry,
   normalizeTkaMapelKey,
   safeSetLocalStorage,
@@ -33,6 +35,293 @@ import { compressDataUrlImage } from './imageUtils';
 
 export const TKA_QUESTIONS_COLLECTION = 'tka_questions';
 export const TKA_SUBMISSIONS_COLLECTION = 'tka_submissions';
+
+const normalizeStudentName = (name?: string): string =>
+  String(name || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+
+const normalizeNisn = (nisn?: string): string => String(nisn || '').trim();
+
+const isPlaceholderStudentName = (name?: string): boolean => {
+  const n = normalizeStudentName(name);
+  return !n || n === 'siswa' || n === 'peserta didik' || n === '-' || n === 'anonim';
+};
+
+export function hasRealNonDefaultStudents(students: Student[]): boolean {
+  if (!Array.isArray(students) || students.length === 0) return false;
+  const defaultIds = new Set(DEFAULT_STUDENTS.map((d) => d.id));
+  const defaultNames = new Set(DEFAULT_STUDENTS.map((d) => normalizeStudentName(d.nama)));
+  return students.some(
+    (s) => !defaultIds.has(s.id) && !defaultNames.has(normalizeStudentName(s.nama))
+  );
+}
+
+export function isSyntheticDefaultStudentRecord(
+  ref: { studentId?: string; nisn?: string; studentName?: string; nama?: string },
+  liveStudents: Student[]
+): boolean {
+  if (!hasRealNonDefaultStudents(liveStudents)) return false;
+  const refId = String(ref.studentId || '').trim();
+  const refName = normalizeStudentName(ref.studentName ?? ref.nama);
+  const refNisn = normalizeNisn(ref.nisn);
+
+  // Pastikan record benar-benar cocok dengan entri dummy DEFAULT_STUDENTS dan tidak ada di liveStudents
+  const matchesLiveByNisn =
+    Boolean(refNisn && refNisn !== '-') &&
+    liveStudents.some((s) => normalizeNisn(s.nisn) === refNisn);
+  const matchesLiveByName =
+    !isPlaceholderStudentName(refName) &&
+    liveStudents.some((s) => normalizeStudentName(s.nama) === refName);
+  if (matchesLiveByNisn || matchesLiveByName) return false;
+
+  return DEFAULT_STUDENTS.some((d) => {
+    const dName = normalizeStudentName(d.nama);
+    const dNisn = normalizeNisn(d.nisn);
+    const idMatch = Boolean(refId && d.id === refId);
+    const nameMatch = Boolean(refName && dName === refName);
+    const nisnMatch = Boolean(refNisn && dNisn === refNisn);
+    return (idMatch && nameMatch) || (nisnMatch && nameMatch) || (idMatch && !refName);
+  });
+}
+
+/**
+ * Mencocokkan record hasil ujian/submission dengan data peserta didik live (`Data Siswa`)
+ * dengan memprioritaskan kecocokan NISN & nama dibandingkan kecocokan ID mentah,
+ * sehingga tidak tertukar apabila ID pernah bergeser atau bentrok saat impor ulang.
+ */
+export function findLiveStudentForRecord(
+  students: Student[],
+  ref: { studentId?: string; nisn?: string; studentName?: string; nama?: string; username?: string }
+): Student | undefined {
+  if (!Array.isArray(students) || students.length === 0) return undefined;
+
+  const refId = String(ref.studentId || '').trim();
+  const refNisn = normalizeNisn(ref.nisn);
+  const rawName = ref.studentName ?? ref.nama;
+  const refName = normalizeStudentName(rawName);
+  const refUser = String(ref.username || '').trim().toLowerCase();
+  const hasValidNisn = refNisn.length > 0 && refNisn !== '-';
+  const hasValidName = !isPlaceholderStudentName(rawName);
+
+  const pickBest = (candidates: Student[]): Student | undefined => {
+    if (candidates.length === 0) return undefined;
+    if (candidates.length === 1) return candidates[0];
+    return [...candidates].sort((a, b) => {
+      const score = (s: Student) =>
+        (refId && s.id === refId ? 4 : 0) +
+        (isKelas6Class(s.kelas) ? 2 : 0) +
+        (hasValidNisn && normalizeNisn(s.nisn) === refNisn ? 1 : 0);
+      return score(b) - score(a);
+    })[0];
+  };
+
+  // 1. NISN + Nama cocok persis
+  if (hasValidNisn && hasValidName) {
+    const m1 = students.filter(
+      (s) => normalizeNisn(s.nisn) === refNisn && normalizeStudentName(s.nama) === refName
+    );
+    if (m1.length > 0) return pickBest(m1);
+  }
+
+  // 2. Student ID + Nama cocok persis
+  if (refId && hasValidName) {
+    const m2 = students.filter(
+      (s) => s.id === refId && normalizeStudentName(s.nama) === refName
+    );
+    if (m2.length > 0) return pickBest(m2);
+  }
+
+  // 3. NISN cocok persis
+  if (hasValidNisn) {
+    const m3 = students.filter((s) => normalizeNisn(s.nisn) === refNisn);
+    if (m3.length > 0) return pickBest(m3);
+  }
+
+  // 4. Username cocok persis
+  if (refUser) {
+    const m4 = students.filter((s) => String(s.username || '').trim().toLowerCase() === refUser);
+    if (m4.length > 0) return pickBest(m4);
+  }
+
+  // 5. Nama ternormalisasi cocok persis
+  if (hasValidName) {
+    const m5 = students.filter((s) => normalizeStudentName(s.nama) === refName);
+    if (m5.length > 0) return pickBest(m5);
+  }
+
+  // 6. Fallback ID saja (misal guru mengedit ejaan nama siswa sementara NISN kosong)
+  if (refId) {
+    return students.find((s) => s.id === refId);
+  }
+
+  return undefined;
+}
+
+export function alignTkaSubmissionsWithStudents(
+  submissions: TKASubmissionItem[],
+  students: Student[]
+): {
+  alignedSubmissions: TKASubmissionItem[];
+  updatedItems: TKASubmissionItem[];
+  staleDocIds: string[];
+  hasChanges: boolean;
+} {
+  if (!Array.isArray(submissions) || submissions.length === 0) {
+    return { alignedSubmissions: [], updatedItems: [], staleDocIds: [], hasChanges: false };
+  }
+  if (!Array.isArray(students) || students.length === 0) {
+    return {
+      alignedSubmissions: submissions,
+      updatedItems: [],
+      staleDocIds: [],
+      hasChanges: false,
+    };
+  }
+
+  const dedupMap = new Map<string, TKASubmissionItem>();
+  const staleDocIdSet = new Set<string>();
+  const changedKeySet = new Set<string>();
+  let hasChanges = false;
+
+  submissions.forEach((sub) => {
+    if (!sub || typeof sub !== 'object') return;
+
+    if (isSyntheticDefaultStudentRecord(sub, students)) {
+      hasChanges = true;
+      if (sub.id) staleDocIdSet.add(sub.id);
+      return;
+    }
+
+    const basePaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
+    const liveStudent = findLiveStudentForRecord(students, sub);
+    const canonicalStudentId = liveStudent?.id || sub.studentId;
+    const canonicalId = makeSubmissionDocId(canonicalStudentId, basePaket, sub.id);
+
+    const alignedStudentName = liveStudent?.nama || sub.studentName;
+    const alignedNisn = liveStudent?.nisn ?? sub.nisn ?? '';
+    const alignedKelas = liveStudent?.kelas || sub.kelas;
+    const alignedFotoUrl = sanitizeSubmissionFotoUrl(liveStudent?.fotoUrl || sub.fotoUrl);
+
+    const metadataChanged = Boolean(
+      liveStudent &&
+        (sub.id !== canonicalId ||
+          sub.studentId !== liveStudent.id ||
+          sub.studentName !== alignedStudentName ||
+          (sub.nisn || '') !== (alignedNisn || '') ||
+          sub.kelas !== alignedKelas)
+    );
+
+    if (sub.id && sub.id !== canonicalId) {
+      staleDocIdSet.add(sub.id);
+      hasChanges = true;
+    }
+
+    const normalizedSub: TKASubmissionItem = {
+      ...sub,
+      id: canonicalId,
+      studentId: canonicalStudentId,
+      studentName: alignedStudentName,
+      nisn: alignedNisn,
+      kelas: alignedKelas,
+      fotoUrl: alignedFotoUrl,
+      paket: basePaket,
+      paketDasar: basePaket,
+    };
+
+    const existing = dedupMap.get(canonicalId);
+    if (existing) {
+      hasChanges = true;
+      const merged = mergeTwoTkaSubmissions(existing, normalizedSub);
+      const finalMerged: TKASubmissionItem = {
+        ...merged,
+        id: canonicalId,
+        studentId: canonicalStudentId,
+        studentName: alignedStudentName,
+        nisn: alignedNisn,
+        kelas: alignedKelas,
+        fotoUrl: alignedFotoUrl,
+      };
+      dedupMap.set(canonicalId, finalMerged);
+      changedKeySet.add(canonicalId);
+    } else {
+      dedupMap.set(canonicalId, normalizedSub);
+      if (metadataChanged) {
+        hasChanges = true;
+        changedKeySet.add(canonicalId);
+      }
+    }
+  });
+
+  const alignedSubmissions = Array.from(dedupMap.values()).sort((a, b) =>
+    (b.updatedAt || '').localeCompare(a.updatedAt || '')
+  );
+  const updatedItems = alignedSubmissions.filter((item) => changedKeySet.has(item.id));
+  const activeIds = new Set(alignedSubmissions.map((s) => s.id));
+  const staleDocIds = Array.from(staleDocIdSet).filter((id) => !activeIds.has(id));
+
+  return {
+    alignedSubmissions,
+    updatedItems,
+    staleDocIds,
+    hasChanges,
+  };
+}
+
+export async function deleteTkaSubmissionDocsInFirestore(docIds: string[]): Promise<void> {
+  if (!docIds || docIds.length === 0) return;
+  try {
+    const CHUNK_SIZE = 350;
+    for (let i = 0; i < docIds.length; i += CHUNK_SIZE) {
+      const chunk = docIds.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+      chunk.forEach((id) => batch.delete(doc(db, TKA_SUBMISSIONS_COLLECTION, id)));
+      await batch.commit();
+    }
+  } catch (err) {
+    console.warn('Hapus dokumen TKA duplikat/lama warning:', err);
+  }
+}
+
+export async function syncTkaSubmissionsWithLiveStudents(
+  studentsOverride?: Student[]
+): Promise<TKASubmissionItem[]> {
+  const studentsList =
+    studentsOverride && studentsOverride.length > 0 ? studentsOverride : getStoredStudents();
+  const currentSubs = getStoredTKASubmissions();
+  if (studentsList.length === 0 || currentSubs.length === 0) return currentSubs;
+
+  // Jangan menimpa data TKA sekolah asli apabila studentsList masih berupa DEFAULT_STUDENTS sebelum cloud terhidrasi
+  if (!hasRealNonDefaultStudents(studentsList)) {
+    const subsLookReal = currentSubs.some((s) => {
+      const defaultIds = new Set(DEFAULT_STUDENTS.map((d) => d.id));
+      const defaultNames = new Set(DEFAULT_STUDENTS.map((d) => normalizeStudentName(d.nama)));
+      return !defaultIds.has(s.studentId) && !defaultNames.has(normalizeStudentName(s.studentName));
+    });
+    if (subsLookReal) return currentSubs;
+  }
+
+  const { alignedSubmissions, updatedItems, staleDocIds, hasChanges } =
+    alignTkaSubmissionsWithStudents(currentSubs, studentsList);
+  if (!hasChanges) return alignedSubmissions;
+
+  runWithoutStorageSync(() => {
+    saveStoredTKASubmissions(alignedSubmissions);
+  });
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
+  }
+
+  if (staleDocIds.length > 0) {
+    await deleteTkaSubmissionDocsInFirestore(staleDocIds);
+  }
+  if (updatedItems.length > 0) {
+    await saveTkaSubmissionsBatchToFirestore(updatedItems);
+  }
+
+  return alignedSubmissions;
+}
 
 function sanitizeQuestionId(rawId?: string, fallbackIdx: number = 0): string {
   const base = (rawId || `tka_q_${Date.now()}_${fallbackIdx}`).trim();
@@ -951,11 +1240,21 @@ export function reconcileTkaResultsToSubmissions(options: {
   const recoveredMap = new Map<string, TKASubmissionItem>();
 
   validTkaResults.forEach((res) => {
-    const matchedStudent = students.find(
-      (st) =>
-        (res.studentId && st.id === res.studentId) ||
-        (res.studentName && st.nama && st.nama.toLowerCase() === res.studentName.toLowerCase())
-    );
+    const matchedStudent = findLiveStudentForRecord(students, {
+      studentId: res.studentId,
+      nisn: res.nisn,
+      studentName: res.studentName,
+    });
+    if (
+      !matchedStudent &&
+      isSyntheticDefaultStudentRecord(
+        { studentId: res.studentId, nisn: res.nisn, studentName: res.studentName },
+        students
+      )
+    ) {
+      return;
+    }
+
     const sid = matchedStudent?.id || res.studentId;
     if (!sid) return;
 
@@ -968,10 +1267,49 @@ export function reconcileTkaResultsToSubmissions(options: {
     const mapelKey = normalizeTkaMapelKey(res.mapel || res.judul || 'Bahasa Indonesia');
     const numericGrade = Number.isFinite(Number(res.nilai)) ? Math.round(Number(res.nilai)) : 0;
 
-    const existing = subMap.get(docId);
+    // Cari existing baik berdasarkan docId baru maupun kecocokan studentId/nama/nisn lama
+    let existing = subMap.get(docId);
+    if (!existing && matchedStudent) {
+      for (const [k, s] of subMap.entries()) {
+        const sPaket = s.paketDasar || extractBaseTkaPaket(s.paket);
+        if (sPaket !== basePaket) continue;
+        const matchedExistingStudent = findLiveStudentForRecord(students, s);
+        if (matchedExistingStudent?.id === matchedStudent.id) {
+          existing = s;
+          if (k !== docId) subMap.delete(k);
+          break;
+        }
+      }
+    }
+
     if (existing) {
       const completed = Array.isArray(existing.completedMapels) ? existing.completedMapels : [];
+      const studentMetaChanged = Boolean(
+        matchedStudent &&
+          (existing.id !== docId ||
+            existing.studentId !== matchedStudent.id ||
+            existing.studentName !== matchedStudent.nama ||
+            (existing.nisn || '') !== (matchedStudent.nisn || '') ||
+            existing.kelas !== matchedStudent.kelas)
+      );
       if (completed.includes(mapelKey)) {
+        if (studentMetaChanged && matchedStudent) {
+          const syncedItem: TKASubmissionItem = {
+            ...existing,
+            id: docId,
+            studentId: matchedStudent.id,
+            studentName: matchedStudent.nama,
+            nisn: matchedStudent.nisn,
+            kelas: matchedStudent.kelas,
+            fotoUrl: sanitizeSubmissionFotoUrl(matchedStudent.fotoUrl || existing.fotoUrl),
+            paket: basePaket,
+            paketDasar: basePaket,
+          };
+          subMap.set(docId, syncedItem);
+          recoveredMap.set(docId, syncedItem);
+        } else {
+          subMap.set(existing.id || docId, existing);
+        }
         return;
       }
       // Mapel ini ada di hasil CBT siswa tapi belum masuk di completedMapels submission
@@ -991,6 +1329,14 @@ export function reconcileTkaResultsToSubmissions(options: {
       );
       const updatedItem: TKASubmissionItem = {
         ...existing,
+        id: docId,
+        studentId: matchedStudent?.id || existing.studentId,
+        studentName: matchedStudent?.nama || existing.studentName,
+        nisn: matchedStudent?.nisn ?? existing.nisn,
+        kelas: matchedStudent?.kelas || existing.kelas || res.kelas || '',
+        fotoUrl: sanitizeSubmissionFotoUrl(matchedStudent?.fotoUrl || existing.fotoUrl),
+        paket: basePaket,
+        paketDasar: basePaket,
         completedMapels: updatedCompleted,
         scoresPerMapel: nextScores,
         answers: {
@@ -1017,8 +1363,8 @@ export function reconcileTkaResultsToSubmissions(options: {
       id: docId,
       studentId: sid,
       studentName: matchedStudent?.nama || res.studentName || 'Siswa',
-      nisn: matchedStudent?.nisn || '',
-      kelas: matchedStudent?.kelas || 'Kelas 6A',
+      nisn: matchedStudent?.nisn || res.nisn || '',
+      kelas: matchedStudent?.kelas || res.kelas || '',
       fotoUrl: sanitizeSubmissionFotoUrl(matchedStudent?.fotoUrl),
       paket: basePaket,
       paketDasar: basePaket,
@@ -1047,7 +1393,8 @@ export function reconcileTkaResultsToSubmissions(options: {
     recoveredMap.set(docId, newItem);
   });
 
-  const mergedSubmissions = Array.from(subMap.values()).sort((a, b) =>
+  const { alignedSubmissions } = alignTkaSubmissionsWithStudents(Array.from(subMap.values()), students);
+  const mergedSubmissions = alignedSubmissions.sort((a, b) =>
     (b.updatedAt || '').localeCompare(a.updatedAt || '')
   );
   return {

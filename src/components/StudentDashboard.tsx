@@ -65,7 +65,7 @@ import {
   getActiveFilters,
   CLASSES_LIST,
 } from '../utils/storage';
-import { upsertTkaSubmissionAsync, reconcileAndSyncLocalTkaSubmissions } from '../utils/tkaFirestore';
+import { upsertTkaSubmissionAsync, reconcileAndSyncLocalTkaSubmissions, findLiveStudentForRecord } from '../utils/tkaFirestore';
 import { syncAllLocalToCloud } from '../utils/cloudSync';
 import {
   StudentExamDraft,
@@ -252,18 +252,15 @@ export const StudentDashboard: React.FC<Props> = ({
     isExamRunning: false,
   });
 
-  // Cari data siswa saat ini (prioritaskan data siswa live dari Firestore agar ID, kelas, & NISN sinkron)
+  // Cari data siswa saat ini (prioritaskan NISN & nama agar kebal terhadap perubahan ID siswa saat impor ulang)
   const currentStudent = useMemo(() => {
     const ad = activeUser.studentData;
-    const uname = (activeUser.username || '').trim().toLowerCase();
-    const aname = (activeUser.name || '').trim().toLowerCase();
-    const liveMatch = students.find(
-      (s) =>
-        (ad?.id && s.id === ad.id) ||
-        (ad?.nisn && s.nisn === ad.nisn) ||
-        (uname && (s.username || '').trim().toLowerCase() === uname) ||
-        (aname && (s.nama || '').trim().toLowerCase() === aname)
-    );
+    const liveMatch = findLiveStudentForRecord(students, {
+      studentId: ad?.id,
+      nisn: ad?.nisn,
+      studentName: ad?.nama || activeUser.name,
+      username: activeUser.username,
+    });
     return liveMatch || ad || students[0];
   }, [activeUser, students]);
   const isExcludedFromTka = isAbkExcludedFromTka(currentStudent);
@@ -1536,6 +1533,8 @@ export const StudentDashboard: React.FC<Props> = ({
       examId: finishedExam.id,
       studentId: currentStudent.id,
       studentName: currentStudent.nama,
+      nisn: currentStudent.nisn,
+      kelas: currentStudent.kelas,
       skor: Number.isFinite(earned) ? earned : 0,
       nilai: finalGrade,
       waktuSelesai: new Date().toLocaleTimeString(),

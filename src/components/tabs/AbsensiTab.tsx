@@ -29,6 +29,7 @@ import {
   ExternalLink,
   Settings2,
   History,
+  Phone,
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import {
@@ -61,6 +62,7 @@ import {
   AttendanceNotificationConfig,
   AttendanceNotificationLog,
   NotificationChannelMode,
+  buildParentAttendanceWhatsAppLink,
   buildWhatsAppDirectUrl,
   dispatchFaceAttendanceNotification,
   formatFaceAttendanceMessage,
@@ -357,7 +359,12 @@ export const AbsensiTab: React.FC<Props> = ({
   const handleRetryLogEntry = async (entry: AttendanceNotificationLog) => {
     setRetryingLogId(entry.id);
     try {
-      const updated = await retryNotificationLog(entry, notifConfigRef.current);
+      const liveStudent = students.find((s) => s.id === entry.studentId);
+      const updated = await retryNotificationLog(
+        entry,
+        notifConfigRef.current,
+        liveStudent?.noTelpOrtu
+      );
       setNotifLogs(getStoredNotificationLogs());
       if (updated.overallStatus === 'SENT') {
         showToast(`Notifikasi ${entry.studentName} berhasil dikirim ulang!`, 'success');
@@ -2655,6 +2662,48 @@ export const AbsensiTab: React.FC<Props> = ({
                     {isDuplicate ? `Waktu Awal: ${scannedSuccessItem.time}` : `Waktu: ${scannedSuccessItem.time}`}
                   </span>
                 </div>
+
+                {/* Aksi Kirim Bukti Kehadiran ke No. Telpon / WA Orang Tua */}
+                {(() => {
+                  const waLink = buildParentAttendanceWhatsAppLink({
+                    student: scannedSuccessItem.student,
+                    date: activeDate,
+                    time: scannedSuccessItem.time,
+                    status: scannedSuccessItem.status,
+                    methodLabel: scannedSuccessItem.methodLabel,
+                    includeConfidence: notifConfig.includeConfidence,
+                  });
+                  return (
+                    <div
+                      className={`mt-2.5 pt-2.5 border-t flex flex-wrap items-center justify-between gap-2 text-[11px] ${theme.footerBorderCls}`}
+                    >
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <Phone className="w-3.5 h-3.5 shrink-0" />
+                        <span>
+                          WA Orang Tua:{' '}
+                          <span className="font-mono">
+                            {scannedSuccessItem.student.noTelpOrtu || 'Belum terdata'}
+                          </span>
+                        </span>
+                      </div>
+                      {waLink.url ? (
+                        <a
+                          href={waLink.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1 rounded-xl bg-white text-emerald-800 hover:bg-emerald-50 font-display font-black text-[11px] inline-flex items-center gap-1.5 shadow-xs whitespace-nowrap"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          <span>Kirim Bukti WA Ortu</span>
+                        </a>
+                      ) : (
+                        <span className="text-[10px] opacity-85 italic">
+                          Isi No. Telpon Ortu di menu Data Siswa
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}
@@ -2863,6 +2912,27 @@ export const AbsensiTab: React.FC<Props> = ({
                       : log.overallStatus === 'FAILED'
                       ? '✕ Gagal API'
                       : '• Log Siap Kirim';
+                  const liveStudent = students.find((s) => s.id === log.studentId);
+                  const parentWaLink = buildParentAttendanceWhatsAppLink({
+                    student: liveStudent || {
+                      nama: log.studentName,
+                      kelas: log.studentClass,
+                      nisn: log.nisn,
+                      barcodeId: log.barcodeId,
+                      namaAyah: '',
+                      namaIbu: '',
+                      noTelpOrtu: log.parentPhone,
+                    },
+                    customPhone: liveStudent?.noTelpOrtu || log.parentPhone || '',
+                    date: log.date,
+                    time: log.time,
+                    status: log.status,
+                    methodLabel: log.methodLabel,
+                    confidence: log.confidence,
+                    includeConfidence: notifConfig.includeConfidence,
+                  });
+                  const parentProofMsg = parentWaLink.message;
+                  const parentWaHref = parentWaLink.url || '';
                   const waHref = buildWhatsAppDirectUrl(
                     notifConfig.whatsappTargetPhone,
                     log.messageText
@@ -2896,24 +2966,40 @@ export const AbsensiTab: React.FC<Props> = ({
                         )}
                         {log.whatsappStatus !== 'SKIPPED' && (
                           <div className="truncate">
-                            <strong>WhatsApp:</strong> {log.whatsappDetail}
+                            <strong>WhatsApp Grup/Wali:</strong> {log.whatsappDetail}
+                          </div>
+                        )}
+                        {log.parentWaDetail && (
+                          <div className="truncate">
+                            <strong>WA Orang Tua:</strong> {log.parentWaDetail}
                           </div>
                         )}
                       </div>
 
                       <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                        {parentWaHref && (
+                          <a
+                            href={parentWaHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold inline-flex items-center gap-1 whitespace-nowrap"
+                          >
+                            <Phone className="w-3 h-3" />
+                            <span>Kirim Bukti WA Ortu</span>
+                          </a>
+                        )}
                         <a
                           href={waHref}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold inline-flex items-center gap-1 whitespace-nowrap"
+                          className="px-2 py-1 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-[10px] font-extrabold inline-flex items-center gap-1 whitespace-nowrap"
                         >
                           <ExternalLink className="w-3 h-3" />
-                          <span>Kirim WA</span>
+                          <span>{parentWaHref ? 'Kirim WA Grup' : 'Kirim WA'}</span>
                         </a>
                         <button
                           type="button"
-                          onClick={() => handleCopyNotifText(log.messageText)}
+                          onClick={() => handleCopyNotifText(parentWaHref ? parentProofMsg : log.messageText)}
                           className="px-2 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
                         >
                           <Copy className="w-3 h-3" />
@@ -3102,6 +3188,11 @@ export const AbsensiTab: React.FC<Props> = ({
                                     + Daftar Wajah
                                   </button>
                                 )}
+                                {s.noTelpOrtu && (
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono text-[9px] font-bold inline-flex items-center gap-0.5">
+                                    <Phone className="w-2.5 h-2.5" /> {s.noTelpOrtu}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -3196,6 +3287,29 @@ export const AbsensiTab: React.FC<Props> = ({
                                 <X className="w-3.5 h-3.5" />
                               </button>
                             )}
+                            {(() => {
+                              if (!rec) return null;
+                              const rowWaLink = buildParentAttendanceWhatsAppLink({
+                                student: s,
+                                date: activeDate,
+                                time: rec.time || '--:--',
+                                status: rec.status,
+                                methodLabel: 'Presensi Sekolah',
+                              });
+                              if (!rowWaLink.url) return null;
+                              return (
+                                <a
+                                  href={rowWaLink.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title={`Kirim bukti kehadiran ke WA Orang Tua (${s.noTelpOrtu})`}
+                                  className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold inline-flex items-center gap-1 shadow-2xs whitespace-nowrap"
+                                >
+                                  <Phone className="w-3 h-3" />
+                                  <span>WA</span>
+                                </a>
+                              );
+                            })()}
                           </div>
                         </td>
                       </tr>
@@ -3575,6 +3689,18 @@ export const AbsensiTab: React.FC<Props> = ({
                   className="w-4 h-4 accent-sky-600"
                 />
                 <span>Sertakan skor akurasi deteksi wajah (%) pada pesan notifikasi</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer font-bold text-emerald-800">
+                <input
+                  type="checkbox"
+                  checked={notifDraft.sendToParentWa !== false}
+                  onChange={(e) =>
+                    setNotifDraft((prev) => ({ ...prev, sendToParentWa: e.target.checked }))
+                  }
+                  className="w-4 h-4 accent-emerald-600"
+                />
+                <span>Kirim bukti kehadiran juga ke No. Telpon / WA Orang Tua siswa (jika terdata)</span>
               </label>
 
               {/* Message Preview */}
