@@ -6,14 +6,12 @@ import {
   HelpCircle,
   Filter,
   Download,
-  Printer,
   PieChart as PieIcon,
   Award,
   AlertTriangle,
   Layers,
   FileSpreadsheet,
   Users,
-  ShieldCheck,
   UserCheck,
   Trash2,
   X,
@@ -47,6 +45,7 @@ import { syncAllLocalToCloud } from '../../utils/cloudSync';
 import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
 import { doesRecordMatchTerm, isSemesterOneLabel } from '../../utils/semesterUtils';
 import { findLiveStudentForRecord } from '../../utils/tkaFirestore';
+import { exportCbtAnalisisToPdf } from '../../utils/analisisReportExport';
 
 export const PAKET_SOAL_LIST = [
   'Sumatif 1 (AS 1)',
@@ -702,6 +701,55 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     XLSX.writeFile(wb, `Analisis_Soal_${selectedMapel.substring(0, 10)}_${selectedClass}.xlsx`);
   };
 
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+
+  const handleDownloadAnalisisPdf = async () => {
+    if (isExportingPdf) return;
+    setIsExportingPdf(true);
+    try {
+      await exportCbtAnalisisToPdf({
+        profile,
+        mapel: selectedMapel,
+        paket: selectedPaket,
+        kelas: selectedClass,
+        tahunPelajaran: activeYear,
+        semester: activeSemester,
+        kktp: 75,
+        questions: questionsData.map((q) => ({
+          no: q.no,
+          pertanyaan: q.pertanyaan,
+          tipe: q.tipe,
+          bobot: q.bobot,
+          tkLabel: q.tkLabel,
+          tkValue: q.tkValue,
+          dpValue: q.dpValue,
+          dpLabel: q.dpLabel,
+          ketuntasanPct: q.ketuntasanPct,
+          pengecoh: q.pengecoh,
+          status: q.status,
+        })),
+        students: studentAnalysisRows.map((row, idx) => ({
+          no: idx + 1,
+          nama: row.student.nama,
+          nisn: row.student.nisn || '-',
+          kategori: isInclusivePackage ? `Inklusi: ${row.student.kebutuhanKhusus}` : 'Reguler',
+          nilai: row.score,
+          isTuntas: row.isTuntas,
+          rekomendasi: row.rekomendasi,
+        })),
+        kepsekNama: kepsekAnalisis.nama,
+        kepsekNipLabel: formatNipLabel(kepsekAnalisis.status, kepsekAnalisis.nip),
+        waliNama: waliAnalisis?.nama || 'Guru Mata Pelajaran',
+        waliNipLabel: formatNipLabel(waliAnalisis?.statusPegawai, waliAnalisis?.nip),
+      });
+      showToast?.(`Laporan Analisis CBT (${selectedMapel} · ${selectedPaket}) berhasil diunduh.`, 'success');
+    } catch {
+      showToast?.('Gagal mengunduh file laporan PDF analisis CBT.', 'error');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   // Deteksi apakah paket soal yang dipilih merupakan paket inklusi
   const isInclusivePackage = useMemo(() => {
     return selectedPaket.toLowerCase().includes('inklusi');
@@ -867,24 +915,26 @@ export const AnalisisSoalTab: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* Eye-Catching Editorial Header Card (Layar) */}
-      <div className="no-print bg-gradient-to-br from-slate-900 via-emerald-950 to-teal-950 text-white p-6 sm:p-7 rounded-3xl shadow-md border border-emerald-900/40 flex flex-col xl:flex-row xl:items-center justify-between gap-5">
+      {/* Attractive Analysis Report Header Card */}
+      <div className="no-print bg-gradient-to-br from-slate-900 via-emerald-950 to-teal-900 text-white p-6 sm:p-7 rounded-3xl shadow-md border border-emerald-800/40 flex flex-col xl:flex-row xl:items-center justify-between gap-5">
         <div className="space-y-2 max-w-2xl">
           <div className="flex flex-wrap items-center gap-2 text-xs text-emerald-200 font-medium">
             <span>Evaluasi Butir Soal CBT</span>
             <span aria-hidden="true">·</span>
+            <span>{selectedPaket}</span>
+            <span aria-hidden="true">·</span>
             <span>{selectedMapel}</span>
             <span aria-hidden="true">·</span>
-            <span>{selectedClass}</span>
+            <span>{selectedClass === 'all' ? 'Semua Kelas' : selectedClass}</span>
           </div>
           <h2 className="text-xl sm:text-2xl font-display font-black tracking-tight flex items-center gap-2.5 text-white">
             <span className="w-10 h-10 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
               <BarChart3 className="w-5 h-5 text-emerald-300" />
             </span>
-            <span>Analisis Butir Soal CBT &amp; Grafik Ketuntasan</span>
+            <span>Laporan Analisis Butir Soal &amp; Ketuntasan CBT</span>
           </h2>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Evaluasi daya pembeda (DP), tingkat kesukaran soal (TK), efektivitas pengecoh, serta distribusi ketuntasan siswa untuk laporan cetak A4.
+            Ringkasan daya pembeda (DP), tingkat kesukaran soal (TK), efektivitas pengecoh, serta distribusi ketuntasan peserta didik secara real-time.
           </p>
         </div>
 
@@ -901,33 +951,34 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           <button
             type="button"
             onClick={handleExportExcel}
-            className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+            className="bg-white/10 hover:bg-white/20 text-white font-display font-bold px-4 py-2.5 rounded-xl text-xs border border-white/20 flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
           >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>Ekspor Excel (.xlsx)</span>
+            <FileSpreadsheet className="w-4 h-4 text-emerald-300" />
+            <span>Unduh Excel</span>
           </button>
           <button
             type="button"
-            onClick={() => window.print()}
-            className="bg-white hover:bg-slate-100 text-slate-900 font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+            disabled={isExportingPdf}
+            onClick={handleDownloadAnalisisPdf}
+            className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-slate-950 font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
           >
-            <Printer className="w-4 h-4 text-emerald-700" />
-            <span>Cetak Laporan A4</span>
+            <Download className="w-4 h-4" />
+            <span>{isExportingPdf ? 'Menyiapkan PDF...' : 'Unduh Laporan'}</span>
           </button>
         </div>
       </div>
 
-      <div className="bg-white p-6 print:p-0 rounded-3xl print:rounded-none shadow-md print:shadow-none border border-slate-100 print:border-0 space-y-6">
+      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 space-y-6">
         {/* Quick-Jump Submitted CBT Exams Bar */}
         {submittedExamBuckets.length > 0 && (
-          <div className="no-print p-4 rounded-2xl bg-emerald-50/80 border border-emerald-200 space-y-2.5">
+          <div className="no-print p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200 space-y-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs font-black text-emerald-900">
                 <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />
                 <span>Data Hasil Ujian CBT Siswa Tersedia ({cbtResultCount} Pengerjaan)</span>
               </div>
-              <span className="text-[11px] font-semibold text-emerald-800">
-                Klik paket ujian di bawah untuk menampilkan analisis hasil nyatanya:
+              <span className="text-[11px] font-medium text-emerald-800">
+                Pilih paket ujian untuk langsung menampilkan hasil analisisnya
               </span>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -946,7 +997,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                       setSelectedPaket(bucket.paket);
                       setSelectedClass(bucket.kelas);
                     }}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center gap-1.5 ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center gap-2 ${
                       isSelected
                         ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs'
                         : 'bg-white text-slate-700 border-emerald-200 hover:border-emerald-400 hover:bg-emerald-50'
@@ -956,11 +1007,11 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                       {bucket.mapel} · {bucket.paket} · {bucket.kelas}
                     </span>
                     <span
-                      className={`px-1.5 py-0.5 rounded-md text-[10px] font-black tabular-nums ${
-                        isSelected ? 'bg-emerald-800 text-emerald-50' : 'bg-emerald-100 text-emerald-800'
+                      className={`text-[11px] font-mono tabular-nums ${
+                        isSelected ? 'text-emerald-100' : 'text-emerald-700'
                       }`}
                     >
-                      {bucket.count} Siswa
+                      ({bucket.count})
                     </span>
                   </button>
                 );
@@ -969,31 +1020,11 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Filter Bar: Dropdown Mapel & Dropdown Jenis Soal */}
-        <div className="no-print p-4 rounded-2xl bg-slate-50 border border-slate-200 grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
-          <div className="md:col-span-5">
-            <label className="block text-xs font-extrabold text-slate-700 mb-1">
-              Pilih Mata Pelajaran:
-            </label>
-            <select
-              value={selectedMapel}
-              onChange={(e) => {
-                hasManualFilterRef.current = true;
-                setSelectedMapel(e.target.value);
-              }}
-              className="w-full px-3.5 py-2.5 rounded-xl border-2 border-emerald-500 bg-white text-xs font-black text-slate-800 outline-none shadow-2xs cursor-pointer focus:ring-2 focus:ring-emerald-200"
-            >
-              {availableMapels.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </div>
-
+        {/* Filter Bar: Paket Soal disamping Mata Pelajaran Dropdown + Target Kelas */}
+        <div className="no-print p-4 rounded-2xl bg-slate-50 border border-slate-200 grid grid-cols-1 md:grid-cols-12 gap-3.5 items-end">
           <div className="md:col-span-4">
-            <label className="block text-xs font-extrabold text-slate-700 mb-1">
-              Pilih Paket / Jenis Soal:
+            <label className="block text-xs font-extrabold text-slate-700 mb-1.5">
+              Filter Paket / Jenis Soal
             </label>
             <select
               value={selectedPaket}
@@ -1011,9 +1042,29 @@ export const AnalisisSoalTab: React.FC<Props> = ({
             </select>
           </div>
 
+          <div className="md:col-span-5">
+            <label className="block text-xs font-extrabold text-slate-700 mb-1.5">
+              Filter Mata Pelajaran
+            </label>
+            <select
+              value={selectedMapel}
+              onChange={(e) => {
+                hasManualFilterRef.current = true;
+                setSelectedMapel(e.target.value);
+              }}
+              className="w-full px-3.5 py-2.5 rounded-xl border border-emerald-400 bg-white text-xs font-black text-slate-800 outline-none shadow-2xs cursor-pointer focus:ring-2 focus:ring-emerald-200"
+            >
+              {availableMapels.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="md:col-span-3">
-            <label className="block text-xs font-extrabold text-slate-700 mb-1">
-              Target Kelas:
+            <label className="block text-xs font-extrabold text-slate-700 mb-1.5">
+              Target Kelas
             </label>
             <select
               value={selectedClass}
@@ -1033,40 +1084,80 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Quick KPI Metrics */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 print:grid-cols-4 gap-3.5 print:gap-2 print-avoid-break">
-          <div className="p-4 print:p-3 rounded-2xl bg-emerald-50/70 border border-emerald-200">
-            <span className="text-[11px] font-extrabold uppercase text-emerald-800">Total Butir Soal</span>
-            <div className="text-2xl print:text-xl font-display font-black text-emerald-950 mt-1 tabular-nums">{questionCount} Butir</div>
-            <span className="text-[10px] text-emerald-700">
-              {questionCount > 0 ? '100% Teranalisis Sistem' : `Belum ada data ${activeSemester} (${activeYear})`}
-            </span>
-          </div>
-
-          <div className="p-4 print:p-3 rounded-2xl bg-sky-50/70 border border-sky-200">
-            <span className="text-[11px] font-extrabold uppercase text-sky-800">Rata-rata Ketuntasan</span>
-            <div className="text-2xl print:text-xl font-display font-black text-sky-950 mt-1 tabular-nums">{avgKetuntasan}%</div>
-            <span className="text-[10px] text-sky-700 tabular-nums">
-              {questionCount > 0 ? 'Di atas KKTP Standar (75%)' : 'Menunggu hasil asesmen'}
-            </span>
-          </div>
-
-          <div className="p-4 print:p-3 rounded-2xl bg-amber-50/70 border border-amber-200">
-            <span className="text-[11px] font-extrabold uppercase text-amber-800">Tingkat Kesukaran (TK)</span>
-            <div className="text-sm font-bold text-slate-800 mt-1.5 flex items-center gap-1.5 tabular-nums">
-              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-black text-xs">{mudahCount} M</span>
-              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-black text-xs">{sedangCount} S</span>
-              <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 font-black text-xs">{sukarCount} Sk</span>
+        {/* Refined Executive KPI Summary Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+          <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-500">Total Butir Soal</span>
+              <Layers className="w-4 h-4 text-emerald-600" />
             </div>
-            <span className="text-[10px] text-amber-700">Proporsi ideal Kurikulum Merdeka</span>
+            <div className="text-2xl font-display font-black text-slate-900 tabular-nums">{questionCount} Butir</div>
+            <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+              <div className="h-full bg-emerald-500 rounded-full" style={{ width: questionCount > 0 ? '100%' : '0%' }} />
+            </div>
+            <span className="text-[11px] text-slate-500 block">
+              {questionCount > 0 ? `${studentAnalysisRows.length} peserta dinilai` : `Belum ada data ${activeSemester} (${activeYear})`}
+            </span>
           </div>
 
-          <div className="p-4 print:p-3 rounded-2xl bg-purple-50/70 border border-purple-200">
-            <span className="text-[11px] font-extrabold uppercase text-purple-800">Daya Pembeda (DP)</span>
-            <div className="text-2xl print:text-xl font-display font-black text-purple-950 mt-1 tabular-nums">
+          <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-500">Rata-rata Ketuntasan</span>
+              <TrendingUp className="w-4 h-4 text-sky-600" />
+            </div>
+            <div className={`text-2xl font-display font-black tabular-nums ${avgKetuntasan >= 75 ? 'text-emerald-700' : 'text-amber-700'}`}>
+              {avgKetuntasan}%
+            </div>
+            <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+              <div
+                className={`h-full rounded-full ${avgKetuntasan >= 75 ? 'bg-sky-500' : 'bg-amber-500'}`}
+                style={{ width: `${Math.min(100, avgKetuntasan)}%` }}
+              />
+            </div>
+            <span className="text-[11px] text-slate-500 tabular-nums block">
+              {questionCount > 0 ? (avgKetuntasan >= 75 ? 'Memenuhi KKTP (75%)' : 'Di bawah KKTP (75%)') : 'Menunggu hasil asesmen'}
+            </span>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-500">Komposisi Kesukaran</span>
+              <PieIcon className="w-4 h-4 text-amber-600" />
+            </div>
+            <div className="text-lg font-display font-black text-slate-900 tabular-nums">
+              {mudahCount}M · {sedangCount}S · {sukarCount}Sk
+            </div>
+            <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden flex">
+              {questionCount > 0 && (
+                <>
+                  <div className="h-full bg-emerald-500" style={{ width: `${(mudahCount / totalQuestions) * 100}%` }} />
+                  <div className="h-full bg-amber-500" style={{ width: `${(sedangCount / totalQuestions) * 100}%` }} />
+                  <div className="h-full bg-rose-500" style={{ width: `${(sukarCount / totalQuestions) * 100}%` }} />
+                </>
+              )}
+            </div>
+            <span className="text-[11px] text-slate-500 block">
+              Mudah · Sedang · Sukar
+            </span>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-500">Daya Pembeda Valid</span>
+              <CheckCircle2 className="w-4 h-4 text-purple-600" />
+            </div>
+            <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
               {sangatBaikCount + baikCount}/{questionCount}
             </div>
-            <span className="text-[10px] text-purple-700">Butir Soal Valid &amp; Baik</span>
+            <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+              <div
+                className="h-full bg-purple-500 rounded-full"
+                style={{ width: `${questionCount > 0 ? Math.round(((sangatBaikCount + baikCount) / questionCount) * 100) : 0}%` }}
+              />
+            </div>
+            <span className="text-[11px] text-slate-500 block">
+              Soal kategori Sangat Baik &amp; Baik
+            </span>
           </div>
         </div>
 

@@ -1986,32 +1986,6 @@ export const StudentDashboard: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Card 4: Raport Kurikulum (P5) */}
-            <div
-              onClick={() => onNavigateTab('rapor-kokurikuler')}
-              className="group bg-white p-6 rounded-3xl border-2 border-emerald-200 hover:border-emerald-500 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden"
-            >
-              <div className="space-y-3">
-                <div className="w-14 h-14 rounded-2xl bg-emerald-50 group-hover:bg-emerald-600 text-emerald-600 group-hover:text-white flex items-center justify-center transition shadow-xs">
-                  <Sprout className="w-7 h-7" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-black uppercase text-emerald-600 tracking-wider">Modul Pelaporan 2</span>
-                  <h3 className="font-display font-black text-lg text-slate-800 group-hover:text-emerald-600 transition">
-                    Raport Kurikulum (P5)
-                  </h3>
-                </div>
-                <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                  Periksa penilaian Projek Penguatan Profil Pelajar Pancasila (P5), dimensi karakter beriman, gotong royong, dan bernalar kritis.
-                </p>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-emerald-100 flex items-center justify-between text-xs font-black text-emerald-600 group-hover:text-emerald-700">
-                <span>Buka Rapor P5</span>
-                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
-              </div>
-            </div>
-
             {/* Card 5: Laporan 7 Kebiasaan */}
             <div
               onClick={() => setViewMode('kebiasaan')}

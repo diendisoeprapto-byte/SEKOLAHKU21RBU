@@ -58,7 +58,6 @@ export type TabId =
   | 'pengaturan-cbt'
   | 'analisis-soal'
   | 'rapor'
-  | 'rapor-kokurikuler'
   | 'backup'
   | 'siswa-tka'
   | 'cp-tp-tka'
@@ -210,18 +209,6 @@ export const Sidebar: React.FC<Props> = ({
             >
               <Award className="w-5 h-5 text-amber-500" />
               <span>Hasil e-Rapor Saya</span>
-            </button>
-
-            <button
-              onClick={() => onSelectTab('rapor-kokurikuler')}
-              className={`w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-3 text-left transition ${
-                activeTab === 'rapor-kokurikuler'
-                  ? 'bg-gradient-to-r from-rose-600 to-rose-700 text-white shadow-md'
-                  : 'text-slate-700 hover:bg-rose-50'
-              }`}
-            >
-              <Sprout className="w-5 h-5 text-emerald-500" />
-              <span>Rapor Kokurikuler (P5)</span>
             </button>
 
             {(() => {
@@ -681,19 +668,6 @@ export const Sidebar: React.FC<Props> = ({
                     >
                       <Printer className="w-4 h-4" />
                       <span>e-Rapor Merdeka</span>
-                    </button>
-                  )}
-                  {(!searchQuery || 'rapor kokurikuler p5 cetak'.includes(searchQuery)) && (
-                    <button
-                      onClick={() => onSelectTab('rapor-kokurikuler')}
-                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'rapor-kokurikuler'
-                          ? 'bg-emerald-600 text-white shadow-xs'
-                          : 'text-slate-700 hover:bg-emerald-50'
-                      }`}
-                    >
-                      <Award className="w-4 h-4" />
-                      <span>Rapor Kokurikuler (P5)</span>
                     </button>
                   )}
                   {(!searchQuery || 'manajemen asaj skl ijazah kelulusan kosp'.includes(searchQuery)) && (

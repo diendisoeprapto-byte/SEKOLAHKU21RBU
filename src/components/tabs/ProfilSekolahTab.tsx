@@ -30,7 +30,7 @@ export const ProfilSekolahTab: React.FC<Props> = ({ profile, onSaveProfile, show
             </h2>
             <p className="text-xs text-slate-500 max-w-3xl mt-1">
               Apabila <strong>Nama Sekolah</strong> diubah di bawah ini, maka seluruh tampilan nama sekolah di
-              aplikasi (Header, Kartu Barcode, Leger, e-Rapor, Rapor Kokurikuler, dan Laporan) akan otomatis
+              aplikasi (Header, Kartu Barcode, Leger, e-Rapor, dan Laporan) akan otomatis
               berganti seketika.
             </p>
           </div>
@@ -120,8 +120,8 @@ export const ProfilSekolahTab: React.FC<Props> = ({ profile, onSaveProfile, show
           <div className="md:col-span-2 lg:col-span-3 pt-3 border-t border-slate-200">
             <span className="text-[11px] font-extrabold uppercase text-rose-700 block mb-2">
               <School className="w-3.5 h-3.5 inline mr-1" />
-              Identitas Kepala Sekolah (Terkoneksi Otomatis ke e-Rapor & Rapor Kokurikuler: Nama, Status
-              Pegawai & NIP/NIPPPK/NIKKI)
+              Identitas Kepala Sekolah (Terkoneksi Otomatis ke e-Rapor &amp; Laporan: Nama, Status
+              Pegawai &amp; NIP/NIPPPK/NIKKI)
             </span>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>

@@ -4,10 +4,6 @@ import {
   Lock,
   ArrowRight,
   ShieldCheck,
-  QrCode,
-  BookOpen,
-  Laptop,
-  BarChart2,
   Globe,
   Eye,
   EyeOff,
@@ -15,6 +11,7 @@ import {
 } from 'lucide-react';
 import { SchoolProfile, Teacher, Student, ActiveUser } from '../types';
 import { getStoredAdminPassword } from '../utils/storage';
+import schoolIllustration from '../assets/images/school_education_illustration_1795173778080.jpg';
 
 interface Props {
   profile: SchoolProfile;
@@ -37,6 +34,7 @@ export const LoginScreen: React.FC<Props> = ({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [illustrationError, setIllustrationError] = useState(false);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -139,12 +137,12 @@ export const LoginScreen: React.FC<Props> = ({
   return (
     <section className="min-h-screen flex items-center justify-center p-4 sm:p-6">
       <div className="max-w-4xl w-full bg-white rounded-[2.5rem] shadow-2xl border-4 border-rose-100 overflow-hidden grid grid-cols-1 lg:grid-cols-12">
-        {/* Left Side: School Branding */}
-        <div className="lg:col-span-6 bg-gradient-to-br from-rose-600 via-rose-700 to-amber-500 p-8 sm:p-10 text-white flex flex-col justify-between relative overflow-hidden">
+        {/* Left Side: Minimalist School Branding & Illustration */}
+        <div className="lg:col-span-6 bg-gradient-to-br from-rose-600 via-rose-700 to-amber-500 p-8 sm:p-10 text-white flex flex-col justify-between gap-6 relative overflow-hidden">
           <div className="absolute -right-12 -bottom-12 w-64 h-64 bg-white/10 rounded-full blur-2xl pointer-events-none"></div>
 
-          <div className="relative z-10 space-y-4">
-            <div className="flex items-center gap-3.5 mb-2">
+          <div className="relative z-10">
+            <div className="flex items-center gap-3.5">
               <img
                 src={profile.logoKemendikbudUrl}
                 alt="Logo Kemendikbud"
@@ -156,46 +154,32 @@ export const LoginScreen: React.FC<Props> = ({
                 className="w-14 h-14 rounded-2xl bg-white p-1.5 shadow-xl border-2 border-yellow-300 object-contain shrink-0"
               />
               <div>
-                <div className="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase border border-white/30">
-                  <ShieldCheck className="w-3.5 h-3.5 text-yellow-300" /> DKI Jakarta • Monas Edition
-                </div>
-                <h1 className="text-3xl sm:text-4xl font-display font-black leading-tight mt-1">SERBU 21</h1>
+                <h1 className="text-3xl sm:text-4xl font-display font-black leading-tight">SERBU 21</h1>
                 <p className="text-[11px] font-bold text-yellow-200 leading-snug">
                   Sistem Edukasi, Rapor, dan Basis Data Utama
                 </p>
               </div>
             </div>
-
-            <div>
-              <p className="text-white font-display font-black text-xl">{profile.name}</p>
-              <p className="text-yellow-200 font-display font-extrabold text-xs uppercase tracking-wider mt-0.5">
-                {profile.kecamatan} • {profile.kota} • {profile.provinsi}
-              </p>
-            </div>
-
-            <p className="text-rose-100 text-xs leading-relaxed font-medium">
-              Sistem Edukasi, Rapor, dan Basis Data Utama {profile.name} — Penilaian Pembelajaran Kurikulum Merdeka
-              (Sumatif AS1-ASn, Remedial, ASTS &amp; ASAS), Leger Nilai, e-Rapor, Absensi Barcode &amp; Wajah, serta Ujian CBT.
-            </p>
           </div>
 
-          <div className="relative z-10 grid grid-cols-2 gap-2.5 mt-8 text-xs">
-            <div className="bg-white/15 backdrop-blur-xs p-3 rounded-2xl border border-white/20 flex items-center gap-2.5">
-              <QrCode className="w-5 h-5 text-yellow-300 shrink-0" />
-              <span className="font-bold leading-tight">Kartu Barcode & Foto Siswa</span>
-            </div>
-            <div className="bg-white/15 backdrop-blur-xs p-3 rounded-2xl border border-white/20 flex items-center gap-2.5">
-              <BarChart2 className="w-5 h-5 text-yellow-300 shrink-0" />
-              <span className="font-bold leading-tight">Grafik Absensi Harian & Bulanan</span>
-            </div>
-            <div className="bg-white/15 backdrop-blur-xs p-3 rounded-2xl border border-white/20 flex items-center gap-2.5">
-              <Laptop className="w-5 h-5 text-yellow-300 shrink-0" />
-              <span className="font-bold leading-tight">CBT 6 Tipe Soal & Fullscreen</span>
-            </div>
-            <div className="bg-white/15 backdrop-blur-xs p-3 rounded-2xl border border-white/20 flex items-center gap-2.5">
-              <BookOpen className="w-5 h-5 text-yellow-300 shrink-0" />
-              <span className="font-bold leading-tight">e-Rapor Merdeka 20 Tahun</span>
-            </div>
+          <div className="relative z-10 flex-1 flex items-center justify-center">
+            {!illustrationError ? (
+              <div className="w-full aspect-[4/3] rounded-3xl overflow-hidden bg-white/15 p-2 border border-white/25 shadow-xl">
+                <img
+                  src={schoolIllustration}
+                  alt="Ilustrasi kegiatan belajar siswa sekolah dasar"
+                  referrerPolicy="no-referrer"
+                  onError={() => setIllustrationError(true)}
+                  className="w-full h-full object-cover rounded-2xl"
+                />
+              </div>
+            ) : (
+              <div className="w-full aspect-[4/3] rounded-3xl bg-white/10 border border-white/20 flex items-center justify-center p-6 text-center">
+                <span className="text-sm font-display font-bold text-yellow-100">
+                  SERBU 21 · Portal Pembelajaran &amp; Penilaian
+                </span>
+              </div>
+            )}
           </div>
         </div>
 

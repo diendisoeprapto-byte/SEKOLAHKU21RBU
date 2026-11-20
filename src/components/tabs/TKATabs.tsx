@@ -45,6 +45,17 @@ import {
   Settings,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Cell,
+  ReferenceLine,
+} from 'recharts';
 import { Student, TKACpTp, TKAQuestion, TKAJenis, ActiveUser, Teacher, SchoolProfile, isSiswaInklusi, isAbkExcludedFromTka, BenarSalahItem, MenjodohkanData } from '../../types';
 import { TKA_JENIS_LIST, TKA_MAPEL_LIST } from '../../data/defaultData';
 import {
@@ -117,6 +128,7 @@ import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxImporter';
 import { compressQuestionImage } from '../../utils/imageUtils';
 import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
+import { exportTkaAnalisisToPdf } from '../../utils/analisisReportExport';
 import { QuestionContent } from '../QuestionContent';
 import { FormattedMathText, FractionBuilderBar } from '../FormattedMathText';
 import { MathPreviewPanel } from '../MathPreviewPanel';
@@ -290,17 +302,11 @@ export const TKATabs: React.FC<Props> = ({
   const [confirmDeleteTkaQId, setConfirmDeleteTkaQId] = useState<string | null>(null);
   const docxTkaInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 4. Analisis TKA State (Multi-Select Mata Pelajaran)
-  const [selectedAnalisisMapels, setSelectedAnalisisMapels] = useState<string[]>([
-    'Bahasa Indonesia',
-    'Matematika',
-    'Ilmu Pengetahuan Alam dan Sosial (IPAS)',
-    'Bahasa Inggris',
-    'Koding dan Kecerdasan Artifisial (KKA)',
-  ]);
+  // 4. Analisis TKA State (Dropdown Paket & Dropdown Mata Pelajaran)
   const [analisisMapelTka, setAnalisisMapelTka] = useState<string>('all');
   const [analisisPaketTka, setAnalisisPaketTka] = useState<string>('all');
   const [analisisChartTab, setAnalisisChartTab] = useState<'kesukaran' | 'ketuntasan' | 'pembeda'>('kesukaran');
+  const [isExportingAnalisisPdf, setIsExportingAnalisisPdf] = useState<boolean>(false);
 
   // 5. Report & Hasil TKA State (mendukung 120+ siswa & multi-rombel)
   const [tkaSubmissions, setTkaSubmissions] = useState<TKASubmissionItem[]>(getStoredTKASubmissions());
@@ -2742,41 +2748,22 @@ export const TKATabs: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* CBT Launcher Bar for Simulasi 1 - 6 & Try Out 1 - 6 */}
+          {/* Minimalist CBT Simulation Launcher Bar */}
           {!isSimulationRunning && !simResult && (
-            <div className="p-5 rounded-3xl bg-gradient-to-r from-amber-500 via-rose-600 to-red-600 text-white shadow-md space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-black uppercase bg-white/20 px-2.5 py-0.5 rounded-full border border-white/30">
-                    CBT Player TKA
-                  </span>
-                  <h3 className="font-display font-black text-base sm:text-lg mt-1">
-                    Mulai Simulasi & Try Out CBT TKA
-                  </h3>
-                </div>
-                <span className="text-xs text-amber-200 font-bold hidden sm:inline">Pilih Paket Ujian di Bawah</span>
-              </div>
-
-              <div className="flex flex-wrap gap-2 pt-1">
-                {TKA_JENIS_LIST.map((jenis) => {
-                  const count = tkaQuestions.filter((q) => q.jenisTka === jenis).length;
-                  const durMins = getTKADurationMinutes(tkaDurations, jenis, null);
-                  return (
-                    <button
-                      key={jenis}
-                      type="button"
-                      onClick={() => handleStartSim(jenis)}
-                      className="px-3.5 py-2 rounded-xl bg-white text-slate-800 hover:bg-amber-100 font-display font-black text-xs shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Play className="w-3.5 h-3.5 text-amber-600" />
-                      <span>{jenis}</span>
-                      <span className="text-[10px] font-mono text-slate-500 font-bold">
-                        ({count} soal • {durMins} mnt)
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-wrap gap-2">
+              {TKA_JENIS_LIST.map((jenis) => {
+                return (
+                  <button
+                    key={jenis}
+                    type="button"
+                    onClick={() => handleStartSim(jenis)}
+                    className="px-3.5 py-2 rounded-xl bg-white text-slate-800 hover:bg-amber-50 hover:border-amber-400 border border-slate-200 font-display font-bold text-xs shadow-2xs transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Play className="w-3.5 h-3.5 text-amber-600" />
+                    <span>{jenis}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -3793,60 +3780,6 @@ export const TKATabs: React.FC<Props> = ({
 
           {/* ================= LIST OF CREATED TKA QUESTIONS (UNDERNEATH THE FORM) ================= */}
           <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
-            {tkaPackageBuckets.length > 0 && (
-              <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200 space-y-2">
-                <span className="text-[11px] font-extrabold text-amber-900 uppercase tracking-wider block">
-                  Daftar Paket &amp; Mapel TKA Tersimpan (
-                  {tkaPackageBuckets.filter((b) => isTKAPackageActive(tkaActivePackages, b.jenisTka, b.mapel)).length} Aktif dari {tkaPackageBuckets.length} Paket):
-                </span>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFilterJenisTka('all');
-                      setFilterMapelTka('all');
-                    }}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer border inline-flex items-center gap-1.5 ${
-                      filterJenisTka === 'all' && filterMapelTka === 'all'
-                        ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                        : 'bg-white text-slate-700 border-slate-200 hover:border-amber-300'
-                    }`}
-                  >
-                    <span>Semua Paket ({tkaQuestions.length} Soal)</span>
-                  </button>
-                  {tkaPackageBuckets.map((b) => {
-                    const isPkgOn = isTKAPackageActive(tkaActivePackages, b.jenisTka, b.mapel);
-                    const isCurrentFilter =
-                      filterJenisTka === b.jenisTka && filterMapelTka === b.mapel;
-                    return (
-                      <button
-                        key={`top_chip_${b.jenisTka}_${b.mapel}`}
-                        type="button"
-                        onClick={() => {
-                          setFilterJenisTka(b.jenisTka);
-                          setFilterMapelTka(b.mapel);
-                        }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer border inline-flex items-center gap-2 ${
-                          isCurrentFilter
-                            ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                            : 'bg-white text-slate-700 border-slate-200 hover:border-amber-300'
-                        }`}
-                      >
-                        <span
-                          className={`w-2 h-2 rounded-full shrink-0 ${
-                            isPkgOn ? 'bg-emerald-400' : 'bg-slate-400'
-                          }`}
-                        />
-                        <span>
-                          {b.jenisTka} • {b.mapel} — {b.count}/{MAX_QUESTIONS_PER_PACKAGE} Soal (
-                          {isPkgOn ? 'Aktif' : 'Nonaktif'})
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
               <div>
@@ -4515,22 +4448,20 @@ export const TKATabs: React.FC<Props> = ({
         const availableAnalisisMapels = Array.from(
           new Set([...TKA_MAPEL_LIST, ...questionsForSelectedPaket.map((q) => q.mapel)])
         ).filter((m) => questionsForSelectedPaket.some((q) => q.mapel === m));
-        const selectedNormalizedSet = new Set(
-          selectedAnalisisMapels.map((m) => normalizeTkaMapelKey(m))
-        );
-        const effectiveSelectedMapels =
-          selectedAnalisisMapels.length === 0
-            ? []
-            : availableAnalisisMapels.filter(
-                (m) =>
-                  selectedAnalisisMapels.includes(m) ||
-                  selectedNormalizedSet.has(normalizeTkaMapelKey(m))
-              );
+
+        const normalizedFilterMapel =
+          analisisMapelTka === 'all' ? 'all' : normalizeTkaMapelKey(analisisMapelTka);
+
+        const activeMapelLabel =
+          analisisMapelTka === 'all'
+            ? `Semua Mata Pelajaran (${availableAnalisisMapels.length} Mapel)`
+            : availableAnalisisMapels.find(
+                (m) => m === analisisMapelTka || normalizeTkaMapelKey(m) === normalizedFilterMapel
+              ) || analisisMapelTka;
 
         const filteredAnalisisQuestions = questionsForSelectedPaket.filter((q) => {
-          if (effectiveSelectedMapels.length === 0) return false;
-          if (!effectiveSelectedMapels.includes(q.mapel)) return false;
-          return true;
+          if (analisisMapelTka === 'all') return true;
+          return q.mapel === analisisMapelTka || normalizeTkaMapelKey(q.mapel) === normalizedFilterMapel;
         });
 
         // Submissions matching selected term, aligned with live Data Siswa, package & excluding ABK set to Tidak Masuk TKA
@@ -4653,28 +4584,43 @@ export const TKATabs: React.FC<Props> = ({
         const countMudah = analisisList.filter((a) => a.tkLabel === 'Mudah').length;
         const countSedang = analisisList.filter((a) => a.tkLabel === 'Sedang').length;
         const countSukar = analisisList.filter((a) => a.tkLabel === 'Sukar').length;
+        const countValidDpTka = analisisList.filter((a) => a.dpValue >= 0.2).length;
         const testedAnalisisList = analisisList.filter((a) => a.pesertaCount > 0);
         const avgPct = testedAnalisisList.length > 0
           ? Math.round(testedAnalisisList.reduce((acc, c) => acc + c.pct, 0) / testedAnalisisList.length)
           : 0;
 
+        const tkaChartData = analisisList.map((a, idx) => ({
+          name: `No.${idx + 1}`,
+          no: idx + 1,
+          ketuntasan: a.pct,
+          tkValue: a.tkValue,
+          tkLabel: a.tkLabel,
+          dpValue: a.dpValue,
+          dpLabel: a.dpLabel,
+          mapel: a.mapel,
+          paket: a.jenisTka,
+          pertanyaan: stripQuestionTags(a.pertanyaan),
+          fillColor:
+            a.tkLabel === 'Mudah'
+              ? '#10B981'
+              : a.tkLabel === 'Sedang'
+              ? '#F59E0B'
+              : '#F43F5E',
+        }));
+
         const handleExportExcelTka = () => {
-          const mapelLabel = effectiveSelectedMapels.length === 0
-            ? 'Tidak Ada Mapel Terpilih'
-            : availableAnalisisMapels.length > 0 && effectiveSelectedMapels.length === availableAnalisisMapels.length
-            ? `Semua Mapel Tersedia (${availableAnalisisMapels.length} Mapel)`
-            : effectiveSelectedMapels.join(', ');
           const wsData = [
             ['ANALISIS BUTIR SOAL TES KEMAMPUAN AKADEMIK (TKA)'],
             ['SDN RAWA BADAK UTARA 21 - JAKARTA UTARA'],
-            [`Mata Pelajaran: ${mapelLabel}`],
+            [`Mata Pelajaran: ${activeMapelLabel}`],
             [`Paket TKA: ${analisisPaketTka === 'all' ? 'Semua Paket' : analisisPaketTka}`],
             [`Jumlah Siswa Mengerjakan: ${totalPesertaSub} Siswa`],
             [],
             ['No', 'Butir Pertanyaan TKA', 'Paket TKA', 'Mata Pelajaran', 'Tipe', 'Tingkat Kesukaran', 'Ketuntasan Siswa (%)', 'Daya Pembeda', 'Status Butir'],
             ...analisisList.map((q, idx) => [
               idx + 1,
-              q.pertanyaan,
+              stripQuestionTags(q.pertanyaan),
               q.jenisTka,
               q.mapel,
               q.tipe,
@@ -4688,191 +4634,151 @@ export const TKATabs: React.FC<Props> = ({
           const ws = XLSX.utils.aoa_to_sheet(wsData);
           const wb = XLSX.utils.book_new();
           XLSX.utils.book_append_sheet(wb, ws, 'Analisis TKA');
-          XLSX.writeFile(wb, `Analisis_TKA_${effectiveSelectedMapels.length}_Mapel_${analisisPaketTka}.xlsx`);
+          XLSX.writeFile(wb, `Analisis_TKA_${analisisMapelTka === 'all' ? 'Semua_Mapel' : analisisMapelTka}_${analisisPaketTka}.xlsx`);
+        };
+
+        const handleDownloadTkaAnalisisPdf = async () => {
+          if (isExportingAnalisisPdf) return;
+          setIsExportingAnalisisPdf(true);
+          try {
+            const kepsek = resolveKepalaSekolah(teachers, profile);
+            await exportTkaAnalisisToPdf({
+              profile,
+              paketLabel: analisisPaketTka === 'all' ? 'Semua Paket' : analisisPaketTka,
+              mapelLabel: activeMapelLabel,
+              tahunPelajaran: activeYear,
+              semester: activeSemester,
+              totalPeserta: totalPesertaSub,
+              targetSiswaKelas6: tkaStudents.length,
+              questions: analisisList.map((q, idx) => ({
+                no: idx + 1,
+                pertanyaan: stripQuestionTags(q.pertanyaan),
+                subLabel: `${q.jenisTka} · ${q.mapel}`,
+                tipe: q.tipe,
+                tkLabel: q.tkLabel,
+                tkValue: q.tkValue,
+                dpValue: q.dpValue,
+                dpLabel: q.dpLabel,
+                ketuntasanPct: q.pct,
+                status: q.status,
+              })),
+              kepsekNama: kepsek.nama,
+              kepsekNipLabel: formatNipLabel(kepsek.status, kepsek.nip),
+            });
+            showToast(`Laporan Analisis TKA (${analisisPaketTka === 'all' ? 'Semua Paket' : analisisPaketTka}) berhasil diunduh.`, 'success');
+          } catch {
+            showToast('Gagal mengunduh file laporan PDF analisis TKA.', 'error');
+          } finally {
+            setIsExportingAnalisisPdf(false);
+          }
         };
 
         return (
-          <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-6">
-            {/* Header */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
-              <div>
-                <span className="text-xs font-extrabold uppercase bg-amber-100 text-amber-900 px-3 py-1 rounded-full">
-                  Menu TKA • Analitik & Evaluasi Soal
-                </span>
-                <h2 className="text-xl font-display font-black text-slate-800 mt-1 flex items-center gap-2">
-                  <BarChart3 className="w-5 h-5 text-amber-600" /> Analisis Butir Soal TKA & Grafik Ketuntasan
+          <div className="space-y-6">
+            {/* Attractive Executive Report Header */}
+            <div className="bg-gradient-to-br from-slate-900 via-amber-950 to-rose-950 text-white p-6 sm:p-7 rounded-3xl shadow-md border border-amber-800/40 flex flex-col xl:flex-row xl:items-center justify-between gap-5">
+              <div className="space-y-2 max-w-2xl">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-amber-200 font-medium">
+                  <span>Evaluasi Butir Soal TKA</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{analisisPaketTka === 'all' ? 'Semua Paket' : analisisPaketTka}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{activeMapelLabel}</span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-display font-black tracking-tight flex items-center gap-2.5 text-white">
+                  <span className="w-10 h-10 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center shrink-0">
+                    <BarChart3 className="w-5 h-5 text-amber-300" />
+                  </span>
+                  <span>Laporan Analisis Butir Soal &amp; Ketuntasan TKA</span>
                 </h2>
-                <p className="text-xs text-slate-500">
-                  Evaluasi tingkat kesukaran soal, daya pembeda, dan grafik ketuntasan peserta didik terkoneksi dengan hasil ujian siswa ({totalPesertaSub} siswa mengerjakan).
+                <p className="text-xs text-slate-300 leading-relaxed tabular-nums">
+                  Evaluasi tingkat kesukaran soal, daya pembeda (DP), dan ketuntasan peserta didik Kelas 6 ({totalPesertaSub} siswa mengerjakan).
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <button
                   type="button"
                   disabled={isSyncingTkaCloud}
                   onClick={handleRefreshTkaFromCloud}
-                  className="bg-sky-50 hover:bg-sky-100 disabled:opacity-60 text-sky-800 font-display font-black px-3.5 py-2 rounded-xl text-xs border border-sky-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                  className="bg-white/10 hover:bg-white/20 disabled:opacity-60 text-white font-display font-bold px-3.5 py-2.5 rounded-xl text-xs border border-white/20 flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
                   title="Tarik & sinkronkan hasil pengerjaan TKA terbaru dari Cloud Firestore"
                 >
-                  <RefreshCw className={`w-4 h-4 text-sky-600 ${isSyncingTkaCloud ? 'animate-spin' : ''}`} />{' '}
-                  {isSyncingTkaCloud ? 'Menyinkronkan...' : 'Segarkan Cloud'}
+                  <RefreshCw className={`w-4 h-4 text-sky-300 ${isSyncingTkaCloud ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingTkaCloud ? 'Sinkron...' : 'Segarkan Cloud'}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleClearSubmissions('analisis', analisisPaketTka)}
-                  className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-display font-black px-3.5 py-2 rounded-xl text-xs border border-rose-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                  className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 font-display font-bold px-3.5 py-2.5 rounded-xl text-xs border border-rose-400/30 flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
                   title="Kosongkan data analisis dan hasil TKA"
                 >
-                  <Trash2 className="w-4 h-4 text-rose-600" /> Kosongkan Data
+                  <Trash2 className="w-4 h-4" />
+                  <span>Kosongkan Data</span>
                 </button>
                 <button
                   type="button"
                   disabled={isSeedingTka}
                   onClick={handleSeedSimulatedSubmissions}
-                  className="bg-purple-50 hover:bg-purple-100 disabled:opacity-60 text-purple-800 font-display font-black px-3.5 py-2 rounded-xl text-xs border border-purple-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                  className="bg-white/10 hover:bg-white/20 disabled:opacity-60 text-white font-display font-bold px-3.5 py-2.5 rounded-xl text-xs border border-white/20 flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
                   title="Simulasikan pengerjaan seluruh siswa Kelas 6"
                 >
-                  <Sparkles className="w-4 h-4 text-purple-600" />{' '}
-                  {isSeedingTka ? 'Memuat Simulasi...' : `Simulasikan Siswa (${tkaStudents.length})`}
+                  <Sparkles className="w-4 h-4 text-purple-300" />
+                  <span>{isSeedingTka ? 'Memuat...' : `Simulasikan (${tkaStudents.length})`}</span>
                 </button>
                 <button
                   type="button"
                   onClick={handleExportExcelTka}
-                  className="bg-amber-50 hover:bg-amber-100 text-amber-900 font-display font-black px-3.5 py-2 rounded-xl text-xs border border-amber-200 flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                  className="bg-white/10 hover:bg-white/20 text-white font-display font-bold px-3.5 py-2.5 rounded-xl text-xs border border-white/20 flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
                 >
-                  <FileSpreadsheet className="w-4 h-4 text-amber-700" /> Ekspor Excel
+                  <FileSpreadsheet className="w-4 h-4 text-amber-300" />
+                  <span>Unduh Excel</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => window.print()}
-                  className="bg-amber-600 hover:bg-amber-700 text-white font-display font-black px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                  disabled={isExportingAnalisisPdf}
+                  onClick={handleDownloadTkaAnalisisPdf}
+                  className="bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 transition cursor-pointer shadow-sm whitespace-nowrap shrink-0"
                 >
-                  <Download className="w-4 h-4" /> Cetak
+                  <Download className="w-4 h-4" />
+                  <span>{isExportingAnalisisPdf ? 'Menyiapkan PDF...' : 'Unduh Laporan'}</span>
                 </button>
               </div>
             </div>
 
-            {totalPesertaSub === 0 && (
-              <div className="bg-amber-50/80 p-4 rounded-2xl border-2 border-amber-300 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-black text-lg">
-                    ℹ️
-                  </div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 space-y-6">
+              {totalPesertaSub === 0 && (
+                <div className="bg-amber-50/80 p-4 rounded-2xl border border-amber-200 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h4 className="text-xs font-black text-amber-900">Data Analisis TKA Saat Ini Masih Kosong</h4>
-                    <p className="text-[11px] text-amber-800 font-medium">
-                      Belum ada siswa yang mengerjakan soal pada paket ini. Siswa dapat login dan mengerjakan melalui menu <strong>"Tes Kemampuan Akademik (TKA)"</strong>, atau klik tombol di sebelah kanan untuk memuat simulasi pengerjaan.
+                    <p className="text-[11px] text-amber-800 font-medium mt-0.5">
+                      Belum ada siswa yang mengerjakan paket ini. Siswa dapat mengerjakan melalui menu Tes Kemampuan Akademik (TKA), atau muat simulasi pengerjaan.
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    disabled={isSeedingTka}
+                    onClick={handleSeedSimulatedSubmissions}
+                    className="bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition whitespace-nowrap shrink-0"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>{isSeedingTka ? 'Memuat Simulasi...' : `Muat Simulasi (${tkaStudents.length} Siswa)`}</span>
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  disabled={isSeedingTka}
-                  onClick={handleSeedSimulatedSubmissions}
-                  className="bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition"
-                >
-                  <Sparkles className="w-4 h-4" />{' '}
-                  {isSeedingTka ? 'Memuat Simulasi...' : `Muat Simulasi (${tkaStudents.length} Siswa)`}
-                </button>
-              </div>
-            )}
+              )}
 
-            {/* Filter Controls: Multi-Select Checkboxes Mapel TKA & Dropdown Paket TKA */}
-            <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
-              <div>
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
-                  <div>
-                    <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
-                      <CheckSquare className="w-4 h-4 text-amber-600" />
-                      Filter Mata Pelajaran TKA (Centang untuk Memilih 1, 2, atau Semua Mapel):
-                    </label>
-                    <p className="text-[11px] text-slate-500">
-                      Jika mapel tidak dicentang, maka butir soal dan data analisis mapel tersebut tidak akan dimunculkan.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedAnalisisMapels([...availableAnalisisMapels])}
-                      className="text-[11px] font-bold text-amber-800 hover:text-amber-950 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition cursor-pointer"
-                    >
-                      Pilih Semua ({availableAnalisisMapels.length} Mapel)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedAnalisisMapels([])}
-                      className="text-[11px] font-bold text-slate-600 hover:text-rose-700 bg-slate-200 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition cursor-pointer"
-                    >
-                      Kosongkan Pilihan
-                    </button>
-                  </div>
-                </div>
-
-                {/* Checkbox cards hanya untuk mapel yang memiliki soal pada paket ini */}
-                {availableAnalisisMapels.length === 0 ? (
-                  <div className="p-4 rounded-xl bg-white border border-slate-200 text-xs text-slate-500 italic">
-                    Belum ada butir soal TKA untuk paket ini.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
-                    {availableAnalisisMapels.map((m) => {
-                      const isChecked = effectiveSelectedMapels.includes(m);
-                      const countQ = questionsForSelectedPaket.filter((q) => q.mapel === m).length;
-                      return (
-                        <label
-                          key={m}
-                          className={`flex items-center justify-between gap-2 p-3 rounded-xl border text-xs font-bold cursor-pointer transition select-none ${
-                            isChecked
-                              ? 'bg-amber-600 text-white border-amber-700 shadow-xs'
-                              : 'bg-white text-slate-700 border-slate-300 hover:border-amber-400'
-                          }`}
-                        >
-                          <span className="flex items-center gap-2 min-w-0">
-                            <input
-                              type="checkbox"
-                              checked={isChecked}
-                              onChange={() => {
-                                const normM = normalizeTkaMapelKey(m);
-                                if (isChecked) {
-                                  setSelectedAnalisisMapels(
-                                    selectedAnalisisMapels.filter(
-                                      (x) => x !== m && normalizeTkaMapelKey(x) !== normM
-                                    )
-                                  );
-                                } else {
-                                  setSelectedAnalisisMapels([...selectedAnalisisMapels, m]);
-                                }
-                              }}
-                              className="w-4 h-4 rounded text-amber-600 accent-amber-600 shrink-0"
-                            />
-                            <span className="truncate">{m}</span>
-                          </span>
-                          <span
-                            className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
-                              isChecked ? 'bg-amber-700 text-amber-50' : 'bg-slate-100 text-slate-500'
-                            }`}
-                          >
-                            {countQ}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex-1 max-w-md">
-                  <label className="block text-xs font-extrabold text-slate-700 mb-1">
-                    Filter Paket / Jenis Soal TKA:
+              {/* Filter Bar: Dropdown Paket Soal disamping Dropdown Mata Pelajaran */}
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+                <div className="md:col-span-6">
+                  <label className="block text-xs font-extrabold text-slate-700 mb-1.5">
+                    Filter Paket / Jenis Soal TKA
                   </label>
                   <select
                     value={analisisPaketTka}
                     onChange={(e) => setAnalisisPaketTka(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none shadow-2xs cursor-pointer focus:border-amber-500"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none shadow-2xs cursor-pointer focus:border-amber-500"
                   >
-                    <option value="all">Semua Paket (Simulasi 1 – 6 & Try Out 1 – 6)</option>
+                    <option value="all">Semua Paket (Simulasi 1 – 6 &amp; Try Out 1 – 6)</option>
                     {TKA_JENIS_LIST.map((p) => (
                       <option key={p} value={p}>
                         {p}
@@ -4881,111 +4787,256 @@ export const TKATabs: React.FC<Props> = ({
                   </select>
                 </div>
 
-                <div className="text-right text-xs text-slate-500 font-medium">
-                  Mapel Terpilih: <strong className="text-amber-800 font-black">{effectiveSelectedMapels.length} dari {availableAnalisisMapels.length} Mapel</strong>
+                <div className="md:col-span-6">
+                  <label className="block text-xs font-extrabold text-slate-700 mb-1.5">
+                    Filter Mata Pelajaran TKA
+                  </label>
+                  <select
+                    value={analisisMapelTka}
+                    onChange={(e) => setAnalisisMapelTka(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-amber-400 bg-white text-xs font-black text-slate-800 outline-none shadow-2xs cursor-pointer focus:ring-2 focus:ring-amber-200"
+                  >
+                    <option value="all">
+                      Semua Mata Pelajaran ({availableAnalisisMapels.length} Mapel Tersedia)
+                    </option>
+                    {availableAnalisisMapels.map((m) => {
+                      const countQ = questionsForSelectedPaket.filter((q) => q.mapel === m).length;
+                      return (
+                        <option key={m} value={m}>
+                          {m} ({countQ} Soal)
+                        </option>
+                      );
+                    })}
+                  </select>
                 </div>
               </div>
-            </div>
 
-            {/* Jika tidak ada mapel yang dipilih */}
-            {effectiveSelectedMapels.length === 0 && (
-              <div className="p-8 text-center bg-amber-50 rounded-2xl border-2 border-amber-300 space-y-2">
-                <AlertCircle className="w-8 h-8 text-amber-600 mx-auto" />
-                <h3 className="font-display font-black text-sm text-amber-900">
-                  Tidak Ada Mata Pelajaran yang Dipilih
-                </h3>
-                <p className="text-xs text-amber-800 max-w-md mx-auto">
-                  Silakan centang minimal 1 mata pelajaran pada pilihan di atas untuk menampilkan hasil analisis butir soal, grafik ketuntasan, dan daya pembeda TKA.
-                </p>
-                {availableAnalisisMapels.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedAnalisisMapels([...availableAnalisisMapels])}
-                    className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white font-bold text-xs hover:bg-amber-700 cursor-pointer shadow-xs"
-                  >
-                    <CheckSquare className="w-3.5 h-3.5" /> Pilih Semua Mata Pelajaran Tersedia
-                  </button>
+              {/* Refined Executive KPI Summary Cards */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+                <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-500">Soal Teranalisis</span>
+                    <Layers className="w-4 h-4 text-amber-600" />
+                  </div>
+                  <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
+                    {totalAnalisis} Butir
+                  </div>
+                  <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                    <div className="h-full bg-amber-500 rounded-full" style={{ width: totalAnalisis > 0 ? '100%' : '0%' }} />
+                  </div>
+                  <span className="text-[11px] text-slate-500 truncate block">
+                    {activeMapelLabel}
+                  </span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-500">Rata-rata Ketuntasan</span>
+                    <TrendingUp className="w-4 h-4 text-emerald-600" />
+                  </div>
+                  <div className={`text-2xl font-display font-black tabular-nums ${avgPct >= 80 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                    {avgPct}%
+                  </div>
+                  <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${avgPct >= 80 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                      style={{ width: `${Math.min(100, avgPct)}%` }}
+                    />
+                  </div>
+                  <span className="text-[11px] text-slate-500 tabular-nums block">
+                    {totalPesertaSub} dari {tkaStudents.length} Siswa Kelas 6
+                  </span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-500">Komposisi Kesukaran</span>
+                    <BarChart3 className="w-4 h-4 text-sky-600" />
+                  </div>
+                  <div className="text-lg font-display font-black text-slate-900 tabular-nums">
+                    {countMudah}M · {countSedang}S · {countSukar}Sk
+                  </div>
+                  <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden flex">
+                    {totalAnalisis > 0 && (
+                      <>
+                        <div className="h-full bg-emerald-500" style={{ width: `${(countMudah / totalAnalisis) * 100}%` }} />
+                        <div className="h-full bg-amber-500" style={{ width: `${(countSedang / totalAnalisis) * 100}%` }} />
+                        <div className="h-full bg-rose-500" style={{ width: `${(countSukar / totalAnalisis) * 100}%` }} />
+                      </>
+                    )}
+                  </div>
+                  <span className="text-[11px] text-slate-500 block">
+                    Mudah · Sedang · Sukar
+                  </span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-500">Daya Pembeda Valid</span>
+                    <CheckCircle className="w-4 h-4 text-purple-600" />
+                  </div>
+                  <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
+                    {countValidDpTka}/{totalAnalisis}
+                  </div>
+                  <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                    <div
+                      className="h-full bg-purple-500 rounded-full"
+                      style={{ width: `${totalAnalisis > 0 ? Math.round((countValidDpTka / totalAnalisis) * 100) : 0}%` }}
+                    />
+                  </div>
+                  <span className="text-[11px] text-slate-500 block">
+                    Soal dengan DP &ge; 0.20
+                  </span>
+                </div>
+              </div>
+
+              {/* GRAFIK DATA ANALISIS TKA */}
+              <div className="p-5 rounded-3xl bg-slate-50 border border-slate-200 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-amber-600" />
+                    <h3 className="font-display font-black text-sm text-slate-900">
+                      Visualisasi Grafik Analisis Soal TKA
+                    </h3>
+                  </div>
+
+                  <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 text-xs font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setAnalisisChartTab('kesukaran')}
+                      className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                        analisisChartTab === 'kesukaran'
+                          ? 'bg-amber-600 text-white font-black'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Tingkat Kesukaran
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAnalisisChartTab('ketuntasan')}
+                      className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                        analisisChartTab === 'ketuntasan'
+                          ? 'bg-amber-600 text-white font-black'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Ketuntasan Siswa
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAnalisisChartTab('pembeda')}
+                      className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
+                        analisisChartTab === 'pembeda'
+                          ? 'bg-amber-600 text-white font-black'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Daya Pembeda
+                    </button>
+                  </div>
+                </div>
+
+                {/* Recharts Overview Bar Chart */}
+                {tkaChartData.length > 0 && (
+                  <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h4 className="text-xs sm:text-sm font-display font-black text-slate-800 flex items-center gap-1.5">
+                          <BarChart3 className="w-4 h-4 text-amber-600" />
+                          Grafik Ketuntasan &amp; Tingkat Kesukaran Per Butir TKA
+                        </h4>
+                        <p className="text-[11px] text-slate-500">
+                          Persentase ketuntasan siswa per butir soal dengan kode warna tingkat kesukaran.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 text-[11px] font-bold">
+                        <span className="inline-flex items-center gap-1.5 text-emerald-700">
+                          <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500" /> Mudah
+                        </span>
+                        <span className="inline-flex items-center gap-1.5 text-amber-700">
+                          <span className="w-2.5 h-2.5 rounded-sm bg-amber-500" /> Sedang
+                        </span>
+                        <span className="inline-flex items-center gap-1.5 text-rose-700">
+                          <span className="w-2.5 h-2.5 rounded-sm bg-rose-500" /> Sukar
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="w-full h-[260px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={tkaChartData.slice(0, 40)}
+                          margin={{ top: 12, right: 16, left: -12, bottom: 6 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
+                          <XAxis
+                            dataKey="name"
+                            tick={{ fontSize: 10, fontWeight: 700, fill: '#334155' }}
+                            axisLine={{ stroke: '#CBD5E1' }}
+                            tickLine={false}
+                          />
+                          <YAxis
+                            domain={[0, 100]}
+                            unit="%"
+                            tick={{ fontSize: 10, fontWeight: 600, fill: '#64748B' }}
+                            axisLine={false}
+                            tickLine={false}
+                          />
+                          <Tooltip
+                            cursor={{ fill: '#FFFBEB' }}
+                            content={({ active, payload }) => {
+                              if (!active || !payload || !payload.length) return null;
+                              const d = payload[0].payload as (typeof tkaChartData)[number];
+                              return (
+                                <div className="bg-white/95 backdrop-blur-xs p-3 rounded-xl border border-slate-200 shadow-lg text-xs max-w-[260px] space-y-1.5">
+                                  <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-1">
+                                    <span className="font-display font-black text-slate-900">
+                                      Soal No. {d.no} ({d.mapel})
+                                    </span>
+                                    <span className="font-bold text-[10px] text-slate-600">{d.tkLabel}</span>
+                                  </div>
+                                  <p className="text-[11px] text-slate-600 line-clamp-2">{d.pertanyaan}</p>
+                                  <div className="grid grid-cols-3 gap-1.5 pt-1 text-[11px] font-mono tabular-nums">
+                                    <div className="bg-slate-50 px-2 py-1 rounded-lg">
+                                      <span className="text-[9px] text-slate-400 block">Tuntas</span>
+                                      <strong className="text-slate-900">{d.ketuntasan}%</strong>
+                                    </div>
+                                    <div className="bg-slate-50 px-2 py-1 rounded-lg">
+                                      <span className="text-[9px] text-slate-400 block">TK</span>
+                                      <strong className="text-slate-900">{d.tkValue.toFixed(2)}</strong>
+                                    </div>
+                                    <div className="bg-slate-50 px-2 py-1 rounded-lg">
+                                      <span className="text-[9px] text-slate-400 block">DP</span>
+                                      <strong className="text-amber-700">{d.dpValue.toFixed(2)}</strong>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }}
+                          />
+                          <ReferenceLine
+                            y={80}
+                            stroke="#059669"
+                            strokeDasharray="4 4"
+                            label={{
+                              value: 'Target TKA 80%',
+                              position: 'insideTopRight',
+                              fill: '#047857',
+                              fontSize: 10,
+                              fontWeight: 700,
+                            }}
+                          />
+                          <Bar dataKey="ketuntasan" name="Ketuntasan (%)" radius={[6, 6, 0, 0]} maxBarSize={36}>
+                            {tkaChartData.slice(0, 40).map((entry) => (
+                              <Cell key={`tka-bar-${entry.no}`} fill={entry.fillColor} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 )}
-              </div>
-            )}
-
-            {/* Quick Metrics */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200">
-                <span className="text-xs font-bold text-amber-800 uppercase">Soal Teranalisis</span>
-                <div className="text-2xl font-display font-black text-slate-900 mt-1">
-                  {totalAnalisis} Butir
-                </div>
-                <span className="text-[11px] text-slate-500 truncate block">
-                  {effectiveSelectedMapels.length === 0
-                    ? 'Tidak ada mapel'
-                    : availableAnalisisMapels.length > 0 && effectiveSelectedMapels.length === availableAnalisisMapels.length
-                    ? `Seluruh Mapel Tersedia (${availableAnalisisMapels.length} Mapel)`
-                    : effectiveSelectedMapels.join(', ')}
-                </span>
-              </div>
-              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200">
-                <span className="text-xs font-bold text-emerald-800 uppercase">Rata-rata Ketuntasan</span>
-                <div className="text-2xl font-display font-black text-emerald-700 mt-1">{avgPct}%</div>
-                <span className="text-[11px] text-emerald-800">Seluruh Siswa Kelas 6 ({tkaStudents.length} Siswa)</span>
-              </div>
-              <div className="p-4 rounded-2xl bg-sky-50 border border-sky-200">
-                <span className="text-xs font-bold text-sky-800 uppercase">Komposisi Kesukaran</span>
-                <div className="text-sm font-black text-slate-800 mt-1.5 flex items-center gap-1.5">
-                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs">{countMudah} Mudah</span>
-                  <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs">{countSedang} Sedang</span>
-                  <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 text-xs">{countSukar} Sukar</span>
-                </div>
-                <span className="text-[11px] text-slate-500">Standar Ujian TKA</span>
-              </div>
-            </div>
-
-            {/* GRAFIK DATA ANALISIS TKA */}
-            <div className="p-5 rounded-3xl bg-slate-50 border border-slate-200 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
-                <div className="flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-amber-600" />
-                  <h3 className="font-display font-black text-sm text-slate-900">
-                    Visualisasi Grafik Analisis Soal TKA
-                  </h3>
-                </div>
-
-                <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 text-xs font-bold">
-                  <button
-                    type="button"
-                    onClick={() => setAnalisisChartTab('kesukaran')}
-                    className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
-                      analisisChartTab === 'kesukaran'
-                        ? 'bg-amber-600 text-white font-black'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Tingkat Kesukaran
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAnalisisChartTab('ketuntasan')}
-                    className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
-                      analisisChartTab === 'ketuntasan'
-                        ? 'bg-amber-600 text-white font-black'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Ketuntasan Siswa
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAnalisisChartTab('pembeda')}
-                    className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
-                      analisisChartTab === 'pembeda'
-                        ? 'bg-amber-600 text-white font-black'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Daya Pembeda
-                  </button>
-                </div>
-              </div>
 
               {/* Chart 1: Tingkat Kesukaran TKA */}
               {analisisChartTab === 'kesukaran' && (
@@ -5318,9 +5369,7 @@ export const TKATabs: React.FC<Props> = ({
                     {analisisList.length === 0 && (
                       <tr>
                         <td colSpan={9} className="p-8 text-center text-slate-400 italic">
-                          {effectiveSelectedMapels.length === 0
-                            ? 'Tidak ada mata pelajaran yang dipilih. Silakan centang minimal 1 mata pelajaran pada filter di atas.'
-                            : !isDefaultTkaTerm && totalPesertaSub === 0
+                          {!isDefaultTkaTerm && totalPesertaSub === 0
                             ? `Belum ada data analisis dan hasil tes TKA pada ${activeSemester} (${activeYear}).`
                             : 'Tidak ada butir soal TKA yang cocok dengan filter Mata Pelajaran & Paket yang dipilih.'}
                         </td>
@@ -5329,6 +5378,7 @@ export const TKATabs: React.FC<Props> = ({
                   </tbody>
                 </table>
               </div>
+            </div>
             </div>
           </div>
         );

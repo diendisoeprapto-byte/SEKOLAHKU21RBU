@@ -89,7 +89,6 @@ import { LegerTab } from './components/tabs/LegerTab';
 import { CBTTab } from './components/tabs/CBTTab';
 import { AnalisisSoalTab } from './components/tabs/AnalisisSoalTab';
 import { ERaporTab } from './components/tabs/ERaporTab';
-import { RaporKokurikulerTab } from './components/tabs/RaporKokurikulerTab';
 import { BackupTab } from './components/tabs/BackupTab';
 import { TKATabs } from './components/tabs/TKATabs';
 import { PenilaianEkskulTab } from './components/tabs/PenilaianEkskulTab';
@@ -1561,18 +1560,6 @@ export default function App() {
                   activeSemester={activeSemester}
                   attendanceRecords={attendanceRecords}
                   showToast={showToast}
-                />
-              )}
-
-              {/* Tab 4.7: Rapor Kokurikuler P5 */}
-              {activeTab === 'rapor-kokurikuler' && (
-                <RaporKokurikulerTab
-                  profile={profile}
-                  students={students}
-                  teachers={teachers}
-                  activeClass={activeClass}
-                  activeYear={activeYear}
-                  activeSemester={activeSemester}
                 />
               )}
 
