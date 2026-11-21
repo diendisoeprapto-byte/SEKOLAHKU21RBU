@@ -59,7 +59,7 @@ export const RaporKokurikulerTab: React.FC<Props> = ({
       <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 flex flex-wrap items-center justify-between gap-4 no-print">
         <div>
           <span className="text-xs font-extrabold uppercase bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full">
-            Rapor Kokurikuler (P5) • {activeSemester} • {activeYear}
+            Rapor Kokurikuler • {activeSemester} • {activeYear}
           </span>
           <h2 className="text-xl font-display font-black text-slate-800 mt-1 flex items-center gap-2">
             <Sprout className="w-5 h-5 text-emerald-600" /> Rapor Projek Penguatan Profil Pelajar Pancasila
@@ -110,7 +110,7 @@ export const RaporKokurikulerTab: React.FC<Props> = ({
                 {profile.name}
               </h1>
               <p className="text-[10px] text-slate-600 font-medium">
-                RAPOR PROJEK PENGUATAN PROFIL PELAJAR PANCASILA (P5)
+                RAPOR KOKURIKULER PROJEK PENGUATAN PROFIL PELAJAR PANCASILA
               </p>
             </div>
             <img
@@ -181,10 +181,10 @@ export const RaporKokurikulerTab: React.FC<Props> = ({
             <div className="border border-dashed border-slate-400 rounded-xl p-8 mb-6 text-center bg-slate-50">
               <Sprout className="w-8 h-8 text-slate-300 mx-auto mb-2" />
               <p className="text-sm font-black text-slate-700">
-                Belum Ada Data Projek Kokurikuler (P5) untuk {activeSemester} ({activeYear})
+                Belum Ada Data Projek Kokurikuler untuk {activeSemester} ({activeYear})
               </p>
               <p className="text-xs text-slate-500 mt-1">
-                Data capaian projek P5 akan tampil setelah penilaian kokurikuler semester ini diisi.
+                Data capaian projek kokurikuler akan tampil setelah penilaian kokurikuler semester ini diisi.
               </p>
             </div>
           )}

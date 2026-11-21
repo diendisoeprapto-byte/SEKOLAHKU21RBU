@@ -128,5 +128,11 @@ service cloud.firestore {
       allow read: if true;
       allow write: if true;
     }
+
+    // Bank Media Ajar (PPT)
+    match /media_ajar/{mediaId} {
+      allow read: if true;
+      allow write: if true;
+    }
   }
 }

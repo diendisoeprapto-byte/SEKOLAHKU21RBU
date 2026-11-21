@@ -30,6 +30,7 @@ import {
   ThumbsUp,
   Save,
   Trash2,
+  Presentation,
 } from 'lucide-react';
 import { collection, addDoc, doc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../utils/firebase';
@@ -86,7 +87,6 @@ import { MathRenderer } from './MathRenderer';
 import { BenarSalahTableView, MenjodohkanColumnsView } from './StructuredQuestionViews';
 import { resolveBenarSalahItems, resolveMenjodohkanData } from '../utils/questionFormat';
 import { StudentPerformanceStats } from './StudentPerformanceStats';
-import { StudentKebiasaanTracker } from './StudentKebiasaanTracker';
 
 
 interface Props {
@@ -1843,7 +1843,163 @@ export const StudentDashboard: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Statistik Performa Rekap Nilai Ujian CBT & TKA (Recharts + Ekspor PDF/Excel) */}
+        {/* MENU UTAMA BERANDA SISWA (MINIMALIS & DI ATAS STATISTIK PERFORMA) */}
+        <div className="no-print space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-base sm:text-lg font-display font-black text-slate-800 flex items-center gap-2">
+              <Layers className="w-4 h-4 text-rose-600" /> Menu Utama Siswa
+            </h2>
+            <span className="text-[11px] font-semibold text-slate-500">
+              Pilih layanan belajar &amp; asesmen
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {/* 1. Ujian CBT */}
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('cbt');
+                setSelectedExamId('');
+                setIsExamRunning(false);
+              }}
+              className="group bg-white p-4 rounded-2xl border border-slate-200 hover:border-rose-300 shadow-2xs hover:shadow-sm transition text-left flex items-center justify-between gap-3 cursor-pointer"
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="w-11 h-11 rounded-xl bg-rose-50 text-rose-600 group-hover:bg-rose-600 group-hover:text-white flex items-center justify-center transition shrink-0">
+                  <Laptop className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-display font-black text-sm text-slate-900 group-hover:text-rose-600 transition truncate">
+                    Ujian CBT
+                  </h3>
+                  <p className="text-xs text-slate-500 truncate mt-0.5">
+                    Sumatif harian, ASTS &amp; ASAS
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-rose-600 group-hover:translate-x-0.5 transition shrink-0" />
+            </button>
+
+            {/* 2. TKA (disembunyikan jika ABK tidak masuk TKA) */}
+            {!isExcludedFromTka && (
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('tka');
+                  setSelectedExamId('');
+                  setIsExamRunning(false);
+                }}
+                className="group bg-white p-4 rounded-2xl border border-slate-200 hover:border-purple-300 shadow-2xs hover:shadow-sm transition text-left flex items-center justify-between gap-3 cursor-pointer"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-11 h-11 rounded-xl bg-purple-50 text-purple-600 group-hover:bg-purple-600 group-hover:text-white flex items-center justify-center transition shrink-0">
+                    <Sparkles className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-display font-black text-sm text-slate-900 group-hover:text-purple-600 transition truncate">
+                      Ujian &amp; Simulasi TKA
+                    </h3>
+                    <p className="text-xs text-slate-500 truncate mt-0.5">
+                      Tes Kemampuan Akademik
+                    </p>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-purple-600 group-hover:translate-x-0.5 transition shrink-0" />
+              </button>
+            )}
+
+            {/* 3. Hasil e-Rapor */}
+            <button
+              type="button"
+              onClick={() => onNavigateTab('rapor')}
+              className="group bg-white p-4 rounded-2xl border border-slate-200 hover:border-amber-300 shadow-2xs hover:shadow-sm transition text-left flex items-center justify-between gap-3 cursor-pointer"
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="w-11 h-11 rounded-xl bg-amber-50 text-amber-600 group-hover:bg-amber-500 group-hover:text-white flex items-center justify-center transition shrink-0">
+                  <Award className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-display font-black text-sm text-slate-900 group-hover:text-amber-600 transition truncate">
+                    Hasil e-Rapor
+                  </h3>
+                  <p className="text-xs text-slate-500 truncate mt-0.5">
+                    Rekap nilai &amp; cetak rapor
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-amber-600 group-hover:translate-x-0.5 transition shrink-0" />
+            </button>
+
+            {/* 4. Laporan 7 Kebiasaan */}
+            <button
+              type="button"
+              onClick={() => setViewMode('kebiasaan')}
+              className="group bg-white p-4 rounded-2xl border border-slate-200 hover:border-emerald-300 shadow-2xs hover:shadow-sm transition text-left flex items-center justify-between gap-3 cursor-pointer"
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white flex items-center justify-center transition shrink-0">
+                  <HeartHandshake className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-display font-black text-sm text-slate-900 group-hover:text-emerald-600 transition truncate">
+                    Laporan 7 Kebiasaan
+                  </h3>
+                  <p className="text-xs text-slate-500 truncate mt-0.5">
+                    Isi kebiasaan harian siswa
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-600 group-hover:translate-x-0.5 transition shrink-0" />
+            </button>
+
+            {/* 5. Perpustakaan Digital */}
+            <button
+              type="button"
+              onClick={() => onNavigateTab('perpustakaan')}
+              className="group bg-white p-4 rounded-2xl border border-slate-200 hover:border-sky-300 shadow-2xs hover:shadow-sm transition text-left flex items-center justify-between gap-3 cursor-pointer"
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="w-11 h-11 rounded-xl bg-sky-50 text-sky-600 group-hover:bg-sky-600 group-hover:text-white flex items-center justify-center transition shrink-0">
+                  <BookOpen className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-display font-black text-sm text-slate-900 group-hover:text-sky-600 transition truncate">
+                    Perpustakaan Digital
+                  </h3>
+                  <p className="text-xs text-slate-500 truncate mt-0.5">
+                    Buku bacaan &amp; kartu pinjam
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-sky-600 group-hover:translate-x-0.5 transition shrink-0" />
+            </button>
+
+            {/* 6. Bank Media Ajar (PPT) */}
+            <button
+              type="button"
+              onClick={() => onNavigateTab('media-ajar')}
+              className="group bg-white p-4 rounded-2xl border border-slate-200 hover:border-indigo-300 shadow-2xs hover:shadow-sm transition text-left flex items-center justify-between gap-3 cursor-pointer"
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="w-11 h-11 rounded-xl bg-indigo-50 text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white flex items-center justify-center transition shrink-0">
+                  <Presentation className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-display font-black text-sm text-slate-900 group-hover:text-indigo-600 transition truncate">
+                    Bank Media Ajar (PPT)
+                  </h3>
+                  <p className="text-xs text-slate-500 truncate mt-0.5">
+                    Slide materi sesuai kelasmu
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition shrink-0" />
+            </button>
+          </div>
+        </div>
+
+        {/* Statistik Performa Rekap Nilai Ujian CBT & TKA */}
         <StudentPerformanceStats
           student={currentStudent}
           cbtExams={allCbtExamsCatalog}
@@ -1863,182 +2019,6 @@ export const StudentDashboard: React.FC<Props> = ({
             setIsExamRunning(false);
           }}
         />
-
-        {/* Pelacakan Progres 7 Kebiasaan Anak Indonesia Hebat & Akumulasi Skor Mingguan */}
-        <StudentKebiasaanTracker
-          studentName={kebiasaanFormNama || currentStudent.nama}
-          studentClass={kebiasaanFormKelas || currentStudent.kelas}
-          todayStr={getLocalTodayStr()}
-          kebiasaanStatus={kebiasaanStatus}
-          kebiasaanSelectedIndicators={kebiasaanSelectedIndicators}
-          studentPastReports={studentPastReports}
-          hasUnsavedChanges={hasKebiasaanUnsavedChanges}
-          isSubmitting={isSubmittingKebiasaan}
-          onToggleIndikator={handleToggleIndikator}
-          onSelectAllIndicatorsForHabit={handleSelectAllIndicatorsForHabit}
-          onCheckAllToday={(checked) => handleMarkAllKebiasaan(checked, true)}
-          onSaveTodayProgress={() =>
-            saveKebiasaanProgress({
-              targetDate: getLocalTodayStr(),
-              openModal: false,
-            })
-          }
-          onOpenFullForm={() => setViewMode('kebiasaan')}
-        />
-
-        {/* 4 MENU UTAMA SISWA (DASHBOARD CARDS GRID) */}
-        <div className="no-print">
-          <div className="mb-4">
-            <h2 className="text-lg font-display font-black text-slate-800 flex items-center gap-2">
-              <Layers className="w-5 h-5 text-rose-600" /> Fitur Pembelajaran &amp; Evaluasi Siswa
-            </h2>
-            <p className="text-xs text-slate-500">
-              Pilih salah satu modul di bawah ini untuk memulai asesmen, membaca buku, atau memantau capaian belajar:
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {/* Card 1: Ujian CBT */}
-            <div
-              onClick={() => {
-                setViewMode('cbt');
-                setSelectedExamId('');
-                setIsExamRunning(false);
-              }}
-              className="group bg-white p-6 rounded-3xl border-2 border-rose-200 hover:border-rose-500 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden"
-            >
-              <div className="space-y-3">
-                <div className="w-14 h-14 rounded-2xl bg-rose-50 group-hover:bg-rose-600 text-rose-600 group-hover:text-white flex items-center justify-center transition shadow-xs">
-                  <Laptop className="w-7 h-7" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-black uppercase text-rose-600 tracking-wider">Modul Asesmen 1</span>
-                  <h3 className="font-display font-black text-lg text-slate-800 group-hover:text-rose-600 transition">
-                    Ujian CBT
-                  </h3>
-                </div>
-                <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                  Akses ujian harian formatif/sumatif (AS 1 - AS 6), Asesmen Sumatif Tengah Semester (ASTS), dan Akhir Semester (ASAS).
-                </p>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-rose-100 flex items-center justify-between text-xs font-black text-rose-600 group-hover:text-rose-700">
-                <span>Mulai Ujian CBT</span>
-                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
-              </div>
-            </div>
-
-            {/* Card 2: TKA (Tes Kemampuan Akademik) - disembunyikan jika siswa inklusi tidak masuk TKA */}
-            {!isExcludedFromTka && (
-              <div
-                onClick={() => {
-                  setViewMode('tka');
-                  setSelectedExamId('');
-                  setIsExamRunning(false);
-                }}
-                className="group bg-white p-6 rounded-3xl border-2 border-purple-200 hover:border-purple-500 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden"
-              >
-                <div className="space-y-3">
-                  <div className="w-14 h-14 rounded-2xl bg-purple-50 group-hover:bg-purple-600 text-purple-600 group-hover:text-white flex items-center justify-center transition shadow-xs">
-                    <Sparkles className="w-7 h-7" />
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-black uppercase text-purple-600 tracking-wider">Modul Asesmen 2</span>
-                    <h3 className="font-display font-black text-lg text-slate-800 group-hover:text-purple-600 transition">
-                      TKA (Tes Kemampuan Akademik)
-                    </h3>
-                  </div>
-                  <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                    Uji target capaian belajar tingkat tinggi (C3/C4/C6), pemecahan masalah kontekstual, dan simulasi soal AKM/Tryout.
-                  </p>
-                </div>
-
-                <div className="mt-6 pt-4 border-t border-purple-100 flex items-center justify-between text-xs font-black text-purple-600 group-hover:text-purple-700">
-                  <span>Buka Menu TKA</span>
-                  <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
-                </div>
-              </div>
-            )}
-
-            {/* Card 3: Hasil E-Rapor */}
-            <div
-              onClick={() => onNavigateTab('rapor')}
-              className="group bg-white p-6 rounded-3xl border-2 border-amber-200 hover:border-amber-500 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden"
-            >
-              <div className="space-y-3">
-                <div className="w-14 h-14 rounded-2xl bg-amber-50 group-hover:bg-amber-500 text-amber-600 group-hover:text-white flex items-center justify-center transition shadow-xs">
-                  <Award className="w-7 h-7" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-black uppercase text-amber-600 tracking-wider">Modul Pelaporan 1</span>
-                  <h3 className="font-display font-black text-lg text-slate-800 group-hover:text-amber-600 transition">
-                    Hasil E-Rapor
-                  </h3>
-                </div>
-                <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                  Lihat nilai akhir akademik intrakurikuler seluruh mata pelajaran, catatan wali kelas, predikat, dan cetak pratinjau lembar rapor.
-                </p>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-amber-100 flex items-center justify-between text-xs font-black text-amber-600 group-hover:text-amber-700">
-                <span>Buka Lembar e-Rapor</span>
-                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
-              </div>
-            </div>
-
-            {/* Card 5: Laporan 7 Kebiasaan */}
-            <div
-              onClick={() => setViewMode('kebiasaan')}
-              className="group bg-white p-6 rounded-3xl border-2 border-amber-300 hover:border-amber-500 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden ring-4 ring-amber-100/50"
-            >
-              <div className="space-y-3">
-                <div className="w-14 h-14 rounded-2xl bg-amber-50 group-hover:bg-amber-500 text-amber-600 group-hover:text-white flex items-center justify-center transition shadow-xs">
-                  <HeartHandshake className="w-7 h-7" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-black uppercase text-amber-600 tracking-wider">Karakter &amp; Pembiasaan</span>
-                  <h3 className="font-display font-black text-lg text-slate-800 group-hover:text-amber-600 transition">
-                    Laporan 7 Kebiasaan Anak Indonesia Hebat
-                  </h3>
-                </div>
-                <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                  Pilih indikator kegiatan harianmu: bangun pagi, beribadah, berolahraga, makan sehat &amp; bergizi, gemar belajar, bermasyarakat, dan tidur cepat.
-                </p>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-amber-100 flex items-center justify-between text-xs font-black text-amber-600 group-hover:text-amber-700">
-                <span>Isi Form Laporan</span>
-                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
-              </div>
-            </div>
-
-            {/* Card 6: Perpustakaan Digital */}
-            <div
-              onClick={() => onNavigateTab('perpustakaan')}
-              className="group bg-white p-6 rounded-3xl border-2 border-sky-200 hover:border-sky-500 shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden"
-            >
-              <div className="space-y-3">
-                <div className="w-14 h-14 rounded-2xl bg-sky-50 group-hover:bg-sky-600 text-sky-600 group-hover:text-white flex items-center justify-center transition shadow-xs">
-                  <BookOpen className="w-7 h-7" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-black uppercase text-sky-600 tracking-wider">Literasi &amp; Pustaka</span>
-                  <h3 className="font-display font-black text-lg text-slate-800 group-hover:text-sky-600 transition">
-                    Perpustakaan Digital
-                  </h3>
-                </div>
-                <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                  Baca buku pelajaran dan cerita bergambar gratis, raih lencana Duta Literasi, dan cek Kartu Peminjaman Perpustakaanmu.
-                </p>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-sky-100 flex items-center justify-between text-xs font-black text-sky-600 group-hover:text-sky-700">
-                <span>Buka Perpustakaan</span>
-                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition" />
-              </div>
-            </div>
-          </div>
-        </div>
       </section>
     );
   }

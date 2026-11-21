@@ -78,16 +78,14 @@ import { ProfilSekolahTab } from './components/tabs/ProfilSekolahTab';
 import { GuruTab } from './components/tabs/GuruTab';
 import { RombelTab } from './components/tabs/RombelTab';
 import { SiswaTab } from './components/tabs/SiswaTab';
-import { VerifikasiInklusiTab } from './components/tabs/VerifikasiInklusiTab';
 import { AbsensiTab } from './components/tabs/AbsensiTab';
 import { KalenderTab } from './components/tabs/KalenderTab';
 import { LaporanAbsensiTab } from './components/tabs/LaporanAbsensiTab';
 import { KurikulumTabs } from './components/tabs/KurikulumTabs';
 import { PenilaianTab } from './components/tabs/PenilaianTab';
 import { CatatanWaliTab } from './components/tabs/CatatanWaliTab';
-import { LegerTab } from './components/tabs/LegerTab';
+import { LegerAnalisisTab } from './components/tabs/LegerAnalisisTab';
 import { CBTTab } from './components/tabs/CBTTab';
-import { AnalisisSoalTab } from './components/tabs/AnalisisSoalTab';
 import { ERaporTab } from './components/tabs/ERaporTab';
 import { BackupTab } from './components/tabs/BackupTab';
 import { TKATabs } from './components/tabs/TKATabs';
@@ -96,6 +94,7 @@ import { DashboardKebiasaanTab } from './components/tabs/DashboardKebiasaanTab';
 import { ManajemenASAJTab } from './components/tabs/ManajemenASAJTab';
 import { PortalAlumniTab } from './components/tabs/PortalAlumniTab';
 import { PerpustakaanTab } from './components/tabs/PerpustakaanTab';
+import { MediaAjarTab } from './components/tabs/MediaAjarTab';
 import { StudentDashboard } from './components/StudentDashboard';
 import { testConnection } from './utils/firebase';
 import {
@@ -1381,8 +1380,8 @@ export default function App() {
                 />
               )}
 
-              {/* Tab 2.1: Siswa */}
-              {activeTab === 'siswa' && (
+              {/* Tab 2.1: Siswa, Akun, Barcode & Verifikasi Siswa Inklusi */}
+              {activeUser.role !== 'siswa' && (activeTab === 'siswa' || activeTab === 'verifikasi-inklusi') && (
                 <SiswaTab
                   students={students}
                   onSaveStudents={handleSaveStudents}
@@ -1394,14 +1393,7 @@ export default function App() {
                   showToast={showToast}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
                   onSelectClass={setActiveClass}
-                />
-              )}
-
-              {/* Tab 2.1b: Verifikasi Siswa Inklusi */}
-              {activeUser.role !== 'siswa' && activeTab === 'verifikasi-inklusi' && (
-                <VerifikasiInklusiTab
-                  students={students}
-                  activeYear={activeYear}
+                  initialSubTab={activeTab === 'verifikasi-inklusi' ? 'inklusi' : 'daftar'}
                 />
               )}
 
@@ -1526,17 +1518,19 @@ export default function App() {
                 />
               )}
 
-              {/* Tab 4.3: Leger */}
-              {activeTab === 'leger' && (
-                <LegerTab
+              {/* Tab 4.3: Leger & Analisis Soal (Tab Menu Terpadu) */}
+              {(activeTab === 'leger' || activeTab === 'analisis-soal') && (
+                <LegerAnalisisTab
                   profile={profile}
                   subjects={subjects}
                   students={students}
+                  teachers={teachers}
                   activeClass={activeClass}
                   activeYear={activeYear}
                   activeSemester={activeSemester}
                   showToast={showToast}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
+                  initialSubTab={activeTab === 'analisis-soal' ? 'analisis' : 'leger'}
                 />
               )}
 
@@ -1562,19 +1556,6 @@ export default function App() {
                     const allByClass = getStoredSubjectsByClass();
                     pushAllDataToCloud({ subjects: updated, subjectsByClass: allByClass }, activeUser?.name || 'admin');
                   }}
-                  showToast={showToast}
-                />
-              )}
-
-              {/* Tab 4.5: Analisis Soal */}
-              {activeTab === 'analisis-soal' && (
-                <AnalisisSoalTab
-                  students={students}
-                  teachers={teachers}
-                  profile={profile}
-                  activeClass={activeClass}
-                  activeYear={activeYear}
-                  activeSemester={activeSemester}
                   showToast={showToast}
                 />
               )}
@@ -1625,6 +1606,16 @@ export default function App() {
                   activeClass={activeClass}
                   showToast={showToast}
                   onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
+                />
+              )}
+
+              {/* Tab 3.6: Bank Media Ajar PPT (Semua Peran dengan Filter Kelas Otomatis) */}
+              {activeTab === 'media-ajar' && (
+                <MediaAjarTab
+                  activeUser={activeUser}
+                  students={students}
+                  profile={profile}
+                  showToast={showToast}
                 />
               )}
 

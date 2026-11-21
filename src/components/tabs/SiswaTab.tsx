@@ -27,6 +27,7 @@ import {
 import { collection, doc, getDocs, writeBatch } from 'firebase/firestore';
 import { db } from '../../utils/firebase';
 import { Student, SchoolProfile, ReligionType, KEBUTUHAN_KHUSUS_OPTIONS, isSiswaInklusi } from '../../types';
+import { VerifikasiInklusiTab } from './VerifikasiInklusiTab';
 import { MAPEL_LIST } from '../../data/defaultData';
 import { getLocalTodayStr, getLocalTimeStr } from '../../utils/dateUtils';
 import {
@@ -78,6 +79,7 @@ interface Props {
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onOpenZoom: (url: string, title: string) => void;
   onSelectClass?: (kelas: string) => void;
+  initialSubTab?: 'daftar' | 'inklusi';
 }
 
 export const SiswaTab: React.FC<Props> = ({
@@ -91,7 +93,19 @@ export const SiswaTab: React.FC<Props> = ({
   showToast,
   onOpenZoom,
   onSelectClass,
+  initialSubTab = 'daftar',
 }) => {
+  const [activeSubTab, setActiveSubTab] = useState<'daftar' | 'inklusi'>(initialSubTab);
+
+  useEffect(() => {
+    setActiveSubTab(initialSubTab);
+  }, [initialSubTab]);
+
+  const inklusiCount = useMemo(
+    () => students.filter((s) => isSiswaInklusi(s.kebutuhanKhusus)).length,
+    [students]
+  );
+
   const [newNama, setNewNama] = useState('');
   const [newJk, setNewJk] = useState<'L' | 'P'>('L');
   const [newTempatLahir, setNewTempatLahir] = useState('Jakarta');
@@ -768,6 +782,38 @@ export const SiswaTab: React.FC<Props> = ({
 
   return (
     <section className="space-y-6">
+      {/* Navigasi Tab Internal Siswa & Verifikasi Inklusi */}
+      <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-2xs inline-flex flex-wrap gap-1.5 no-print">
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('daftar')}
+          className={`px-4 py-2.5 rounded-xl font-display font-extrabold text-xs flex items-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'daftar'
+              ? 'bg-sky-600 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <Users className="w-4 h-4" />
+          <span>Data Siswa ({students.length})</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSubTab('inklusi')}
+          className={`px-4 py-2.5 rounded-xl font-display font-extrabold text-xs flex items-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'inklusi'
+              ? 'bg-amber-600 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <Sparkles className="w-4 h-4" />
+          <span>Verifikasi Siswa Inklusi ({inklusiCount})</span>
+        </button>
+      </div>
+
+      {activeSubTab === 'inklusi' ? (
+        <VerifikasiInklusiTab students={students} activeYear={activeYear} />
+      ) : (
+        <>
       {/* Form Tambah Siswa */}
       <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2208,6 +2254,8 @@ export const SiswaTab: React.FC<Props> = ({
         initialClass={selectedFilterClass === 'SEMUA' ? activeClass : selectedFilterClass}
         activeYear={activeYear}
       />
+        </>
+      )}
     </section>
   );
 };

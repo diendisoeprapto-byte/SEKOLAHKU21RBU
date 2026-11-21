@@ -193,6 +193,23 @@ export const TKATabs: React.FC<Props> = ({
   onOpenZoom,
   onSaveStudents,
 }) => {
+  const [internalSubType, setInternalSubType] = useState<Props['subType']>(subType);
+
+  useEffect(() => {
+    setInternalSubType(subType);
+  }, [subType]);
+
+  const activeViewType: Props['subType'] =
+    subType === 'bank-soal-tka' || subType === 'pengaturan-tka'
+      ? internalSubType === 'pengaturan-tka'
+        ? 'pengaturan-tka'
+        : 'bank-soal-tka'
+      : subType === 'analisis-tka' || subType === 'hasil-tka'
+      ? internalSubType === 'hasil-tka'
+        ? 'hasil-tka'
+        : 'analisis-tka'
+      : subType;
+
   // 1. Data Siswa TKA: Seluruh Kelas 6 yang mengikuti TKA (mengecualikan siswa berkebutuhan khusus jika diatur Tidak Masuk TKA)
   const allKelas6Students = useMemo(
     () => students.filter((s) => isKelas6Class(s.kelas)),
@@ -409,7 +426,7 @@ export const TKATabs: React.FC<Props> = ({
   }, []);
 
   useEffect(() => {
-    if (subType === 'analisis-tka' || subType === 'hasil-tka' || subType === 'tes-tka-siswa') {
+    if (activeViewType === 'analisis-tka' || activeViewType === 'hasil-tka' || activeViewType === 'tes-tka-siswa') {
       const existingSubs = getStoredTKASubmissions();
       const { mergedSubmissions, recoveredItems } = reconcileTkaResultsToSubmissions({
         cbtResults: getStoredCBTResults(),
@@ -432,7 +449,7 @@ export const TKATabs: React.FC<Props> = ({
       }
 
       if (
-        (subType === 'analisis-tka' || subType === 'hasil-tka') &&
+        (activeViewType === 'analisis-tka' || activeViewType === 'hasil-tka') &&
         candidateSubs.length === 0 &&
         !hasAutoReconciledTkaRef.current
       ) {
@@ -446,7 +463,7 @@ export const TKATabs: React.FC<Props> = ({
           .catch(() => {});
       }
     }
-  }, [subType, students]);
+  }, [activeViewType, students]);
 
   useEffect(() => {
     setDurPanelMinutes(getTKADurationMinutes(tkaDurations, durPanelPaket, durPanelMapel));
@@ -1230,7 +1247,7 @@ export const TKATabs: React.FC<Props> = ({
 
   // Memoize hasil alignment & lookup siswa untuk tab Report & Hasil TKA agar tidak dihitung ulang tiap render
   const memoizedEligibleHasilRows = useMemo(() => {
-    if (subType !== 'hasil-tka') return [];
+    if (activeViewType !== 'hasil-tka') return [];
     const alignedSubmissions = alignTkaSubmissionsWithStudents(tkaSubmissions, students).alignedSubmissions;
     return alignedSubmissions
       .map((sub) => {
@@ -1288,7 +1305,7 @@ export const TKATabs: React.FC<Props> = ({
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
-  }, [subType, tkaSubmissions, students, studentByIdLookup, excludedAbkIds, excludedAbkNisns, studentPhotoMap]);
+  }, [activeViewType, tkaSubmissions, students, studentByIdLookup, excludedAbkIds, excludedAbkNisns, studentPhotoMap]);
 
   const handleSeedSimulatedSubmissions = async () => {
     if (isSeedingTka) return;
@@ -2161,6 +2178,66 @@ export const TKATabs: React.FC<Props> = ({
 
   return (
     <section className="space-y-6">
+      {/* Tab Switcher Bank Soal & Pengaturan TKA */}
+      {(subType === 'bank-soal-tka' || subType === 'pengaturan-tka') && (
+        <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-2xs inline-flex flex-wrap gap-1.5 no-print">
+          <button
+            type="button"
+            onClick={() => setInternalSubType('bank-soal-tka')}
+            className={`px-4 py-2.5 rounded-xl font-display font-extrabold text-xs flex items-center gap-2 transition cursor-pointer ${
+              activeViewType === 'bank-soal-tka'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <FileQuestion className="w-4 h-4" />
+            <span>Bank Soal TKA &amp; Simulasi</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setInternalSubType('pengaturan-tka')}
+            className={`px-4 py-2.5 rounded-xl font-display font-extrabold text-xs flex items-center gap-2 transition cursor-pointer ${
+              activeViewType === 'pengaturan-tka'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <Settings className="w-4 h-4" />
+            <span>Pengaturan Soal &amp; Ujian TKA</span>
+          </button>
+        </div>
+      )}
+
+      {/* Tab Switcher Analisis Soal & Report Hasil TKA */}
+      {(subType === 'analisis-tka' || subType === 'hasil-tka') && (
+        <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-2xs inline-flex flex-wrap gap-1.5 no-print">
+          <button
+            type="button"
+            onClick={() => setInternalSubType('analisis-tka')}
+            className={`px-4 py-2.5 rounded-xl font-display font-extrabold text-xs flex items-center gap-2 transition cursor-pointer ${
+              activeViewType === 'analisis-tka'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4" />
+            <span>Analisis Soal TKA</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setInternalSubType('hasil-tka')}
+            className={`px-4 py-2.5 rounded-xl font-display font-extrabold text-xs flex items-center gap-2 transition cursor-pointer ${
+              activeViewType === 'hasil-tka'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <Award className="w-4 h-4" />
+            <span>Report &amp; Hasil TKA</span>
+          </button>
+        </div>
+      )}
+
       {/* ================= 1. SUB-MENU SISWA TKA ================= */}
       {subType === 'siswa-tka' && (
         <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-5">
@@ -2911,7 +2988,7 @@ export const TKATabs: React.FC<Props> = ({
       })()}
 
       {/* ================= 3. SUB-MENU BANK SOAL TKA (IMAGE 1 EXACT DESIGN) ================= */}
-      {subType === 'bank-soal-tka' && (
+      {activeViewType === 'bank-soal-tka' && (
         <div className="space-y-6">
           {/* Header & Quick Action Buttons */}
           <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -4315,7 +4392,7 @@ export const TKATabs: React.FC<Props> = ({
       )}
 
       {/* ================= 3B. SUB-MENU PENGATURAN SOAL, WAKTU UJIAN & ACAK TKA ================= */}
-      {subType === 'pengaturan-tka' && (
+      {activeViewType === 'pengaturan-tka' && (
         <div className="space-y-6">
           <div className="bg-white p-6 rounded-3xl shadow-md border border-slate-100 space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
@@ -4682,7 +4759,7 @@ export const TKATabs: React.FC<Props> = ({
       )}
 
       {/* ================= 4. SUB-MENU ANALISIS SOAL TKA ================= */}
-      {subType === 'analisis-tka' && (() => {
+      {activeViewType === 'analisis-tka' && (() => {
         const questionsForSelectedPaket = tkaQuestions.filter(
           (q) => analisisPaketTka === 'all' || q.jenisTka === analisisPaketTka
         );
@@ -5659,7 +5736,7 @@ export const TKATabs: React.FC<Props> = ({
       {/* ============================================================== */}
       {/* 5. MENU REPORT & HASIL TKA SISWA                               */}
       {/* ============================================================== */}
-      {subType === 'hasil-tka' && (() => {
+      {activeViewType === 'hasil-tka' && (() => {
         const eligibleAllTkaSubmissions = memoizedEligibleHasilRows;
         const yearMatchedTkaSubmissions = eligibleAllTkaSubmissions.filter(
           (sub) =>

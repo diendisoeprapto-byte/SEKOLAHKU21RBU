@@ -153,6 +153,23 @@
         "catatan": { "type": "string" }
       },
       "required": ["barcode_id", "nisn", "nama_siswa", "judul_buku", "tanggal_pinjam", "status"]
+    },
+    "MediaAjar": {
+      "title": "MediaAjar",
+      "description": "Katalog tautan slide PowerPoint (PPTX) / PDF Google Drive per kelas pada fitur Bank Media Ajar",
+      "type": "object",
+      "properties": {
+        "judul": { "type": "string" },
+        "kelas": { "type": "string" },
+        "mapel": { "type": "string" },
+        "pertemuan": { "type": "string" },
+        "drive_url": { "type": "string" },
+        "embed_url": { "type": "string" },
+        "guru_nama": { "type": "string" },
+        "guru_uid": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["judul", "kelas", "mapel", "pertemuan", "drive_url", "embed_url", "guru_nama", "guru_uid"]
     }
   },
   "firestore": {
@@ -199,6 +216,10 @@
     "/pinjaman/{pinjamanId}": {
       "schema": "PeminjamanPerpustakaan",
       "description": "Catatan checkout peminjaman buku perpustakaan yang menautkan barcode kartu absensi/perpustakaan siswa ke ID buku"
+    },
+    "/media_ajar/{mediaId}": {
+      "schema": "MediaAjar",
+      "description": "Daftar slide materi pembelajaran (PPTX/PDF Google Drive) terfilter per kelas 1 sampai 6"
     }
   }
 }

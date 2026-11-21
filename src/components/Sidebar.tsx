@@ -31,6 +31,7 @@ import {
   HeartHandshake,
   Archive,
   Camera,
+  Presentation,
 } from 'lucide-react';
 import { ActiveUser, SchoolProfile, Student, isAbkExcludedFromTka } from '../types';
 
@@ -50,6 +51,7 @@ export type TabId =
   | 'kktp'
   | 'ekskul'
   | 'kokurikuler'
+  | 'media-ajar'
   | 'penilaian'
   | 'penilaian-ekskul'
   | 'catatan'
@@ -272,6 +274,18 @@ export const Sidebar: React.FC<Props> = ({
               <BookOpen className={`w-5 h-5 ${activeTab === 'perpustakaan' ? 'text-white' : 'text-rose-600'}`} />
               <span>Perpustakaan Digital</span>
             </button>
+
+            <button
+              onClick={() => onSelectTab('media-ajar')}
+              className={`w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-3 text-left transition ${
+                activeTab === 'media-ajar'
+                  ? 'bg-gradient-to-r from-rose-600 to-rose-700 text-white shadow-md'
+                  : 'text-slate-700 hover:bg-rose-50'
+              }`}
+            >
+              <Presentation className={`w-5 h-5 ${activeTab === 'media-ajar' ? 'text-white' : 'text-rose-600'}`} />
+              <span>Bank Media Ajar (PPT)</span>
+            </button>
           </nav>
         ) : (
           /* Admin / Guru Navigation */
@@ -372,30 +386,17 @@ export const Sidebar: React.FC<Props> = ({
               </button>
               {openGroups.group2 && (
                 <div className="p-2 space-y-1 bg-white/80 border-t border-sky-100">
-                  {(!searchQuery || 'siswa akun barcode nisn foto'.includes(searchQuery)) && (
+                  {(!searchQuery || 'data siswa akun barcode nisn foto verifikasi inklusi abk'.includes(searchQuery)) && (
                     <button
                       onClick={() => onSelectTab('siswa')}
                       className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'siswa'
+                        activeTab === 'siswa' || activeTab === 'verifikasi-inklusi'
                           ? 'bg-sky-600 text-white shadow-xs'
                           : 'text-slate-700 hover:bg-sky-50'
                       }`}
                     >
                       <Users className="w-4 h-4" />
-                      <span>Siswa, Akun & Barcode</span>
-                    </button>
-                  )}
-                  {(!searchQuery || 'verifikasi siswa inklusi abk reguler kategori kebutuhan khusus'.includes(searchQuery)) && (
-                    <button
-                      onClick={() => onSelectTab('verifikasi-inklusi')}
-                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'verifikasi-inklusi'
-                          ? 'bg-amber-600 text-white shadow-xs'
-                          : 'text-slate-700 hover:bg-amber-50'
-                      }`}
-                    >
-                      <HeartHandshake className="w-4 h-4" />
-                      <span>Verifikasi Siswa Inklusi</span>
+                      <span>Data Siswa</span>
                     </button>
                   )}
                   {(!searchQuery || 'scan absensi barcode wajah kamera face id'.includes(searchQuery)) && (
@@ -408,7 +409,7 @@ export const Sidebar: React.FC<Props> = ({
                       }`}
                     >
                       <QrCode className="w-4 h-4" />
-                      <span>Scan Absensi Barcode &amp; Wajah</span>
+                      <span>Scan Absensi</span>
                     </button>
                   )}
                   {(!searchQuery || 'kalender pendidikan kaldik libur dki jakarta'.includes(searchQuery)) && (
@@ -530,7 +531,7 @@ export const Sidebar: React.FC<Props> = ({
                       <span>Menu Ekstrakurikuler</span>
                     </button>
                   )}
-                  {(!searchQuery || 'kokurikuler p5 projek profil pelajar pancasila'.includes(searchQuery)) && (
+                  {(!searchQuery || 'kokurikuler projek profil pelajar pancasila'.includes(searchQuery)) && (
                     <button
                       onClick={() => onSelectTab('kokurikuler')}
                       className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
@@ -540,7 +541,20 @@ export const Sidebar: React.FC<Props> = ({
                       }`}
                     >
                       <Sprout className="w-4 h-4" />
-                      <span>Menu Kokurikuler (P5)</span>
+                      <span>Menu Kokurikuler</span>
+                    </button>
+                  )}
+                  {(!searchQuery || 'bank media ajar ppt slide presentasi powerpoint materi drive'.includes(searchQuery)) && (
+                    <button
+                      onClick={() => onSelectTab('media-ajar')}
+                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
+                        activeTab === 'media-ajar'
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'text-slate-700 hover:bg-amber-50'
+                      }`}
+                    >
+                      <Presentation className="w-4 h-4" />
+                      <span>Bank Media Ajar (PPT)</span>
                     </button>
                   )}
                 </div>
@@ -605,56 +619,30 @@ export const Sidebar: React.FC<Props> = ({
                       <span>Catatan Wali Kelas</span>
                     </button>
                   )}
-                  {(!searchQuery || 'leger rekap nilai ranking xlsx'.includes(searchQuery)) && (
+                  {(!searchQuery || 'leger rekap nilai ranking xlsx analisis butir soal grafik'.includes(searchQuery)) && (
                     <button
                       onClick={() => onSelectTab('leger')}
                       className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'leger'
+                        activeTab === 'leger' || activeTab === 'analisis-soal'
                           ? 'bg-emerald-600 text-white shadow-xs'
                           : 'text-slate-700 hover:bg-emerald-50'
                       }`}
                     >
                       <Table className="w-4 h-4" />
-                      <span>Leger / Rekap Nilai</span>
+                      <span>Leger &amp; Analisis Soal</span>
                     </button>
                   )}
-                  {(!searchQuery || 'bank soal ujian cbt online'.includes(searchQuery)) && (
+                  {(!searchQuery || 'bank soal ujian cbt online pengaturan sesi aktivasi waktu acak jawaban'.includes(searchQuery)) && (
                     <button
                       onClick={() => onSelectTab('ujian')}
                       className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'ujian'
+                        activeTab === 'ujian' || activeTab === 'pengaturan-cbt'
                           ? 'bg-emerald-600 text-white shadow-xs'
                           : 'text-slate-700 hover:bg-emerald-50'
                       }`}
                     >
                       <Laptop className="w-4 h-4" />
-                      <span>Bank Soal & Ujian CBT</span>
-                    </button>
-                  )}
-                  {(!searchQuery || 'pengaturan soal cbt aktivasi waktu ujian acak jawaban'.includes(searchQuery)) && (
-                    <button
-                      onClick={() => onSelectTab('pengaturan-cbt')}
-                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'pengaturan-cbt'
-                          ? 'bg-emerald-600 text-white shadow-xs'
-                          : 'text-slate-700 hover:bg-emerald-50'
-                      }`}
-                    >
-                      <Settings className="w-4 h-4" />
-                      <span>Pengaturan Soal & Ujian CBT</span>
-                    </button>
-                  )}
-                  {(!searchQuery || 'analisis butir soal grafik'.includes(searchQuery)) && (
-                    <button
-                      onClick={() => onSelectTab('analisis-soal')}
-                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'analisis-soal'
-                          ? 'bg-emerald-600 text-white shadow-xs'
-                          : 'text-slate-700 hover:bg-emerald-50'
-                      }`}
-                    >
-                      <BarChart3 className="w-4 h-4" />
-                      <span>Analisis Soal & Grafik</span>
+                      <span>Bank Soal &amp; Sesi CBT</span>
                     </button>
                   )}
                   {(!searchQuery || 'rapor e-rapor cetak a4 f4'.includes(searchQuery)) && (
@@ -732,56 +720,30 @@ export const Sidebar: React.FC<Props> = ({
                       <span>CP dan TP TKA</span>
                     </button>
                   )}
-                  {(!searchQuery || 'bank soal tka simulasi 1 6 tryout tka 1 5 import xlsx csv'.includes(searchQuery)) && (
+                  {(!searchQuery || 'bank soal tka simulasi 1 6 tryout tka 1 5 import xlsx csv pengaturan soal waktu ujian acak jawaban'.includes(searchQuery)) && (
                     <button
                       onClick={() => onSelectTab('bank-soal-tka')}
                       className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'bank-soal-tka'
+                        activeTab === 'bank-soal-tka' || activeTab === 'pengaturan-tka'
                           ? 'bg-purple-600 text-white shadow-xs'
                           : 'text-slate-700 hover:bg-purple-50'
                       }`}
                     >
                       <FileQuestion className="w-4 h-4" />
-                      <span>Bank Soal TKA & Simulasi</span>
+                      <span>Bank Soal &amp; Pengaturan TKA</span>
                     </button>
                   )}
-                  {(!searchQuery || 'pengaturan soal tka aktivasi waktu ujian acak jawaban'.includes(searchQuery)) && (
-                    <button
-                      onClick={() => onSelectTab('pengaturan-tka')}
-                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'pengaturan-tka'
-                          ? 'bg-purple-600 text-white shadow-xs'
-                          : 'text-slate-700 hover:bg-purple-50'
-                      }`}
-                    >
-                      <Settings className="w-4 h-4" />
-                      <span>Pengaturan Soal & Ujian TKA</span>
-                    </button>
-                  )}
-                  {(!searchQuery || 'analisis soal tka butir daya beda tingkat kesukaran'.includes(searchQuery)) && (
+                  {(!searchQuery || 'analisis soal tka butir daya beda tingkat kesukaran report hasil nilai tka skor siswa ujian peringkat'.includes(searchQuery)) && (
                     <button
                       onClick={() => onSelectTab('analisis-tka')}
                       className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'analisis-tka'
+                        activeTab === 'analisis-tka' || activeTab === 'hasil-tka'
                           ? 'bg-purple-600 text-white shadow-xs'
                           : 'text-slate-700 hover:bg-purple-50'
                       }`}
                     >
                       <BarChart3 className="w-4 h-4" />
-                      <span>Analisis Soal TKA</span>
-                    </button>
-                  )}
-                  {(!searchQuery || 'report hasil nilai tka skor siswa ujian peringkat'.includes(searchQuery)) && (
-                    <button
-                      onClick={() => onSelectTab('hasil-tka')}
-                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
-                        activeTab === 'hasil-tka'
-                          ? 'bg-purple-600 text-white shadow-xs'
-                          : 'text-slate-700 hover:bg-purple-50'
-                      }`}
-                    >
-                      <Award className="w-4 h-4" />
-                      <span>Report & Hasil TKA</span>
+                      <span>Analisis &amp; Report Hasil TKA</span>
                     </button>
                   )}
                 </div>
