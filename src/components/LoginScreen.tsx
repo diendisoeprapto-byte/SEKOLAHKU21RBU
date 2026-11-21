@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { SchoolProfile, Teacher, Student, ActiveUser } from '../types';
 import { getStoredAdminPassword } from '../utils/storage';
+import { SYSTEM_CREDIT_TEXT } from '../utils/ownershipWatermark';
 import schoolIllustration from '../assets/images/school_education_illustration_1795173778080.jpg';
 
 interface Props {
@@ -20,6 +21,7 @@ interface Props {
   onLoginSuccess: (user: ActiveUser) => void;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onOpenGoogleSitesGuide: () => void;
+  onLogoSecretClick?: () => void;
 }
 
 export const LoginScreen: React.FC<Props> = ({
@@ -29,6 +31,7 @@ export const LoginScreen: React.FC<Props> = ({
   onLoginSuccess,
   showToast,
   onOpenGoogleSitesGuide,
+  onLogoSecretClick,
 }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -135,14 +138,17 @@ export const LoginScreen: React.FC<Props> = ({
   };
 
   return (
-    <section className="min-h-screen flex items-center justify-center p-4 sm:p-6">
+    <section className="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 gap-4">
       <div className="max-w-4xl w-full bg-white rounded-[2.5rem] shadow-2xl border-4 border-rose-100 overflow-hidden grid grid-cols-1 lg:grid-cols-12">
         {/* Left Side: Minimalist School Branding & Illustration */}
         <div className="lg:col-span-6 bg-gradient-to-br from-rose-600 via-rose-700 to-amber-500 p-8 sm:p-10 text-white flex flex-col justify-between gap-6 relative overflow-hidden">
           <div className="absolute -right-12 -bottom-12 w-64 h-64 bg-white/10 rounded-full blur-2xl pointer-events-none"></div>
 
           <div className="relative z-10">
-            <div className="flex items-center gap-3.5">
+            <div
+              onClick={onLogoSecretClick}
+              className="flex items-center gap-3.5 select-none"
+            >
               <img
                 src={profile.logoKemendikbudUrl}
                 alt="Logo Kemendikbud"
@@ -279,6 +285,11 @@ export const LoginScreen: React.FC<Props> = ({
           </div>
         </div>
       </div>
+
+      {/* Minimalist Credit Footer */}
+      <footer className="text-center text-[11px] font-semibold text-slate-500 px-3 tracking-wide">
+        {SYSTEM_CREDIT_TEXT}
+      </footer>
     </section>
   );
 };

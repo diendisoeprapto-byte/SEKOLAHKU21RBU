@@ -1,4 +1,10 @@
 /**
+ * ============================================================================
+ * Aplikasi                     : SERBU 21 (SDN Rawa Badak Utara 21)
+ * Original Creator & Architect : Endi Soeprapto, S.Pd., Gr.
+ * Dedikasi                     : "For my beloved daughter, Dilanesa"
+ * Tahun                        : 2026
+ * ============================================================================
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -71,6 +77,12 @@ import { CustomHolidayModal } from './components/modals/CustomHolidayModal';
 import { MonthlyAttendanceModal } from './components/modals/MonthlyAttendanceModal';
 import { ChangePasswordModal } from './components/modals/ChangePasswordModal';
 import { AdminProfilePhotoModal } from './components/modals/AdminProfilePhotoModal';
+import { OwnershipCertificateModal } from './components/modals/OwnershipCertificateModal';
+import {
+  _CREATOR_SIGNATURE_ENDI_DILANESA,
+  SYSTEM_CREDIT_TEXT,
+  verifySystemOwnershipIntegrity,
+} from './utils/ownershipWatermark';
 
 // Tabs
 import { DashboardTab } from './components/tabs/DashboardTab';
@@ -169,6 +181,63 @@ export default function App() {
   const activeUserRef = React.useRef<ActiveUser | null>(null);
   const [restoreTick, setRestoreTick] = useState(0);
   const [activeExamStatus, setActiveExamStatus] = useState<ActiveExamHeaderStatus | null>(null);
+  const [isOwnershipModalOpen, setIsOwnershipModalOpen] = useState(false);
+  const ownershipStatus = React.useMemo(() => verifySystemOwnershipIntegrity(), []);
+  const logoClickTrackerRef = React.useRef<{ count: number; lastClickAt: number }>({
+    count: 0,
+    lastClickAt: 0,
+  });
+  const secretKeyTrackerRef = React.useRef<{ buffer: string; lastKeyAt: number }>({
+    buffer: '',
+    lastKeyAt: 0,
+  });
+
+  const handleSecretLogoClick = React.useCallback(() => {
+    const now = Date.now();
+    const tracker = logoClickTrackerRef.current;
+    const nextCount = now - tracker.lastClickAt <= 2500 ? tracker.count + 1 : 1;
+    if (nextCount >= 5) {
+      logoClickTrackerRef.current = { count: 0, lastClickAt: 0 };
+      setIsOwnershipModalOpen(true);
+    } else {
+      logoClickTrackerRef.current = { count: nextCount, lastClickAt: now };
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleSecretKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      const key = e.key.toLowerCase();
+      if (!/^[a-z]$/.test(key)) return;
+
+      const now = Date.now();
+      const tracker = secretKeyTrackerRef.current;
+      const prevBuf = now - tracker.lastKeyAt <= 2500 ? tracker.buffer : '';
+      const nextBuf = `${prevBuf}${key}`.slice(-8);
+
+      if (nextBuf === 'dilanesa') {
+        secretKeyTrackerRef.current = { buffer: '', lastKeyAt: 0 };
+        setIsOwnershipModalOpen(true);
+      } else {
+        secretKeyTrackerRef.current = { buffer: nextBuf, lastKeyAt: now };
+      }
+    };
+
+    window.addEventListener('keydown', handleSecretKeyDown);
+    return () => window.removeEventListener('keydown', handleSecretKeyDown);
+  }, []);
+
   const initialFilters = getActiveFilters();
   const activeClassRef = React.useRef<string>(initialFilters.kelas);
   const [subjects, setSubjects] = useState<Subject[]>(() => getStoredSubjectsForClass(initialFilters.kelas));
@@ -1243,6 +1312,13 @@ export default function App() {
         </div>
       )}
 
+      {/* Secret Proof of Ownership Certificate Modal */}
+      <OwnershipCertificateModal
+        isOpen={isOwnershipModalOpen}
+        onClose={() => setIsOwnershipModalOpen(false)}
+        ownershipStatus={ownershipStatus}
+      />
+
       {/* If Not Logged In -> Show Login Screen */}
       {!activeUser ? (
         <LoginScreen
@@ -1252,10 +1328,14 @@ export default function App() {
           onLoginSuccess={handleLoginSuccess}
           showToast={showToast}
           onOpenGoogleSitesGuide={() => setIsGoogleSitesModalOpen(true)}
+          onLogoSecretClick={handleSecretLogoClick}
         />
       ) : (
         /* Main App Interface */
-        <div className="flex flex-col min-h-screen">
+        <div
+          className="flex flex-col min-h-screen"
+          data-system-signature={_CREATOR_SIGNATURE_ENDI_DILANESA.raw}
+        >
           <Header
             profile={profile}
             activeUser={activeUser}
@@ -1270,6 +1350,7 @@ export default function App() {
               activeUser.role === 'admin' ? () => setIsAdminProfileModalOpen(true) : undefined
             }
             activeExamStatus={activeExamStatus}
+            onLogoSecretClick={handleSecretLogoClick}
           />
 
           <div className="max-w-[1600px] w-full mx-auto flex-1 flex flex-col lg:flex-row gap-6 p-4 sm:p-6">
@@ -1659,6 +1740,13 @@ export default function App() {
               )}
             </main>
           </div>
+
+          {/* Minimalist App Credit Footer */}
+          <footer className="mt-auto border-t border-slate-200/80 bg-white/85 backdrop-blur-xs py-3 px-4 text-center no-print">
+            <p className="text-[11px] font-semibold text-slate-500 tracking-wide">
+              {SYSTEM_CREDIT_TEXT}
+            </p>
+          </footer>
         </div>
       )}
     </div>

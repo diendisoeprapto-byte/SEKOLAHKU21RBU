@@ -15,6 +15,7 @@ interface Props {
   onOpenChangePassword?: () => void;
   onOpenAdminProfile?: () => void;
   activeExamStatus?: ActiveExamHeaderStatus | null;
+  onLogoSecretClick?: () => void;
 }
 
 export const Header: React.FC<Props> = ({
@@ -29,6 +30,7 @@ export const Header: React.FC<Props> = ({
   onOpenChangePassword,
   onOpenAdminProfile,
   activeExamStatus,
+  onLogoSecretClick,
 }) => {
   // Deteksi peran user: Kepsek, Administrator, Guru Mata Pelajaran, Tata Usaha, atau Guru Kelas
   const isGuruKelas = useMemo(() => {
@@ -82,30 +84,35 @@ export const Header: React.FC<Props> = ({
           >
             <Menu className="w-5 h-5" />
           </button>
-          <div className="flex items-center gap-1.5">
-            <img
-              src={profile.logoKemendikbudUrl}
-              alt="Logo Kemendikbud"
-              className="w-10 h-10 rounded-2xl bg-white p-1 object-contain shadow-md border-2 border-sky-300 shrink-0"
-            />
-            <img
-              src={profile.logoSekolahUrl}
-              alt="Logo Sekolah"
-              className="w-10 h-10 rounded-2xl bg-white p-1 object-contain shadow-md border-2 border-yellow-300 shrink-0"
-            />
-          </div>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-display font-black text-lg sm:text-xl tracking-tight">
-                SERBU 21 • {profile.name}
-              </span>
-              <span className="bg-yellow-300 text-slate-900 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase">
-                {activeUser.role}
-              </span>
+          <div
+            onClick={onLogoSecretClick}
+            className="flex items-center gap-3 select-none"
+          >
+            <div className="flex items-center gap-1.5">
+              <img
+                src={profile.logoKemendikbudUrl}
+                alt="Logo Kemendikbud"
+                className="w-10 h-10 rounded-2xl bg-white p-1 object-contain shadow-md border-2 border-sky-300 shrink-0"
+              />
+              <img
+                src={profile.logoSekolahUrl}
+                alt="Logo Sekolah"
+                className="w-10 h-10 rounded-2xl bg-white p-1 object-contain shadow-md border-2 border-yellow-300 shrink-0"
+              />
             </div>
-            <p className="text-xs text-rose-100">
-              Sistem Edukasi, Rapor, dan Basis Data Utama • {profile.provinsi} • Kurikulum Merdeka
-            </p>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-display font-black text-lg sm:text-xl tracking-tight">
+                  SERBU 21 • {profile.name}
+                </span>
+                <span className="bg-yellow-300 text-slate-900 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase">
+                  {activeUser.role}
+                </span>
+              </div>
+              <p className="text-xs text-rose-100">
+                Sistem Edukasi, Rapor, dan Basis Data Utama • {profile.provinsi} • Kurikulum Merdeka
+              </p>
+            </div>
           </div>
         </div>
 
