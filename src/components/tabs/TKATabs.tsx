@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, startTransition } from 'react';
 import {
   Users,
   Compass,
@@ -43,7 +43,6 @@ import {
   ChevronDown,
   User,
   Settings,
-  Save,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {
@@ -94,6 +93,7 @@ import {
   pushAllDataToCloud,
   syncAllLocalToCloud,
   reconcileTkaFromCloudBackup,
+  scheduleRealtimeModuleSync,
 } from '../../utils/cloudSync';
 import {
   exportQuestionsToWord,
@@ -135,6 +135,7 @@ import { compressQuestionImage } from '../../utils/imageUtils';
 import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
 import { exportTkaAnalisisToPdf } from '../../utils/analisisReportExport';
 import { QuestionContent } from '../QuestionContent';
+import { ManualTkaScoreModal, ManualTkaModalSeed } from './ManualTkaScoreModal';
 import { FormattedMathText, FractionBuilderBar } from '../FormattedMathText';
 import { MathPreviewPanel } from '../MathPreviewPanel';
 import {
@@ -240,6 +241,14 @@ export const TKATabs: React.FC<Props> = ({
     return map;
   }, [students]);
 
+  const studentByIdLookup = useMemo(() => {
+    const map = new Map<string, Student>();
+    students.forEach((s) => {
+      if (s.id) map.set(s.id, s);
+    });
+    return map;
+  }, [students]);
+
   const [classFilter, setClassFilter] = useState<string>('all');
   const [searchStudent, setSearchStudent] = useState('');
 
@@ -334,26 +343,10 @@ export const TKATabs: React.FC<Props> = ({
   const [downloadSelectedStudentId, setDownloadSelectedStudentId] = useState<string>('');
   const [downloadStudentSearch, setDownloadStudentSearch] = useState<string>('');
   const [downloadSelectedClass, setDownloadSelectedClass] = useState<string>('all');
-  const [showManualTkaModal, setShowManualTkaModal] = useState<boolean>(false);
-  const [manualModalTab, setManualModalTab] = useState<'individu' | 'massal'>('individu');
-  const [manualPaket, setManualPaket] = useState<string>(TKA_JENIS_LIST[0] || 'Simulasi 1');
-  const [manualStudentId, setManualStudentId] = useState<string>('');
-  const [manualStudentSearch, setManualStudentSearch] = useState<string>('');
-  const [manualStudentClassFilter, setManualStudentClassFilter] = useState<string>('all');
-  const [manualScoresInput, setManualScoresInput] = useState<Record<TKAMapelScoreKey, string>>({
-    'Bahasa Indonesia': '',
-    'Matematika': '',
-    'IPAS': '',
-    'Bahasa Inggris': '',
-    'Koding dan Kecerdasan Artifisial (KKA)': '',
-  });
-  const [manualTanggalUjian, setManualTanggalUjian] = useState<string>('');
-  const [manualDurasi, setManualDurasi] = useState<string>('45 Menit');
-  const [manualBatchClassFilter, setManualBatchClassFilter] = useState<string>('all');
-  const [manualBatchInputs, setManualBatchInputs] = useState<
-    Record<string, Partial<Record<TKAMapelScoreKey, string>>>
-  >({});
-  const [isSavingManualTka, setIsSavingManualTka] = useState<boolean>(false);
+  const [manualTkaModalSeed, setManualTkaModalSeed] = useState<ManualTkaModalSeed | null>(null);
+  const latestTkaSubmissionsRef = useRef<TKASubmissionItem[]>(tkaSubmissions);
+  latestTkaSubmissionsRef.current = tkaSubmissions;
+  const skipNextSubmissionEventRef = useRef<boolean>(false);
 
   // 6. Student Exam Room State (tes-tka-siswa)
   const [activeExamPaket, setActiveExamPaket] = useState<string | null>(null);
@@ -387,7 +380,13 @@ export const TKATabs: React.FC<Props> = ({
     const syncDurations = () => setTkaDurations(getStoredTKADurations());
     const syncActivePackages = () => setTkaActivePackages(getStoredTKAActivePackages());
     const syncTkaQuestions = () => setTkaQuestions(getStoredTKAQuestions());
-    const syncSubmissions = () => setTkaSubmissions(getStoredTKASubmissions());
+    const syncSubmissions = () => {
+      if (skipNextSubmissionEventRef.current) {
+        skipNextSubmissionEventRef.current = false;
+        return;
+      }
+      setTkaSubmissions(getStoredTKASubmissions());
+    };
     const syncCloudAll = () => {
       setTkaQuestions(getStoredTKAQuestions());
       setCpTpList(getStoredTKACpTp());
@@ -1127,156 +1126,6 @@ export const TKATabs: React.FC<Props> = ({
     }
   };
 
-  const MANUAL_TKA_MAPEL_LIST: Array<{ key: TKAMapelScoreKey; shortLabel: string }> = [
-    { key: 'Bahasa Indonesia', shortLabel: 'B. Indonesia' },
-    { key: 'Matematika', shortLabel: 'Matematika' },
-    { key: 'IPAS', shortLabel: 'IPAS' },
-    { key: 'Bahasa Inggris', shortLabel: 'B. Inggris' },
-    { key: 'Koding dan Kecerdasan Artifisial (KKA)', shortLabel: 'KKA' },
-  ];
-
-  const EMPTY_MANUAL_SCORES: Record<TKAMapelScoreKey, string> = {
-    'Bahasa Indonesia': '',
-    'Matematika': '',
-    'IPAS': '',
-    'Bahasa Inggris': '',
-    'Koding dan Kecerdasan Artifisial (KKA)': '',
-  };
-
-  const formatManualTanggalToday = () =>
-    new Date().toLocaleDateString('id-ID', {
-      day: '2-digit',
-      month: 'long',
-      year: 'numeric',
-    });
-
-  const findExistingTkaSubmission = (
-    studentId: string,
-    paket: string,
-    nisn?: string
-  ): TKASubmissionItem | undefined => {
-    const basePaket = extractBaseTkaPaket(paket) || paket;
-    const expectedDocId = makeSubmissionDocId(studentId, basePaket);
-    return tkaSubmissions.find((sub) => {
-      const subBasePaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
-      if (sub.id === expectedDocId) return true;
-      if (subBasePaket !== basePaket) return false;
-      if (sub.studentId === studentId) return true;
-      if (nisn && sub.nisn && sub.nisn === nisn) return true;
-      return false;
-    });
-  };
-
-  const extractManualMapelInputs = (
-    sub?: TKASubmissionItem
-  ): Record<TKAMapelScoreKey, string> => {
-    if (!sub) return { ...EMPTY_MANUAL_SCORES };
-    const completed = Array.isArray(sub.completedMapels)
-      ? sub.completedMapels.map((m) => normalizeTkaMapelKey(m))
-      : [];
-    const next = { ...EMPTY_MANUAL_SCORES };
-    MANUAL_TKA_MAPEL_LIST.forEach(({ key }) => {
-      const val = Number(sub.scoresPerMapel?.[key] ?? 0);
-      const isPresent = completed.length > 0 ? completed.includes(key) : val > 0;
-      next[key] = isPresent && Number.isFinite(val) ? String(Math.round(val)) : '';
-    });
-    return next;
-  };
-
-  const sanitizeManualScoreInput = (raw: string): string => {
-    const trimmed = raw.trim();
-    if (trimmed === '') return '';
-    const digitsOnly = trimmed.replace(/[^0-9]/g, '');
-    if (digitsOnly === '') return '';
-    const num = Math.min(100, Math.max(0, Number(digitsOnly)));
-    return String(num);
-  };
-
-  const buildManualBatchInputsForPaket = (
-    paket: string
-  ): Record<string, Partial<Record<TKAMapelScoreKey, string>>> => {
-    const map: Record<string, Partial<Record<TKAMapelScoreKey, string>>> = {};
-    tkaStudents.forEach((s) => {
-      const existing = findExistingTkaSubmission(s.id, paket, s.nisn);
-      map[s.id] = extractManualMapelInputs(existing);
-    });
-    return map;
-  };
-
-  const syncManualIndividuSelection = (studentId: string, paket: string) => {
-    const student = tkaStudents.find((s) => s.id === studentId);
-    const existing = findExistingTkaSubmission(studentId, paket, student?.nisn);
-    setManualScoresInput(extractManualMapelInputs(existing));
-    setManualTanggalUjian(existing?.tanggalUjian || formatManualTanggalToday());
-    setManualDurasi(existing?.durasiPengerjaan || '45 Menit');
-  };
-
-  const buildManualSubmissionRecord = (params: {
-    student: Student;
-    paket: string;
-    mapelInputs: Partial<Record<TKAMapelScoreKey, string>>;
-    tanggalUjian?: string;
-    durasi?: string;
-    existingSub?: TKASubmissionItem;
-  }): TKASubmissionItem | null => {
-    const { student, paket, mapelInputs, tanggalUjian, durasi, existingSub } = params;
-    const basePaket = extractBaseTkaPaket(paket) || paket;
-    const completedMapels: TKAMapelScoreKey[] = [];
-    const scoresPerMapel: TKASubmissionItem['scoresPerMapel'] = {
-      'Bahasa Indonesia': 0,
-      'Matematika': 0,
-      'IPAS': 0,
-      'Bahasa Inggris': 0,
-      'Koding dan Kecerdasan Artifisial (KKA)': 0,
-    };
-
-    MANUAL_TKA_MAPEL_LIST.forEach(({ key }) => {
-      const raw = (mapelInputs[key] ?? '').toString().trim();
-      if (raw !== '') {
-        const parsed = Number(raw);
-        if (Number.isFinite(parsed)) {
-          const clamped = Math.round(Math.min(100, Math.max(0, parsed)));
-          completedMapels.push(key);
-          scoresPerMapel[key] = clamped;
-        }
-      }
-    });
-
-    if (completedMapels.length === 0) return null;
-
-    const sum = completedMapels.reduce((acc, k) => acc + Number(scoresPerMapel?.[k] ?? 0), 0);
-    const skorTotal = Math.round(sum / completedMapels.length);
-    const predikat: 'A' | 'B' | 'C' | 'D' =
-      skorTotal >= 88 ? 'A' : skorTotal >= 78 ? 'B' : skorTotal >= 68 ? 'C' : 'D';
-    const status: 'Tuntas' | 'Remedial' = skorTotal >= 75 ? 'Tuntas' : 'Remedial';
-    const docId = makeSubmissionDocId(student.id, basePaket, existingSub?.id);
-    const nowIso = new Date().toISOString();
-
-    return {
-      ...(existingSub || {}),
-      id: docId,
-      studentId: student.id,
-      studentName: student.nama,
-      nisn: student.nisn || '',
-      kelas: student.kelas || '-',
-      fotoUrl: sanitizeSubmissionFotoUrl(student.fotoUrl || existingSub?.fotoUrl),
-      paket: basePaket,
-      paketDasar: basePaket,
-      completedMapels,
-      answers: existingSub?.answers || {},
-      scoresPerMapel,
-      skorTotal,
-      predikat,
-      status,
-      tanggalUjian:
-        (tanggalUjian || '').trim() || existingSub?.tanggalUjian || formatManualTanggalToday(),
-      durasiPengerjaan: (durasi || '').trim() || existingSub?.durasiPengerjaan || '45 Menit',
-      tahunPelajaran: existingSub?.tahunPelajaran || activeYear,
-      semester: existingSub?.semester || activeSemester,
-      updatedAt: nowIso,
-    };
-  };
-
   const openManualModalForNew = () => {
     if (tkaStudents.length === 0) {
       showToast('Belum ada data peserta didik Kelas 6 di menu Data Siswa.', 'error');
@@ -1287,21 +1136,12 @@ export const TKATabs: React.FC<Props> = ({
     const targetClass = hasilKelasTka !== 'all' ? hasilKelasTka : 'all';
     const initialStudent =
       tkaStudents.find((s) => targetClass === 'all' || s.kelas === targetClass) || tkaStudents[0];
-    setManualModalTab('individu');
-    setManualPaket(targetPaket);
-    setManualStudentClassFilter(targetClass);
-    setManualBatchClassFilter(targetClass);
-    setManualStudentSearch('');
-    setManualStudentId(initialStudent?.id || '');
-    if (initialStudent) {
-      syncManualIndividuSelection(initialStudent.id, targetPaket);
-    } else {
-      setManualScoresInput({ ...EMPTY_MANUAL_SCORES });
-      setManualTanggalUjian(formatManualTanggalToday());
-      setManualDurasi('45 Menit');
-    }
-    setManualBatchInputs(buildManualBatchInputsForPaket(targetPaket));
-    setShowManualTkaModal(true);
+    setManualTkaModalSeed({
+      paket: targetPaket,
+      studentId: initialStudent?.id || '',
+      classFilter: targetClass,
+      initialRecord: null,
+    });
   };
 
   const openManualModalForEdit = (record: any) => {
@@ -1312,142 +1152,143 @@ export const TKATabs: React.FC<Props> = ({
     const targetPaket =
       record.paketDasar || extractBaseTkaPaket(record.paket) || TKA_JENIS_LIST[0] || 'Simulasi 1';
     const targetStudentId = liveStudent?.id || record.studentId;
-    setManualModalTab('individu');
-    setManualPaket(targetPaket);
-    setManualStudentClassFilter('all');
-    setManualBatchClassFilter(
-      record.kelas && record.kelas !== '-' ? record.kelas : 'all'
-    );
-    setManualStudentSearch('');
-    setManualStudentId(targetStudentId);
-    setManualScoresInput(extractManualMapelInputs(record as TKASubmissionItem));
-    setManualTanggalUjian(record.tanggalUjian || formatManualTanggalToday());
-    setManualDurasi(record.durasiPengerjaan || '45 Menit');
-    setManualBatchInputs(buildManualBatchInputsForPaket(targetPaket));
-    setShowManualTkaModal(true);
+    setManualTkaModalSeed({
+      paket: targetPaket,
+      studentId: targetStudentId,
+      classFilter: record.kelas && record.kelas !== '-' ? record.kelas : 'all',
+      initialRecord: record as TKASubmissionItem,
+    });
   };
 
-  const mergeManualSubmissionsIntoList = (
-    baseList: TKASubmissionItem[],
-    incoming: TKASubmissionItem[]
-  ): TKASubmissionItem[] => {
-    const incomingMap = new Map<string, TKASubmissionItem>();
-    incoming.forEach((item) => {
-      incomingMap.set(item.id, item);
-    });
-    const remaining = baseList.filter((sub) => {
-      const subBase = sub.paketDasar || extractBaseTkaPaket(sub.paket);
-      const canonicalId = makeSubmissionDocId(sub.studentId, subBase, sub.id);
-      return !incomingMap.has(sub.id) && !incomingMap.has(canonicalId);
-    });
-    return [...incoming, ...remaining].sort((a, b) =>
-      (b.updatedAt || '').localeCompare(a.updatedAt || '')
-    );
-  };
-
-  const handleSaveSingleManualTka = async (
-    advanceToNext: boolean,
-    filteredSelectableStudents: Student[]
-  ) => {
-    if (isSavingManualTka) return;
-    const student = tkaStudents.find((s) => s.id === manualStudentId);
-    if (!student) {
-      showToast('Pilih siswa Kelas 6 terlebih dahulu.', 'error');
-      return;
-    }
-    const existingSub = findExistingTkaSubmission(student.id, manualPaket, student.nisn);
-    const newSub = buildManualSubmissionRecord({
-      student,
-      paket: manualPaket,
-      mapelInputs: manualScoresInput,
-      tanggalUjian: manualTanggalUjian,
-      durasi: manualDurasi,
-      existingSub,
-    });
-    if (!newSub) {
-      showToast('Isi minimal 1 nilai mata pelajaran (0–100) terlebih dahulu.', 'error');
-      return;
-    }
-    setIsSavingManualTka(true);
-    try {
-      const nextList = mergeManualSubmissionsIntoList(tkaSubmissions, [newSub]);
-      saveStoredTKASubmissions(nextList);
-      setTkaSubmissions(nextList);
-      setManualBatchInputs((prev) => ({
-        ...prev,
-        [student.id]: extractManualMapelInputs(newSub),
-      }));
-      await saveTkaSubmissionToFirestore(newSub).catch(() => false);
-      syncAllLocalToCloud(activeUser.name || 'admin').catch(() => {});
-      showToast(
-        `Nilai TKA "${student.nama}" (${newSub.paket}) tersimpan — Rata-rata: ${newSub.skorTotal} (${newSub.predikat}).`,
-        'success'
-      );
-
-      if (advanceToNext) {
-        const curIdx = filteredSelectableStudents.findIndex((s) => s.id === student.id);
-        const nextStudent =
-          curIdx >= 0 && curIdx + 1 < filteredSelectableStudents.length
-            ? filteredSelectableStudents[curIdx + 1]
-            : null;
-        if (nextStudent) {
-          setManualStudentId(nextStudent.id);
-          syncManualIndividuSelection(nextStudent.id, manualPaket);
-        } else {
-          setShowManualTkaModal(false);
-        }
-      } else {
-        setShowManualTkaModal(false);
-      }
-    } finally {
-      setIsSavingManualTka(false);
-    }
-  };
-
-  const handleSaveBatchManualTka = async () => {
-    if (isSavingManualTka) return;
-    const targetStudents = tkaStudents.filter(
-      (s) => manualBatchClassFilter === 'all' || s.kelas === manualBatchClassFilter
-    );
-    const savedSubs: TKASubmissionItem[] = [];
-    targetStudents.forEach((student) => {
-      const inputs = manualBatchInputs[student.id];
-      if (!inputs) return;
-      const existingSub = findExistingTkaSubmission(student.id, manualPaket, student.nisn);
-      const built = buildManualSubmissionRecord({
-        student,
-        paket: manualPaket,
-        mapelInputs: inputs,
-        tanggalUjian: manualTanggalUjian,
-        durasi: manualDurasi,
-        existingSub,
+  const mergeManualSubmissionsIntoList = useCallback(
+    (baseList: TKASubmissionItem[], incoming: TKASubmissionItem[]): TKASubmissionItem[] => {
+      const incomingMap = new Map<string, TKASubmissionItem>();
+      incoming.forEach((item) => {
+        incomingMap.set(item.id, item);
       });
-      if (built) {
-        savedSubs.push(built);
-      }
-    });
-
-    if (savedSubs.length === 0) {
-      showToast('Isi minimal 1 nilai siswa pada daftar di bawah sebelum menyimpan.', 'error');
-      return;
-    }
-
-    setIsSavingManualTka(true);
-    try {
-      const nextList = mergeManualSubmissionsIntoList(tkaSubmissions, savedSubs);
-      saveStoredTKASubmissions(nextList);
-      setTkaSubmissions(nextList);
-      await saveTkaSubmissionsBatchToFirestore(savedSubs).catch(() => false);
-      syncAllLocalToCloud(activeUser.name || 'admin').catch(() => {});
-      setShowManualTkaModal(false);
-      showToast(
-        `Berhasil menyimpan nilai TKA untuk ${savedSubs.length} siswa pada paket "${manualPaket}"!`,
-        'success'
+      const remaining = baseList.filter((sub) => {
+        const subBase = sub.paketDasar || extractBaseTkaPaket(sub.paket);
+        const canonicalId = makeSubmissionDocId(sub.studentId, subBase, sub.id);
+        return !incomingMap.has(sub.id) && !incomingMap.has(canonicalId);
+      });
+      return [...incoming, ...remaining].sort((a, b) =>
+        (b.updatedAt || '').localeCompare(a.updatedAt || '')
       );
-    } finally {
-      setIsSavingManualTka(false);
-    }
-  };
+    },
+    []
+  );
+
+  const handleCloseManualModal = useCallback(() => {
+    setManualTkaModalSeed(null);
+  }, []);
+
+  const handleManualValidationError = useCallback(
+    (message: string) => {
+      showToast(message, 'error');
+    },
+    [showToast]
+  );
+
+  const handleApplyManualTkaSubmissions = useCallback(
+    (savedSubs: TKASubmissionItem[], toastMessage: string, closeAfter: boolean) => {
+      if (closeAfter) {
+        setManualTkaModalSeed(null);
+      }
+      if (savedSubs.length === 0) {
+        showToast(toastMessage, 'success');
+        return;
+      }
+
+      const nextList = mergeManualSubmissionsIntoList(latestTkaSubmissionsRef.current, savedSubs);
+      latestTkaSubmissionsRef.current = nextList;
+      showToast(toastMessage, 'success');
+
+      // Render tabel latar secara non-blocking agar modal/navigasi siswa berikutnya tetap 60fps
+      startTransition(() => {
+        setTkaSubmissions(nextList);
+      });
+
+      // Simpan ke storage lokal & Firestore setelah frame UI selesai dirender
+      const actorName = activeUser.name || 'admin';
+      const snapshotToPersist = nextList;
+      setTimeout(() => {
+        skipNextSubmissionEventRef.current = true;
+        saveStoredTKASubmissions(snapshotToPersist);
+        const cloudPromise =
+          savedSubs.length === 1
+            ? saveTkaSubmissionToFirestore(savedSubs[0])
+            : saveTkaSubmissionsBatchToFirestore(savedSubs);
+        cloudPromise
+          .then(() => {
+            scheduleRealtimeModuleSync(actorName);
+          })
+          .catch(() => {});
+      }, 0);
+    },
+    [mergeManualSubmissionsIntoList, showToast, activeUser.name]
+  );
+
+  // Memoize hasil alignment & lookup siswa untuk tab Report & Hasil TKA agar tidak dihitung ulang tiap render
+  const memoizedEligibleHasilRows = useMemo(() => {
+    if (subType !== 'hasil-tka') return [];
+    const alignedSubmissions = alignTkaSubmissionsWithStudents(tkaSubmissions, students).alignedSubmissions;
+    return alignedSubmissions
+      .map((sub) => {
+        const liveStudent =
+          studentByIdLookup.get(sub.studentId) || findLiveStudentForRecord(students, sub);
+        if (liveStudent && (isAbkExcludedFromTka(liveStudent) || !isKelas6Class(liveStudent.kelas))) {
+          return null;
+        }
+        if (
+          (sub.studentId && excludedAbkIds.has(sub.studentId)) ||
+          (sub.nisn && excludedAbkNisns.has(sub.nisn))
+        ) {
+          return null;
+        }
+        const resolvedStudentId = liveStudent?.id || sub.studentId;
+        const resolvedNama = liveStudent?.nama || sub.studentName;
+        const resolvedNisn = liveStudent?.nisn ?? sub.nisn;
+        const resolvedKelas = liveStudent?.kelas || sub.kelas || '-';
+        const completed = Array.isArray(sub.completedMapels)
+          ? sub.completedMapels.map((m) => normalizeTkaMapelKey(m))
+          : [];
+        const hasMapel = (key: TKAMapelScoreKey) => {
+          if (completed.length > 0) return completed.includes(key);
+          return Number(sub.scoresPerMapel?.[key] ?? 0) > 0;
+        };
+        const resolvedFoto =
+          liveStudent?.fotoUrl ||
+          sub.fotoUrl ||
+          studentPhotoMap.get(resolvedStudentId) ||
+          studentPhotoMap.get(resolvedNisn) ||
+          DEFAULT_STUDENT_AVATAR_URL;
+        return {
+          ...sub,
+          id: sub.id,
+          studentId: resolvedStudentId,
+          nama: resolvedNama,
+          studentName: resolvedNama,
+          nisn: resolvedNisn,
+          kelas: resolvedKelas,
+          fotoUrl: resolvedFoto,
+          paket: sub.paketDasar || extractBaseTkaPaket(sub.paket),
+          completedMapels: completed,
+          skorIndo: hasMapel('Bahasa Indonesia') ? (sub.scoresPerMapel?.['Bahasa Indonesia'] ?? 0) : null,
+          skorMtk: hasMapel('Matematika') ? (sub.scoresPerMapel?.['Matematika'] ?? 0) : null,
+          skorIpas: hasMapel('IPAS') ? (sub.scoresPerMapel?.['IPAS'] ?? 0) : null,
+          skorInggris: hasMapel('Bahasa Inggris') ? (sub.scoresPerMapel?.['Bahasa Inggris'] ?? 0) : null,
+          skorKka: hasMapel('Koding dan Kecerdasan Artifisial (KKA)')
+            ? (sub.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ?? 0)
+            : null,
+          skorTotal: sub.skorTotal,
+          predikat: sub.predikat,
+          status: sub.status,
+          tanggalUjian: sub.tanggalUjian || '04 November 2026',
+          durasiPengerjaan: sub.durasiPengerjaan || '45 Menit',
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+  }, [subType, tkaSubmissions, students, studentByIdLookup, excludedAbkIds, excludedAbkNisns, studentPhotoMap]);
 
   const handleSeedSimulatedSubmissions = async () => {
     if (isSeedingTka) return;
@@ -5819,15 +5660,7 @@ export const TKATabs: React.FC<Props> = ({
       {/* 5. MENU REPORT & HASIL TKA SISWA                               */}
       {/* ============================================================== */}
       {subType === 'hasil-tka' && (() => {
-        // Align & sinkronkan submission dengan Data Siswa live (nama, NISN, kelas/rombel) agar selalu akurat
-        const alignedSubmissions = alignTkaSubmissionsWithStudents(tkaSubmissions, students).alignedSubmissions;
-        const eligibleAllTkaSubmissions = alignedSubmissions.filter((sub) => {
-          const liveStudent = findLiveStudentForRecord(students, sub);
-          if (liveStudent && (isAbkExcludedFromTka(liveStudent) || !isKelas6Class(liveStudent.kelas))) {
-            return false;
-          }
-          return !isExcludedTkaSubmission(sub);
-        });
+        const eligibleAllTkaSubmissions = memoizedEligibleHasilRows;
         const yearMatchedTkaSubmissions = eligibleAllTkaSubmissions.filter(
           (sub) =>
             showAllTkaTerms ||
@@ -5836,56 +5669,11 @@ export const TKATabs: React.FC<Props> = ({
         );
         const termTkaSubmissions =
           yearMatchedTkaSubmissions.length > 0 ? yearMatchedTkaSubmissions : eligibleAllTkaSubmissions;
-        const recordsForPaket = termTkaSubmissions
-          .filter((sub) => {
-            if (hasilPaketTka === 'all') return true;
-            const baseSubPaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
-            return baseSubPaket === hasilPaketTka || sub.paket === hasilPaketTka;
-          })
-          .map((sub) => {
-            const liveStudent = findLiveStudentForRecord(students, sub);
-            const resolvedStudentId = liveStudent?.id || sub.studentId;
-            const resolvedNama = liveStudent?.nama || sub.studentName;
-            const resolvedNisn = liveStudent?.nisn ?? sub.nisn;
-            const resolvedKelas = liveStudent?.kelas || sub.kelas || '-';
-            const completed = Array.isArray(sub.completedMapels)
-              ? sub.completedMapels.map((m) => normalizeTkaMapelKey(m))
-              : [];
-            const hasMapel = (key: TKAMapelScoreKey) => {
-              if (completed.length > 0) return completed.includes(key);
-              return Number(sub.scoresPerMapel?.[key] ?? 0) > 0;
-            };
-            const resolvedFoto =
-              liveStudent?.fotoUrl ||
-              sub.fotoUrl ||
-              studentPhotoMap.get(resolvedStudentId) ||
-              studentPhotoMap.get(resolvedNisn) ||
-              DEFAULT_STUDENT_AVATAR_URL;
-            return {
-              ...sub,
-              id: sub.id,
-              studentId: resolvedStudentId,
-              nama: resolvedNama,
-              studentName: resolvedNama,
-              nisn: resolvedNisn,
-              kelas: resolvedKelas,
-              fotoUrl: resolvedFoto,
-              paket: sub.paketDasar || extractBaseTkaPaket(sub.paket),
-              completedMapels: completed,
-              skorIndo: hasMapel('Bahasa Indonesia') ? (sub.scoresPerMapel?.['Bahasa Indonesia'] ?? 0) : null,
-              skorMtk: hasMapel('Matematika') ? (sub.scoresPerMapel?.['Matematika'] ?? 0) : null,
-              skorIpas: hasMapel('IPAS') ? (sub.scoresPerMapel?.['IPAS'] ?? 0) : null,
-              skorInggris: hasMapel('Bahasa Inggris') ? (sub.scoresPerMapel?.['Bahasa Inggris'] ?? 0) : null,
-              skorKka: hasMapel('Koding dan Kecerdasan Artifisial (KKA)')
-                ? (sub.scoresPerMapel?.['Koding dan Kecerdasan Artifisial (KKA)'] ?? 0)
-                : null,
-              skorTotal: sub.skorTotal,
-              predikat: sub.predikat,
-              status: sub.status,
-              tanggalUjian: sub.tanggalUjian || '04 November 2026',
-              durasiPengerjaan: sub.durasiPengerjaan || '45 Menit',
-            };
-          });
+        const recordsForPaket = termTkaSubmissions.filter((sub) => {
+          if (hasilPaketTka === 'all') return true;
+          const baseSubPaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
+          return baseSubPaket === hasilPaketTka || sub.paket === hasilPaketTka;
+        });
 
         const availableHasilClasses = Array.from(
           new Set([
@@ -7326,557 +7114,19 @@ export const TKATabs: React.FC<Props> = ({
             })()}
 
             {/* Modal Input & Edit Nilai TKA Manual (Per Siswa & Per Kelas) */}
-            {showManualTkaModal && (() => {
-              const selectableStudents = tkaStudents
-                .filter((s) => {
-                  if (manualStudentClassFilter !== 'all' && s.kelas !== manualStudentClassFilter) {
-                    return false;
-                  }
-                  const q = manualStudentSearch.trim().toLowerCase();
-                  if (
-                    q &&
-                    !s.nama.toLowerCase().includes(q) &&
-                    !(s.nisn || '').toLowerCase().includes(q)
-                  ) {
-                    return false;
-                  }
-                  return true;
-                })
-                .sort((a, b) => {
-                  const cmpCls = (a.kelas || '').localeCompare(b.kelas || '', 'id', { numeric: true });
-                  if (cmpCls !== 0) return cmpCls;
-                  return (a.nama || '').localeCompare(b.nama || '', 'id');
-                });
-
-              const selectedManualStudent = tkaStudents.find((s) => s.id === manualStudentId) || null;
-
-              const filledMapelVals = MANUAL_TKA_MAPEL_LIST
-                .map(({ key }) => (manualScoresInput[key] ?? '').trim())
-                .filter((v) => v !== '')
-                .map((v) => Math.round(Math.min(100, Math.max(0, Number(v) || 0))));
-              const previewAvg =
-                filledMapelVals.length > 0
-                  ? Math.round(filledMapelVals.reduce((a, b) => a + b, 0) / filledMapelVals.length)
-                  : null;
-              const previewPredikat =
-                previewAvg === null
-                  ? '-'
-                  : previewAvg >= 88
-                  ? 'A'
-                  : previewAvg >= 78
-                  ? 'B'
-                  : previewAvg >= 68
-                  ? 'C'
-                  : 'D';
-              const previewStatus =
-                previewAvg === null ? '-' : previewAvg >= 75 ? 'Tuntas' : 'Remedial';
-
-              const batchStudents = tkaStudents
-                .filter(
-                  (s) => manualBatchClassFilter === 'all' || s.kelas === manualBatchClassFilter
-                )
-                .sort((a, b) => {
-                  const cmpCls = (a.kelas || '').localeCompare(b.kelas || '', 'id', { numeric: true });
-                  if (cmpCls !== 0) return cmpCls;
-                  return (a.nama || '').localeCompare(b.nama || '', 'id');
-                });
-
-              const filledBatchCount = batchStudents.filter((s) => {
-                const row = manualBatchInputs[s.id];
-                if (!row) return false;
-                return MANUAL_TKA_MAPEL_LIST.some(
-                  ({ key }) => (row[key] ?? '').toString().trim() !== ''
-                );
-              }).length;
-
-              return (
-                <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 no-print">
-                  <div className="bg-white w-full max-w-4xl max-h-[92vh] rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                    {/* Modal Header */}
-                    <div className="bg-gradient-to-r from-emerald-800 via-teal-800 to-slate-900 text-white px-5 py-4 flex items-center justify-between gap-3 shrink-0">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
-                          <Edit3 className="w-5 h-5 text-emerald-200" />
-                        </div>
-                        <div>
-                          <h3 className="font-display font-black text-base tracking-tight">
-                            Input &amp; Edit Nilai TKA Manual
-                          </h3>
-                          <p className="text-[11px] text-emerald-100/90">
-                            Tambahkan atau perbarui nilai TKA siswa per orang maupun per kelas. Penilaian otomatis dari soal CBT tetap berjalan normal.
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowManualTkaModal(false)}
-                        className="p-1.5 rounded-xl hover:bg-white/15 text-white/80 hover:text-white cursor-pointer transition"
-                        aria-label="Tutup modal input nilai manual"
-                      >
-                        <X className="w-5 h-5" />
-                      </button>
-                    </div>
-
-                    {/* Top Controls: Paket Ujian & Mode Tabs */}
-                    <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="flex bg-white p-1 rounded-xl border border-slate-200 shadow-2xs">
-                          <button
-                            type="button"
-                            onClick={() => setManualModalTab('individu')}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-display font-black flex items-center gap-1.5 cursor-pointer transition ${
-                              manualModalTab === 'individu'
-                                ? 'bg-emerald-600 text-white shadow-xs'
-                                : 'text-slate-600 hover:bg-slate-100'
-                            }`}
-                          >
-                            <User className="w-3.5 h-3.5" />
-                            <span>Per Siswa (Individu)</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setManualBatchInputs(buildManualBatchInputsForPaket(manualPaket));
-                              setManualModalTab('massal');
-                            }}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-display font-black flex items-center gap-1.5 cursor-pointer transition ${
-                              manualModalTab === 'massal'
-                                ? 'bg-emerald-600 text-white shadow-xs'
-                                : 'text-slate-600 hover:bg-slate-100'
-                            }`}
-                          >
-                            <Users className="w-3.5 h-3.5" />
-                            <span>Input Cepat Per Kelas ({batchStudents.length})</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <label className="text-[11px] font-black text-slate-600 whitespace-nowrap">
-                          Paket TKA:
-                        </label>
-                        <select
-                          value={manualPaket}
-                          onChange={(e) => {
-                            const nextPaket = e.target.value;
-                            setManualPaket(nextPaket);
-                            if (manualStudentId) {
-                              syncManualIndividuSelection(manualStudentId, nextPaket);
-                            }
-                            setManualBatchInputs(buildManualBatchInputsForPaket(nextPaket));
-                          }}
-                          className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 focus:border-emerald-600 outline-none cursor-pointer"
-                        >
-                          {TKA_JENIS_LIST.map((j) => (
-                            <option key={j} value={j}>
-                              {j}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* Modal Body */}
-                    <div className="p-5 overflow-y-auto flex-1 space-y-4">
-                      {/* Info Note preserving Auto Grading */}
-                      <div className="bg-sky-50 border border-sky-200 rounded-2xl px-3.5 py-2.5 text-[11px] text-sky-900 flex items-start gap-2">
-                        <CheckCircle className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
-                        <span>
-                          <strong>Mode Hibrida Aman:</strong> Kosongkan kolom mata pelajaran yang belum diujikan. Jika siswa sebelumnya atau nanti mengerjakan soal TKA secara otomatis, riwayat jawaban CBT tetap tersimpan dan nilai per mapel akan tergabung otomatis.
-                        </span>
-                      </div>
-
-                      {manualModalTab === 'individu' ? (
-                        <div className="space-y-4">
-                          {/* Student Picker Row */}
-                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200">
-                            <div className="sm:col-span-3">
-                              <label className="block text-[11px] font-black text-slate-600 mb-1">
-                                Filter Kelas 6:
-                              </label>
-                              <select
-                                value={manualStudentClassFilter}
-                                onChange={(e) => {
-                                  const cls = e.target.value;
-                                  setManualStudentClassFilter(cls);
-                                  const firstMatch = tkaStudents.find(
-                                    (s) => cls === 'all' || s.kelas === cls
-                                  );
-                                  if (firstMatch) {
-                                    setManualStudentId(firstMatch.id);
-                                    syncManualIndividuSelection(firstMatch.id, manualPaket);
-                                  }
-                                }}
-                                className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold outline-none focus:border-emerald-600 cursor-pointer"
-                              >
-                                <option value="all">Semua Kelas 6</option>
-                                {availableTkaStudentClasses.map((cls) => (
-                                  <option key={cls} value={cls}>
-                                    {cls}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="sm:col-span-3">
-                              <label className="block text-[11px] font-black text-slate-600 mb-1">
-                                Cari Nama / NISN:
-                              </label>
-                              <div className="relative">
-                                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
-                                <input
-                                  type="text"
-                                  value={manualStudentSearch}
-                                  onChange={(e) => setManualStudentSearch(e.target.value)}
-                                  placeholder="Ketik nama..."
-                                  className="w-full pl-8 pr-2.5 py-2 rounded-xl border border-slate-300 bg-white text-xs outline-none focus:border-emerald-600"
-                                />
-                              </div>
-                            </div>
-                            <div className="sm:col-span-6">
-                              <label className="block text-[11px] font-black text-slate-600 mb-1">
-                                Pilih Peserta Didik ({selectableStudents.length} Siswa):
-                              </label>
-                              <select
-                                value={manualStudentId}
-                                onChange={(e) => {
-                                  const nextId = e.target.value;
-                                  setManualStudentId(nextId);
-                                  syncManualIndividuSelection(nextId, manualPaket);
-                                }}
-                                className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-emerald-600 cursor-pointer"
-                              >
-                                {selectableStudents.length === 0 ? (
-                                  <option value="">-- Tidak ada siswa yang sesuai --</option>
-                                ) : (
-                                  selectableStudents.map((s) => (
-                                    <option key={s.id} value={s.id}>
-                                      {s.nama} — {s.kelas} ({s.nisn || 'Tanpa NISN'})
-                                    </option>
-                                  ))
-                                )}
-                              </select>
-                            </div>
-                          </div>
-
-                          {/* Selected Student Info + Date/Duration */}
-                          {selectedManualStudent && (
-                            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
-                              <div className="sm:col-span-6 flex items-center gap-3 bg-emerald-50/70 border border-emerald-200 rounded-2xl px-3.5 py-2.5">
-                                <img
-                                  src={selectedManualStudent.fotoUrl || DEFAULT_STUDENT_AVATAR_URL}
-                                  alt={selectedManualStudent.nama}
-                                  className="w-10 h-10 rounded-full object-cover border border-emerald-300 bg-white shrink-0"
-                                  onError={(e) => {
-                                    (e.currentTarget as HTMLImageElement).src =
-                                      DEFAULT_STUDENT_AVATAR_URL;
-                                  }}
-                                />
-                                <div className="min-w-0">
-                                  <div className="font-display font-black text-xs text-slate-900 truncate">
-                                    {selectedManualStudent.nama}
-                                  </div>
-                                  <div className="text-[11px] text-slate-600 font-medium">
-                                    {selectedManualStudent.kelas} · NISN:{' '}
-                                    <span className="font-mono">{selectedManualStudent.nisn || '-'}</span>
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="sm:col-span-3">
-                                <label className="block text-[11px] font-black text-slate-600 mb-1">
-                                  Tanggal Ujian:
-                                </label>
-                                <input
-                                  type="text"
-                                  value={manualTanggalUjian}
-                                  onChange={(e) => setManualTanggalUjian(e.target.value)}
-                                  placeholder="cth: 20 November 2026"
-                                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-medium outline-none focus:border-emerald-600"
-                                />
-                              </div>
-                              <div className="sm:col-span-3">
-                                <label className="block text-[11px] font-black text-slate-600 mb-1">
-                                  Durasi Pengerjaan:
-                                </label>
-                                <input
-                                  type="text"
-                                  value={manualDurasi}
-                                  onChange={(e) => setManualDurasi(e.target.value)}
-                                  placeholder="cth: 45 Menit"
-                                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-medium outline-none focus:border-emerald-600"
-                                />
-                              </div>
-                            </div>
-                          )}
-
-                          {/* 5 Subject Score Inputs */}
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <label className="text-xs font-black text-slate-800">
-                                Nilai Per Mata Pelajaran (Skala 0 – 100):
-                              </label>
-                              <button
-                                type="button"
-                                onClick={() => setManualScoresInput({ ...EMPTY_MANUAL_SCORES })}
-                                className="text-[11px] font-bold text-slate-500 hover:text-rose-600 cursor-pointer"
-                              >
-                                Kosongkan Semua Isian
-                              </button>
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                              {MANUAL_TKA_MAPEL_LIST.map(({ key, shortLabel }) => (
-                                <div
-                                  key={key}
-                                  className="bg-slate-50 border border-slate-200 rounded-2xl p-3 space-y-1.5 focus-within:border-emerald-500 focus-within:bg-emerald-50/30 transition"
-                                >
-                                  <label className="block text-[11px] font-black text-slate-700 leading-tight">
-                                    {shortLabel}
-                                  </label>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    max={100}
-                                    inputMode="numeric"
-                                    value={manualScoresInput[key]}
-                                    onChange={(e) => {
-                                      const val = sanitizeManualScoreInput(e.target.value);
-                                      setManualScoresInput((prev) => ({
-                                        ...prev,
-                                        [key]: val,
-                                      }));
-                                    }}
-                                    placeholder="—"
-                                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-center font-display font-black text-base text-slate-900 tabular-nums outline-none focus:border-emerald-600"
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          {/* Live Calculation Preview */}
-                          <div className="bg-slate-900 text-white rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3">
-                            <div className="text-xs text-slate-300">
-                              Pratinjau Kalkulasi Otomatis ({filledMapelVals.length} Mapel Diisi)
-                            </div>
-                            <div className="flex flex-wrap items-center gap-4 text-xs">
-                              <div>
-                                <span className="text-slate-400 mr-1.5">Rata-rata:</span>
-                                <span className="font-display font-black text-base text-amber-300 tabular-nums">
-                                  {previewAvg !== null ? previewAvg : '—'}
-                                </span>
-                              </div>
-                              <div>
-                                <span className="text-slate-400 mr-1.5">Predikat:</span>
-                                <span className="font-display font-black text-sm px-2 py-0.5 rounded-lg bg-white/15">
-                                  {previewPredikat}
-                                </span>
-                              </div>
-                              <div>
-                                <span className="text-slate-400 mr-1.5">Status (KKM 75):</span>
-                                <span
-                                  className={`font-display font-black text-xs px-2.5 py-0.5 rounded-lg ${
-                                    previewStatus === 'Tuntas'
-                                      ? 'bg-emerald-500/25 text-emerald-300'
-                                      : previewStatus === 'Remedial'
-                                      ? 'bg-rose-500/25 text-rose-300'
-                                      : 'bg-white/10 text-slate-300'
-                                  }`}
-                                >
-                                  {previewStatus}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        /* Batch / Per Class Input Tab */
-                        <div className="space-y-3">
-                          <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
-                            <div className="flex items-center gap-2">
-                              <label className="text-xs font-black text-slate-700">
-                                Pilih Kelas:
-                              </label>
-                              <select
-                                value={manualBatchClassFilter}
-                                onChange={(e) => setManualBatchClassFilter(e.target.value)}
-                                className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold outline-none focus:border-emerald-600 cursor-pointer"
-                              >
-                                <option value="all">
-                                  Semua Kelas 6 ({tkaStudents.length} Siswa)
-                                </option>
-                                {availableTkaStudentClasses.map((cls) => (
-                                  <option key={cls} value={cls}>
-                                    {cls} ({tkaStudents.filter((s) => s.kelas === cls).length} Siswa)
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600 font-bold">
-                              <span>Tanggal:</span>
-                              <input
-                                type="text"
-                                value={manualTanggalUjian}
-                                onChange={(e) => setManualTanggalUjian(e.target.value)}
-                                className="w-36 px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-medium"
-                              />
-                              <span className="ml-1 text-emerald-700 font-black">
-                                {filledBatchCount}/{batchStudents.length} siswa terisi
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="border border-slate-200 rounded-2xl overflow-x-auto max-h-[46vh]">
-                            <table className="w-full text-left border-collapse text-xs">
-                              <thead className="bg-slate-100 text-slate-700 sticky top-0 z-10 border-b border-slate-200">
-                                <tr>
-                                  <th className="p-2.5 font-black w-8 text-center">No</th>
-                                  <th className="p-2.5 font-black min-w-[180px]">Nama Siswa &amp; Kelas</th>
-                                  {MANUAL_TKA_MAPEL_LIST.map(({ key, shortLabel }) => (
-                                    <th
-                                      key={key}
-                                      className="p-2 font-black text-center min-w-[78px]"
-                                    >
-                                      {shortLabel}
-                                    </th>
-                                  ))}
-                                  <th className="p-2.5 font-black text-center w-16">Rata²</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                {batchStudents.map((s, idx) => {
-                                  const rowInputs = manualBatchInputs[s.id] || {};
-                                  const rowNums = MANUAL_TKA_MAPEL_LIST
-                                    .map(({ key }) => (rowInputs[key] ?? '').toString().trim())
-                                    .filter((v) => v !== '')
-                                    .map((v) => Math.round(Math.min(100, Math.max(0, Number(v) || 0))));
-                                  const rowAvg =
-                                    rowNums.length > 0
-                                      ? Math.round(rowNums.reduce((a, b) => a + b, 0) / rowNums.length)
-                                      : null;
-                                  return (
-                                    <tr key={s.id} className="hover:bg-slate-50">
-                                      <td className="p-2 text-center text-slate-400 font-bold tabular-nums">
-                                        {idx + 1}
-                                      </td>
-                                      <td className="p-2">
-                                        <div className="font-bold text-slate-900 leading-tight">
-                                          {s.nama}
-                                        </div>
-                                        <div className="text-[10px] text-slate-500">
-                                          {s.kelas} · {s.nisn || '-'}
-                                        </div>
-                                      </td>
-                                      {MANUAL_TKA_MAPEL_LIST.map(({ key }) => (
-                                        <td key={key} className="p-1.5 text-center">
-                                          <input
-                                            type="number"
-                                            min={0}
-                                            max={100}
-                                            inputMode="numeric"
-                                            value={rowInputs[key] ?? ''}
-                                            onChange={(e) => {
-                                              const val = sanitizeManualScoreInput(e.target.value);
-                                              setManualBatchInputs((prev) => ({
-                                                ...prev,
-                                                [s.id]: {
-                                                  ...(prev[s.id] || {}),
-                                                  [key]: val,
-                                                },
-                                              }));
-                                            }}
-                                            placeholder="—"
-                                            className="w-16 px-1.5 py-1 rounded-lg border border-slate-300 bg-white text-center font-bold text-slate-900 tabular-nums outline-none focus:border-emerald-600"
-                                          />
-                                        </td>
-                                      ))}
-                                      <td className="p-2 text-center font-display font-black tabular-nums">
-                                        {rowAvg !== null ? (
-                                          <span
-                                            className={
-                                              rowAvg >= 75 ? 'text-emerald-700' : 'text-rose-600'
-                                            }
-                                          >
-                                            {rowAvg}
-                                          </span>
-                                        ) : (
-                                          <span className="text-slate-300">—</span>
-                                        )}
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                                {batchStudents.length === 0 && (
-                                  <tr>
-                                    <td
-                                      colSpan={3 + MANUAL_TKA_MAPEL_LIST.length}
-                                      className="p-6 text-center text-slate-400 italic"
-                                    >
-                                      Belum ada siswa Kelas 6 pada filter kelas ini.
-                                    </td>
-                                  </tr>
-                                )}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Sticky Footer */}
-                    <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => setShowManualTkaModal(false)}
-                        className="px-4 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-bold cursor-pointer"
-                      >
-                        Batal
-                      </button>
-                      <div className="flex flex-wrap items-center gap-2">
-                        {manualModalTab === 'individu' ? (
-                          <>
-                            <button
-                              type="button"
-                              disabled={isSavingManualTka || !selectedManualStudent}
-                              onClick={() =>
-                                void handleSaveSingleManualTka(true, selectableStudents)
-                              }
-                              className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-display font-black flex items-center gap-1.5 cursor-pointer shadow-xs"
-                            >
-                              <ChevronRight className="w-4 h-4" />
-                              <span>Simpan &amp; Lanjut Siswa Berikutnya</span>
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isSavingManualTka || !selectedManualStudent}
-                              onClick={() =>
-                                void handleSaveSingleManualTka(false, selectableStudents)
-                              }
-                              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-display font-black flex items-center gap-1.5 cursor-pointer shadow-xs"
-                            >
-                              <Save className="w-4 h-4" />
-                              <span>{isSavingManualTka ? 'Menyimpan...' : 'Simpan Nilai'}</span>
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={isSavingManualTka || filledBatchCount === 0}
-                            onClick={() => void handleSaveBatchManualTka()}
-                            className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-display font-black flex items-center gap-1.5 cursor-pointer shadow-xs"
-                          >
-                            <Save className="w-4 h-4" />
-                            <span>
-                              {isSavingManualTka
-                                ? 'Menyimpan...'
-                                : `Simpan Nilai (${filledBatchCount} Siswa)`}
-                            </span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
+            {manualTkaModalSeed && (
+              <ManualTkaScoreModal
+                seed={manualTkaModalSeed}
+                tkaStudents={tkaStudents}
+                availableClasses={availableTkaStudentClasses}
+                tkaSubmissions={tkaSubmissions}
+                activeYear={activeYear}
+                activeSemester={activeSemester}
+                onClose={handleCloseManualModal}
+                onApplySavedSubmissions={handleApplyManualTkaSubmissions}
+                onValidationError={handleManualValidationError}
+              />
+            )}
           </div>
         );
       })()}
