@@ -83,6 +83,8 @@ interface TeacherChatMessage {
   id: string;
   role: 'user' | 'model';
   text: string;
+  isError?: boolean;
+  retryPrompt?: string;
 }
 
 const DEFAULT_MAPEL_LIST = [
@@ -303,7 +305,10 @@ export const SarahAssistantTab: React.FC<Props> = ({
       role: 'user',
       text: promptText,
     };
-    const prevHistory = chatMessages.slice(-10).map((m) => ({ role: m.role, text: m.text }));
+    const prevHistory = chatMessages
+      .filter((m) => !m.isError)
+      .slice(-10)
+      .map((m) => ({ role: m.role, text: m.text }));
 
     setChatMessages((prev) => [...prev, userMsg]);
     if (!overrideText) setChatInput('');
@@ -344,7 +349,9 @@ export const SarahAssistantTab: React.FC<Props> = ({
         {
           id: `terr_${Date.now()}`,
           role: 'model',
-          text: `Mohon maaf Bapak/Ibu, SARAH mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}). Silakan kirim ulang pertanyaan Anda.`,
+          text: `Mohon maaf Bapak/Ibu, SARAH mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}).`,
+          isError: true,
+          retryPrompt: promptText,
         },
       ]);
     } finally {
@@ -952,11 +959,30 @@ export const SarahAssistantTab: React.FC<Props> = ({
                   className={`max-w-[90%] sm:max-w-[78%] rounded-3xl px-4 py-3 shadow-2xs space-y-2 ${
                     msg.role === 'user'
                       ? 'bg-gradient-to-r from-rose-600 to-rose-700 text-white rounded-br-sm text-xs sm:text-sm font-medium leading-relaxed'
+                      : msg.isError
+                      ? 'bg-amber-50/90 border border-amber-200 text-amber-950 rounded-bl-sm'
                       : 'bg-white border border-slate-200 text-slate-800 rounded-bl-sm'
                   }`}
                 >
                   {msg.role === 'user' ? (
                     <p className="whitespace-pre-wrap">{msg.text}</p>
+                  ) : msg.isError ? (
+                    <>
+                      <p className="text-xs sm:text-sm leading-relaxed">{msg.text}</p>
+                      {msg.retryPrompt && (
+                        <div className="flex justify-end pt-1.5 border-t border-amber-200/70">
+                          <button
+                            type="button"
+                            disabled={isChatSending}
+                            onClick={() => handleSendTeacherChat(undefined, msg.retryPrompt)}
+                            className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition disabled:opacity-50"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>Coba Kirim Ulang</span>
+                          </button>
+                        </div>
+                      )}
+                    </>
                   ) : (
                     <>
                       <SarahMarkdown content={msg.text} />

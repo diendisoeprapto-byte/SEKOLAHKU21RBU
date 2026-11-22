@@ -1,8 +1,13 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 
-const MODEL_NAME = 'gemini-4-hydrogen';
+const PRIMARY_MODEL = 'gemini-4-hydrogen';
+const FALLBACK_MODEL = 'gemini-3.1-flash-lite';
 
-function formatGeminiError(error) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseErrorDetails(error) {
   const rawMessage = typeof error?.message === 'string' ? error.message.trim() : '';
   let statusCode = Number(error?.statusCode || error?.status) || 500;
   let cleanMessage = rawMessage || 'Terjadi kesalahan saat menghubungi layanan SARAH AI.';
@@ -23,10 +28,80 @@ function formatGeminiError(error) {
     }
   }
 
+  return { statusCode, cleanMessage };
+}
+
+function isTransientGeminiError(error) {
+  const { statusCode, cleanMessage } = parseErrorDetails(error);
+  const lower = cleanMessage.toLowerCase();
+  if ([429, 500, 502, 503, 504].includes(statusCode)) return true;
+  return (
+    lower.includes('high demand') ||
+    lower.includes('temporarily unavailable') ||
+    lower.includes('unavailable') ||
+    lower.includes('overloaded') ||
+    lower.includes('try again later') ||
+    lower.includes('resource_exhausted') ||
+    lower.includes('timeout') ||
+    lower.includes('econnreset') ||
+    lower.includes('fetch failed')
+  );
+}
+
+async function generateWithRetryAndFallback({ ai, contents, config = {}, useLowThinking = false }) {
+  const attempts = [
+    { model: PRIMARY_MODEL, delayMs: 0, lowThinking: useLowThinking },
+    { model: PRIMARY_MODEL, delayMs: 650, lowThinking: useLowThinking },
+    { model: FALLBACK_MODEL, delayMs: 200, lowThinking: false },
+    { model: FALLBACK_MODEL, delayMs: 700, lowThinking: false },
+  ];
+
+  let lastError = null;
+  for (const step of attempts) {
+    if (step.delayMs > 0) {
+      await sleep(step.delayMs);
+    }
+    try {
+      const stepConfig = { ...config };
+      if (step.lowThinking && step.model === PRIMARY_MODEL) {
+        stepConfig.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+      }
+      return await ai.models.generateContent({
+        model: step.model,
+        contents,
+        config: stepConfig,
+      });
+    } catch (err) {
+      lastError = err;
+      if (!isTransientGeminiError(err)) {
+        throw err;
+      }
+      console.warn(
+        `[sarah-ai] Transient error on ${step.model}:`,
+        parseErrorDetails(err).cleanMessage
+      );
+    }
+  }
+
+  throw lastError;
+}
+
+function formatGeminiError(error) {
+  const { statusCode: initialCode, cleanMessage: initialMsg } = parseErrorDetails(error);
+  let statusCode = initialCode;
+  let cleanMessage = initialMsg;
+  const lower = cleanMessage.toLowerCase();
+
   if (statusCode === 400 || statusCode === 403) {
     cleanMessage = `Konfigurasi API Key Gemini bermasalah (${cleanMessage}). Periksa GEMINI_API_KEY di Settings > Secrets atau Environment Variables Netlify.`;
-  } else if (statusCode === 429) {
-    cleanMessage = `Batas penggunaan (kuota) API Gemini sedang penuh (${cleanMessage}). Silakan tunggu sebentar lalu coba lagi.`;
+  } else if (statusCode === 503 || lower.includes('high demand') || lower.includes('overloaded')) {
+    statusCode = 503;
+    cleanMessage =
+      'Server AI Gemini sedang mengalami lonjakan antrean permintaan sementara. Silakan klik tombol kirim ulang beberapa detik lagi.';
+  } else if (statusCode === 429 || lower.includes('resource_exhausted')) {
+    statusCode = 429;
+    cleanMessage =
+      'Batas penggunaan (kuota) API Gemini sedang penuh sementara. Silakan tunggu beberapa detik lalu coba kirim ulang.';
   }
 
   const normalized = new Error(cleanMessage);
@@ -250,8 +325,8 @@ ${typeInstructions}
 - Sertakan field "pembahasan" yang menjelaskan alasan kunci jawaban dengan bahasa edukatif yang ramah.
 - Kembalikan HANYA JSON sesuai skema.`;
 
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
+  const response = await generateWithRetryAndFallback({
+    ai,
     contents: prompt,
     config: {
       systemInstruction,
@@ -415,9 +490,10 @@ export async function processSarahRequest(body = {}) {
         },
       ];
 
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
+      const response = await generateWithRetryAndFallback({
+        ai,
         contents,
+        useLowThinking: true,
         config: {
           systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo),
         },
@@ -451,9 +527,10 @@ export async function processSarahRequest(body = {}) {
         },
       ];
 
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
+      const response = await generateWithRetryAndFallback({
+        ai,
         contents,
+        useLowThinking: true,
         config: {
           systemInstruction: buildTeacherBaseSystem(ragBlock, userInfo),
         },
@@ -472,8 +549,8 @@ export async function processSarahRequest(body = {}) {
       userInfo
     );
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
+    const response = await generateWithRetryAndFallback({
+      ai,
       contents: userPrompt,
       config: {
         systemInstruction,

@@ -416,28 +416,52 @@ export interface SarahTextGeneratedResponse {
 export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
   payload: Record<string, any>
 ): Promise<T> {
-  const response = await fetch('/.netlify/functions/sarah-ai', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
+  const maxAttempts = 2;
+  let lastErr: Error | null = null;
 
-  let data: any = null;
-  try {
-    data = await response.json();
-  } catch {
-    data = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    }
+
+    try {
+      const response = await fetch('/.netlify/functions/sarah-ai', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      let data: any = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+
+      if (response.ok) {
+        return data as T;
+      }
+
+      const errMsg =
+        data?.error || `Permintaan ke layanan SARAH gagal (HTTP ${response.status}).`;
+      const isTransientStatus = [502, 503, 504].includes(response.status);
+      lastErr = new Error(errMsg);
+
+      if (!isTransientStatus || attempt === maxAttempts - 1) {
+        throw lastErr;
+      }
+    } catch (err: any) {
+      const isNetworkError = err instanceof TypeError;
+      lastErr = err instanceof Error ? err : new Error('Gagal terhubung ke layanan SARAH.');
+      if (!isNetworkError || attempt === maxAttempts - 1) {
+        throw lastErr;
+      }
+    }
   }
 
-  if (!response.ok) {
-    throw new Error(
-      data?.error || `Permintaan ke layanan SARAH gagal (HTTP ${response.status}).`
-    );
-  }
-
-  return data as T;
+  throw lastErr || new Error('Permintaan ke layanan SARAH gagal.');
 }
 
 function escapeHtmlForDoc(raw: string): string {
