@@ -32,6 +32,8 @@ import {
   History,
   Clock,
   ChevronDown,
+  Mic,
+  MicOff,
 } from 'lucide-react';
 import {
   ActiveUser,
@@ -84,6 +86,11 @@ import {
   syncSarahConfigToFirestore,
 } from '../../utils/sarahFirestore';
 import { SarahMarkdown } from '../SarahMarkdown';
+import {
+  SARAH_AVATAR_ASSETS,
+  SarahAvatarType,
+  extractSarahResponseMetadata,
+} from '../../utils/sarahVisuals';
 import type { TabId } from '../Sidebar';
 
 interface Props {
@@ -226,6 +233,16 @@ export const SarahAssistantTab: React.FC<Props> = ({
   // Processing state
   const [isGenerating, setIsGenerating] = useState(false);
   const [processingLabel, setProcessingLabel] = useState('');
+
+  // Adaptive Visual Avatar state
+  const [sarahAvatarType, setSarahAvatarType] = useState<SarahAvatarType>('sarah-hijab.png');
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
+
+  // Web Speech API state for Modul Ajar voice dictation
+  type VoiceFieldTarget = 'modulTopik' | 'modulInklusi';
+  const [voiceTarget, setVoiceTarget] = useState<VoiceFieldTarget | null>(null);
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const recognitionRef = useRef<any>(null);
 
   // Mode 0: Obrolan Bebas (Multi-turn Interactive Chat + Auto-Save History)
   const sarahChatUserId = useMemo(
@@ -410,10 +427,119 @@ export const SarahAssistantTab: React.FC<Props> = ({
 
   const handleCopyText = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      const cleaned = extractSarahResponseMetadata(text)
+        .cleanText.replace(/\[STIKER\s*:\s*[a-zA-Z_]+\s*\]/gi, '')
+        .trim();
+      await navigator.clipboard.writeText(cleaned);
       showToast('Jawaban SARAH berhasil disalin ke clipboard!', 'success');
     } catch {
       showToast('Gagal menyalin teks. Silakan blok manual teks yang diinginkan.', 'error');
+    }
+  };
+
+  const stopVoiceRecognition = () => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch {
+        // Ignore stop errors if already ended
+      }
+      recognitionRef.current = null;
+    }
+    setVoiceTarget(null);
+    setInterimTranscript('');
+  };
+
+  useEffect(() => {
+    if (subTab !== 'modul') {
+      stopVoiceRecognition();
+    }
+  }, [subTab]);
+
+  useEffect(() => {
+    return () => {
+      stopVoiceRecognition();
+    };
+  }, []);
+
+  const handleToggleSpeech = (target: 'modulTopik' | 'modulInklusi') => {
+    if (voiceTarget === target) {
+      stopVoiceRecognition();
+      showToast('Perekaman suara dihentikan.', 'success');
+      return;
+    }
+
+    stopVoiceRecognition();
+
+    const SpeechRecognitionCtor =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionCtor) {
+      showToast(
+        'Browser Anda belum mendukung perintah suara (Web Speech API). Silakan gunakan Google Chrome atau Microsoft Edge.',
+        'error'
+      );
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognitionCtor();
+      recognition.lang = 'id-ID';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      recognition.onresult = (event: any) => {
+        let finalText = '';
+        let interimText = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const piece = event.results[i][0]?.transcript || '';
+          if (event.results[i].isFinal) {
+            finalText += piece;
+          } else {
+            interimText += piece;
+          }
+        }
+        setInterimTranscript(interimText.trim());
+
+        if (finalText.trim()) {
+          const cleanChunk = finalText.trim();
+          if (target === 'modulTopik') {
+            setModulTopik((prev) => (prev.trim() ? `${prev.trim()} ${cleanChunk}` : cleanChunk));
+          } else {
+            setModulInklusi((prev) => (prev.trim() ? `${prev.trim()} ${cleanChunk}` : cleanChunk));
+          }
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        const errCode = String(event?.error || '');
+        if (errCode === 'not-allowed' || errCode === 'service-not-allowed') {
+          showToast(
+            'Akses mikrofon ditolak. Harap izinkan mikrofon di pengaturan browser Anda.',
+            'error'
+          );
+        } else if (errCode !== 'aborted' && errCode !== 'no-speech') {
+          showToast(`Kendala pengenalan suara: ${errCode}`, 'error');
+        }
+        stopVoiceRecognition();
+      };
+
+      recognition.onend = () => {
+        setVoiceTarget(null);
+        setInterimTranscript('');
+        recognitionRef.current = null;
+      };
+
+      recognitionRef.current = recognition;
+      setVoiceTarget(target);
+      recognition.start();
+      showToast('Mikrofon aktif! Silakan ucapkan topik Modul Ajar dalam Bahasa Indonesia.', 'success');
+    } catch {
+      stopVoiceRecognition();
+      showToast('Gagal mengaktifkan mikrofon. Pastikan izin mikrofon tersedia.', 'error');
     }
   };
 
@@ -540,11 +666,21 @@ export const SarahAssistantTab: React.FC<Props> = ({
       const res = await callSarahAiEndpoint<SarahTextGeneratedResponse>({
         mode: 'general_chat',
         role: activeUser.role,
-        user: { name: activeUser.name, kelas: activeClass },
+        user: {
+          name: activeUser.name,
+          kelas: activeClass,
+          agama: sarahAvatarType === 'sarah-nonhijab.png' ? 'Kristen' : 'Islam',
+        },
         params: { message: promptText, mapel: chatMapel },
         history: prevHistory,
         ragContext,
       });
+
+      const parsedMeta = extractSarahResponseMetadata(res.text);
+      if (parsedMeta.avatarType) {
+        setSarahAvatarType(parsedMeta.avatarType);
+        setAvatarLoadError(false);
+      }
 
       setChatMessages((prev) => [
         ...prev,
@@ -1268,28 +1404,43 @@ export const SarahAssistantTab: React.FC<Props> = ({
       {/* Header Banner */}
       <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-r from-rose-600 via-rose-700 to-indigo-700 p-6 sm:p-8 text-white shadow-lg no-print">
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-          <div className="space-y-2 max-w-2xl">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/15 border border-white/25 text-[11px] font-black uppercase tracking-wider">
-                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                <span>Asisten AI Terintegrasi SERBU 21</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsInfoModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-pink-500/35 hover:bg-pink-500/55 border border-pink-200/50 text-[11px] font-bold text-white transition cursor-pointer"
-                title="Tentang & Dedikasi SARAH"
-              >
-                <Heart className="w-3.5 h-3.5 text-pink-200 fill-pink-200" />
-                <span>Tentang SARAH</span>
-              </button>
+          <div className="flex items-start gap-4 max-w-2xl">
+            <div className="hidden sm:flex w-16 h-16 rounded-2xl overflow-hidden border-2 border-white/50 bg-white/15 shrink-0 shadow-md items-center justify-center">
+              {!avatarLoadError ? (
+                <img
+                  src={SARAH_AVATAR_ASSETS[sarahAvatarType]}
+                  alt="Avatar SARAH AI"
+                  referrerPolicy="no-referrer"
+                  onError={() => setAvatarLoadError(true)}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <Sparkles className="w-7 h-7 text-amber-300" />
+              )}
             </div>
-            <h1 className="font-display font-black text-2xl sm:text-3xl tracking-tight">
-              SARAH — Sistem Asisten Adaptif, Ramah, Amanah &amp; Humanis
-            </h1>
-            <p className="text-xs sm:text-sm text-rose-100 leading-relaxed">
-              Sahabat pendidik berjiwa kasih sayang untuk tanya jawab bebas, membuat LKPD menarik siap cetak, Modul Ajar Berdiferensiasi, soal CBT otomatis, serta memantau diskusi belajar siswa.
-            </p>
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/15 border border-white/25 text-[11px] font-black uppercase tracking-wider">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Asisten AI Terintegrasi SERBU 21</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsInfoModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-pink-500/35 hover:bg-pink-500/55 border border-pink-200/50 text-[11px] font-bold text-white transition cursor-pointer"
+                  title="Tentang & Dedikasi SARAH"
+                >
+                  <Heart className="w-3.5 h-3.5 text-pink-200 fill-pink-200" />
+                  <span>Tentang SARAH</span>
+                </button>
+              </div>
+              <h1 className="font-display font-black text-2xl sm:text-3xl tracking-tight">
+                SARAH — Sistem Asisten Adaptif, Ramah, Amanah &amp; Humanis
+              </h1>
+              <p className="text-xs sm:text-sm text-rose-100 leading-relaxed">
+                Sahabat pendidik berjiwa kasih sayang untuk tanya jawab bebas, membuat LKPD menarik siap cetak, Modul Ajar Berdiferensiasi, soal CBT otomatis, serta memantau diskusi belajar siswa.
+              </p>
+            </div>
           </div>
 
           <div className="grid grid-cols-3 gap-2.5 shrink-0">
@@ -1460,8 +1611,18 @@ export const SarahAssistantTab: React.FC<Props> = ({
             {/* Chat Top Bar */}
             <div className="px-4 sm:px-5 py-3.5 bg-gradient-to-r from-rose-50 via-pink-50/70 to-indigo-50 border-b border-rose-100 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-xs">
-                  <MessageSquareHeart className="w-5 h-5" />
+                <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-xs overflow-hidden border border-rose-200 shrink-0">
+                  {!avatarLoadError ? (
+                    <img
+                      src={SARAH_AVATAR_ASSETS[sarahAvatarType]}
+                      alt="Avatar SARAH AI"
+                      referrerPolicy="no-referrer"
+                      onError={() => setAvatarLoadError(true)}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <MessageSquareHeart className="w-5 h-5" />
+                  )}
                 </div>
                 <div>
                   <h2 className="font-display font-black text-sm text-slate-900">
@@ -1497,6 +1658,18 @@ export const SarahAssistantTab: React.FC<Props> = ({
                   <Plus className="w-3.5 h-3.5" />
                   <span>Obrolan Baru</span>
                 </button>
+                <select
+                  value={sarahAvatarType}
+                  onChange={(e) => {
+                    setSarahAvatarType(e.target.value as SarahAvatarType);
+                    setAvatarLoadError(false);
+                  }}
+                  title="Sesuaikan Avatar SARAH"
+                  className="px-2.5 py-1.5 rounded-xl border border-rose-200 bg-white text-xs font-bold text-slate-700 outline-none"
+                >
+                  <option value="sarah-hijab.png">Avatar: Hijab Pink</option>
+                  <option value="sarah-nonhijab.png">Avatar: Non-Hijab</option>
+                </select>
                 <select
                   value={chatMapel}
                   onChange={(e) => setChatMapel(e.target.value)}
@@ -1637,12 +1810,15 @@ export const SarahAssistantTab: React.FC<Props> = ({
                                 type="button"
                                 onClick={async () => {
                                   try {
+                                    const cleanedForKb = extractSarahResponseMetadata(msg.text)
+                                      .cleanText.replace(/\[STIKER\s*:\s*[a-zA-Z_]+\s*\]/gi, '')
+                                      .trim();
                                     await addSarahKnowledgeItem({
                                       judul: `Diskusi SARAH (${chatMapel}) - ${new Date().toLocaleDateString('id-ID')}`,
                                       kategori: 'Materi Ajar',
                                       kelas: activeClass || 'Semua',
                                       mata_pelajaran: chatMapel,
-                                      konten_ringkasan: msg.text,
+                                      konten_ringkasan: cleanedForKb || msg.text,
                                       sumber: `Obrolan SARAH (${activeUser.name})`,
                                       disetujui_oleh: activeUser.name,
                                     });
@@ -2058,22 +2234,80 @@ export const SarahAssistantTab: React.FC<Props> = ({
             </div>
 
             <div>
-              <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
-                Topik / Tujuan Pembelajaran (TP) <span className="text-rose-600">*</span>
-              </label>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                <label className="block text-[11px] font-black text-slate-700 uppercase">
+                  Topik / Tujuan Pembelajaran (TP) <span className="text-rose-600">*</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSpeech('modulTopik')}
+                  className={`px-3 py-1 rounded-xl text-[11px] font-extrabold flex items-center gap-1.5 transition cursor-pointer border ${
+                    voiceTarget === 'modulTopik'
+                      ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
+                      : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                  }`}
+                  title="Gunakan suara untuk mendiktekan topik Modul Ajar (Web Speech API)"
+                >
+                  {voiceTarget === 'modulTopik' ? (
+                    <>
+                      <MicOff className="w-3.5 h-3.5" />
+                      <span>Hentikan Bicara</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-3.5 h-3.5" />
+                      <span>Mulai Bicara</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <textarea
                 rows={3}
                 value={modulTopik}
                 onChange={(e) => setModulTopik(e.target.value)}
-                placeholder="Contoh: Sistem pernapasan manusia dan cara menjaga kesehatan organ pernapasan..."
+                placeholder="Contoh: Sistem pernapasan manusia dan cara menjaga kesehatan organ pernapasan... (atau klik 'Mulai Bicara')"
                 className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white text-xs text-slate-800 outline-none focus:border-rose-600"
               />
+              {voiceTarget === 'modulTopik' && (
+                <div className="mt-1.5 px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-[11px] text-rose-800 flex items-center gap-2">
+                  <Mic className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span className="font-bold">
+                    {interimTranscript
+                      ? `Mendengar: "${interimTranscript}"`
+                      : 'Silakan berbicara sekarang dalam Bahasa Indonesia...'}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div>
-              <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
-                Catatan Kebutuhan Inklusi / Diferensiasi Siswa
-              </label>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                <label className="block text-[11px] font-black text-slate-700 uppercase">
+                  Catatan Kebutuhan Inklusi / Diferensiasi Siswa
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSpeech('modulInklusi')}
+                  className={`px-2.5 py-1 rounded-xl text-[10px] font-extrabold flex items-center gap-1 transition cursor-pointer border ${
+                    voiceTarget === 'modulInklusi'
+                      ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                      : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
+                  }`}
+                  title="Dikte suara catatan inklusi"
+                >
+                  {voiceTarget === 'modulInklusi' ? (
+                    <>
+                      <MicOff className="w-3 h-3" />
+                      <span>Berhenti</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-3 h-3" />
+                      <span>Bicara</span>
+                    </>
+                  )}
+                </button>
+              </div>
               <textarea
                 rows={3}
                 value={modulInklusi}
@@ -2081,6 +2315,16 @@ export const SarahAssistantTab: React.FC<Props> = ({
                 placeholder="Contoh: Terdapat 1 siswa slow learner dan 2 siswa kinestetik; sertakan lembar kerja visual sederhana..."
                 className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white text-xs text-slate-800 outline-none focus:border-rose-600"
               />
+              {voiceTarget === 'modulInklusi' && (
+                <div className="mt-1.5 px-3 py-2 rounded-xl bg-indigo-50 border border-indigo-200 text-[11px] text-indigo-800 flex items-center gap-2">
+                  <Mic className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                  <span className="font-bold">
+                    {interimTranscript
+                      ? `Mendengar: "${interimTranscript}"`
+                      : 'Silakan ucapkan catatan diferensiasi/inklusi...'}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div>

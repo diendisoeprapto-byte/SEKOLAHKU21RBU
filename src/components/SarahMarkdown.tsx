@@ -1,9 +1,43 @@
-import React from 'react';
+import React, { useState } from 'react';
+import {
+  SARAH_STICKER_ASSETS,
+  SarahStickerCode,
+  extractSarahResponseMetadata,
+} from '../utils/sarahVisuals';
 
 interface Props {
   content: string;
   compact?: boolean;
 }
+
+const VALID_STICKER_CODES: SarahStickerCode[] = ['sapa', 'jempol', 'semangat', 'terimakasih'];
+const STICKER_TOKEN_REGEX = /\[STIKER\s*:\s*([a-zA-Z_]+)\s*\]/gi;
+
+const SarahStickerView: React.FC<{ code: SarahStickerCode }> = ({ code }) => {
+  const asset = SARAH_STICKER_ASSETS[code];
+  const [imgError, setImgError] = useState(false);
+
+  return (
+    <div className="my-2 inline-flex flex-col items-center">
+      {!imgError ? (
+        <img
+          src={asset.src}
+          alt={asset.label}
+          title={asset.label}
+          referrerPolicy="no-referrer"
+          onError={() => setImgError(true)}
+          className="w-[120px] h-[120px] object-cover rounded-2xl border-2 border-white shadow-md sarah-sticker-anim select-none bg-rose-50"
+        />
+      ) : (
+        <div className="w-[120px] h-[120px] rounded-2xl border-2 border-rose-200 bg-gradient-to-br from-rose-50 to-amber-50 shadow-sm flex flex-col items-center justify-center p-2 text-center sarah-sticker-anim">
+          <span className="font-display font-black text-xs text-rose-700">
+            {asset.badgeText}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+};
 
 function renderInline(text: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
@@ -59,17 +93,62 @@ function isTableSeparator(line: string): boolean {
 }
 
 export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => {
-  const lines = (content || '').split(/\r?\n/);
+  const { cleanText } = extractSarahResponseMetadata(content || '');
+  const lines = cleanText.split(/\r?\n/);
   const elements: React.ReactNode[] = [];
   let idx = 0;
+  let stickerUsedCount = 0;
 
   while (idx < lines.length) {
     const rawLine = lines[idx];
-    const line = rawLine.trim();
+    const trimmedRaw = rawLine.trim();
 
-    if (!line) {
+    if (!trimmedRaw) {
       idx++;
       continue;
+    }
+
+    // Extract optional sticker tokens on this line (render max 1 sticker per message)
+    let lineStickerBefore: SarahStickerCode | null = null;
+    let lineStickerAfter: SarahStickerCode | null = null;
+    const stickerMatches = Array.from(trimmedRaw.matchAll(STICKER_TOKEN_REGEX));
+    let line = trimmedRaw;
+
+    if (stickerMatches.length > 0) {
+      for (const m of stickerMatches) {
+        const candidate = String(m[1] || '').toLowerCase() as SarahStickerCode;
+        if (VALID_STICKER_CODES.includes(candidate) && stickerUsedCount === 0) {
+          stickerUsedCount += 1;
+          const matchIndex = m.index ?? 0;
+          if (matchIndex <= 4) {
+            lineStickerBefore = candidate;
+          } else {
+            lineStickerAfter = candidate;
+          }
+        }
+      }
+      line = trimmedRaw.replace(STICKER_TOKEN_REGEX, '').trim();
+
+      if (!line) {
+        const loneSticker = lineStickerBefore || lineStickerAfter;
+        if (loneSticker) {
+          elements.push(
+            <div key={`stk_only_${idx}`} className="flex justify-start">
+              <SarahStickerView code={loneSticker} />
+            </div>
+          );
+        }
+        idx++;
+        continue;
+      }
+    }
+
+    if (lineStickerBefore) {
+      elements.push(
+        <div key={`stk_pre_${idx}`} className="flex justify-start">
+          <SarahStickerView code={lineStickerBefore} />
+        </div>
+      );
     }
 
     // Markdown Table
@@ -117,6 +196,13 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
           </table>
         </div>
       );
+      if (lineStickerAfter) {
+        elements.push(
+          <div key={`stk_post_${idx}`} className="flex justify-start">
+            <SarahStickerView code={lineStickerAfter} />
+          </div>
+        );
+      }
       continue;
     }
 
@@ -174,7 +260,9 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
     if (/^[-*•]\s+/.test(line)) {
       const items: string[] = [];
       while (idx < lines.length && /^[-*•]\s+/.test(lines[idx].trim())) {
-        items.push(lines[idx].trim().replace(/^[-*•]\s+/, ''));
+        items.push(
+          lines[idx].trim().replace(/^[-*•]\s+/, '').replace(STICKER_TOKEN_REGEX, '').trim()
+        );
         idx++;
       }
       elements.push(
@@ -186,6 +274,13 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
           ))}
         </ul>
       );
+      if (lineStickerAfter) {
+        elements.push(
+          <div key={`stk_post_${idx}`} className="flex justify-start">
+            <SarahStickerView code={lineStickerAfter} />
+          </div>
+        );
+      }
       continue;
     }
 
@@ -193,7 +288,9 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
     if (/^\d+\.\s+/.test(line)) {
       const items: string[] = [];
       while (idx < lines.length && /^\d+\.\s+/.test(lines[idx].trim())) {
-        items.push(lines[idx].trim().replace(/^\d+\.\s+/, ''));
+        items.push(
+          lines[idx].trim().replace(/^\d+\.\s+/, '').replace(STICKER_TOKEN_REGEX, '').trim()
+        );
         idx++;
       }
       elements.push(
@@ -205,6 +302,13 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
           ))}
         </ol>
       );
+      if (lineStickerAfter) {
+        elements.push(
+          <div key={`stk_post_${idx}`} className="flex justify-start">
+            <SarahStickerView code={lineStickerAfter} />
+          </div>
+        );
+      }
       continue;
     }
 
@@ -219,6 +323,14 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
         {renderInline(line)}
       </p>
     );
+
+    if (lineStickerAfter) {
+      elements.push(
+        <div key={`stk_post_${idx}`} className="flex justify-start">
+          <SarahStickerView code={lineStickerAfter} />
+        </div>
+      );
+    }
     idx++;
   }
 

@@ -88,6 +88,42 @@
   animation: scanLaser 2.2s infinite ease-in-out;
 }
 
+@keyframes sarahStickerEntrance {
+  0% {
+    opacity: 0;
+    transform: scale(0.72) rotate(-5deg);
+  }
+  65% {
+    opacity: 1;
+    transform: scale(1.06) rotate(2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes sarahStickerFloat {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-4px) rotate(1.2deg);
+  }
+}
+
+.sarah-sticker-anim {
+  animation:
+    sarahStickerEntrance 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards,
+    sarahStickerFloat 3.6s ease-in-out 0.5s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sarah-sticker-anim {
+    animation: none;
+  }
+}
+
 /* Html5Qrcode Scanner Styling */
 #html5qr-code-full-region {
   border: none !important;

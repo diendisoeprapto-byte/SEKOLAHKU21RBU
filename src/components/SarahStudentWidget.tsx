@@ -50,6 +50,12 @@ import {
   subscribeToSarahKnowledgeBase,
 } from '../utils/sarahFirestore';
 import { SarahMarkdown } from './SarahMarkdown';
+import {
+  SARAH_AVATAR_ASSETS,
+  SarahAvatarType,
+  extractSarahResponseMetadata,
+  resolveAvatarTypeFromReligion,
+} from '../utils/sarahVisuals';
 
 interface Props {
   activeUser: ActiveUser;
@@ -132,12 +138,21 @@ export const SarahStudentWidget: React.FC<Props> = ({
   });
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => [buildWelcomeMessage()]);
+  const [activeAvatarType, setActiveAvatarType] = useState<SarahAvatarType>(() =>
+    resolveAvatarTypeFromReligion(currentStudent?.agama)
+  );
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
   const [chatSessions, setChatSessions] = useState<SarahChatSessionItem[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [isLoadingSessionMsgs, setIsLoadingSessionMsgs] = useState(false);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setActiveAvatarType(resolveAvatarTypeFromReligion(currentStudent?.agama));
+    setAvatarLoadError(false);
+  }, [currentStudent?.agama]);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -239,7 +254,10 @@ export const SarahStudentWidget: React.FC<Props> = ({
 
   const handleCopyAnswer = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      const cleaned = extractSarahResponseMetadata(text)
+        .cleanText.replace(/\[STIKER\s*:\s*[a-zA-Z_]+\s*\]/gi, '')
+        .trim();
+      await navigator.clipboard.writeText(cleaned);
       showToast('Jawaban SARAH berhasil disalin!', 'success');
     } catch {
       showToast('Gagal menyalin jawaban.', 'error');
@@ -391,6 +409,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
         user: {
           name: currentStudent?.nama || activeUser.name,
           kelas: studentKelas,
+          agama: currentStudent?.agama || '',
         },
         params: {
           message: question,
@@ -399,6 +418,12 @@ export const SarahStudentWidget: React.FC<Props> = ({
         history: prevHistory,
         ragContext,
       });
+
+      const parsedMeta = extractSarahResponseMetadata(res.text);
+      if (parsedMeta.avatarType) {
+        setActiveAvatarType(parsedMeta.avatarType);
+        setAvatarLoadError(false);
+      }
 
       setMessages((prev) => [
         ...prev,
@@ -449,9 +474,17 @@ export const SarahStudentWidget: React.FC<Props> = ({
           {/* Header */}
           <div className="bg-gradient-to-r from-rose-600 via-rose-700 to-indigo-700 text-white p-4 flex items-center justify-between gap-2 shrink-0">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-10 h-10 rounded-2xl bg-white/20 border border-white/30 flex items-center justify-center shrink-0">
+              <div className="w-11 h-11 rounded-2xl bg-white/20 border-2 border-white/50 flex items-center justify-center shrink-0 overflow-hidden shadow-xs relative">
                 {isLockedForExam ? (
                   <Lock className="w-5 h-5 text-amber-200" />
+                ) : !avatarLoadError ? (
+                  <img
+                    src={SARAH_AVATAR_ASSETS[activeAvatarType]}
+                    alt="Avatar SARAH AI"
+                    referrerPolicy="no-referrer"
+                    onError={() => setAvatarLoadError(true)}
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
                   <Sparkles className="w-5 h-5 text-amber-300" />
                 )}
