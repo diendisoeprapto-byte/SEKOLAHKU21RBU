@@ -134,5 +134,41 @@ service cloud.firestore {
       allow read: if true;
       allow write: if true;
     }
+
+    // Asisten AI SARAH - Knowledge Base & Memori Pembelajaran Berkelanjutan
+    match /sarah_knowledge_base/{docId} {
+      allow read: if true;
+      allow create, update: if
+        request.resource.data.judul is string &&
+        request.resource.data.judul.size() > 0 &&
+        request.resource.data.judul.size() <= 300 &&
+        request.resource.data.kategori in ['RPP/Modul Ajar', 'Bank Soal', 'Materi Ajar', 'Kebijakan Sekolah'] &&
+        request.resource.data.kelas is string &&
+        request.resource.data.kelas.size() <= 40 &&
+        request.resource.data.mata_pelajaran is string &&
+        request.resource.data.mata_pelajaran.size() <= 120 &&
+        request.resource.data.konten_ringkasan is string &&
+        request.resource.data.konten_ringkasan.size() > 0 &&
+        request.resource.data.konten_ringkasan.size() <= 40000;
+      allow delete: if true;
+    }
+
+    // Asisten AI SARAH - Log Topik & Pertanyaan Siswa untuk Pemantauan Guru
+    match /sarah_student_logs/{logId} {
+      allow read: if true;
+      allow create, update: if
+        request.resource.data.studentId is string &&
+        request.resource.data.studentId.size() <= 120 &&
+        request.resource.data.studentName is string &&
+        request.resource.data.studentName.size() <= 150 &&
+        request.resource.data.kelas is string &&
+        request.resource.data.kelas.size() <= 40 &&
+        request.resource.data.topik is string &&
+        request.resource.data.topik.size() <= 200 &&
+        request.resource.data.pertanyaan is string &&
+        request.resource.data.pertanyaan.size() > 0 &&
+        request.resource.data.pertanyaan.size() <= 3000;
+      allow delete: if true;
+    }
   }
 }

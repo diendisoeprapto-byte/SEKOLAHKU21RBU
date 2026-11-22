@@ -107,6 +107,8 @@ import { ManajemenASAJTab } from './components/tabs/ManajemenASAJTab';
 import { PortalAlumniTab } from './components/tabs/PortalAlumniTab';
 import { PerpustakaanTab } from './components/tabs/PerpustakaanTab';
 import { MediaAjarTab } from './components/tabs/MediaAjarTab';
+import { SarahAssistantTab } from './components/tabs/SarahAssistantTab';
+import { SarahStudentWidget } from './components/SarahStudentWidget';
 import { StudentDashboard } from './components/StudentDashboard';
 import { testConnection } from './utils/firebase';
 import {
@@ -1738,8 +1740,32 @@ export default function App() {
                   onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
                 />
               )}
+
+              {/* Tab Asisten AI SARAH (Khusus Guru & Admin) */}
+              {activeUser.role !== 'siswa' && activeTab === 'asisten-sarah' && (
+                <SarahAssistantTab
+                  activeUser={activeUser}
+                  profile={profile}
+                  activeClass={activeClass}
+                  subjects={subjects}
+                  showToast={showToast}
+                  onNavigateTab={setActiveTab}
+                />
+              )}
             </main>
           </div>
+
+          {/* Widget Mengambang Tanya SARAH (Khusus Portal Siswa dengan Kunci Ujian CBT Otomatis) */}
+          {activeUser.role === 'siswa' && (
+            <SarahStudentWidget
+              activeUser={activeUser}
+              students={students}
+              subjects={subjects}
+              profile={profile}
+              activeExamStatus={activeExamStatus}
+              showToast={showToast}
+            />
+          )}
 
           {/* Minimalist App Credit Footer */}
           <footer className="mt-auto border-t border-slate-200/80 bg-white/85 backdrop-blur-xs py-3 px-4 text-center no-print">

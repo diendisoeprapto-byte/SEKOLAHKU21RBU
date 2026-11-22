@@ -170,6 +170,40 @@
         "created_at": { "type": "string", "format": "date-time" }
       },
       "required": ["judul", "kelas", "mapel", "pertemuan", "drive_url", "embed_url", "guru_nama", "guru_uid"]
+    },
+    "SarahKnowledgeItem": {
+      "title": "SarahKnowledgeItem",
+      "description": "Basis pengetahuan kurasi guru untuk asisten AI SARAH (RAG pembelajaran berkelanjutan)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "judul": { "type": "string" },
+        "kategori": { "type": "string" },
+        "kelas": { "type": "string" },
+        "mata_pelajaran": { "type": "string" },
+        "konten_ringkasan": { "type": "string" },
+        "sumber": { "type": "string" },
+        "disetujui_oleh": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "judul", "kategori", "kelas", "mata_pelajaran", "konten_ringkasan", "sumber", "disetujui_oleh"]
+    },
+    "SarahStudentLog": {
+      "title": "SarahStudentLog",
+      "description": "Log topik & pertanyaan siswa kepada SARAH untuk pemantauan guru kelas",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "nisn": { "type": "string" },
+        "kelas": { "type": "string" },
+        "mata_pelajaran": { "type": "string" },
+        "topik": { "type": "string" },
+        "pertanyaan": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "studentId", "studentName", "kelas", "topik", "pertanyaan"]
     }
   },
   "firestore": {
@@ -220,6 +254,14 @@
     "/media_ajar/{mediaId}": {
       "schema": "MediaAjar",
       "description": "Daftar slide materi pembelajaran (PPTX/PDF Google Drive) terfilter per kelas 1 sampai 6"
+    },
+    "/sarah_knowledge_base/{docId}": {
+      "schema": "SarahKnowledgeItem",
+      "description": "Basis pengetahuan & memori pembelajaran berkelanjutan asisten SARAH"
+    },
+    "/sarah_student_logs/{logId}": {
+      "schema": "SarahStudentLog",
+      "description": "Log pertanyaan siswa pada widget Tanya SARAH untuk pantauan guru"
     }
   }
 }

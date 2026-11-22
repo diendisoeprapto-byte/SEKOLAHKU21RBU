@@ -1,0 +1,400 @@
+import { GoogleGenAI, Type } from '@google/genai';
+
+const MODEL_NAME = 'gemini-2.5-flash';
+
+function sanitizeString(val, maxLen = 4000) {
+  if (typeof val !== 'string') return '';
+  return val.trim().slice(0, maxLen);
+}
+
+function buildRagContextBlock(ragContext = {}) {
+  const parts = [];
+  const schoolName = sanitizeString(ragContext.schoolName || 'SDN Rawa Badak Utara 21', 150);
+  const activeClass = sanitizeString(ragContext.activeClass || '', 60);
+
+  parts.push(`PROFIL SEKOLAH: ${schoolName}${activeClass ? ` | Konteks Kelas: ${activeClass}` : ''}`);
+
+  if (Array.isArray(ragContext.subjectsList) && ragContext.subjectsList.length > 0) {
+    const subLines = ragContext.subjectsList
+      .slice(0, 15)
+      .map((s) => `- ${sanitizeString(s.name, 100)}${s.tp ? ` (TP: ${sanitizeString(s.tp, 250)})` : ''}`);
+    parts.push(`DAFTAR MATA PELAJARAN & TP KURIKULUM SEKOLAH:\n${subLines.join('\n')}`);
+  }
+
+  if (Array.isArray(ragContext.knowledgeDocs) && ragContext.knowledgeDocs.length > 0) {
+    const kbLines = ragContext.knowledgeDocs.slice(0, 8).map((doc, i) => {
+      return `[KB-${i + 1}] Judul: ${sanitizeString(doc.judul, 160)} | Kategori: ${sanitizeString(doc.kategori, 60)} | Kelas: ${sanitizeString(doc.kelas, 30)} | Mapel: ${sanitizeString(doc.mata_pelajaran, 80)} | Sumber: ${sanitizeString(doc.sumber, 120)}\nRingkasan: ${sanitizeString(doc.konten_ringkasan, 1200)}`;
+    });
+    parts.push(`MEMORI PENGETAHUAN SEKOLAH (sarah_knowledge_base):\n${kbLines.join('\n\n')}`);
+  }
+
+  if (Array.isArray(ragContext.mediaAjarDocs) && ragContext.mediaAjarDocs.length > 0) {
+    const mediaLines = ragContext.mediaAjarDocs.slice(0, 8).map((m, i) => {
+      return `[Media-${i + 1}] Judul: ${sanitizeString(m.judul, 160)} | Kelas: ${sanitizeString(m.kelas, 20)} | Mapel: ${sanitizeString(m.mapel, 80)} | ${sanitizeString(m.bab, 40)} - ${sanitizeString(m.pertemuan, 40)} | Pengunggah: ${sanitizeString(m.guru_nama, 80)}`;
+    });
+    parts.push(`KATALOG BANK MEDIA AJAR PPT SEKOLAH (media_ajar):\n${mediaLines.join('\n')}`);
+  }
+
+  return parts.join('\n\n');
+}
+
+function buildStudentSystemInstruction(ragBlock, userInfo = {}) {
+  const studentName = sanitizeString(userInfo.name || 'Siswa', 80);
+  const studentClass = sanitizeString(userInfo.kelas || 'SD', 40);
+
+  return `Kamu adalah SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis), tutor belajar resmi untuk siswa Sekolah Dasar di aplikasi SERBU 21 SDN Rawa Badak Utara 21.
+Saat ini kamu sedang berbicara dengan siswa bernama ${studentName} (${studentClass}).
+
+PRINSIP UTAMA & SYSTEM INSTRUCTION KETAT:
+1. GAYA BAHASA & KARAKTER: Gunakan bahasa Indonesia yang baik, sopan, hangat, sabar, ramah anak SD, tidak menggurui secara kaku, dan menyemangati. Sisipkan secara natural penguatan nilai "7 Kebiasaan Anak Indonesia Hebat" (1. Bangun Pagi, 2. Beribadah, 3. Berolahraga, 4. Makan Sehat dan Bergizi, 5. Gemar Belajar, 6. Bermasyarakat, 7. Tidur Cepat) bila relevan dengan momen belajar siswa.
+2. ATURAN ANTI-MENYONTEK (METODE SOKRATIK MUTLAK):
+   - Kamu DILARANG KERAS memberikan jawaban akhir secara langsung atas soal PR, latihan, kuis, tebak pilihan A/B/C/D, atau hasil hitungan tugas siswa.
+   - Jika siswa menanyakan jawaban soal (contoh: "berapa hasil 3/4 + 2/5?", "jawaban nomor 3 apa?", "pilihannya A atau B?", "kerjakan PR ini"), kamu WAJIB menolak memberi jawaban langsung dengan cara ramah, lalu berikan:
+     (a) Penjelasan singkat konsep dasarnya,
+     (b) Analogi sehari-hari yang mudah dibayangkan anak SD,
+     (c) Petunjuk langkah pertama (scaffolding) dan 1–2 pertanyaan pemantik balik agar siswa mencoba berpikir dan menjawab langkah tersebut sendiri.
+   - Jika siswa mengirimkan percobaannya ("apakah jawabanku 10 benar?"), konfirmasi proses berpikirnya terlebih dahulu dan bimbing bila masih keliru tanpa langsung membocorkan angka/huruf akhir sebelum siswa memahami langkahnya.
+3. BATASAN RUANG LINGKUP KURIKULUM:
+   - Fokus HANYA pada materi pelajaran SD Kurikulum Merdeka, literasi/numerasi, media ajar sekolah, serta pembiasaan 7 Kebiasaan Anak Indonesia Hebat.
+   - Tolak dengan sangat sopan pertanyaan di luar konteks belajar SD (misalnya hiburan dewasa, game non-edukatif, gosip, politik, atau permintaan membuat kecurangan ujian) dan ajak kembali berdiskusi tentang pelajaran sekolah.
+4. GUNAKAN BASIS DATA SEKOLAH: Prioritaskan referensi dari materi dan memori pengetahuan sekolah di bawah ini bila relevan, dan jangan mengarang materi ajar yang tidak ada di referensi seolah-olah berasal dari dokumen guru.
+
+KONTEKS BASIS DATA SEKOLAH SAAT INI:
+${ragBlock}`;
+}
+
+function buildTeacherPromptAndInstruction(mode, params, ragBlock, userInfo = {}) {
+  const teacherName = sanitizeString(userInfo.name || 'Bapak/Ibu Guru', 100);
+  const kelas = sanitizeString(params.kelas || 'Kelas 6', 40);
+  const mapel = sanitizeString(params.mapel || 'Umum', 100);
+  const topik = sanitizeString(params.topik || '', 600);
+  const inklusiCatatan = sanitizeString(params.inklusiCatatan || '', 800);
+
+  const baseSystem = `Kamu adalah SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis), asisten kecerdasan buatan profesional bagi Pendidik & Administrator di aplikasi sekolah SERBU 21 (SDN Rawa Badak Utara 21).
+Pengguna saat ini adalah ${teacherName}.
+Gunakan bahasa Indonesia baku pendidikan Kurikulum Merdeka Indonesia yang rapi, terstruktur dengan Markdown (heading, daftar bernomor/poin, tebal, serta tabel Markdown bila diperlukan), praktis diterapkan di kelas SD, serta merujuk pada konteks basis data sekolah berikut bila relevan:
+
+${ragBlock}`;
+
+  if (mode === 'modul_ajar') {
+    const userPrompt = `Buatkan **Modul Ajar / RPP Berdiferensiasi (Pendekatan Pembelajaran Mendalam / Deep Learning)** Kurikulum Merdeka SD yang siap cetak dan langsung dapat digunakan di kelas dengan rincian berikut:
+- Jenjang / Kelas: ${kelas}
+- Mata Pelajaran: ${mapel}
+- Topik / Tujuan Pembelajaran (TP): ${topik}
+- Catatan Kebutuhan Inklusi / Diferensiasi Siswa: ${inklusiCatatan || 'Reguler / beragam gaya belajar visual, auditori, kinestetik'}
+
+Struktur wajib yang harus ditampilkan lengkap dan rapi:
+1. **Identitas Modul Ajar** (dalam bentuk tabel ringkas mencakup Satuan Pendidikan SDN Rawa Badak Utara 21, Fase/Kelas, Mapel, Topik, Alokasi Waktu, Integrasi Nilai *7 Kebiasaan Anak Indonesia Hebat*)
+2. **Tujuan Pembelajaran (TP) & Kriteria Ketercapaian Tujuan Pembelajaran (KKTP)**
+3. **Pemetaan Kebutuhan Belajar & Strategi Diferensiasi** (Konten, Proses, Produk — serta akomodasi khusus siswa inklusi sesuai catatan di atas jika ada)
+4. **Kegiatan Pembelajaran Mendalam**
+   - **Pendahuluan** (apersepsi bermakna, doa/kesiapan, pertanyaan pemantik)
+   - **Kegiatan Inti** (eksplorasi berkesadaran/*mindful*, aktivitas kolaboratif bermakna/*meaningful*, dan praktik menyenangkan/*joyful*, lengkap dengan penyesuaian diferensiasi)
+   - **Penutup** (refleksi siswa, simpulan, tindak lanjut pembiasaan 7 Kebiasaan Anak Indonesia Hebat)
+5. **Asesmen Formatif & Sumatif** (sertakan contoh instrumen singkat, rubrik penilaian dalam tabel Markdown, serta rencana tindak lanjut remedial/pengayaan).`;
+
+    return { systemInstruction: baseSystem, userPrompt };
+  }
+
+  if (mode === 'riset_materi') {
+    const fokusKebiasaan = sanitizeString(params.fokusKebiasaan || 'Semua 7 Kebiasaan Anak Indonesia Hebat', 150);
+    const userPrompt = `Lakukan **Riset & Pengayaan Materi Pembelajaran** untuk guru SD dengan rincian:
+- Jenjang / Kelas: ${kelas}
+- Mata Pelajaran: ${mapel}
+- Fokus Topik / Permintaan Guru: ${topik}
+- Penguatan Karakter: ${fokusKebiasaan}
+
+Sajikan dalam format terstruktur dan inspiratif:
+1. **Rangkuman Konsep Inti Materi** (penjelasan akurat yang mudah diajarkan kepada siswa SD, beserta miskonsepsi umum yang perlu dihindari guru)
+2. **Analogi & Alat Peraga Sederhana di Kelas**
+3. **Ide Aktivitas Kelas Interaktif** yang mengintegrasikan nilai **7 Kebiasaan Anak Indonesia Hebat** (Bangun Pagi, Beribadah, Berolahraga, Makan Sehat dan Bergizi, Gemar Belajar, Bermasyarakat, Tidur Cepat)
+4. **Pertanyaan Pemantik & Tugas Refleksi Rumah bersama Orang Tua**
+5. **Ringkasan Siap Simpan** (1 paragraf padat yang dapat disimpan guru ke Memori SARAH).`;
+
+    return { systemInstruction: baseSystem, userPrompt };
+  }
+
+  const customPrompt = sanitizeString(params.prompt || topik, 3000);
+  return {
+    systemInstruction: baseSystem,
+    userPrompt: customPrompt || 'Bantu saya menyiapkan materi pembelajaran SD sesuai basis data sekolah.',
+  };
+}
+
+async function generateCbtQuestions({ ai, params, ragBlock }) {
+  const kelas = sanitizeString(params.kelas || 'Kelas 6', 40);
+  const mapel = sanitizeString(params.mapel || 'Bahasa Indonesia', 100);
+  const topik = sanitizeString(params.topik || '', 800);
+  const sumberMateri = sanitizeString(params.sumberMateri || '', 2500);
+  const jumlahSoal = Math.max(1, Math.min(20, Number(params.jumlahSoal) || 5));
+  const kesulitan = sanitizeString(params.kesulitan || 'Campuran LOTS & HOTS', 60);
+  const tipeSoalRaw = sanitizeString(params.tipeSoal || 'pg', 30);
+  const allowedTypes = ['pg', 'isian', 'uraian'];
+  const tipeSoal = allowedTypes.includes(tipeSoalRaw) ? tipeSoalRaw : 'pg';
+
+  const typeInstructions =
+    tipeSoal === 'pg'
+      ? `Semua soal WAJIB bertipe "pg" (Pilihan Ganda). Setiap soal memiliki tepat 4 opsi di array "opsi" diawali "A. ...", "B. ...", "C. ...", "D. ...", dan field "kunciJawaban" WAJIB persis sama dengan salah satu string lengkap di array "opsi" (misalnya "B. Paru-paru").`
+      : tipeSoal === 'isian'
+      ? `Semua soal WAJIB bertipe "isian" (Isian Singkat). Array "opsi" dikosongkan ([]), dan "kunciJawaban" berisi jawaban singkat padat dan jelas.`
+      : `Semua soal WAJIB bertipe "uraian" (Uraian / Esai). Array "opsi" dikosongkan ([]), dan "kunciJawaban" berisi pedoman/poin jawaban kunci yang lengkap untuk guru.`;
+
+  const bobotDefault = Math.max(1, Math.round(100 / jumlahSoal));
+
+  const systemInstruction = `Kamu adalah SARAH, pakar penyusun soal asesmen Kurikulum Merdeka Sekolah Dasar (SDN Rawa Badak Utara 21).
+Tugasmu menyusun soal berkualitas tinggi, kontekstual, menggunakan bahasa Indonesia yang jelas sesuai usia siswa ${kelas}, dan terbebas dari bias atau jawaban ambigu.
+Prioritaskan referensi dari sumber materi dan basis data sekolah berikut:
+${ragBlock}`;
+
+  const prompt = `Buatlah tepat ${jumlahSoal} butir soal CBT untuk:
+- Kelas: ${kelas}
+- Mata Pelajaran: ${mapel}
+- Topik / Kompetensi: ${topik || 'Sesuai materi sumber'}
+- Tingkat Kognitif / Kesulitan: ${kesulitan}
+- Tipe Soal: ${tipeSoal}
+${sumberMateri ? `\nMATERI SUMBER DARI GURU / MEDIA AJAR:\n${sumberMateri}\n` : ''}
+
+ATURAN FORMAT SOAL:
+${typeInstructions}
+- Berikan bobot skor default ${bobotDefault} per soal (total sekitar 100).
+- Sertakan field "pembahasan" yang menjelaskan alasan kunci jawaban dengan bahasa edukatif.
+- Kembalikan HANYA JSON sesuai skema.`;
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          ringkasan: {
+            type: Type.STRING,
+            description: 'Ringkasan singkat cakupan soal yang dibuat',
+          },
+          questions: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                tipe: {
+                  type: Type.STRING,
+                  description: 'Salah satu dari: pg, isian, uraian',
+                },
+                pertanyaan: {
+                  type: Type.STRING,
+                  description: 'Teks butir pertanyaan lengkap',
+                },
+                opsi: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: '4 opsi A-D untuk tipe pg, atau array kosong untuk isian/uraian',
+                },
+                kunciJawaban: {
+                  type: Type.STRING,
+                  description: 'Untuk pg harus persis sama dengan salah satu string pada opsi; untuk isian/uraian berisi jawaban kunci',
+                },
+                pembahasan: {
+                  type: Type.STRING,
+                  description: 'Penjelasan jawaban benar',
+                },
+                bobot: {
+                  type: Type.INTEGER,
+                  description: 'Bobot nilai soal',
+                },
+              },
+              required: ['tipe', 'pertanyaan', 'opsi', 'kunciJawaban', 'pembahasan', 'bobot'],
+            },
+          },
+        },
+        required: ['questions'],
+      },
+    },
+  });
+
+  const rawText = (response.text || '{}').trim();
+  const parsed = JSON.parse(rawText);
+  const rawQuestions = Array.isArray(parsed.questions) ? parsed.questions : [];
+
+  const normalizedQuestions = rawQuestions.map((q, idx) => {
+    const qType = tipeSoal;
+    let opsi = Array.isArray(q.opsi) ? q.opsi.map((o) => String(o).trim()).filter(Boolean) : [];
+    let kunci = String(q.kunciJawaban || '').trim();
+
+    if (qType === 'pg') {
+      const prefixes = ['A.', 'B.', 'C.', 'D.'];
+      opsi = opsi.slice(0, 4).map((opt, i) => {
+        if (/^[A-D]\.\s+/i.test(opt)) return opt;
+        return `${prefixes[i]} ${opt.replace(/^[A-D][.):\-\s]+/i, '').trim()}`;
+      });
+      while (opsi.length < 4) {
+        const i = opsi.length;
+        opsi.push(`${prefixes[i]} Pilihan ${prefixes[i].charAt(0)}`);
+      }
+      // Ensure kunciJawaban matches exact string from opsi so SERBU 21 CBTTab & StudentDashboard work seamlessly
+      const letterMatch = kunci.match(/^([A-D])(?:\.|\b)/i);
+      const exactOpt = opsi.find((o) => o.toLowerCase() === kunci.toLowerCase());
+      if (exactOpt) {
+        kunci = exactOpt;
+      } else if (letterMatch) {
+        const letterIdx = letterMatch[1].toUpperCase().charCodeAt(0) - 65;
+        kunci = opsi[letterIdx] || opsi[0];
+      } else {
+        const containsOpt = opsi.find((o) => o.toLowerCase().includes(kunci.toLowerCase()));
+        kunci = containsOpt || opsi[0];
+      }
+    } else {
+      opsi = undefined;
+    }
+
+    return {
+      id: `sarah_cbt_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+      tipe: qType,
+      pertanyaan: String(q.pertanyaan || '').trim(),
+      ...(opsi ? { opsi } : {}),
+      kunciJawaban: kunci,
+      pembahasan: String(q.pembahasan || '').trim(),
+      bobot: Math.max(1, Number(q.bobot) || bobotDefault),
+      mapel,
+      kelas,
+    };
+  });
+
+  return {
+    mode: 'cbt_generator',
+    ringkasan: String(parsed.ringkasan || `${normalizedQuestions.length} soal ${mapel} (${kelas})`).trim(),
+    questions: normalizedQuestions,
+  };
+}
+
+export async function processSarahRequest(body = {}) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    const err = new Error(
+      'GEMINI_API_KEY belum dikonfigurasi pada environment server. Hubungi administrator sistem.'
+    );
+    err.statusCode = 500;
+    throw err;
+  }
+
+  const role = sanitizeString(body.role || 'guru', 20).toLowerCase();
+  const mode = sanitizeString(body.mode || (role === 'siswa' ? 'student_chat' : 'general_chat'), 40);
+  const params = body.params && typeof body.params === 'object' ? body.params : {};
+  const userInfo = body.user && typeof body.user === 'object' ? body.user : {};
+  const ragBlock = buildRagContextBlock(body.ragContext || {});
+
+  if (role === 'siswa' && mode !== 'student_chat') {
+    const err = new Error('Akses ditolak: Mode ini khusus untuk Guru dan Administrator.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
+  if (mode === 'cbt_generator') {
+    return await generateCbtQuestions({ ai, params, ragBlock });
+  }
+
+  if (mode === 'student_chat') {
+    const message = sanitizeString(params.message || body.message || '', 2000);
+    if (!message) {
+      const err = new Error('Pertanyaan siswa tidak boleh kosong.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
+    const contents = [
+      ...history
+        .filter((h) => h && typeof h.text === 'string' && h.text.trim())
+        .map((h) => ({
+          role: h.role === 'model' ? 'model' : 'user',
+          parts: [{ text: sanitizeString(h.text, 1500) }],
+        })),
+      {
+        role: 'user',
+        parts: [{ text: message }],
+      },
+    ];
+
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents,
+      config: {
+        systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo),
+      },
+    });
+
+    return {
+      mode: 'student_chat',
+      text: (response.text || '').trim() || 'Maaf, SARAH belum dapat memproses pertanyaanmu saat ini.',
+    };
+  }
+
+  const { systemInstruction, userPrompt } = buildTeacherPromptAndInstruction(
+    mode,
+    params,
+    ragBlock,
+    userInfo
+  );
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: userPrompt,
+    config: {
+      systemInstruction,
+    },
+  });
+
+  return {
+    mode,
+    text: (response.text || '').trim() || 'Maaf, SARAH belum menghasilkan respons. Silakan coba lagi.',
+  };
+}
+
+export const handler = async (event) => {
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+  };
+
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 204, headers, body: '' };
+  }
+
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers,
+      body: JSON.stringify({ error: 'Method Not Allowed. Gunakan POST.' }),
+    };
+  }
+
+  try {
+    const body = event.body ? JSON.parse(event.body) : {};
+    const result = await processSarahRequest(body);
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify(result),
+    };
+  } catch (error) {
+    const statusCode = Number(error?.statusCode) || 500;
+    console.error('[sarah-ai Netlify Function error]:', error?.message || error);
+    return {
+      statusCode,
+      headers,
+      body: JSON.stringify({
+        error: error?.message || 'Terjadi kesalahan saat menghubungi layanan SARAH AI.',
+      }),
+    };
+  }
+};
