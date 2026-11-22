@@ -34,6 +34,9 @@ import {
   ChevronDown,
   Mic,
   MicOff,
+  Paperclip,
+  FileText,
+  FileSpreadsheet,
 } from 'lucide-react';
 import {
   ActiveUser,
@@ -92,6 +95,18 @@ import {
   extractSarahResponseMetadata,
 } from '../../utils/sarahVisuals';
 import { SarahEmojiPicker } from '../SarahEmojiPicker';
+import {
+  SARAH_CHAT_ACCEPTED_FILES,
+  SARAH_MAX_ATTACHMENTS_PER_MSG,
+  SARAH_MAX_TOTAL_PAYLOAD_CHARS,
+  SarahAttachmentKind,
+  SarahChatAttachment,
+  estimateAttachmentsPayloadSize,
+  formatAttachmentSize,
+  isEndiSoepraptoUser,
+  prepareSarahChatAttachment,
+  toAttachmentPayloads,
+} from '../../utils/sarahAttachments';
 import type { TabId } from '../Sidebar';
 
 interface Props {
@@ -139,10 +154,19 @@ const IMAGE_STYLE_OPTIONS: Array<{
   },
 ];
 
+interface TeacherChatAttachmentView {
+  id: string;
+  name: string;
+  kind: SarahAttachmentKind;
+  sizeBytes: number;
+  previewDataUrl?: string;
+}
+
 interface TeacherChatMessage {
   id: string;
   role: 'user' | 'model';
   text: string;
+  attachments?: TeacherChatAttachmentView[];
   isError?: boolean;
   retryPrompt?: string;
 }
@@ -383,8 +407,95 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const [chatInput, setChatInput] = useState('');
   const [chatMapel, setChatMapel] = useState('Umum');
   const [isChatSending, setIsChatSending] = useState(false);
+  const canUploadChatFiles = useMemo(() => isEndiSoepraptoUser(activeUser), [activeUser]);
+  const [chatAttachments, setChatAttachments] = useState<SarahChatAttachment[]>([]);
+  const [isReadingAttachment, setIsReadingAttachment] = useState(false);
+  const [isDraggingOverChat, setIsDraggingOverChat] = useState(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const chatFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!canUploadChatFiles) {
+      setChatAttachments([]);
+      setIsDraggingOverChat(false);
+    }
+  }, [canUploadChatFiles]);
+
+  const handleAddChatFiles = async (fileList: FileList | File[] | null) => {
+    if (!canUploadChatFiles || !fileList) return;
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    const remainingSlots = SARAH_MAX_ATTACHMENTS_PER_MSG - chatAttachments.length;
+    if (remainingSlots <= 0) {
+      showToast(
+        `Maksimal ${SARAH_MAX_ATTACHMENTS_PER_MSG} file atau gambar dalam satu pesan.`,
+        'error'
+      );
+      return;
+    }
+
+    const picked = files.slice(0, remainingSlots);
+    if (files.length > remainingSlots) {
+      showToast(
+        `Hanya ${remainingSlots} lampiran tambahan yang dapat dimasukkan (maksimal ${SARAH_MAX_ATTACHMENTS_PER_MSG} per pesan).`,
+        'error'
+      );
+    }
+
+    setIsReadingAttachment(true);
+    try {
+      const prepared: SarahChatAttachment[] = [];
+      for (const file of picked) {
+        try {
+          const item = await prepareSarahChatAttachment(file);
+          prepared.push(item);
+        } catch (err: any) {
+          showToast(err?.message || `Gagal memproses file "${file.name}".`, 'error');
+        }
+      }
+
+      if (prepared.length > 0) {
+        const combined = [...chatAttachments, ...prepared];
+        if (estimateAttachmentsPayloadSize(combined) > SARAH_MAX_TOTAL_PAYLOAD_CHARS) {
+          showToast(
+            'Total ukuran lampiran melebihi batas pengiriman (maks. ±4,5 MB). Kurangi jumlah atau ukuran file.',
+            'error'
+          );
+          return;
+        }
+        setChatAttachments(combined);
+      }
+    } finally {
+      setIsReadingAttachment(false);
+      if (chatFileInputRef.current) {
+        chatFileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleRemoveChatAttachment = (id: string) => {
+    setChatAttachments((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handlePasteChatInput = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    if (!canUploadChatFiles) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imageFiles: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.kind === 'file') {
+        const f = it.getAsFile();
+        if (f) imageFiles.push(f);
+      }
+    }
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      void handleAddChatFiles(imageFiles);
+    }
+  };
 
   const handleInsertChatEmoji = (emoji: string) => {
     const el = chatInputRef.current;
@@ -712,6 +823,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
     if (isChatSending) return;
     setActiveChatSessionId(null);
     setChatMessages([buildTeacherWelcome()]);
+    setChatAttachments([]);
     setShowMobileHistory(false);
     showToast('Memulai obrolan baru bersama SARAH!', 'success');
   };
@@ -746,12 +858,40 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const handleSendTeacherChat = async (e?: React.FormEvent, overrideText?: string) => {
     if (e) e.preventDefault();
     const promptText = (overrideText ?? chatInput).trim();
-    if (!promptText || isChatSending) return;
+    const pendingAttachments =
+      !overrideText && canUploadChatFiles ? [...chatAttachments] : [];
+
+    if ((!promptText && pendingAttachments.length === 0) || isChatSending || isReadingAttachment) {
+      return;
+    }
+
+    const attachmentMetaList: TeacherChatAttachmentView[] = pendingAttachments.map((att) => ({
+      id: att.id,
+      name: att.name,
+      kind: att.kind,
+      sizeBytes: att.sizeBytes,
+      previewDataUrl: att.previewDataUrl,
+    }));
+
+    const displayUserText =
+      promptText || 'Tolong baca, analisis, dan jelaskan isi lampiran berikut dengan rapi dan ramah.';
+
+    const attachmentLabelsForHistory = pendingAttachments
+      .map(
+        (att) =>
+          `[Lampiran ${att.kind === 'image' ? 'Gambar' : att.kind === 'pdf' ? 'PDF' : 'Dokumen'}: ${att.name} (${formatAttachmentSize(att.sizeBytes)})]`
+      )
+      .join('\n');
+
+    const savedUserText = attachmentLabelsForHistory
+      ? `${displayUserText}\n\n${attachmentLabelsForHistory}`
+      : displayUserText;
 
     const userMsg: TeacherChatMessage = {
       id: `tu_${Date.now()}`,
       role: 'user',
-      text: promptText,
+      text: displayUserText,
+      ...(attachmentMetaList.length > 0 ? { attachments: attachmentMetaList } : {}),
     };
     const prevHistory = chatMessages
       .filter((m) => !m.isError)
@@ -759,16 +899,22 @@ export const SarahAssistantTab: React.FC<Props> = ({
       .map((m) => ({ role: m.role, text: m.text }));
 
     setChatMessages((prev) => [...prev, userMsg]);
-    if (!overrideText) setChatInput('');
+    if (!overrideText) {
+      setChatInput('');
+      setChatAttachments([]);
+    }
     setIsChatSending(true);
 
     let currentSessionId = activeChatSessionId;
     try {
       if (!currentSessionId) {
+        const sessionSeedText =
+          promptText ||
+          (pendingAttachments[0] ? `Lampiran ${pendingAttachments[0].name}` : 'Obrolan Baru');
         const created = await createSarahChatSession({
           userId: sarahChatUserId,
           role: 'guru',
-          firstQuestion: promptText,
+          firstQuestion: sessionSeedText,
         });
         currentSessionId = created.id;
         setActiveChatSessionId(created.id);
@@ -783,7 +929,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         await appendSarahChatMessage({
           sessionId: currentSessionId,
           sender: 'user',
-          text: promptText,
+          text: savedUserText,
         });
       }
     } catch {
@@ -791,11 +937,14 @@ export const SarahAssistantTab: React.FC<Props> = ({
     }
 
     try {
+      const ragQuery = [promptText, ...pendingAttachments.map((a) => a.name)]
+        .filter(Boolean)
+        .join(' ');
       const ragContext = retrieveSarahRagContext({
         schoolName: profile.name,
         kelas: activeClass,
         mapel: chatMapel === 'Umum' ? '' : chatMapel,
-        queryText: promptText,
+        queryText: ragQuery,
         knowledgeDocs,
         mediaAjarDocs,
         subjects,
@@ -807,10 +956,14 @@ export const SarahAssistantTab: React.FC<Props> = ({
         role: activeUser.role,
         user: {
           name: activeUser.name,
+          username: activeUser.username,
           kelas: activeClass,
           agama: sarahAvatarType === 'sarah-nonhijab.png' ? 'Kristen' : 'Islam',
         },
-        params: { message: promptText, mapel: chatMapel },
+        params: { message: displayUserText, mapel: chatMapel },
+        ...(pendingAttachments.length > 0
+          ? { attachments: toAttachmentPayloads(pendingAttachments) }
+          : {}),
         history: prevHistory,
         ragContext,
       });
@@ -856,7 +1009,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
           role: 'model',
           text: `Mohon maaf Bapak/Ibu, SARAH mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}). Silakan coba kirim ulang ya 😊`,
           isError: true,
-          retryPrompt: promptText,
+          ...(pendingAttachments.length === 0 ? { retryPrompt: promptText } : {}),
         },
       ]);
     } finally {
@@ -867,6 +1020,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const handleClearTeacherChat = () => {
     setActiveChatSessionId(null);
     setChatMessages([buildTeacherWelcome()]);
+    setChatAttachments([]);
     showToast('Obrolan dibersihkan. Silakan mulai topik diskusi baru!', 'success');
   };
 
@@ -1748,7 +1902,41 @@ export const SarahAssistantTab: React.FC<Props> = ({
           </aside>
 
           {/* Main Chat Column */}
-          <div className="flex-1 flex flex-col min-w-0 relative">
+          <div
+            className="flex-1 flex flex-col min-w-0 relative"
+            onDragOver={(e) => {
+              if (!canUploadChatFiles) return;
+              e.preventDefault();
+              if (!isDraggingOverChat) setIsDraggingOverChat(true);
+            }}
+            onDragLeave={(e) => {
+              if (!canUploadChatFiles) return;
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setIsDraggingOverChat(false);
+              }
+            }}
+            onDrop={(e) => {
+              if (!canUploadChatFiles) return;
+              e.preventDefault();
+              setIsDraggingOverChat(false);
+              if (e.dataTransfer?.files?.length) {
+                void handleAddChatFiles(e.dataTransfer.files);
+              }
+            }}
+          >
+            {canUploadChatFiles && isDraggingOverChat && (
+              <div className="absolute inset-0 z-30 bg-rose-600/10 backdrop-blur-[2px] border-2 border-dashed border-rose-500 rounded-3xl flex items-center justify-center pointer-events-none">
+                <div className="bg-white px-5 py-4 rounded-2xl shadow-xl border border-rose-200 text-center space-y-1">
+                  <Paperclip className="w-7 h-7 text-rose-600 mx-auto" />
+                  <p className="font-display font-black text-sm text-rose-900">
+                    Lepaskan Gambar atau File di Sini
+                  </p>
+                  <p className="text-[11px] text-slate-600">
+                    Mendukung PNG, JPG, WEBP, PDF, Word (.docx), Excel (.xlsx), dan Teks
+                  </p>
+                </div>
+              </div>
+            )}
             {/* Chat Top Bar */}
             <div className="px-4 sm:px-5 py-3.5 bg-gradient-to-r from-rose-50 via-pink-50/70 to-indigo-50 border-b border-rose-100 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
               <div className="flex items-center gap-2.5">
@@ -1916,7 +2104,45 @@ export const SarahAssistantTab: React.FC<Props> = ({
                       }`}
                     >
                       {msg.role === 'user' ? (
-                        <p className="whitespace-pre-wrap">{msg.text}</p>
+                        <div className="space-y-2">
+                          {msg.attachments && msg.attachments.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {msg.attachments.map((att) =>
+                                att.kind === 'image' && att.previewDataUrl ? (
+                                  <div
+                                    key={att.id}
+                                    className="rounded-2xl overflow-hidden border border-white/25 bg-black/15 max-w-[220px]"
+                                  >
+                                    <img
+                                      src={att.previewDataUrl}
+                                      alt={att.name}
+                                      className="max-h-40 w-auto object-cover"
+                                    />
+                                    <div className="px-2 py-1 text-[10px] font-bold text-rose-50 truncate bg-black/25">
+                                      {att.name}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div
+                                    key={att.id}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/15 border border-white/25 text-[11px] font-bold text-white"
+                                  >
+                                    {att.kind === 'pdf' ? (
+                                      <FileText className="w-3.5 h-3.5 shrink-0" />
+                                    ) : (
+                                      <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+                                    )}
+                                    <span className="truncate max-w-[180px]">{att.name}</span>
+                                    <span className="text-[10px] text-rose-100 shrink-0">
+                                      ({formatAttachmentSize(att.sizeBytes)})
+                                    </span>
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          )}
+                          <p className="whitespace-pre-wrap">{msg.text}</p>
+                        </div>
                       ) : msg.isError ? (
                         <>
                           <p className="text-xs sm:text-sm leading-relaxed">{msg.text}</p>
@@ -2014,11 +2240,84 @@ export const SarahAssistantTab: React.FC<Props> = ({
               ))}
             </div>
 
+            {/* Pending Attachments Preview Bar (Khusus Endi Soeprapto) */}
+            {canUploadChatFiles && chatAttachments.length > 0 && (
+              <div className="px-4 py-2.5 bg-rose-50/80 border-t border-rose-200 flex flex-wrap items-center gap-2 shrink-0">
+                {chatAttachments.map((att) => (
+                  <div
+                    key={att.id}
+                    className="flex items-center gap-2 pl-2 pr-1.5 py-1.5 rounded-2xl bg-white border border-rose-200 shadow-2xs max-w-[240px]"
+                  >
+                    {att.kind === 'image' && att.previewDataUrl ? (
+                      <img
+                        src={att.previewDataUrl}
+                        alt={att.name}
+                        className="w-8 h-8 rounded-lg object-cover border border-slate-200 shrink-0"
+                      />
+                    ) : att.kind === 'pdf' ? (
+                      <div className="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                    ) : (
+                      <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                        <FileSpreadsheet className="w-4 h-4" />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-bold text-slate-800 truncate">{att.name}</p>
+                      <p className="text-[10px] text-slate-500">
+                        {formatAttachmentSize(att.sizeBytes)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveChatAttachment(att.id)}
+                      disabled={isChatSending}
+                      title="Hapus lampiran"
+                      className="p-1 rounded-lg hover:bg-rose-100 text-slate-400 hover:text-rose-600 transition cursor-pointer shrink-0"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Chat Input */}
             <form
               onSubmit={handleSendTeacherChat}
               className="p-4 bg-white border-t border-slate-200 flex items-center gap-2.5 shrink-0"
             >
+              {canUploadChatFiles && (
+                <>
+                  <input
+                    ref={chatFileInputRef}
+                    type="file"
+                    multiple
+                    accept={SARAH_CHAT_ACCEPTED_FILES}
+                    onChange={(e) => void handleAddChatFiles(e.target.files)}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => chatFileInputRef.current?.click()}
+                    disabled={
+                      isChatSending ||
+                      isReadingAttachment ||
+                      chatAttachments.length >= SARAH_MAX_ATTACHMENTS_PER_MSG
+                    }
+                    title="Unggah gambar atau dokumen (PDF, Word, Excel, TXT) — khusus akun Endi Soeprapto"
+                    className="px-3 py-3 rounded-2xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 shrink-0"
+                  >
+                    {isReadingAttachment ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Paperclip className="w-4 h-4" />
+                    )}
+                    <span className="hidden sm:inline">Lampiran</span>
+                  </button>
+                </>
+              )}
               <SarahEmojiPicker
                 onSelectEmoji={handleInsertChatEmoji}
                 disabled={isChatSending}
@@ -2028,13 +2327,22 @@ export const SarahAssistantTab: React.FC<Props> = ({
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
+                onPaste={handlePasteChatInput}
                 disabled={isChatSending}
-                placeholder="Tulis pertanyaan, ide, atau topik diskusi bebas dengan SARAH..."
+                placeholder={
+                  canUploadChatFiles
+                    ? 'Tulis pertanyaan, tempel screenshot (Ctrl+V), atau lampirkan file/gambar untuk SARAH...'
+                    : 'Tulis pertanyaan, ide, atau topik diskusi bebas dengan SARAH...'
+                }
                 className="flex-1 px-4 py-3 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-rose-600 outline-none text-xs sm:text-sm text-slate-800"
               />
               <button
                 type="submit"
-                disabled={isChatSending || !chatInput.trim()}
+                disabled={
+                  isChatSending ||
+                  isReadingAttachment ||
+                  (!chatInput.trim() && (!canUploadChatFiles || chatAttachments.length === 0))
+                }
                 className="px-5 py-3 rounded-2xl bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 text-white font-display font-black text-xs flex items-center gap-2 shadow-sm transition cursor-pointer disabled:opacity-40 shrink-0"
               >
                 <Send className="w-4 h-4" />

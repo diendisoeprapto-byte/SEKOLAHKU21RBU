@@ -114,6 +114,132 @@ function sanitizeString(val, maxLen = 4000) {
   return val.trim().slice(0, maxLen);
 }
 
+const ALLOWED_BINARY_ATTACHMENT_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'application/pdf',
+]);
+
+function isEndiSoepraptoUser(userInfo = {}, role = '') {
+  if (!userInfo || typeof userInfo !== 'object') return false;
+  if (String(role || '').toLowerCase() === 'siswa') return false;
+
+  const normName = String(userInfo.name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const normUsername = String(userInfo.username || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+
+  if (normName.includes('endi soeprapto')) {
+    return true;
+  }
+
+  if (
+    normUsername === 'endisoeprapto' ||
+    (normUsername.includes('endi') && normUsername.includes('soeprapto'))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function buildValidatedAttachmentParts(rawAttachments, userInfo, role) {
+  if (!Array.isArray(rawAttachments) || rawAttachments.length === 0) {
+    return [];
+  }
+
+  if (!isEndiSoepraptoUser(userInfo, role)) {
+    const err = new Error(
+      'Akses ditolak: Fitur unggah file atau gambar hanya tersedia khusus untuk akun Endi Soeprapto.'
+    );
+    err.statusCode = 403;
+    throw err;
+  }
+
+  if (rawAttachments.length > 3) {
+    const err = new Error('Maksimal 3 file atau gambar dalam satu pesan.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const parts = [];
+  let totalPayloadChars = 0;
+
+  for (const item of rawAttachments) {
+    if (!item || typeof item !== 'object') continue;
+    const kind = sanitizeString(item.kind || '', 20);
+    const name = sanitizeString(item.name || 'lampiran', 120).replace(/[<>:"/\\|?*]/g, '_');
+
+    if (kind === 'image' || kind === 'pdf') {
+      const mimeType = sanitizeString(item.mimeType || '', 80).toLowerCase();
+      if (!ALLOWED_BINARY_ATTACHMENT_MIMES.has(mimeType)) {
+        const err = new Error(`Tipe file tidak diizinkan untuk "${name}".`);
+        err.statusCode = 400;
+        throw err;
+      }
+      if (kind === 'pdf' && mimeType !== 'application/pdf') {
+        const err = new Error(`MIME PDF tidak valid untuk "${name}".`);
+        err.statusCode = 400;
+        throw err;
+      }
+      if (kind === 'image' && !mimeType.startsWith('image/')) {
+        const err = new Error(`MIME gambar tidak valid untuk "${name}".`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const base64Data = typeof item.base64Data === 'string' ? item.base64Data.trim() : '';
+      if (!base64Data || base64Data.length > 5_400_000 || !/^[A-Za-z0-9+/=]+$/.test(base64Data)) {
+        const err = new Error(`Data lampiran "${name}" tidak valid atau terlalu besar.`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      totalPayloadChars += base64Data.length;
+      if (totalPayloadChars > 6_800_000) {
+        const err = new Error('Total ukuran semua lampiran melebihi batas sistem.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      parts.push({
+        inlineData: {
+          mimeType,
+          data: base64Data,
+        },
+      });
+      parts.push({
+        text: `[Lampiran ${kind === 'pdf' ? 'Dokumen PDF' : 'Gambar'}: ${name}]`,
+      });
+    } else if (kind === 'text') {
+      const extractedText = sanitizeString(item.extractedText || '', 30000);
+      if (!extractedText) continue;
+      totalPayloadChars += extractedText.length;
+      if (totalPayloadChars > 6_800_000) {
+        const err = new Error('Total ukuran semua lampiran melebihi batas sistem.');
+        err.statusCode = 400;
+        throw err;
+      }
+      parts.push({
+        text: `[Lampiran Dokumen Teks: ${name}]\n"""\n${extractedText}\n"""`,
+      });
+    } else {
+      const err = new Error(`Jenis lampiran "${kind}" tidak dikenali.`);
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
+  return parts;
+}
+
 function buildRagContextBlock(ragContext = {}) {
   const parts = [];
   const schoolName = sanitizeString(ragContext.schoolName || 'SDN Rawa Badak Utara 21', 150);
@@ -638,6 +764,18 @@ export async function processSarahRequest(body = {}) {
     throw err;
   }
 
+  const rawAttachments = Array.isArray(body.attachments)
+    ? body.attachments
+    : Array.isArray(params.attachments)
+    ? params.attachments
+    : [];
+
+  if (rawAttachments.length > 0 && mode !== 'general_chat') {
+    const err = new Error('Lampiran file atau gambar hanya didukung di Obrolan Bebas SARAH AI.');
+    err.statusCode = 403;
+    throw err;
+  }
+
   const ai = new GoogleGenAI({
     apiKey,
     httpOptions: {
@@ -694,8 +832,15 @@ export async function processSarahRequest(body = {}) {
     }
 
     if (mode === 'general_chat') {
-      const message = sanitizeString(params.message || body.message || '', 3000);
-      if (!message) {
+      const attachmentParts = buildValidatedAttachmentParts(rawAttachments, userInfo, role);
+      const rawMessage = sanitizeString(params.message || body.message || '', 3000);
+      const message =
+        rawMessage ||
+        (attachmentParts.length > 0
+          ? 'Tolong analisis, baca, dan jelaskan isi lampiran file atau gambar yang saya unggah dengan rapi dan ramah.'
+          : '');
+
+      if (!message && attachmentParts.length === 0) {
         const err = new Error('Pesan obrolan tidak boleh kosong.');
         err.statusCode = 400;
         throw err;
@@ -711,7 +856,7 @@ export async function processSarahRequest(body = {}) {
           })),
         {
           role: 'user',
-          parts: [{ text: message }],
+          parts: [...attachmentParts, { text: message }],
         },
       ];
 

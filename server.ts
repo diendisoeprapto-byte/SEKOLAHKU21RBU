@@ -13,7 +13,7 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
   const isProd = process.env.NODE_ENV === 'production';
 
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: '8mb' }));
 
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', service: 'serbu21-sarah-ai' });
