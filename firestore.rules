@@ -170,5 +170,30 @@ service cloud.firestore {
         request.resource.data.pertanyaan.size() <= 3000;
       allow delete: if true;
     }
+
+    // Asisten AI SARAH - Riwayat Percakapan Otomatis (Auto-Save Chat History)
+    match /sarah_chat_sessions/{sessionId} {
+      allow read: if true;
+      allow create, update: if
+        request.resource.data.user_id is string &&
+        request.resource.data.user_id.size() > 0 &&
+        request.resource.data.user_id.size() <= 160 &&
+        request.resource.data.role in ['guru', 'siswa'] &&
+        request.resource.data.judul_sesi is string &&
+        request.resource.data.judul_sesi.size() > 0 &&
+        request.resource.data.judul_sesi.size() <= 180;
+      allow delete: if true;
+
+      match /messages/{messageId} {
+        allow read: if true;
+        allow create, update: if
+          exists(/databases/$(database)/documents/sarah_chat_sessions/$(sessionId)) &&
+          request.resource.data.sender in ['user', 'sarah'] &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() > 0 &&
+          request.resource.data.text.size() <= 40000;
+        allow delete: if true;
+      }
+    }
   }
 }

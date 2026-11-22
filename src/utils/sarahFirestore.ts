@@ -4,13 +4,19 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
+  limit,
   onSnapshot,
+  orderBy,
+  query,
   serverTimestamp,
   setDoc,
   Timestamp,
+  where,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { CBTQuestion, Subject } from '../types';
+import { ActiveUser, CBTQuestion, Subject } from '../types';
 
 export type SarahKategori =
   | 'RPP/Modul Ajar'
@@ -62,8 +68,29 @@ export interface SarahConfigDoc {
   updatedAt?: any;
 }
 
+export type SarahChatRole = 'guru' | 'siswa';
+
+export interface SarahChatSessionItem {
+  id: string;
+  user_id: string;
+  role: SarahChatRole;
+  judul_sesi: string;
+  created_at?: Timestamp | Date | string | number | null;
+  updated_at?: Timestamp | Date | string | number | null;
+}
+
+export interface SarahChatMessageDoc {
+  id: string;
+  sender: 'user' | 'sarah';
+  text: string;
+  timestamp?: Timestamp | Date | string | number | null;
+}
+
 export const SARAH_KB_COLLECTION = 'sarah_knowledge_base';
 export const SARAH_STUDENT_LOGS_COLLECTION = 'sarah_student_logs';
+export const SARAH_CHAT_SESSIONS_COLLECTION = 'sarah_chat_sessions';
+export const SARAH_MAX_CHAT_SESSIONS = 20;
+export const SARAH_MAX_CHAT_MESSAGES = 30;
 export const MEDIA_AJAR_COLLECTION = 'media_ajar';
 export const SARAH_CONFIG_DOC_PATH = 'sarah_config';
 
@@ -279,6 +306,167 @@ export async function logSarahStudentQuestion(
   }
 }
 
+export function buildSarahChatUserId(
+  activeUser: Pick<ActiveUser, 'role' | 'username' | 'name' | 'studentData'>,
+  studentFallbackId?: string
+): string {
+  if (activeUser.role === 'siswa') {
+    const raw =
+      studentFallbackId ||
+      activeUser.studentData?.id ||
+      activeUser.studentData?.nisn ||
+      activeUser.username ||
+      activeUser.name ||
+      'siswa';
+    return `siswa_${String(raw).trim().toLowerCase().replace(/\s+/g, '_')}`.slice(0, 150);
+  }
+  const raw = activeUser.username || activeUser.name || activeUser.role;
+  return `${activeUser.role}_${String(raw).trim().toLowerCase().replace(/\s+/g, '_')}`.slice(0, 150);
+}
+
+export function generateSarahSessionTitle(firstQuestion: string): string {
+  const words = String(firstQuestion || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .filter(Boolean);
+  if (words.length === 0) return 'Obrolan Baru bersama SARAH';
+  const picked = words.slice(0, 6).join(' ');
+  const suffix = words.length > 6 ? '...' : '';
+  return `${picked}${suffix}`.slice(0, 160);
+}
+
+export async function loadUserSarahChatSessions(
+  userId: string
+): Promise<SarahChatSessionItem[]> {
+  if (!userId) return [];
+  const colRef = collection(db, SARAH_CHAT_SESSIONS_COLLECTION);
+
+  let snap;
+  try {
+    const qOrdered = query(
+      colRef,
+      where('user_id', '==', userId),
+      orderBy('updated_at', 'desc'),
+      limit(SARAH_MAX_CHAT_SESSIONS)
+    );
+    snap = await getDocs(qOrdered);
+  } catch (err: any) {
+    const msg = String(err?.message || '').toLowerCase();
+    if (err?.code === 'failed-precondition' || msg.includes('index')) {
+      const qFallback = query(
+        colRef,
+        where('user_id', '==', userId),
+        limit(SARAH_MAX_CHAT_SESSIONS)
+      );
+      snap = await getDocs(qFallback);
+    } else {
+      throw err;
+    }
+  }
+
+  const sessions: SarahChatSessionItem[] = [];
+  snap.forEach((d) => {
+    const data = d.data() as any;
+    sessions.push({
+      id: d.id,
+      user_id: String(data.user_id || userId),
+      role: data.role === 'siswa' ? 'siswa' : 'guru',
+      judul_sesi: String(data.judul_sesi || 'Percakapan SARAH'),
+      created_at: data.created_at || null,
+      updated_at: data.updated_at || data.created_at || null,
+    });
+  });
+
+  sessions.sort(
+    (a, b) =>
+      resolveTimestampMillis(b.updated_at || b.created_at) -
+      resolveTimestampMillis(a.updated_at || a.created_at)
+  );
+
+  return sessions.slice(0, SARAH_MAX_CHAT_SESSIONS);
+}
+
+export async function loadSarahSessionMessages(
+  sessionId: string
+): Promise<SarahChatMessageDoc[]> {
+  if (!sessionId) return [];
+  const msgsRef = collection(db, SARAH_CHAT_SESSIONS_COLLECTION, sessionId, 'messages');
+  const qMsgs = query(msgsRef, orderBy('timestamp', 'desc'), limit(SARAH_MAX_CHAT_MESSAGES));
+  const snap = await getDocs(qMsgs);
+  const items: SarahChatMessageDoc[] = [];
+  snap.forEach((d) => {
+    const data = d.data() as any;
+    items.push({
+      id: d.id,
+      sender: data.sender === 'user' ? 'user' : 'sarah',
+      text: String(data.text || ''),
+      timestamp: data.timestamp || null,
+    });
+  });
+  return items.reverse();
+}
+
+export async function createSarahChatSession(params: {
+  userId: string;
+  role: SarahChatRole;
+  firstQuestion: string;
+}): Promise<SarahChatSessionItem> {
+  const sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const judul_sesi = generateSarahSessionTitle(params.firstQuestion);
+  const ref = doc(db, SARAH_CHAT_SESSIONS_COLLECTION, sessionId);
+  await setDoc(ref, {
+    user_id: params.userId.slice(0, 160),
+    role: params.role,
+    judul_sesi,
+    created_at: serverTimestamp(),
+    updated_at: serverTimestamp(),
+  });
+  return {
+    id: sessionId,
+    user_id: params.userId,
+    role: params.role,
+    judul_sesi,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  };
+}
+
+export async function appendSarahChatMessage(params: {
+  sessionId: string;
+  sender: 'user' | 'sarah';
+  text: string;
+}): Promise<string> {
+  const cleanText = String(params.text || '').trim().slice(0, 39000);
+  if (!cleanText) return '';
+  const msgRef = await addDoc(
+    collection(db, SARAH_CHAT_SESSIONS_COLLECTION, params.sessionId, 'messages'),
+    {
+      sender: params.sender,
+      text: cleanText,
+      timestamp: serverTimestamp(),
+    }
+  );
+  await setDoc(
+    doc(db, SARAH_CHAT_SESSIONS_COLLECTION, params.sessionId),
+    { updated_at: serverTimestamp() },
+    { merge: true }
+  );
+  return msgRef.id;
+}
+
+export async function deleteSarahChatSession(sessionId: string): Promise<void> {
+  if (!sessionId) return;
+  const msgsRef = collection(db, SARAH_CHAT_SESSIONS_COLLECTION, sessionId, 'messages');
+  const snap = await getDocs(query(msgsRef, limit(100)));
+  if (!snap.empty) {
+    const batch = writeBatch(db);
+    snap.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  }
+  await deleteDoc(doc(db, SARAH_CHAT_SESSIONS_COLLECTION, sessionId));
+}
+
 export function subscribeToMediaAjarForSarah(
   onUpdate: (docs: SarahMediaAjarContextDoc[]) => void
 ): () => void {
@@ -411,6 +599,61 @@ export interface SarahCbtGeneratedResponse {
 export interface SarahTextGeneratedResponse {
   mode: string;
   text: string;
+}
+
+export interface SarahImageGeneratedResponse {
+  mode: 'image_generator';
+  title: string;
+  caption: string;
+  styleTag: string;
+  gaya: string;
+  rasio: string;
+  width: number;
+  height: number;
+  svgCode: string;
+}
+
+export interface SarahIllustrationAsset extends SarahImageGeneratedResponse {
+  id: string;
+  svgDataUrl: string;
+  pngDataUrl?: string;
+  createdAt: number;
+}
+
+export function svgToDataUrl(svgCode: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgCode)}`;
+}
+
+export async function rasterizeSvgToPngDataUrl(
+  svgCode: string,
+  width = 800,
+  height = 600
+): Promise<string> {
+  const dataUrl = svgToDataUrl(svgCode);
+  return await new Promise<string>((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(320, width * scale);
+        canvas.height = Math.max(240, height * scale);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve('');
+          return;
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/png'));
+      } catch {
+        resolve('');
+      }
+    };
+    img.onerror = () => resolve('');
+    img.src = dataUrl;
+  });
 }
 
 export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
@@ -573,8 +816,30 @@ export function exportSarahToWordDoc(params: {
   markdownContent: string;
   schoolName?: string;
   author?: string;
+  illustration?: {
+    title: string;
+    caption?: string;
+    pngDataUrl?: string;
+    svgDataUrl?: string;
+  } | null;
 }) {
   const bodyHtml = markdownToPrintableHtml(params.markdownContent);
+  const safeImgSrc =
+    params.illustration?.pngDataUrl &&
+    params.illustration.pngDataUrl.startsWith('data:image/png;base64,')
+      ? params.illustration.pngDataUrl
+      : '';
+  const illustrationHtml = safeImgSrc
+    ? `<div class="illustration-box">
+        <img src="${safeImgSrc}" alt="${escapeHtmlForDoc(params.illustration?.title || 'Ilustrasi Pembelajaran')}" style="max-width: 520px; width: 100%; height: auto; border-radius: 10px; border: 1px solid #e2e8f0;" />
+        ${
+          params.illustration?.caption
+            ? `<div class="illustration-caption"><strong>${escapeHtmlForDoc(params.illustration.title)}</strong> — ${escapeHtmlForDoc(params.illustration.caption)}</div>`
+            : ''
+        }
+      </div>`
+    : '';
+
   const fullHtml = `<!DOCTYPE html>
 <html xmlns:o="urn:schemas-microsoft-com:office:office"
       xmlns:w="urn:schemas-microsoft-com:office:word"
@@ -594,6 +859,8 @@ export function exportSarahToWordDoc(params: {
   th, td { border: 1px solid #94a3b8; padding: 6px 8px; text-align: left; vertical-align: top; font-size: 10.5pt; }
   th { background-color: #f1f5f9; font-weight: bold; }
   .meta { font-size: 9.5pt; color: #475569; margin-bottom: 14px; border-bottom: 1px solid #cbd5e1; padding-bottom: 8px; }
+  .illustration-box { text-align: center; margin: 12px 0 16px 0; padding: 10px; background: #fff8f9; border: 1px solid #fecdd3; border-radius: 8px; }
+  .illustration-caption { font-size: 9.5pt; color: #475569; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -603,6 +870,7 @@ export function exportSarahToWordDoc(params: {
     ${params.subtitle ? `<div><strong>Keterangan:</strong> ${escapeHtmlForDoc(params.subtitle)}</div>` : ''}
     ${params.author ? `<div><strong>Disusun oleh:</strong> ${escapeHtmlForDoc(params.author)}</div>` : ''}
   </div>
+  ${illustrationHtml}
   ${bodyHtml}
 </body>
 </html>`;

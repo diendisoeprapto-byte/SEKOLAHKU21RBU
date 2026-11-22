@@ -11,6 +11,11 @@ import {
   Heart,
   Copy,
   RotateCcw,
+  History,
+  Plus,
+  Trash2,
+  Clock,
+  ChevronDown,
 } from 'lucide-react';
 import {
   ActiveExamHeaderStatus,
@@ -24,11 +29,20 @@ import { subscribeToCbtExamsCollection } from '../utils/cbtFirestore';
 import {
   DEFAULT_SARAH_CONFIG,
   SARAH_ATTRIBUTION_TEXT,
+  SARAH_MAX_CHAT_SESSIONS,
+  SarahChatSessionItem,
   SarahConfigDoc,
   SarahKnowledgeItem,
   SarahMediaAjarContextDoc,
   SarahTextGeneratedResponse,
+  appendSarahChatMessage,
+  buildSarahChatUserId,
   callSarahAiEndpoint,
+  createSarahChatSession,
+  deleteSarahChatSession,
+  formatSarahDateTime,
+  loadSarahSessionMessages,
+  loadUserSarahChatSessions,
   logSarahStudentQuestion,
   retrieveSarahRagContext,
   subscribeToMediaAjarForSarah,
@@ -106,6 +120,11 @@ export const SarahStudentWidget: React.FC<Props> = ({
 
   const studentKelas = currentStudent?.kelas || activeUser.detail || 'Kelas SD';
 
+  const sarahChatUserId = useMemo(
+    () => buildSarahChatUserId(activeUser, currentStudent?.id || currentStudent?.nisn),
+    [activeUser, currentStudent?.id, currentStudent?.nisn]
+  );
+
   const buildWelcomeMessage = (): ChatMessage => ({
     id: 'sarah_welcome',
     role: 'model',
@@ -113,6 +132,12 @@ export const SarahStudentWidget: React.FC<Props> = ({
   });
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => [buildWelcomeMessage()]);
+  const [chatSessions, setChatSessions] = useState<SarahChatSessionItem[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [isLoadingSessionMsgs, setIsLoadingSessionMsgs] = useState(false);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -133,6 +158,50 @@ export const SarahStudentWidget: React.FC<Props> = ({
       window.removeEventListener('serbu21-open-tanya-sarah', handleOpenEvent);
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadHistory = async () => {
+      setIsLoadingSessions(true);
+      try {
+        const sessions = await loadUserSarahChatSessions(sarahChatUserId);
+        if (cancelled) return;
+        setChatSessions(sessions);
+        if (sessions.length > 0) {
+          const latest = sessions[0];
+          setActiveSessionId(latest.id);
+          setIsLoadingSessionMsgs(true);
+          const msgs = await loadSarahSessionMessages(latest.id);
+          if (cancelled) return;
+          if (msgs.length > 0) {
+            setMessages(
+              msgs.map((m) => ({
+                id: m.id,
+                role: m.sender === 'user' ? 'user' : 'model',
+                text: m.text,
+              }))
+            );
+          } else {
+            setMessages([buildWelcomeMessage()]);
+          }
+        } else {
+          setActiveSessionId(null);
+          setMessages([buildWelcomeMessage()]);
+        }
+      } catch {
+        // Keep welcome screen if offline
+      } finally {
+        if (!cancelled) {
+          setIsLoadingSessions(false);
+          setIsLoadingSessionMsgs(false);
+        }
+      }
+    };
+    loadHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [sarahChatUserId]);
 
   useEffect(() => {
     if (isOpen) {
@@ -177,9 +246,65 @@ export const SarahStudentWidget: React.FC<Props> = ({
     }
   };
 
-  const handleClearChat = () => {
+  const handleSelectSession = async (sessionId: string) => {
+    if (!sessionId || isThinking) return;
+    setActiveSessionId(sessionId);
+    setIsHistoryOpen(false);
+    setIsLoadingSessionMsgs(true);
+    try {
+      const msgs = await loadSarahSessionMessages(sessionId);
+      if (msgs.length > 0) {
+        setMessages(
+          msgs.map((m) => ({
+            id: m.id,
+            role: m.sender === 'user' ? 'user' : 'model',
+            text: m.text,
+          }))
+        );
+      } else {
+        setMessages([buildWelcomeMessage()]);
+      }
+    } catch {
+      showToast('Gagal memuat riwayat percakapan.', 'error');
+    } finally {
+      setIsLoadingSessionMsgs(false);
+    }
+  };
+
+  const handleNewChat = () => {
+    if (isThinking) return;
+    setActiveSessionId(null);
+    setIsHistoryOpen(false);
     setMessages([buildWelcomeMessage()]);
-    showToast('Obrolan dibersihkan. Yuk mulai topik belajar baru, Nak!', 'success');
+    showToast('Obrolan baru dimulai. Yuk belajar bersama SARAH, Nak!', 'success');
+  };
+
+  const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (deletingSessionId) return;
+    setDeletingSessionId(sessionId);
+    try {
+      await deleteSarahChatSession(sessionId);
+      const remaining = chatSessions.filter((s) => s.id !== sessionId);
+      setChatSessions(remaining);
+      if (activeSessionId === sessionId) {
+        if (remaining.length > 0) {
+          await handleSelectSession(remaining[0].id);
+        } else {
+          setActiveSessionId(null);
+          setMessages([buildWelcomeMessage()]);
+        }
+      }
+      showToast('Riwayat percakapan berhasil dihapus.', 'success');
+    } catch {
+      showToast('Gagal menghapus riwayat percakapan.', 'error');
+    } finally {
+      setDeletingSessionId(null);
+    }
+  };
+
+  const handleClearChat = () => {
+    handleNewChat();
   };
 
   const handleSend = async (e?: React.FormEvent, overridePrompt?: string) => {
@@ -209,6 +334,34 @@ export const SarahStudentWidget: React.FC<Props> = ({
     if (!overridePrompt) setInputText('');
     setIsThinking(true);
     setStatusLabel('SARAH sedang membaca basis data sekolah...');
+
+    let currentSessionId = activeSessionId;
+    try {
+      if (!currentSessionId) {
+        const created = await createSarahChatSession({
+          userId: sarahChatUserId,
+          role: 'siswa',
+          firstQuestion: question,
+        });
+        currentSessionId = created.id;
+        setActiveSessionId(created.id);
+        setChatSessions((prev) =>
+          [created, ...prev.filter((s) => s.id !== created.id)].slice(
+            0,
+            SARAH_MAX_CHAT_SESSIONS
+          )
+        );
+      }
+      if (currentSessionId) {
+        await appendSarahChatMessage({
+          sessionId: currentSessionId,
+          sender: 'user',
+          text: question,
+        });
+      }
+    } catch {
+      // Proceed even if auto-save encounters a temporary network glitch
+    }
 
     try {
       const ragContext = retrieveSarahRagContext({
@@ -255,6 +408,23 @@ export const SarahStudentWidget: React.FC<Props> = ({
           text: res.text,
         },
       ]);
+
+      if (currentSessionId) {
+        appendSarahChatMessage({
+          sessionId: currentSessionId,
+          sender: 'sarah',
+          text: res.text,
+        }).catch(() => {});
+        setChatSessions((prev) => {
+          const target = prev.find((s) => s.id === currentSessionId);
+          if (!target) return prev;
+          const updated = { ...target, updated_at: Date.now() };
+          return [updated, ...prev.filter((s) => s.id !== currentSessionId)].slice(
+            0,
+            SARAH_MAX_CHAT_SESSIONS
+          );
+        });
+      }
     } catch (err: any) {
       setMessages((prev) => [
         ...prev,
@@ -371,16 +541,39 @@ export const SarahStudentWidget: React.FC<Props> = ({
             </div>
           ) : (
             <>
-              {/* Subject Selector & Anti-Cheat Badge */}
-              <div className="px-4 py-2.5 bg-rose-50/70 border-b border-rose-100 flex items-center justify-between gap-2 shrink-0">
-                <div className="flex items-center gap-1.5 text-[10px] font-extrabold text-rose-800">
-                  <HeartHandshake className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  <span>7 Kebiasaan Hebat &amp; Sokratik</span>
+              {/* Subject Selector & History Controls */}
+              <div className="px-3.5 py-2 bg-rose-50/70 border-b border-rose-100 flex flex-wrap items-center justify-between gap-2 shrink-0 relative">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setIsHistoryOpen((p) => !p)}
+                    className="px-2.5 py-1 rounded-xl bg-white hover:bg-rose-100/70 border border-rose-200 text-rose-800 text-[10px] font-extrabold flex items-center gap-1 cursor-pointer transition"
+                    title="Lihat Riwayat Percakapan"
+                  >
+                    <History className="w-3 h-3 text-rose-600" />
+                    <span>Riwayat ({chatSessions.length})</span>
+                    <ChevronDown
+                      className={`w-3 h-3 transition-transform ${
+                        isHistoryOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleNewChat}
+                    disabled={isThinking}
+                    className="px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-extrabold flex items-center gap-1 cursor-pointer transition disabled:opacity-50"
+                    title="Mulai Obrolan Baru"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Obrolan Baru</span>
+                  </button>
                 </div>
+
                 <select
                   value={selectedMapel}
                   onChange={(e) => setSelectedMapel(e.target.value)}
-                  className="px-2.5 py-1 rounded-xl border border-rose-200 bg-white text-[11px] font-bold text-slate-700 outline-none max-w-[165px]"
+                  className="px-2 py-1 rounded-xl border border-rose-200 bg-white text-[10px] font-bold text-slate-700 outline-none max-w-[140px]"
                 >
                   {mapelChoices.map((m) => (
                     <option key={m} value={m}>
@@ -388,61 +581,140 @@ export const SarahStudentWidget: React.FC<Props> = ({
                     </option>
                   ))}
                 </select>
+
+                {/* Collapsible Riwayat Percakapan Dropdown */}
+                {isHistoryOpen && (
+                  <div className="absolute top-full left-0 right-0 z-20 bg-white border-b-2 border-rose-200 shadow-xl max-h-64 overflow-y-auto p-3 space-y-1.5">
+                    <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                      <span className="text-[10px] font-black uppercase text-slate-600 flex items-center gap-1">
+                        <HeartHandshake className="w-3 h-3 text-rose-600" />
+                        Riwayat Percakapan ({chatSessions.length}/{SARAH_MAX_CHAT_SESSIONS})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsHistoryOpen(false)}
+                        className="p-1 rounded-lg hover:bg-slate-100 text-slate-500 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    {isLoadingSessions ? (
+                      <div className="py-3 text-center text-[11px] text-slate-500 flex items-center justify-center gap-1.5">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-600" />
+                        <span>Memuat riwayat...</span>
+                      </div>
+                    ) : chatSessions.length === 0 ? (
+                      <p className="py-3 text-center text-[11px] text-slate-500">
+                        Belum ada riwayat obrolan tersimpan. Pertanyaanmu akan tersimpan otomatis!
+                      </p>
+                    ) : (
+                      chatSessions.map((sess) => {
+                        const isActive = sess.id === activeSessionId;
+                        return (
+                          <div
+                            key={sess.id}
+                            onClick={() => handleSelectSession(sess.id)}
+                            role="button"
+                            tabIndex={0}
+                            className={`p-2 rounded-xl border flex items-center justify-between gap-2 cursor-pointer transition ${
+                              isActive
+                                ? 'bg-rose-50 border-rose-300'
+                                : 'bg-slate-50 border-slate-200 hover:bg-rose-50/40'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[11px] font-bold text-slate-800 truncate">
+                                {sess.judul_sesi}
+                              </p>
+                              <p className="text-[9px] text-slate-500 flex items-center gap-1">
+                                <Clock className="w-2.5 h-2.5" />
+                                <span>
+                                  {formatSarahDateTime(sess.updated_at || sess.created_at)}
+                                </span>
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteSession(sess.id, e)}
+                              disabled={deletingSessionId === sess.id}
+                              title="Hapus Riwayat"
+                              aria-label="Hapus Riwayat"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-100 cursor-pointer shrink-0 disabled:opacity-40"
+                            >
+                              {deletingSessionId === sess.id ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-3 h-3" />
+                              )}
+                            </button>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/70">
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
+                {isLoadingSessionMsgs ? (
+                  <div className="h-full flex items-center justify-center gap-2 text-xs font-bold text-slate-500">
+                    <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
+                    <span>Memuat obrolan terakhirmu...</span>
+                  </div>
+                ) : (
+                  messages.map((msg) => (
                     <div
-                      className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 shadow-2xs ${
-                        msg.role === 'user'
-                          ? 'bg-rose-600 text-white rounded-br-sm text-xs font-medium leading-relaxed'
-                          : msg.isError
-                          ? 'bg-amber-50/90 border border-amber-200 text-amber-950 rounded-bl-sm space-y-2'
-                          : 'bg-white border border-slate-200 text-slate-800 rounded-bl-sm space-y-2'
-                      }`}
+                      key={msg.id}
+                      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
-                      {msg.role === 'user' ? (
-                        <p className="whitespace-pre-wrap">{msg.text}</p>
-                      ) : msg.isError ? (
-                        <>
-                          <p className="text-xs leading-relaxed">{msg.text}</p>
-                          {msg.retryPrompt && (
-                            <div className="flex justify-end pt-1 border-t border-amber-200/70">
+                      <div
+                        className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 shadow-2xs ${
+                          msg.role === 'user'
+                            ? 'bg-rose-600 text-white rounded-br-sm text-xs font-medium leading-relaxed'
+                            : msg.isError
+                            ? 'bg-amber-50/90 border border-amber-200 text-amber-950 rounded-bl-sm space-y-2'
+                            : 'bg-white border border-slate-200 text-slate-800 rounded-bl-sm space-y-2'
+                        }`}
+                      >
+                        {msg.role === 'user' ? (
+                          <p className="whitespace-pre-wrap">{msg.text}</p>
+                        ) : msg.isError ? (
+                          <>
+                            <p className="text-xs leading-relaxed">{msg.text}</p>
+                            {msg.retryPrompt && (
+                              <div className="flex justify-end pt-1 border-t border-amber-200/70">
+                                <button
+                                  type="button"
+                                  disabled={isThinking}
+                                  onClick={() => handleSend(undefined, msg.retryPrompt)}
+                                  className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] flex items-center gap-1 cursor-pointer transition disabled:opacity-50"
+                                >
+                                  <RotateCcw className="w-2.5 h-2.5" />
+                                  <span>Coba Kirim Ulang</span>
+                                </button>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <SarahMarkdown content={msg.text} compact />
+                            <div className="flex justify-end pt-1 border-t border-slate-100">
                               <button
                                 type="button"
-                                disabled={isThinking}
-                                onClick={() => handleSend(undefined, msg.retryPrompt)}
-                                className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] flex items-center gap-1 cursor-pointer transition disabled:opacity-50"
+                                onClick={() => handleCopyAnswer(msg.text)}
+                                className="px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-[10px] flex items-center gap-1 cursor-pointer transition"
                               >
-                                <RotateCcw className="w-2.5 h-2.5" />
-                                <span>Coba Kirim Ulang</span>
+                                <Copy className="w-2.5 h-2.5" />
+                                <span>Salin Jawaban</span>
                               </button>
                             </div>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          <SarahMarkdown content={msg.text} compact />
-                          <div className="flex justify-end pt-1 border-t border-slate-100">
-                            <button
-                              type="button"
-                              onClick={() => handleCopyAnswer(msg.text)}
-                              className="px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-[10px] flex items-center gap-1 cursor-pointer transition"
-                            >
-                              <Copy className="w-2.5 h-2.5" />
-                              <span>Salin Jawaban</span>
-                            </button>
-                          </div>
-                        </>
-                      )}
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
 
                 {isThinking && (
                   <div className="flex justify-start">

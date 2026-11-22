@@ -26,6 +26,12 @@ import {
   ClipboardList,
   RotateCcw,
   X,
+  Image as ImageIcon,
+  Palette,
+  RefreshCw,
+  History,
+  Clock,
+  ChevronDown,
 } from 'lucide-react';
 import {
   ActiveUser,
@@ -46,7 +52,11 @@ import { syncAllLocalToCloud } from '../../utils/cloudSync';
 import {
   DEFAULT_SARAH_CONFIG,
   SARAH_ATTRIBUTION_TEXT,
+  SARAH_MAX_CHAT_SESSIONS,
+  SarahChatSessionItem,
   SarahConfigDoc,
+  SarahIllustrationAsset,
+  SarahImageGeneratedResponse,
   SarahKategori,
   SarahKnowledgeItem,
   SarahMediaAjarContextDoc,
@@ -54,15 +64,23 @@ import {
   SarahCbtGeneratedResponse,
   SarahTextGeneratedResponse,
   addSarahKnowledgeItem,
+  appendSarahChatMessage,
+  buildSarahChatUserId,
   callSarahAiEndpoint,
+  createSarahChatSession,
+  deleteSarahChatSession,
   deleteSarahKnowledgeItem,
   exportSarahToWordDoc,
   formatSarahDateTime,
+  loadSarahSessionMessages,
+  loadUserSarahChatSessions,
+  rasterizeSvgToPngDataUrl,
   retrieveSarahRagContext,
   subscribeToMediaAjarForSarah,
   subscribeToSarahConfig,
   subscribeToSarahKnowledgeBase,
   subscribeToSarahStudentLogs,
+  svgToDataUrl,
   syncSarahConfigToFirestore,
 } from '../../utils/sarahFirestore';
 import { SarahMarkdown } from '../SarahMarkdown';
@@ -77,7 +95,41 @@ interface Props {
   onNavigateTab: (tab: TabId) => void;
 }
 
-type SarahTeacherSubTab = 'chat' | 'lkpd' | 'modul' | 'cbt' | 'riset' | 'memori' | 'logs';
+type SarahTeacherSubTab = 'chat' | 'lkpd' | 'modul' | 'gambar' | 'cbt' | 'riset' | 'memori' | 'logs';
+type SarahVisualStyleId = '3d_clay' | '3d_isometrik' | '2d_ceria' | 'diagram_edukatif';
+type SarahDocVisualChoice = SarahVisualStyleId | 'none';
+
+const IMAGE_STYLE_OPTIONS: Array<{
+  id: SarahVisualStyleId;
+  label: string;
+  badge: string;
+  desc: string;
+}> = [
+  {
+    id: '3d_clay',
+    label: '3D Clay & Glossy Menarik',
+    badge: '3D',
+    desc: 'Tampak timbul, pencahayaan lembut & warna cerah modern',
+  },
+  {
+    id: '2d_ceria',
+    label: '2D Ilustrasi Buku Anak',
+    badge: '2D',
+    desc: 'Gaya cerita anak ceria, ramah siswa SD & penuh warna',
+  },
+  {
+    id: '3d_isometrik',
+    label: '3D Isometrik Edukatif',
+    badge: '3D Iso',
+    desc: 'Sudut 3D dimensi ruang, cocok untuk bangun ruang & adegan',
+  },
+  {
+    id: 'diagram_edukatif',
+    label: 'Diagram Poster Berlabel',
+    badge: 'Diagram',
+    desc: 'Ilustrasi 2D/3D dengan panah & label bahasa Indonesia',
+  },
+];
 
 interface TeacherChatMessage {
   id: string;
@@ -175,7 +227,12 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [processingLabel, setProcessingLabel] = useState('');
 
-  // Mode 0: Obrolan Bebas (Multi-turn Interactive Chat)
+  // Mode 0: Obrolan Bebas (Multi-turn Interactive Chat + Auto-Save History)
+  const sarahChatUserId = useMemo(
+    () => buildSarahChatUserId(activeUser),
+    [activeUser]
+  );
+
   const buildTeacherWelcome = (): TeacherChatMessage => ({
     id: 'sarah_teacher_welcome',
     role: 'model',
@@ -185,10 +242,60 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const [chatMessages, setChatMessages] = useState<TeacherChatMessage[]>(() => [
     buildTeacherWelcome(),
   ]);
+  const [chatSessions, setChatSessions] = useState<SarahChatSessionItem[]>([]);
+  const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(null);
+  const [isLoadingChatSessions, setIsLoadingChatSessions] = useState(false);
+  const [isLoadingSessionMsgs, setIsLoadingSessionMsgs] = useState(false);
+  const [showMobileHistory, setShowMobileHistory] = useState(false);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState('');
   const [chatMapel, setChatMapel] = useState('Umum');
   const [isChatSending, setIsChatSending] = useState(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const initHistory = async () => {
+      setIsLoadingChatSessions(true);
+      try {
+        const sessions = await loadUserSarahChatSessions(sarahChatUserId);
+        if (cancelled) return;
+        setChatSessions(sessions);
+        if (sessions.length > 0) {
+          const latest = sessions[0];
+          setActiveChatSessionId(latest.id);
+          setIsLoadingSessionMsgs(true);
+          const msgs = await loadSarahSessionMessages(latest.id);
+          if (cancelled) return;
+          if (msgs.length > 0) {
+            setChatMessages(
+              msgs.map((m) => ({
+                id: m.id,
+                role: m.sender === 'user' ? 'user' : 'model',
+                text: m.text,
+              }))
+            );
+          } else {
+            setChatMessages([buildTeacherWelcome()]);
+          }
+        } else {
+          setActiveChatSessionId(null);
+          setChatMessages([buildTeacherWelcome()]);
+        }
+      } catch {
+        // Keep fresh welcome screen if offline/unavailable
+      } finally {
+        if (!cancelled) {
+          setIsLoadingChatSessions(false);
+          setIsLoadingSessionMsgs(false);
+        }
+      }
+    };
+    initHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [sarahChatUserId]);
 
   useEffect(() => {
     if (subTab === 'chat') {
@@ -204,7 +311,10 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const [lkpdDiferensiasi, setLkpdDiferensiasi] = useState<'Reguler' | 'Pendampingan Khusus Inklusi'>(
     'Reguler'
   );
+  const [lkpdGayaGambar, setLkpdGayaGambar] = useState<SarahDocVisualChoice>('3d_clay');
   const [lkpdResult, setLkpdResult] = useState('');
+  const [lkpdIllustration, setLkpdIllustration] = useState<SarahIllustrationAsset | null>(null);
+  const [isRegenLkpdImage, setIsRegenLkpdImage] = useState(false);
   const [isSavingLkpdKb, setIsSavingLkpdKb] = useState(false);
 
   // Mode A: Modul Ajar & RPP Berdiferensiasi
@@ -212,8 +322,21 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const [modulMapel, setModulMapel] = useState(mapelOptions[0] || 'Bahasa Indonesia');
   const [modulTopik, setModulTopik] = useState('');
   const [modulInklusi, setModulInklusi] = useState('');
+  const [modulGayaGambar, setModulGayaGambar] = useState<SarahDocVisualChoice>('3d_clay');
   const [modulResult, setModulResult] = useState('');
+  const [modulIllustration, setModulIllustration] = useState<SarahIllustrationAsset | null>(null);
+  const [isRegenModulImage, setIsRegenModulImage] = useState(false);
   const [isSavingModulKb, setIsSavingModulKb] = useState(false);
+
+  // Mode Studio Gambar SARAH (3D & 2D)
+  const [gambarDeskripsi, setGambarDeskripsi] = useState('');
+  const [gambarGaya, setGambarGaya] = useState<SarahVisualStyleId>('3d_clay');
+  const [gambarRasio, setGambarRasio] = useState<'16:9' | '4:3' | '1:1' | '3:4'>('4:3');
+  const [gambarKelas, setGambarKelas] = useState(defaultGradeKelas);
+  const [gambarMapel, setGambarMapel] = useState(mapelOptions[0] || 'IPAS');
+  const [gambarResult, setGambarResult] = useState<SarahIllustrationAsset | null>(null);
+  const [gambarHistory, setGambarHistory] = useState<SarahIllustrationAsset[]>([]);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
 
   // Mode B: Generator Soal CBT Otomatis
   const [cbtKelas, setCbtKelas] = useState(defaultGradeKelas);
@@ -294,7 +417,67 @@ export const SarahAssistantTab: React.FC<Props> = ({
     }
   };
 
-  // Handler Obrolan Bebas (Multi-Turn)
+  // Handler Obrolan Bebas (Multi-Turn + Auto-Save Firestore)
+  const handleSelectTeacherSession = async (sessionId: string) => {
+    if (!sessionId || isChatSending) return;
+    setActiveChatSessionId(sessionId);
+    setShowMobileHistory(false);
+    setIsLoadingSessionMsgs(true);
+    try {
+      const msgs = await loadSarahSessionMessages(sessionId);
+      if (msgs.length > 0) {
+        setChatMessages(
+          msgs.map((m) => ({
+            id: m.id,
+            role: m.sender === 'user' ? 'user' : 'model',
+            text: m.text,
+          }))
+        );
+      } else {
+        setChatMessages([buildTeacherWelcome()]);
+      }
+    } catch {
+      showToast('Gagal memuat riwayat percakapan.', 'error');
+    } finally {
+      setIsLoadingSessionMsgs(false);
+    }
+  };
+
+  const handleNewTeacherChat = () => {
+    if (isChatSending) return;
+    setActiveChatSessionId(null);
+    setChatMessages([buildTeacherWelcome()]);
+    setShowMobileHistory(false);
+    showToast('Memulai obrolan baru bersama SARAH!', 'success');
+  };
+
+  const handleDeleteTeacherSession = async (
+    sessionId: string,
+    e: React.MouseEvent
+  ) => {
+    e.stopPropagation();
+    if (deletingSessionId) return;
+    setDeletingSessionId(sessionId);
+    try {
+      await deleteSarahChatSession(sessionId);
+      const remaining = chatSessions.filter((s) => s.id !== sessionId);
+      setChatSessions(remaining);
+      if (activeChatSessionId === sessionId) {
+        if (remaining.length > 0) {
+          await handleSelectTeacherSession(remaining[0].id);
+        } else {
+          setActiveChatSessionId(null);
+          setChatMessages([buildTeacherWelcome()]);
+        }
+      }
+      showToast('Riwayat percakapan berhasil dihapus.', 'success');
+    } catch {
+      showToast('Gagal menghapus riwayat percakapan.', 'error');
+    } finally {
+      setDeletingSessionId(null);
+    }
+  };
+
   const handleSendTeacherChat = async (e?: React.FormEvent, overrideText?: string) => {
     if (e) e.preventDefault();
     const promptText = (overrideText ?? chatInput).trim();
@@ -313,6 +496,34 @@ export const SarahAssistantTab: React.FC<Props> = ({
     setChatMessages((prev) => [...prev, userMsg]);
     if (!overrideText) setChatInput('');
     setIsChatSending(true);
+
+    let currentSessionId = activeChatSessionId;
+    try {
+      if (!currentSessionId) {
+        const created = await createSarahChatSession({
+          userId: sarahChatUserId,
+          role: 'guru',
+          firstQuestion: promptText,
+        });
+        currentSessionId = created.id;
+        setActiveChatSessionId(created.id);
+        setChatSessions((prev) =>
+          [created, ...prev.filter((s) => s.id !== created.id)].slice(
+            0,
+            SARAH_MAX_CHAT_SESSIONS
+          )
+        );
+      }
+      if (currentSessionId) {
+        await appendSarahChatMessage({
+          sessionId: currentSessionId,
+          sender: 'user',
+          text: promptText,
+        });
+      }
+    } catch {
+      // Do not block AI reply if auto-save encounters a temporary network glitch
+    }
 
     try {
       const ragContext = retrieveSarahRagContext({
@@ -343,6 +554,23 @@ export const SarahAssistantTab: React.FC<Props> = ({
           text: res.text,
         },
       ]);
+
+      if (currentSessionId) {
+        appendSarahChatMessage({
+          sessionId: currentSessionId,
+          sender: 'sarah',
+          text: res.text,
+        }).catch(() => {});
+        setChatSessions((prev) => {
+          const target = prev.find((s) => s.id === currentSessionId);
+          if (!target) return prev;
+          const updated = { ...target, updated_at: Date.now() };
+          return [updated, ...prev.filter((s) => s.id !== currentSessionId)].slice(
+            0,
+            SARAH_MAX_CHAT_SESSIONS
+          );
+        });
+      }
     } catch (err: any) {
       setChatMessages((prev) => [
         ...prev,
@@ -360,8 +588,82 @@ export const SarahAssistantTab: React.FC<Props> = ({
   };
 
   const handleClearTeacherChat = () => {
+    setActiveChatSessionId(null);
     setChatMessages([buildTeacherWelcome()]);
     showToast('Obrolan dibersihkan. Silakan mulai topik diskusi baru!', 'success');
+  };
+
+  const requestIllustrationAsset = async (opts: {
+    deskripsi: string;
+    gaya: SarahVisualStyleId;
+    rasio: '16:9' | '4:3' | '1:1' | '3:4';
+    kelas: string;
+    mapel: string;
+    konteks: string;
+    ragContext: ReturnType<typeof retrieveSarahRagContext>;
+  }): Promise<SarahIllustrationAsset> => {
+    const imgRes = await callSarahAiEndpoint<SarahImageGeneratedResponse>({
+      mode: 'image_generator',
+      role: activeUser.role,
+      user: { name: activeUser.name, kelas: activeClass },
+      params: {
+        deskripsi: opts.deskripsi,
+        gaya: opts.gaya,
+        rasio: opts.rasio,
+        kelas: opts.kelas,
+        mapel: opts.mapel,
+        konteks: opts.konteks,
+      },
+      ragContext: opts.ragContext,
+    });
+    const svgDataUrl = svgToDataUrl(imgRes.svgCode);
+    const pngDataUrl = await rasterizeSvgToPngDataUrl(imgRes.svgCode, imgRes.width, imgRes.height);
+    return {
+      ...imgRes,
+      id: `img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      svgDataUrl,
+      pngDataUrl,
+      createdAt: Date.now(),
+    };
+  };
+
+  const downloadAssetPng = async (asset: SarahIllustrationAsset) => {
+    const png =
+      asset.pngDataUrl || (await rasterizeSvgToPngDataUrl(asset.svgCode, asset.width, asset.height));
+    if (!png) {
+      showToast('Gagal mengonversi gambar ke PNG.', 'error');
+      return;
+    }
+    const a = document.createElement('a');
+    const safeName = asset.title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 48);
+    a.href = png;
+    a.download = `${safeName || 'ilustrasi_sarah'}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast('Gambar PNG berhasil diunduh!', 'success');
+  };
+
+  const downloadAssetSvg = (asset: SarahIllustrationAsset) => {
+    const blob = new Blob([asset.svgCode], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safeName = asset.title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 48);
+    a.href = url;
+    a.download = `${safeName || 'ilustrasi_sarah'}.svg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Gambar vektor SVG berhasil diunduh!', 'success');
   };
 
   // Handler Generator LKPD Menarik
@@ -372,7 +674,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       return;
     }
     setIsGenerating(true);
-    setProcessingLabel('SARAH sedang membaca basis data sekolah...');
+    setProcessingLabel('SARAH sedang merancang LKPD beserta ilustrasi visual menarik...');
     try {
       const ragContext = retrieveSarahRagContext({
         schoolName: profile.name,
@@ -385,11 +687,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         sarahConfig,
       });
 
-      setTimeout(() => {
-        setProcessingLabel(`SARAH sedang merancang LKPD ${lkpdAktivitas} yang menyenangkan...`);
-      }, 600);
-
-      const res = await callSarahAiEndpoint<SarahTextGeneratedResponse>({
+      const textPromise = callSarahAiEndpoint<SarahTextGeneratedResponse>({
         mode: 'lkpd_generator',
         role: activeUser.role,
         user: { name: activeUser.name, kelas: activeClass },
@@ -403,13 +701,77 @@ export const SarahAssistantTab: React.FC<Props> = ({
         ragContext,
       });
 
-      setLkpdResult(res.text);
-      showToast('LKPD menarik siap pakai berhasil disusun oleh SARAH!', 'success');
+      const imagePromise =
+        lkpdGayaGambar !== 'none'
+          ? requestIllustrationAsset({
+              deskripsi: `Ilustrasi edukatif ceria untuk LKPD siswa SD (${lkpdKelas}, ${lkpdMapel}) bertopik: ${lkpdTopik}. Aktivitas: ${lkpdAktivitas}.`,
+              gaya: lkpdGayaGambar,
+              rasio: '4:3',
+              kelas: lkpdKelas,
+              mapel: lkpdMapel,
+              konteks: 'LKPD Siswa SD',
+              ragContext,
+            })
+          : Promise.resolve(null);
+
+      const [textSettled, imgSettled] = await Promise.allSettled([textPromise, imagePromise]);
+
+      if (textSettled.status === 'rejected') {
+        throw textSettled.reason;
+      }
+
+      setLkpdResult(textSettled.value.text);
+      if (imgSettled.status === 'fulfilled' && imgSettled.value) {
+        setLkpdIllustration(imgSettled.value);
+        setGambarHistory((prev) => [imgSettled.value!, ...prev].slice(0, 8));
+        showToast('LKPD & ilustrasi menarik berhasil disusun oleh SARAH!', 'success');
+      } else {
+        setLkpdIllustration(null);
+        showToast(
+          lkpdGayaGambar !== 'none'
+            ? 'LKPD berhasil disusun! Anda bisa klik Buat Ulang Gambar bila ilustrasi belum tampil.'
+            : 'LKPD menarik siap pakai berhasil disusun oleh SARAH!',
+          'success'
+        );
+      }
     } catch (err: any) {
       showToast(err?.message || 'Gagal menyusun LKPD dengan SARAH.', 'error');
     } finally {
       setIsGenerating(false);
       setProcessingLabel('');
+    }
+  };
+
+  const handleRegenerateLkpdImage = async () => {
+    if (!lkpdTopik.trim() || lkpdGayaGambar === 'none') return;
+    setIsRegenLkpdImage(true);
+    try {
+      const ragContext = retrieveSarahRagContext({
+        schoolName: profile.name,
+        kelas: lkpdKelas,
+        mapel: lkpdMapel,
+        queryText: lkpdTopik,
+        knowledgeDocs,
+        mediaAjarDocs,
+        subjects,
+        sarahConfig,
+      });
+      const asset = await requestIllustrationAsset({
+        deskripsi: `Ilustrasi edukatif menarik untuk LKPD SD (${lkpdKelas}, ${lkpdMapel}) topik: ${lkpdTopik}`,
+        gaya: lkpdGayaGambar,
+        rasio: '4:3',
+        kelas: lkpdKelas,
+        mapel: lkpdMapel,
+        konteks: 'LKPD Siswa SD',
+        ragContext,
+      });
+      setLkpdIllustration(asset);
+      setGambarHistory((prev) => [asset, ...prev].slice(0, 8));
+      showToast('Ilustrasi LKPD berhasil diperbarui!', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Gagal membuat ulang gambar LKPD.', 'error');
+    } finally {
+      setIsRegenLkpdImage(false);
     }
   };
 
@@ -435,7 +797,6 @@ export const SarahAssistantTab: React.FC<Props> = ({
   };
 
   const handlePrintLkpd = () => {
-    if (!lkpdResult.trim()) return;
     window.print();
   };
 
@@ -446,7 +807,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       return;
     }
     setIsGenerating(true);
-    setProcessingLabel('SARAH sedang membaca basis data sekolah...');
+    setProcessingLabel('SARAH sedang menyusun Modul Ajar & ilustrasi visual...');
     try {
       const ragContext = retrieveSarahRagContext({
         schoolName: profile.name,
@@ -459,11 +820,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         sarahConfig,
       });
 
-      setTimeout(() => {
-        setProcessingLabel('SARAH sedang menyusun Modul Ajar Berdiferensiasi...');
-      }, 600);
-
-      const res = await callSarahAiEndpoint<SarahTextGeneratedResponse>({
+      const textPromise = callSarahAiEndpoint<SarahTextGeneratedResponse>({
         mode: 'modul_ajar',
         role: activeUser.role,
         user: { name: activeUser.name, kelas: activeClass },
@@ -476,13 +833,108 @@ export const SarahAssistantTab: React.FC<Props> = ({
         ragContext,
       });
 
-      setModulResult(res.text);
-      showToast('Modul Ajar & RPP Berdiferensiasi berhasil disusun oleh SARAH!', 'success');
+      const imagePromise =
+        modulGayaGambar !== 'none'
+          ? requestIllustrationAsset({
+              deskripsi: `Ilustrasi sampul/media pembelajaran menarik untuk Modul Ajar SD (${modulKelas}, ${modulMapel}) topik: ${modulTopik}`,
+              gaya: modulGayaGambar,
+              rasio: '16:9',
+              kelas: modulKelas,
+              mapel: modulMapel,
+              konteks: 'Modul Ajar Kurikulum Merdeka',
+              ragContext,
+            })
+          : Promise.resolve(null);
+
+      const [textSettled, imgSettled] = await Promise.allSettled([textPromise, imagePromise]);
+      if (textSettled.status === 'rejected') {
+        throw textSettled.reason;
+      }
+
+      setModulResult(textSettled.value.text);
+      if (imgSettled.status === 'fulfilled' && imgSettled.value) {
+        setModulIllustration(imgSettled.value);
+        setGambarHistory((prev) => [imgSettled.value!, ...prev].slice(0, 8));
+        showToast('Modul Ajar & ilustrasi menarik berhasil disusun oleh SARAH!', 'success');
+      } else {
+        setModulIllustration(null);
+        showToast('Modul Ajar & RPP Berdiferensiasi berhasil disusun oleh SARAH!', 'success');
+      }
     } catch (err: any) {
       showToast(err?.message || 'Gagal menghubungi asisten SARAH.', 'error');
     } finally {
       setIsGenerating(false);
       setProcessingLabel('');
+    }
+  };
+
+  const handleRegenerateModulImage = async () => {
+    if (!modulTopik.trim() || modulGayaGambar === 'none') return;
+    setIsRegenModulImage(true);
+    try {
+      const ragContext = retrieveSarahRagContext({
+        schoolName: profile.name,
+        kelas: modulKelas,
+        mapel: modulMapel,
+        queryText: modulTopik,
+        knowledgeDocs,
+        mediaAjarDocs,
+        subjects,
+        sarahConfig,
+      });
+      const asset = await requestIllustrationAsset({
+        deskripsi: `Ilustrasi pembelajaran menarik untuk Modul Ajar SD (${modulKelas}, ${modulMapel}) topik: ${modulTopik}`,
+        gaya: modulGayaGambar,
+        rasio: '16:9',
+        kelas: modulKelas,
+        mapel: modulMapel,
+        konteks: 'Modul Ajar Kurikulum Merdeka',
+        ragContext,
+      });
+      setModulIllustration(asset);
+      setGambarHistory((prev) => [asset, ...prev].slice(0, 8));
+      showToast('Ilustrasi Modul Ajar berhasil diperbarui!', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Gagal membuat ulang gambar Modul Ajar.', 'error');
+    } finally {
+      setIsRegenModulImage(false);
+    }
+  };
+
+  const handleGenerateStudioImage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!gambarDeskripsi.trim()) {
+      showToast('Harap tulis deskripsi gambar 3D atau 2D yang ingin dibuat SARAH.', 'error');
+      return;
+    }
+    setIsGeneratingImage(true);
+    try {
+      const ragContext = retrieveSarahRagContext({
+        schoolName: profile.name,
+        kelas: gambarKelas,
+        mapel: gambarMapel,
+        queryText: gambarDeskripsi,
+        knowledgeDocs,
+        mediaAjarDocs,
+        subjects,
+        sarahConfig,
+      });
+      const asset = await requestIllustrationAsset({
+        deskripsi: gambarDeskripsi,
+        gaya: gambarGaya,
+        rasio: gambarRasio,
+        kelas: gambarKelas,
+        mapel: gambarMapel,
+        konteks: 'Media Visual Guru & Siswa SD',
+        ragContext,
+      });
+      setGambarResult(asset);
+      setGambarHistory((prev) => [asset, ...prev].slice(0, 8));
+      showToast('Gambar ilustrasi menarik berhasil dibuat oleh SARAH!', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Gagal membuat gambar bersama SARAH.', 'error');
+    } finally {
+      setIsGeneratingImage(false);
     }
   };
 
@@ -863,6 +1315,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
           { id: 'chat', label: 'Obrolan Bebas', icon: MessageSquareHeart },
           { id: 'lkpd', label: 'Generator LKPD', icon: ClipboardList },
           { id: 'modul', label: 'Modul Ajar & RPP', icon: BookOpen },
+          { id: 'gambar', label: 'Buat Gambar (3D & 2D)', icon: ImageIcon },
           { id: 'cbt', label: 'Generator Soal CBT', icon: FileQuestion },
           { id: 'riset', label: 'Riset & Pengayaan', icon: Lightbulb },
           { id: 'memori', label: `Memori & Ajarkan (${knowledgeDocs.length})`, icon: Brain },
@@ -904,183 +1357,369 @@ export const SarahAssistantTab: React.FC<Props> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* TAB 0: OBROLAN BEBAS (RUANG TANYA JAWAB INTERAKTIF GURU & SARAH)      */}
+      {/* TAB 0: OBROLAN BEBAS (RUANG TANYA JAWAB INTERAKTIF + AUTO-SAVE)      */}
       {/* ===================================================================== */}
       {subTab === 'chat' && (
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden flex flex-col h-[660px] max-h-[78vh]">
-          {/* Chat Top Bar */}
-          <div className="px-5 py-3.5 bg-gradient-to-r from-rose-50 via-pink-50/70 to-indigo-50 border-b border-rose-100 flex flex-wrap items-center justify-between gap-3 shrink-0">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-xs">
-                <MessageSquareHeart className="w-5 h-5" />
-              </div>
-              <div>
-                <h2 className="font-display font-black text-sm text-slate-900">
-                  Obrolan Interaktif Bebas dengan SARAH
-                </h2>
-                <p className="text-[11px] text-slate-600">
-                  Percakapan multi-turn: SARAH mengingat alur diskusi Anda sebelumnya
-                </p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={chatMapel}
-                onChange={(e) => setChatMapel(e.target.value)}
-                className="px-3 py-1.5 rounded-xl border border-rose-200 bg-white text-xs font-bold text-slate-700 outline-none"
-              >
-                <option value="Umum">Konteks Mapel: Umum</option>
-                {mapelOptions.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden flex h-[680px] max-h-[80vh] relative">
+          {/* Desktop Sidebar: Riwayat Percakapan */}
+          <aside className="hidden lg:flex w-72 shrink-0 border-r border-slate-200 bg-slate-50/80 flex-col">
+            <div className="p-4 border-b border-slate-200 bg-white space-y-3">
               <button
                 type="button"
-                onClick={handleClearTeacherChat}
-                className="px-3 py-1.5 rounded-xl bg-white hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                onClick={handleNewTeacherChat}
+                disabled={isChatSending}
+                className="w-full py-2.5 px-3 rounded-2xl bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 text-white font-display font-black text-xs flex items-center justify-center gap-2 shadow-xs transition cursor-pointer disabled:opacity-50"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Hapus Obrolan</span>
+                <Plus className="w-4 h-4" />
+                <span>Obrolan Baru</span>
               </button>
+              <div className="flex items-center justify-between text-[11px] font-black text-slate-600 uppercase tracking-wide">
+                <span className="flex items-center gap-1.5">
+                  <History className="w-3.5 h-3.5 text-rose-600" />
+                  Riwayat Percakapan
+                </span>
+                <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 text-[10px]">
+                  {chatSessions.length}/{SARAH_MAX_CHAT_SESSIONS}
+                </span>
+              </div>
             </div>
-          </div>
 
-          {/* Chat Message Stream */}
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-50/60">
-            {chatMessages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[90%] sm:max-w-[78%] rounded-3xl px-4 py-3 shadow-2xs space-y-2 ${
-                    msg.role === 'user'
-                      ? 'bg-gradient-to-r from-rose-600 to-rose-700 text-white rounded-br-sm text-xs sm:text-sm font-medium leading-relaxed'
-                      : msg.isError
-                      ? 'bg-amber-50/90 border border-amber-200 text-amber-950 rounded-bl-sm'
-                      : 'bg-white border border-slate-200 text-slate-800 rounded-bl-sm'
-                  }`}
-                >
-                  {msg.role === 'user' ? (
-                    <p className="whitespace-pre-wrap">{msg.text}</p>
-                  ) : msg.isError ? (
-                    <>
-                      <p className="text-xs sm:text-sm leading-relaxed">{msg.text}</p>
-                      {msg.retryPrompt && (
-                        <div className="flex justify-end pt-1.5 border-t border-amber-200/70">
-                          <button
-                            type="button"
-                            disabled={isChatSending}
-                            onClick={() => handleSendTeacherChat(undefined, msg.retryPrompt)}
-                            className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition disabled:opacity-50"
-                          >
-                            <RotateCcw className="w-3 h-3" />
-                            <span>Coba Kirim Ulang</span>
-                          </button>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <SarahMarkdown content={msg.text} />
-                      <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100">
-                        <button
-                          type="button"
-                          onClick={() => handleCopyText(msg.text)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition"
+            <div className="flex-1 overflow-y-auto p-2.5 space-y-1.5">
+              {isLoadingChatSessions ? (
+                <div className="p-4 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
+                  <span>Memuat riwayat...</span>
+                </div>
+              ) : chatSessions.length === 0 ? (
+                <div className="p-4 text-center space-y-1.5 text-slate-500">
+                  <MessageCircle className="w-7 h-7 mx-auto text-slate-300" />
+                  <p className="text-xs font-bold text-slate-600">Belum ada riwayat obrolan</p>
+                  <p className="text-[11px]">
+                    Percakapan Anda akan tersimpan otomatis di sini (maks. 20 sesi terakhir).
+                  </p>
+                </div>
+              ) : (
+                chatSessions.map((sess) => {
+                  const isActive = sess.id === activeChatSessionId;
+                  return (
+                    <div
+                      key={sess.id}
+                      onClick={() => handleSelectTeacherSession(sess.id)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          handleSelectTeacherSession(sess.id);
+                        }
+                      }}
+                      className={`group w-full text-left p-2.5 rounded-2xl border transition cursor-pointer flex items-start justify-between gap-2 ${
+                        isActive
+                          ? 'bg-rose-50 border-rose-300 shadow-2xs'
+                          : 'bg-white border-slate-200/80 hover:border-rose-200 hover:bg-rose-50/40'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <p
+                          className={`text-xs font-bold leading-snug line-clamp-2 ${
+                            isActive ? 'text-rose-900' : 'text-slate-800'
+                          }`}
                         >
-                          <Copy className="w-3 h-3" />
-                          <span>Salin Jawaban</span>
-                        </button>
-                        {msg.id !== 'sarah_teacher_welcome' && (
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                await addSarahKnowledgeItem({
-                                  judul: `Diskusi SARAH (${chatMapel}) - ${new Date().toLocaleDateString('id-ID')}`,
-                                  kategori: 'Materi Ajar',
-                                  kelas: activeClass || 'Semua',
-                                  mata_pelajaran: chatMapel,
-                                  konten_ringkasan: msg.text,
-                                  sumber: `Obrolan SARAH (${activeUser.name})`,
-                                  disetujui_oleh: activeUser.name,
-                                });
-                                showToast('Jawaban disimpan ke Memori SARAH!', 'success');
-                              } catch {
-                                showToast('Gagal menyimpan ke memori SARAH.', 'error');
-                              }
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition"
-                          >
-                            <Star className="w-3 h-3 text-amber-600" />
-                            <span>Simpan ke Memori</span>
-                          </button>
-                        )}
+                          {sess.judul_sesi}
+                        </p>
+                        <p className="text-[10px] text-slate-500 flex items-center gap-1">
+                          <Clock className="w-3 h-3 shrink-0" />
+                          <span className="truncate">
+                            {formatSarahDateTime(sess.updated_at || sess.created_at)}
+                          </span>
+                        </p>
                       </div>
-                    </>
-                  )}
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteTeacherSession(sess.id, e)}
+                        disabled={deletingSessionId === sess.id}
+                        title="Hapus Riwayat"
+                        aria-label="Hapus Riwayat"
+                        className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-100 transition shrink-0 cursor-pointer disabled:opacity-40"
+                      >
+                        {deletingSessionId === sess.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </aside>
+
+          {/* Main Chat Column */}
+          <div className="flex-1 flex flex-col min-w-0 relative">
+            {/* Chat Top Bar */}
+            <div className="px-4 sm:px-5 py-3.5 bg-gradient-to-r from-rose-50 via-pink-50/70 to-indigo-50 border-b border-rose-100 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-xs">
+                  <MessageSquareHeart className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="font-display font-black text-sm text-slate-900">
+                    Obrolan Interaktif Bebas dengan SARAH
+                  </h2>
+                  <p className="text-[11px] text-slate-600">
+                    Tersimpan otomatis lintas perangkat • Maks. 20 sesi &amp; 30 pesan terakhir
+                  </p>
                 </div>
               </div>
-            ))}
 
-            {isChatSending && (
-              <div className="flex justify-start">
-                <div className="bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-2 text-xs font-bold">
-                  <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
-                  <span>SARAH sedang membaca basis data sekolah &amp; merangkai jawaban...</span>
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Mobile / Tablet History Dropdown Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setShowMobileHistory((p) => !p)}
+                  className="lg:hidden px-3 py-1.5 rounded-xl bg-white hover:bg-rose-50 text-slate-800 border border-rose-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <History className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Riwayat ({chatSessions.length})</span>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 transition-transform ${
+                      showMobileHistory ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleNewTeacherChat}
+                  disabled={isChatSending}
+                  className="lg:hidden px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Obrolan Baru</span>
+                </button>
+                <select
+                  value={chatMapel}
+                  onChange={(e) => setChatMapel(e.target.value)}
+                  className="px-3 py-1.5 rounded-xl border border-rose-200 bg-white text-xs font-bold text-slate-700 outline-none"
+                >
+                  <option value="Umum">Konteks Mapel: Umum</option>
+                  {mapelOptions.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleClearTeacherChat}
+                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Hapus Obrolan</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Mobile History Dropdown Panel */}
+            {showMobileHistory && (
+              <div className="lg:hidden absolute top-[68px] left-0 right-0 z-20 bg-white border-b-2 border-rose-200 shadow-xl max-h-72 overflow-y-auto p-3 space-y-2">
+                <div className="flex items-center justify-between px-1 pb-1 border-b border-slate-100">
+                  <span className="text-[11px] font-black text-slate-700 uppercase">
+                    Riwayat Percakapan ({chatSessions.length}/{SARAH_MAX_CHAT_SESSIONS})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowMobileHistory(false)}
+                    className="p-1 rounded-lg hover:bg-slate-100 text-slate-500 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
+                {chatSessions.length === 0 ? (
+                  <p className="text-xs text-slate-500 text-center py-3">
+                    Belum ada riwayat obrolan tersimpan.
+                  </p>
+                ) : (
+                  chatSessions.map((sess) => {
+                    const isActive = sess.id === activeChatSessionId;
+                    return (
+                      <div
+                        key={sess.id}
+                        onClick={() => handleSelectTeacherSession(sess.id)}
+                        role="button"
+                        tabIndex={0}
+                        className={`p-2.5 rounded-2xl border flex items-center justify-between gap-2 cursor-pointer ${
+                          isActive
+                            ? 'bg-rose-50 border-rose-300'
+                            : 'bg-slate-50 border-slate-200 hover:bg-rose-50/40'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-bold text-slate-800 truncate">
+                            {sess.judul_sesi}
+                          </p>
+                          <p className="text-[10px] text-slate-500">
+                            {formatSarahDateTime(sess.updated_at || sess.created_at)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteTeacherSession(sess.id, e)}
+                          disabled={deletingSessionId === sess.id}
+                          title="Hapus Riwayat"
+                          aria-label="Hapus Riwayat"
+                          className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-100 cursor-pointer shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             )}
 
-            <div ref={chatEndRef} />
-          </div>
+            {/* Chat Message Stream */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-50/60">
+              {isLoadingSessionMsgs ? (
+                <div className="h-full flex items-center justify-center gap-2 text-xs font-bold text-slate-500">
+                  <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
+                  <span>Memuat riwayat percakapan terakhir...</span>
+                </div>
+              ) : (
+                chatMessages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-[90%] sm:max-w-[78%] rounded-3xl px-4 py-3 shadow-2xs space-y-2 ${
+                        msg.role === 'user'
+                          ? 'bg-gradient-to-r from-rose-600 to-rose-700 text-white rounded-br-sm text-xs sm:text-sm font-medium leading-relaxed'
+                          : msg.isError
+                          ? 'bg-amber-50/90 border border-amber-200 text-amber-950 rounded-bl-sm'
+                          : 'bg-white border border-slate-200 text-slate-800 rounded-bl-sm'
+                      }`}
+                    >
+                      {msg.role === 'user' ? (
+                        <p className="whitespace-pre-wrap">{msg.text}</p>
+                      ) : msg.isError ? (
+                        <>
+                          <p className="text-xs sm:text-sm leading-relaxed">{msg.text}</p>
+                          {msg.retryPrompt && (
+                            <div className="flex justify-end pt-1.5 border-t border-amber-200/70">
+                              <button
+                                type="button"
+                                disabled={isChatSending}
+                                onClick={() => handleSendTeacherChat(undefined, msg.retryPrompt)}
+                                className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition disabled:opacity-50"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                <span>Coba Kirim Ulang</span>
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <SarahMarkdown content={msg.text} />
+                          <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyText(msg.text)}
+                              className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition"
+                            >
+                              <Copy className="w-3 h-3" />
+                              <span>Salin Jawaban</span>
+                            </button>
+                            {msg.id !== 'sarah_teacher_welcome' && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await addSarahKnowledgeItem({
+                                      judul: `Diskusi SARAH (${chatMapel}) - ${new Date().toLocaleDateString('id-ID')}`,
+                                      kategori: 'Materi Ajar',
+                                      kelas: activeClass || 'Semua',
+                                      mata_pelajaran: chatMapel,
+                                      konten_ringkasan: msg.text,
+                                      sumber: `Obrolan SARAH (${activeUser.name})`,
+                                      disetujui_oleh: activeUser.name,
+                                    });
+                                    showToast('Jawaban disimpan ke Memori SARAH!', 'success');
+                                  } catch {
+                                    showToast('Gagal menyimpan ke memori SARAH.', 'error');
+                                  }
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition"
+                              >
+                                <Star className="w-3 h-3 text-amber-600" />
+                                <span>Simpan ke Memori</span>
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
 
-          {/* Starter Prompts */}
-          <div className="px-4 py-2 bg-white border-t border-slate-100 flex gap-2 overflow-x-auto shrink-0">
-            {[
-              'Buatkan ice breaking 5 menit yang ceria sebelum pelajaran dimulai',
-              'Bagaimana pendekatan lembut menghadapi siswa yang kurang percaya diri di kelas?',
-              'Bantu buatkan pesan pengumuman WhatsApp yang santun untuk wali murid',
-              'Rekomendasikan strategi pembelajaran berdiferensiasi untuk kelas saya',
-            ].map((chip, i) => (
-              <button
-                key={i}
-                type="button"
-                disabled={isChatSending}
-                onClick={() => handleSendTeacherChat(undefined, chip)}
-                className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-[11px] font-bold whitespace-nowrap cursor-pointer transition disabled:opacity-50"
-              >
-                {chip}
-              </button>
-            ))}
-          </div>
+              {isChatSending && (
+                <div className="flex justify-start">
+                  <div className="bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-2 text-xs font-bold">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                    <span>SARAH sedang membaca basis data sekolah &amp; merangkai jawaban...</span>
+                  </div>
+                </div>
+              )}
 
-          {/* Chat Input */}
-          <form
-            onSubmit={handleSendTeacherChat}
-            className="p-4 bg-white border-t border-slate-200 flex items-center gap-2.5 shrink-0"
-          >
-            <input
-              type="text"
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              disabled={isChatSending}
-              placeholder="Tulis pertanyaan, ide, atau topik diskusi bebas dengan SARAH..."
-              className="flex-1 px-4 py-3 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-rose-600 outline-none text-xs sm:text-sm text-slate-800"
-            />
-            <button
-              type="submit"
-              disabled={isChatSending || !chatInput.trim()}
-              className="px-5 py-3 rounded-2xl bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 text-white font-display font-black text-xs flex items-center gap-2 shadow-sm transition cursor-pointer disabled:opacity-40 shrink-0"
+              <div ref={chatEndRef} />
+            </div>
+
+            {/* Starter Prompts */}
+            <div className="px-4 py-2 bg-white border-t border-slate-100 flex gap-2 overflow-x-auto shrink-0">
+              {[
+                'Buatkan ice breaking 5 menit yang ceria sebelum pelajaran dimulai',
+                'Bagaimana pendekatan lembut menghadapi siswa yang kurang percaya diri di kelas?',
+                'Bantu buatkan pesan pengumuman WhatsApp yang santun untuk wali murid',
+                'Rekomendasikan strategi pembelajaran berdiferensiasi untuk kelas saya',
+              ].map((chip, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  disabled={isChatSending}
+                  onClick={() => handleSendTeacherChat(undefined, chip)}
+                  className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-[11px] font-bold whitespace-nowrap cursor-pointer transition disabled:opacity-50"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+
+            {/* Chat Input */}
+            <form
+              onSubmit={handleSendTeacherChat}
+              className="p-4 bg-white border-t border-slate-200 flex items-center gap-2.5 shrink-0"
             >
-              <Send className="w-4 h-4" />
-              <span>Kirim</span>
-            </button>
-          </form>
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                disabled={isChatSending}
+                placeholder="Tulis pertanyaan, ide, atau topik diskusi bebas dengan SARAH..."
+                className="flex-1 px-4 py-3 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-rose-600 outline-none text-xs sm:text-sm text-slate-800"
+              />
+              <button
+                type="submit"
+                disabled={isChatSending || !chatInput.trim()}
+                className="px-5 py-3 rounded-2xl bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 text-white font-display font-black text-xs flex items-center gap-2 shadow-sm transition cursor-pointer disabled:opacity-40 shrink-0"
+              >
+                <Send className="w-4 h-4" />
+                <span>Kirim</span>
+              </button>
+            </form>
+          </div>
         </div>
       )}
 
@@ -1191,6 +1830,24 @@ export const SarahAssistantTab: React.FC<Props> = ({
               </div>
             </div>
 
+            <div>
+              <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                Ilustrasi Visual Menarik (3D / 2D)
+              </label>
+              <select
+                value={lkpdGayaGambar}
+                onChange={(e) => setLkpdGayaGambar(e.target.value as SarahDocVisualChoice)}
+                className="w-full px-3 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800 outline-none focus:border-rose-600"
+              >
+                {IMAGE_STYLE_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    [{opt.badge}] {opt.label}
+                  </option>
+                ))}
+                <option value="none">Tanpa Gambar Ilustrasi</option>
+              </select>
+            </div>
+
             <button
               type="submit"
               disabled={isGenerating}
@@ -1208,7 +1865,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
                   Pratinjau LKPD Siap Cetak
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Dilengkapi Kop Identitas, Misi Seru, Langkah Visual, Tabel Kerja &amp; Refleksi Perasaan
+                  Dilengkapi Kop Identitas, Ilustrasi 3D/2D, Misi Seru, Tabel Kerja &amp; Refleksi Perasaan
                 </p>
               </div>
               {lkpdResult && (
@@ -1229,6 +1886,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
                         markdownContent: lkpdResult,
                         schoolName: profile.name,
                         author: activeUser.name,
+                        illustration: lkpdIllustration,
                       })
                     }
                     className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs flex items-center gap-1.5 border border-indigo-200 cursor-pointer"
@@ -1272,6 +1930,59 @@ export const SarahAssistantTab: React.FC<Props> = ({
                     <div>{lkpdAktivitas}</div>
                   </div>
                 </div>
+
+                {lkpdIllustration && (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50/40 p-3 space-y-2 print-avoid-break">
+                    <div className="flex flex-wrap items-center justify-between gap-2 no-print">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[10px] font-black uppercase">
+                        <Palette className="w-3 h-3" /> {lkpdIllustration.styleTag}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={isRegenLkpdImage}
+                          onClick={handleRegenerateLkpdImage}
+                          className="px-2.5 py-1 rounded-lg bg-white hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isRegenLkpdImage ? 'animate-spin' : ''}`} />
+                          <span>{isRegenLkpdImage ? 'Menggambar...' : 'Buat Ulang Gambar'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => downloadAssetPng(lkpdIllustration)}
+                          className="px-2.5 py-1 rounded-lg bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Download className="w-3 h-3" /> PNG
+                        </button>
+                      </div>
+                    </div>
+                    <img
+                      src={lkpdIllustration.svgDataUrl}
+                      alt={lkpdIllustration.title}
+                      className="w-full max-h-[300px] object-contain rounded-xl bg-white border border-rose-100 mx-auto"
+                    />
+                    <p className="text-center text-[11px] text-slate-600 font-medium">
+                      <strong className="text-slate-800">{lkpdIllustration.title}</strong> — {lkpdIllustration.caption}
+                    </p>
+                  </div>
+                )}
+
+                {!lkpdIllustration && lkpdGayaGambar !== 'none' && (
+                  <div className="no-print flex items-center justify-between gap-2 p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                    <span className="text-xs text-slate-600 font-medium">
+                      Ingin melengkapi LKPD ini dengan gambar ilustrasi 3D/2D menarik?
+                    </span>
+                    <button
+                      type="button"
+                      disabled={isRegenLkpdImage}
+                      onClick={handleRegenerateLkpdImage}
+                      className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>{isRegenLkpdImage ? 'Menggambar...' : 'Buat Gambar Sekarang'}</span>
+                    </button>
+                  </div>
+                )}
 
                 <SarahMarkdown content={lkpdResult} />
               </div>
@@ -1372,6 +2083,24 @@ export const SarahAssistantTab: React.FC<Props> = ({
               />
             </div>
 
+            <div>
+              <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                Ilustrasi Visual Modul (3D / 2D)
+              </label>
+              <select
+                value={modulGayaGambar}
+                onChange={(e) => setModulGayaGambar(e.target.value as SarahDocVisualChoice)}
+                className="w-full px-3 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800 outline-none focus:border-rose-600"
+              >
+                {IMAGE_STYLE_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    [{opt.badge}] {opt.label}
+                  </option>
+                ))}
+                <option value="none">Tanpa Gambar Ilustrasi</option>
+              </select>
+            </div>
+
             <button
               type="submit"
               disabled={isGenerating}
@@ -1382,18 +2111,25 @@ export const SarahAssistantTab: React.FC<Props> = ({
             </button>
           </form>
 
-          <div className="lg:col-span-7 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+          <div className="lg:col-span-7 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4 lkpd-print-sheet">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 no-print">
               <div>
                 <h3 className="font-display font-black text-sm text-slate-900">
                   Hasil Modul Ajar &amp; RPP
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Siap disalin, diekspor ke dokumen Word, atau disimpan ke Memori SARAH
+                  Dilengkapi ilustrasi 3D/2D, siap cetak PDF, diekspor ke Word, atau disimpan ke Memori SARAH
                 </p>
               </div>
               {modulResult && (
                 <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handlePrintLkpd}
+                    className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5" /> Cetak / PDF
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleCopyText(modulResult)}
@@ -1410,6 +2146,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
                         markdownContent: modulResult,
                         schoolName: profile.name,
                         author: activeUser.name,
+                        illustration: modulIllustration,
                       })
                     }
                     className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs flex items-center gap-1.5 border border-indigo-200 cursor-pointer"
@@ -1430,15 +2167,334 @@ export const SarahAssistantTab: React.FC<Props> = ({
             </div>
 
             {modulResult ? (
-              <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/70 border border-slate-200 max-h-[650px] overflow-y-auto">
+              <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/70 border border-slate-200 max-h-[650px] overflow-y-auto print-expand-scroll lkpd-print-sheet space-y-4">
+                {modulIllustration && (
+                  <div className="rounded-2xl border border-indigo-200 bg-white p-3 space-y-2 print-avoid-break">
+                    <div className="flex flex-wrap items-center justify-between gap-2 no-print">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[10px] font-black uppercase">
+                        <Palette className="w-3 h-3" /> {modulIllustration.styleTag}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={isRegenModulImage}
+                          onClick={handleRegenerateModulImage}
+                          className="px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isRegenModulImage ? 'animate-spin' : ''}`} />
+                          <span>{isRegenModulImage ? 'Menggambar...' : 'Buat Ulang Gambar'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => downloadAssetPng(modulIllustration)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-rose-50 text-rose-700 border border-rose-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Download className="w-3 h-3" /> PNG
+                        </button>
+                      </div>
+                    </div>
+                    <img
+                      src={modulIllustration.svgDataUrl}
+                      alt={modulIllustration.title}
+                      className="w-full max-h-[280px] object-contain rounded-xl bg-slate-50 border border-slate-100 mx-auto"
+                    />
+                    <p className="text-center text-[11px] text-slate-600 font-medium">
+                      <strong className="text-slate-800">{modulIllustration.title}</strong> — {modulIllustration.caption}
+                    </p>
+                  </div>
+                )}
+
+                {!modulIllustration && modulGayaGambar !== 'none' && (
+                  <div className="no-print flex items-center justify-between gap-2 p-3 rounded-2xl bg-white border border-slate-200">
+                    <span className="text-xs text-slate-600 font-medium">
+                      Ingin menambahkan ilustrasi gambar 3D/2D ke Modul Ajar ini?
+                    </span>
+                    <button
+                      type="button"
+                      disabled={isRegenModulImage}
+                      onClick={handleRegenerateModulImage}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>{isRegenModulImage ? 'Menggambar...' : 'Buat Gambar Sekarang'}</span>
+                    </button>
+                  </div>
+                )}
+
                 <SarahMarkdown content={modulResult} />
               </div>
             ) : (
-              <div className="py-16 text-center space-y-2 text-slate-400">
+              <div className="py-16 text-center space-y-2 text-slate-400 no-print">
                 <GraduationCap className="w-10 h-10 mx-auto text-rose-200" />
                 <p className="text-xs font-bold text-slate-500">
                   Isi formulir di sebelah kiri untuk membuat Modul Ajar Kurikulum Merdeka.
                 </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* TAB STUDIO GAMBAR: BUAT GAMBAR EDUKATIF 3D & 2D BERSAMA SARAH         */}
+      {/* ===================================================================== */}
+      {subTab === 'gambar' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 no-print">
+          <form
+            onSubmit={handleGenerateStudioImage}
+            className="lg:col-span-5 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4 h-fit"
+          >
+            <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-rose-500 to-indigo-600 text-white flex items-center justify-center">
+                <Palette className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="font-display font-black text-sm text-slate-900">
+                  Studio Gambar Edukatif SARAH (3D &amp; 2D)
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  Ilustrasi 3D clay, isometrik, 2D cerita anak &amp; diagram berlabel siap pakai
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                Deskripsi / Topik Gambar <span className="text-rose-600">*</span>
+              </label>
+              <textarea
+                rows={3}
+                value={gambarDeskripsi}
+                onChange={(e) => setGambarDeskripsi(e.target.value)}
+                placeholder="Contoh: Organ sistem pencernaan manusia yang ceria dengan lambung, usus, dan label ramah anak SD..."
+                className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white text-xs text-slate-800 outline-none focus:border-rose-600"
+              />
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {[
+                  'Sistem pernapasan manusia paru-paru ramah anak SD',
+                  'Siklus air hujan, awan, matahari, dan penguapan',
+                  'Bangun ruang kubus, balok, kerucut, dan bola warna-warni',
+                  'Anak-anak SD ceria membaca buku di taman sekolah',
+                ].map((idea, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setGambarDeskripsi(idea)}
+                    className="px-2.5 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-[10px] font-bold cursor-pointer transition"
+                  >
+                    + {idea}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-black text-slate-700 uppercase mb-1.5">
+                Pilih Gaya Visual (3D / 2D)
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {IMAGE_STYLE_OPTIONS.map((styleOpt) => {
+                  const selected = gambarGaya === styleOpt.id;
+                  return (
+                    <button
+                      key={styleOpt.id}
+                      type="button"
+                      onClick={() => setGambarGaya(styleOpt.id)}
+                      className={`p-3 rounded-2xl border text-left transition cursor-pointer ${
+                        selected
+                          ? 'bg-rose-50 border-rose-500 ring-2 ring-rose-200'
+                          : 'bg-slate-50 border-slate-200 hover:bg-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1 mb-0.5">
+                        <span className="font-display font-black text-xs text-slate-900">
+                          {styleOpt.label}
+                        </span>
+                        <span
+                          className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md ${
+                            selected ? 'bg-rose-600 text-white' : 'bg-slate-200 text-slate-700'
+                          }`}
+                        >
+                          {styleOpt.badge}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-500 leading-snug">{styleOpt.desc}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2.5">
+              <div>
+                <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                  Rasio
+                </label>
+                <select
+                  value={gambarRasio}
+                  onChange={(e) => setGambarRasio(e.target.value as '16:9' | '4:3' | '1:1' | '3:4')}
+                  className="w-full px-2.5 py-2 rounded-2xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800"
+                >
+                  <option value="4:3">Kartu (4:3)</option>
+                  <option value="16:9">Poster (16:9)</option>
+                  <option value="1:1">Persegi (1:1)</option>
+                  <option value="3:4">Potret (3:4)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                  Kelas
+                </label>
+                <select
+                  value={gambarKelas}
+                  onChange={(e) => setGambarKelas(e.target.value)}
+                  className="w-full px-2.5 py-2 rounded-2xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800"
+                >
+                  {CLASSES_LIST.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                  Mapel
+                </label>
+                <select
+                  value={gambarMapel}
+                  onChange={(e) => setGambarMapel(e.target.value)}
+                  className="w-full px-2.5 py-2 rounded-2xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800"
+                >
+                  {mapelOptions.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isGeneratingImage}
+              className="w-full py-3 rounded-2xl bg-gradient-to-r from-rose-600 via-pink-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 text-white font-display font-black text-xs flex items-center justify-center gap-2 shadow-md transition cursor-pointer disabled:opacity-60"
+            >
+              {isGeneratingImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              <span>{isGeneratingImage ? 'SARAH Sedang Menggambar...' : 'Buat Gambar Menarik dengan SARAH'}</span>
+            </button>
+          </form>
+
+          <div className="lg:col-span-7 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-display font-black text-sm text-slate-900">
+                  Hasil Ilustrasi Visual SARAH
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Siap diunduh sebagai PNG/SVG atau langsung dipasang ke LKPD &amp; Modul Ajar
+                </p>
+              </div>
+              {gambarResult && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => downloadAssetPng(gambarResult)}
+                    className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Unduh PNG
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => downloadAssetSvg(gambarResult)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" /> SVG
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLkpdIllustration(gambarResult);
+                      setSubTab('lkpd');
+                      showToast('Gambar dipasang ke pratinjau Generator LKPD!', 'success');
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-pink-50 hover:bg-pink-100 text-rose-700 border border-rose-200 font-bold text-xs cursor-pointer"
+                  >
+                    Pasang ke LKPD
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModulIllustration(gambarResult);
+                      setSubTab('modul');
+                      showToast('Gambar dipasang ke pratinjau Modul Ajar!', 'success');
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-bold text-xs cursor-pointer"
+                  >
+                    Pasang ke Modul
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {gambarResult ? (
+              <div className="space-y-3">
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-rose-50/50 via-white to-indigo-50/50 border-2 border-rose-100 flex flex-col items-center justify-center">
+                  <img
+                    src={gambarResult.svgDataUrl}
+                    alt={gambarResult.title}
+                    className="w-full max-h-[430px] object-contain rounded-xl shadow-xs bg-white"
+                  />
+                </div>
+                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-display font-black text-xs text-slate-900">
+                      {gambarResult.title}
+                    </p>
+                    <p className="text-[11px] text-slate-600">{gambarResult.caption}</p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-lg bg-indigo-100 text-indigo-800 text-[10px] font-black uppercase">
+                    {gambarResult.styleTag} • {gambarResult.rasio}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="py-16 text-center space-y-2 text-slate-400">
+                <ImageIcon className="w-10 h-10 mx-auto text-rose-200" />
+                <p className="text-xs font-bold text-slate-500">
+                  Tulis deskripsi atau pilih ide gambar di sebelah kiri, lalu pilih gaya 3D atau 2D yang Anda sukai!
+                </p>
+              </div>
+            )}
+
+            {gambarHistory.length > 1 && (
+              <div className="pt-2 border-t border-slate-100 space-y-2">
+                <p className="text-[11px] font-black uppercase text-slate-500">
+                  Galeri Gambar Sesi Ini ({gambarHistory.length})
+                </p>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                  {gambarHistory.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setGambarResult(item)}
+                      className={`p-1.5 rounded-xl border text-left transition cursor-pointer ${
+                        gambarResult?.id === item.id
+                          ? 'border-rose-500 ring-2 ring-rose-200 bg-rose-50'
+                          : 'border-slate-200 bg-white hover:border-rose-300'
+                      }`}
+                    >
+                      <img
+                        src={item.svgDataUrl}
+                        alt={item.title}
+                        className="w-full h-16 object-contain rounded-lg bg-slate-50"
+                      />
+                      <p className="text-[10px] font-bold text-slate-700 truncate mt-1">
+                        {item.title}
+                      </p>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>

@@ -432,6 +432,148 @@ ${typeInstructions}
   };
 }
 
+function getRatioDimensions(rasio) {
+  switch (rasio) {
+    case '16:9':
+      return { width: 960, height: 540 };
+    case '1:1':
+      return { width: 800, height: 800 };
+    case '3:4':
+      return { width: 600, height: 800 };
+    case '4:3':
+    default:
+      return { width: 800, height: 600 };
+  }
+}
+
+function sanitizeSvgVector(rawSvg, width, height) {
+  if (typeof rawSvg !== 'string') return '';
+  const match = rawSvg.match(/<svg[\s\S]*<\/svg>/i);
+  if (!match) return '';
+
+  let svg = match[0]
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi, '')
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/javascript\s*:/gi, '');
+
+  if (!/\sxmlns=/.test(svg)) {
+    svg = svg.replace(/^<svg/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+  if (!/\sviewBox=/.test(svg)) {
+    svg = svg.replace(/^<svg/i, `<svg viewBox="0 0 ${width} ${height}"`);
+  }
+  if (!/\swidth=/.test(svg)) {
+    svg = svg.replace(/^<svg/i, `<svg width="${width}"`);
+  }
+  if (!/\sheight=/.test(svg)) {
+    svg = svg.replace(/^<svg/i, `<svg height="${height}"`);
+  }
+  return svg;
+}
+
+async function generateSarahIllustration({ ai, params, ragBlock, userInfo }) {
+  const deskripsi = sanitizeString(params.deskripsi || params.topik || '', 1200);
+  if (!deskripsi) {
+    const err = new Error('Deskripsi atau topik gambar tidak boleh kosong.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const kelas = sanitizeString(params.kelas || 'Kelas SD', 40);
+  const mapel = sanitizeString(params.mapel || 'Umum', 100);
+  const gaya = sanitizeString(params.gaya || '3d_clay', 40);
+  const rasio = sanitizeString(params.rasio || '4:3', 20);
+  const konteks = sanitizeString(params.konteks || 'pembelajaran', 60);
+  const { width, height } = getRatioDimensions(rasio);
+
+  const styleDirections = {
+    '3d_clay':
+      'GAYA VISUAL: Ilustrasi 3D Clay & Glossy Edukatif (seperti animasi 3D ramah anak). WAJIB menggunakan banyak <radialGradient>, <linearGradient>, <filter id="softShadow"> dengan <feDropShadow>, pantulan cahaya putih lembut (specular highlight ellipse), bayangan dasar elips di lantai/meja, serta bentuk membulat penuh kedalaman 3D sehingga objek tampak timbul dan nyata.',
+    '3d_isometrik':
+      'GAYA VISUAL: Ilustrasi 3D Isometrik Edukatif. Gambar objek/adegan dalam perspektif 3D isometrik bersudut 30 derajat dengan sisi atas terang, sisi kiri sedang, sisi kanan agak gelap, garis tepi halus, gradien berdimensi, dan bayangan jatuh yang rapi.',
+    '2d_ceria':
+      'GAYA VISUAL: Ilustrasi 2D Buku Cerita Anak SD yang Ceria & Hangat. Gunakan karakter atau objek ekspresif dengan proporsi ramah anak, warna pastel-cerah harmonis, stroke membulat (stroke-linecap="round" stroke-linejoin="round"), awan/bintang/daun dekoratif, serta detail berlapis yang sangat menarik.',
+    diagram_edukatif:
+      'GAYA VISUAL: Poster & Diagram Edukatif 2D/3D Berlabel Bahasa Indonesia. Tampilkan ilustrasi utama yang besar dan bergradasi di tengah, lalu tambahkan 3–5 kotak label (pill rounded rect) berbahasa Indonesia yang jelas beserta garis panah penunjuk yang rapi tanpa saling tumpang tindih.',
+  };
+
+  const chosenStyleGuide = styleDirections[gaya] || styleDirections['3d_clay'];
+  const teacherName = sanitizeString(userInfo?.name || 'Bapak/Ibu Guru', 80);
+
+  const systemInstruction = `Kamu adalah SARAH Studio Visual, ilustrator vektor edukatif ahli untuk Sekolah Dasar di aplikasi SERBU 21 (SDN Rawa Badak Utara 21) yang mendampingi ${teacherName}.
+Tugasmu merancang ilustrasi vektor SVG yang SANGAT MENARIK, CERIA, RAPI, DETAIL, dan RAMAH ANAK SD untuk kebutuhan ${konteks} (${kelas}, ${mapel}).
+Referensi sekolah bila relevan:
+${ragBlock}`;
+
+  const prompt = `Buatkan ilustrasi SVG lengkap berkualitas tinggi untuk topik/deskripsi berikut:
+"${deskripsi}"
+
+SPESIFIKASI WAJIB:
+- Kanvas SVG: viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg".
+- ${chosenStyleGuide}
+- Latar belakang: Gunakan <rect width="${width}" height="${height}" rx="28" fill="url(#bgGrad)" /> dengan gradasi lembut dan elemen dekorasi halus (sparkle, gelembung lembut, atau bentuk geometris pastel) agar gambar terlihat profesional seperti karya ilustrator modern.
+- Kekayaan detail: Susun minimal 20–45 elemen vektor berlapis (<defs>, <linearGradient>, <radialGradient>, <filter>, <g>, <path>, <circle>, <ellipse>, <rect>, <polygon>) yang membentuk adegan atau objek utama yang sangat jelas dikenali (JANGAN hanya kotak kosong atau gambar tongkat sederhana).
+- Tata letak aman: Pastikan seluruh gambar, bayangan, dan teks berada rapi di dalam margin 36px dari tepi kanvas (tidak terpotong).
+- Jika mencantumkan teks judul atau label singkat di dalam SVG, gunakan font-family="Arial, Helvetica, sans-serif", bahasa Indonesia yang benar, dan ukuran terbaca jelas tanpa menabrak objek utama.
+- DILARANG menyertakan tag <script>, <foreignObject>, atau event handler apa pun.
+- Kembalikan HANYA JSON sesuai skema.`;
+
+  const response = await generateWithRetryAndFallback({
+    ai,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          title: {
+            type: Type.STRING,
+            description: 'Judul singkat menarik untuk gambar ilustrasi dalam bahasa Indonesia',
+          },
+          caption: {
+            type: Type.STRING,
+            description: 'Keterangan edukatif 1-2 kalimat ramah guru & siswa SD',
+          },
+          styleTag: {
+            type: Type.STRING,
+            description: 'Label singkat gaya visual misalnya: 3D Clay Edukatif, 2D Buku Anak, Diagram Berlabel',
+          },
+          svgCode: {
+            type: Type.STRING,
+            description: `Kode XML SVG utuh dimulai dari <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" ...> sampai </svg>`,
+          },
+        },
+        required: ['title', 'caption', 'styleTag', 'svgCode'],
+      },
+    },
+  });
+
+  const rawText = (response.text || '{}').trim();
+  const parsed = JSON.parse(rawText);
+  const svgCode = sanitizeSvgVector(parsed.svgCode, width, height);
+
+  if (!svgCode) {
+    const err = new Error('SARAH belum berhasil merender gambar vektor pada percobaan ini. Silakan klik buat ulang gambar.');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  return {
+    mode: 'image_generator',
+    title: String(parsed.title || deskripsi.slice(0, 80)).trim(),
+    caption: String(parsed.caption || `Ilustrasi edukatif untuk topik ${deskripsi}`).trim(),
+    styleTag: String(parsed.styleTag || gaya).trim(),
+    gaya,
+    rasio,
+    width,
+    height,
+    svgCode,
+  };
+}
+
 export async function processSarahRequest(body = {}) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
@@ -466,6 +608,10 @@ export async function processSarahRequest(body = {}) {
   try {
     if (mode === 'cbt_generator') {
       return await generateCbtQuestions({ ai, params, ragBlock });
+    }
+
+    if (mode === 'image_generator') {
+      return await generateSarahIllustration({ ai, params, ragBlock, userInfo });
     }
 
     if (mode === 'student_chat') {

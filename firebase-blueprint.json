@@ -204,6 +204,30 @@
         "created_at": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "studentId", "studentName", "kelas", "topik", "pertanyaan"]
+    },
+    "SarahChatSession": {
+      "title": "SarahChatSession",
+      "description": "Sesi riwayat percakapan otomatis (Auto-Save) asisten SARAH per pengguna",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "role": { "type": "string", "enum": ["guru", "siswa"] },
+        "judul_sesi": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "role", "judul_sesi"]
+    },
+    "SarahChatMessage": {
+      "title": "SarahChatMessage",
+      "description": "Pesan dalam sub-koleksi riwayat chat SARAH",
+      "type": "object",
+      "properties": {
+        "sender": { "type": "string", "enum": ["user", "sarah"] },
+        "text": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sender", "text"]
     }
   },
   "firestore": {
@@ -262,6 +286,14 @@
     "/sarah_student_logs/{logId}": {
       "schema": "SarahStudentLog",
       "description": "Log pertanyaan siswa pada widget Tanya SARAH untuk pantauan guru"
+    },
+    "/sarah_chat_sessions/{sessionId}": {
+      "schema": "SarahChatSession",
+      "description": "Sesi riwayat percakapan otomatis SARAH per akun pengguna (dibatasi 20 sesi terakhir)"
+    },
+    "/sarah_chat_sessions/{sessionId}/messages/{messageId}": {
+      "schema": "SarahChatMessage",
+      "description": "Sub-koleksi isi pesan percakapan SARAH per sesi (dibatasi 30 pesan terakhir)"
     }
   }
 }
