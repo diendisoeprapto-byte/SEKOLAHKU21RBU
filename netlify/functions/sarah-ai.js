@@ -1,6 +1,38 @@
 import { GoogleGenAI, Type } from '@google/genai';
 
-const MODEL_NAME = 'gemini-2.5-flash';
+const MODEL_NAME = 'gemini-4-hydrogen';
+
+function formatGeminiError(error) {
+  const rawMessage = typeof error?.message === 'string' ? error.message.trim() : '';
+  let statusCode = Number(error?.statusCode || error?.status) || 500;
+  let cleanMessage = rawMessage || 'Terjadi kesalahan saat menghubungi layanan SARAH AI.';
+
+  if (rawMessage.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(rawMessage);
+      if (parsed?.error) {
+        if (Number(parsed.error.code)) {
+          statusCode = Number(parsed.error.code);
+        }
+        if (typeof parsed.error.message === 'string' && parsed.error.message.trim()) {
+          cleanMessage = parsed.error.message.trim();
+        }
+      }
+    } catch {
+      // Keep rawMessage when not valid JSON
+    }
+  }
+
+  if (statusCode === 400 || statusCode === 403) {
+    cleanMessage = `Konfigurasi API Key Gemini bermasalah (${cleanMessage}). Periksa GEMINI_API_KEY di Settings > Secrets atau Environment Variables Netlify.`;
+  } else if (statusCode === 429) {
+    cleanMessage = `Batas penggunaan (kuota) API Gemini sedang penuh (${cleanMessage}). Silakan tunggu sebentar lalu coba lagi.`;
+  }
+
+  const normalized = new Error(cleanMessage);
+  normalized.statusCode = statusCode >= 400 && statusCode < 600 ? statusCode : 500;
+  return normalized;
+}
 
 function sanitizeString(val, maxLen = 4000) {
   if (typeof val !== 'string') return '';
@@ -356,101 +388,105 @@ export async function processSarahRequest(body = {}) {
     },
   });
 
-  if (mode === 'cbt_generator') {
-    return await generateCbtQuestions({ ai, params, ragBlock });
-  }
-
-  if (mode === 'student_chat') {
-    const message = sanitizeString(params.message || body.message || '', 2000);
-    if (!message) {
-      const err = new Error('Pertanyaan siswa tidak boleh kosong.');
-      err.statusCode = 400;
-      throw err;
+  try {
+    if (mode === 'cbt_generator') {
+      return await generateCbtQuestions({ ai, params, ragBlock });
     }
 
-    const history = Array.isArray(body.history) ? body.history.slice(-10) : [];
-    const contents = [
-      ...history
-        .filter((h) => h && typeof h.text === 'string' && h.text.trim())
-        .map((h) => ({
-          role: h.role === 'model' ? 'model' : 'user',
-          parts: [{ text: sanitizeString(h.text, 1500) }],
-        })),
-      {
-        role: 'user',
-        parts: [{ text: message }],
-      },
-    ];
+    if (mode === 'student_chat') {
+      const message = sanitizeString(params.message || body.message || '', 2000);
+      if (!message) {
+        const err = new Error('Pertanyaan siswa tidak boleh kosong.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const history = Array.isArray(body.history) ? body.history.slice(-10) : [];
+      const contents = [
+        ...history
+          .filter((h) => h && typeof h.text === 'string' && h.text.trim())
+          .map((h) => ({
+            role: h.role === 'model' ? 'model' : 'user',
+            parts: [{ text: sanitizeString(h.text, 1500) }],
+          })),
+        {
+          role: 'user',
+          parts: [{ text: message }],
+        },
+      ];
+
+      const response = await ai.models.generateContent({
+        model: MODEL_NAME,
+        contents,
+        config: {
+          systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo),
+        },
+      });
+
+      return {
+        mode: 'student_chat',
+        text: (response.text || '').trim() || 'Maaf ya Nak, SARAH belum dapat memproses pertanyaanmu saat ini.',
+      };
+    }
+
+    if (mode === 'general_chat') {
+      const message = sanitizeString(params.message || body.message || '', 3000);
+      if (!message) {
+        const err = new Error('Pesan obrolan tidak boleh kosong.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const history = Array.isArray(body.history) ? body.history.slice(-12) : [];
+      const contents = [
+        ...history
+          .filter((h) => h && typeof h.text === 'string' && h.text.trim())
+          .map((h) => ({
+            role: h.role === 'model' ? 'model' : 'user',
+            parts: [{ text: sanitizeString(h.text, 2000) }],
+          })),
+        {
+          role: 'user',
+          parts: [{ text: message }],
+        },
+      ];
+
+      const response = await ai.models.generateContent({
+        model: MODEL_NAME,
+        contents,
+        config: {
+          systemInstruction: buildTeacherBaseSystem(ragBlock, userInfo),
+        },
+      });
+
+      return {
+        mode: 'general_chat',
+        text: (response.text || '').trim() || 'Mohon maaf, SARAH belum menghasilkan balasan. Silakan coba kembali.',
+      };
+    }
+
+    const { systemInstruction, userPrompt } = buildTeacherPromptAndInstruction(
+      mode,
+      params,
+      ragBlock,
+      userInfo
+    );
 
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents,
+      contents: userPrompt,
       config: {
-        systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo),
+        systemInstruction,
       },
     });
 
     return {
-      mode: 'student_chat',
-      text: (response.text || '').trim() || 'Maaf ya Nak, SARAH belum dapat memproses pertanyaanmu saat ini.',
+      mode,
+      text: (response.text || '').trim() || 'Mohon maaf, SARAH belum menghasilkan respons. Silakan coba lagi.',
     };
+  } catch (error) {
+    throw formatGeminiError(error);
   }
-
-  if (mode === 'general_chat') {
-    const message = sanitizeString(params.message || body.message || '', 3000);
-    if (!message) {
-      const err = new Error('Pesan obrolan tidak boleh kosong.');
-      err.statusCode = 400;
-      throw err;
-    }
-
-    const history = Array.isArray(body.history) ? body.history.slice(-12) : [];
-    const contents = [
-      ...history
-        .filter((h) => h && typeof h.text === 'string' && h.text.trim())
-        .map((h) => ({
-          role: h.role === 'model' ? 'model' : 'user',
-          parts: [{ text: sanitizeString(h.text, 2000) }],
-        })),
-      {
-        role: 'user',
-        parts: [{ text: message }],
-      },
-    ];
-
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents,
-      config: {
-        systemInstruction: buildTeacherBaseSystem(ragBlock, userInfo),
-      },
-    });
-
-    return {
-      mode: 'general_chat',
-      text: (response.text || '').trim() || 'Mohon maaf, SARAH belum menghasilkan balasan. Silakan coba kembali.',
-    };
-  }
-
-  const { systemInstruction, userPrompt } = buildTeacherPromptAndInstruction(
-    mode,
-    params,
-    ragBlock,
-    userInfo
-  );
-
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
-    contents: userPrompt,
-    config: {
-      systemInstruction,
-    },
-  });
-
-  return {
-    mode,
-    text: (response.text || '').trim() || 'Mohon maaf, SARAH belum menghasilkan respons. Silakan coba lagi.',
-  };
 }
 
 export const handler = async (event) => {

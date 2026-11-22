@@ -14,7 +14,7 @@
     "validate:students": "tsx scripts/validate-student-classes.ts"
   },
   "dependencies": {
-    "@google/genai": "^2.4.0",
+    "@google/genai": "^2.32.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/jsbarcode": "^3.11.4",
     "@types/katex": "^0.16.8",
