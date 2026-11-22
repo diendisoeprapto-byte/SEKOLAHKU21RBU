@@ -56,6 +56,7 @@ import {
   extractSarahResponseMetadata,
   resolveAvatarTypeFromReligion,
 } from '../utils/sarahVisuals';
+import { SarahEmojiPicker } from './SarahEmojiPicker';
 
 interface Props {
   activeUser: ActiveUser;
@@ -155,6 +156,24 @@ export const SarahStudentWidget: React.FC<Props> = ({
   }, [currentStudent?.agama]);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleInsertStudentEmoji = (emoji: string) => {
+    const el = chatInputRef.current;
+    if (!el) {
+      setInputText((prev) => `${prev}${emoji}`);
+      return;
+    }
+    const start = el.selectionStart ?? inputText.length;
+    const end = el.selectionEnd ?? inputText.length;
+    const nextVal = `${inputText.slice(0, start)}${emoji}${inputText.slice(end)}`;
+    setInputText(nextVal);
+    requestAnimationFrame(() => {
+      el.focus();
+      const nextPos = start + emoji.length;
+      el.setSelectionRange(nextPos, nextPos);
+    });
+  };
 
   useEffect(() => {
     const unsubCfg = subscribeToSarahConfig(setSarahConfig);
@@ -785,7 +804,13 @@ export const SarahStudentWidget: React.FC<Props> = ({
                 onSubmit={handleSend}
                 className="p-3 bg-white border-t border-slate-200 flex items-center gap-2 shrink-0"
               >
+                <SarahEmojiPicker
+                  onSelectEmoji={handleInsertStudentEmoji}
+                  disabled={isThinking}
+                  compact
+                />
                 <input
+                  ref={chatInputRef}
                   type="text"
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}

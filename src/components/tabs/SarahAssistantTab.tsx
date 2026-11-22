@@ -91,6 +91,7 @@ import {
   SarahAvatarType,
   extractSarahResponseMetadata,
 } from '../../utils/sarahVisuals';
+import { SarahEmojiPicker } from '../SarahEmojiPicker';
 import type { TabId } from '../Sidebar';
 
 interface Props {
@@ -187,6 +188,120 @@ const KATEGORI_OPTIONS: SarahKategori[] = [
   'Kebijakan Sekolah',
 ];
 
+const ENDS_WITH_EMOJI_RE = /\p{Extended_Pictographic}\s*$/u;
+
+function enrichSarahFriendlyEmojis(
+  rawText: string,
+  options?: { isChat?: boolean }
+): string {
+  if (!rawText || !rawText.trim()) return rawText;
+
+  // Preserve leading [AVATAR: ...] and trailing [STIKER: ...] tokens untouched
+  const avatarMatch = rawText.match(/^(\s*\[AVATAR\s*:[^\]]*\]\s*)/i);
+  const avatarPrefix = avatarMatch ? avatarMatch[1] : '';
+  const withoutAvatar = avatarPrefix ? rawText.slice(avatarPrefix.length) : rawText;
+
+  const stickerMatch = withoutAvatar.match(/(\s*\[STIKER\s*:\s*[a-zA-Z_]+\s*\]\s*)$/i);
+  const stickerSuffix = stickerMatch ? stickerMatch[1] : '';
+  const body = stickerSuffix
+    ? withoutAvatar.slice(0, withoutAvatar.length - stickerSuffix.length)
+    : withoutAvatar;
+
+  if (!body.trim()) return rawText;
+
+  const existingEmojis = body.match(/\p{Extended_Pictographic}/gu) || [];
+  if (existingEmojis.length >= 2) {
+    return rawText;
+  }
+
+  const needed = Math.max(1, 2 - existingEmojis.length);
+  const candidates: string[] = [];
+
+  if (/(halo|hai|assalamu|selamat|bapak|ibu|terima\s*kasih|sama-sama|salam|ramah|senang)/i.test(body)) {
+    candidates.push('😊');
+  }
+  if (/(modul|rpp|lkpd|belajar|materi|siswa|kelas|sekolah|pelajaran|kurikulum|buku|pembelajaran|asesmen)/i.test(body)) {
+    candidates.push('📚', '🎒');
+  }
+  if (/(strategi|ide|langkah|tips|solusi|metode|inovasi|kegiatan|ice\s*breaking|eksplorasi|refleksi|rangkuman)/i.test(body)) {
+    candidates.push('✨', '💡');
+  }
+  if (/(hebat|bagus|semangat|baik|sukses|setuju|mantap|dukungan|apresiasi|bisa|siap)/i.test(body)) {
+    candidates.push('👍', '🌟');
+  }
+
+  for (const fallback of ['😊', '✨', '👍', '📚']) {
+    if (!candidates.includes(fallback)) {
+      candidates.push(fallback);
+    }
+  }
+
+  const chosen = candidates
+    .filter((emoji) => !body.includes(emoji))
+    .slice(0, needed);
+
+  if (chosen.length === 0) return rawText;
+
+  const lines = body.split('\n');
+  let inCodeFence = false;
+  const safeProseIndices: number[] = [];
+  const fallbackTextIndices: number[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (/^```/.test(trimmed)) {
+      inCodeFence = !inCodeFence;
+      continue;
+    }
+    if (inCodeFence || !trimmed) continue;
+    if (/^\|/.test(trimmed) || trimmed.endsWith('|')) continue;
+    if (/^[-*_]{3,}$/.test(trimmed)) continue;
+    if (/^\[(AVATAR|STIKER)\s*:/i.test(trimmed)) continue;
+    if (/^!\[/.test(trimmed)) continue;
+
+    fallbackTextIndices.push(i);
+
+    if (
+      !/^#{1,6}\s/.test(trimmed) &&
+      !/^>\s/.test(trimmed) &&
+      !/^[-*+]\s/.test(trimmed) &&
+      !/^\d+\.\s/.test(trimmed) &&
+      !trimmed.endsWith(':')
+    ) {
+      safeProseIndices.push(i);
+    }
+  }
+
+  if (safeProseIndices.length >= 2) {
+    const firstIdx = safeProseIndices[0];
+    const lastIdx = safeProseIndices[safeProseIndices.length - 1];
+    if (!ENDS_WITH_EMOJI_RE.test(lines[firstIdx])) {
+      lines[firstIdx] = `${lines[firstIdx].replace(/\s+$/, '')} ${chosen[0]}`;
+    }
+    if (chosen[1] && !ENDS_WITH_EMOJI_RE.test(lines[lastIdx])) {
+      lines[lastIdx] = `${lines[lastIdx].replace(/\s+$/, '')} ${chosen[1]}`;
+    }
+  } else if (safeProseIndices.length === 1) {
+    const idx = safeProseIndices[0];
+    if (!ENDS_WITH_EMOJI_RE.test(lines[idx])) {
+      lines[idx] = `${lines[idx].replace(/\s+$/, '')} ${chosen.join(' ')}`;
+    }
+  } else if (options?.isChat) {
+    if (fallbackTextIndices.length > 0) {
+      const targetIdx = fallbackTextIndices[fallbackTextIndices.length - 1];
+      if (!ENDS_WITH_EMOJI_RE.test(lines[targetIdx])) {
+        lines[targetIdx] = `${lines[targetIdx].replace(/\s+$/, '')} ${chosen.join(' ')}`;
+      }
+    } else {
+      lines.push('', chosen.join(' '));
+    }
+  } else {
+    return rawText;
+  }
+
+  return `${avatarPrefix}${lines.join('\n')}${stickerSuffix}`;
+}
+
 export const SarahAssistantTab: React.FC<Props> = ({
   activeUser,
   profile,
@@ -253,7 +368,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const buildTeacherWelcome = (): TeacherChatMessage => ({
     id: 'sarah_teacher_welcome',
     role: 'model',
-    text: `Assalamu'alaikum / Selamat sejahtera, **${activeUser.name}**.\n\nSaya **SARAH**, sahabat diskusi Bapak/Ibu di **${profile.name}**. Silakan ajak saya berdiskusi secara bebas—mulai dari strategi mendampingi anak di kelas, merancang ice breaking, menyusun asesmen, hingga menyelesaikan kendala belajar siswa. Apa yang sedang ingin Bapak/Ibu bahas hari ini?`,
+    text: `Assalamu'alaikum / Selamat sejahtera, **${activeUser.name}**! 😊\n\nSaya **SARAH**, sahabat diskusi Bapak/Ibu di **${profile.name}**. 📚 Silakan ajak saya berdiskusi secara bebas—mulai dari strategi mendampingi anak di kelas, merancang ice breaking, menyusun asesmen, hingga menyelesaikan kendala belajar siswa. Apa yang sedang ingin Bapak/Ibu bahas hari ini? ✨`,
   });
 
   const [chatMessages, setChatMessages] = useState<TeacherChatMessage[]>(() => [
@@ -269,6 +384,24 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const [chatMapel, setChatMapel] = useState('Umum');
   const [isChatSending, setIsChatSending] = useState(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleInsertChatEmoji = (emoji: string) => {
+    const el = chatInputRef.current;
+    if (!el) {
+      setChatInput((prev) => `${prev}${emoji}`);
+      return;
+    }
+    const start = el.selectionStart ?? chatInput.length;
+    const end = el.selectionEnd ?? chatInput.length;
+    const nextVal = `${chatInput.slice(0, start)}${emoji}${chatInput.slice(end)}`;
+    setChatInput(nextVal);
+    requestAnimationFrame(() => {
+      el.focus();
+      const nextPos = start + emoji.length;
+      el.setSelectionRange(nextPos, nextPos);
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -289,7 +422,10 @@ export const SarahAssistantTab: React.FC<Props> = ({
               msgs.map((m) => ({
                 id: m.id,
                 role: m.sender === 'user' ? 'user' : 'model',
-                text: m.text,
+                text:
+                  m.sender === 'user'
+                    ? m.text
+                    : enrichSarahFriendlyEmojis(m.text, { isChat: true }),
               }))
             );
           } else {
@@ -556,7 +692,10 @@ export const SarahAssistantTab: React.FC<Props> = ({
           msgs.map((m) => ({
             id: m.id,
             role: m.sender === 'user' ? 'user' : 'model',
-            text: m.text,
+            text:
+              m.sender === 'user'
+                ? m.text
+                : enrichSarahFriendlyEmojis(m.text, { isChat: true }),
           }))
         );
       } else {
@@ -682,12 +821,14 @@ export const SarahAssistantTab: React.FC<Props> = ({
         setAvatarLoadError(false);
       }
 
+      const cheerfulReply = enrichSarahFriendlyEmojis(res.text, { isChat: true });
+
       setChatMessages((prev) => [
         ...prev,
         {
           id: `tm_${Date.now()}`,
           role: 'model',
-          text: res.text,
+          text: cheerfulReply,
         },
       ]);
 
@@ -695,7 +836,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         appendSarahChatMessage({
           sessionId: currentSessionId,
           sender: 'sarah',
-          text: res.text,
+          text: cheerfulReply,
         }).catch(() => {});
         setChatSessions((prev) => {
           const target = prev.find((s) => s.id === currentSessionId);
@@ -713,7 +854,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         {
           id: `terr_${Date.now()}`,
           role: 'model',
-          text: `Mohon maaf Bapak/Ibu, SARAH mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}).`,
+          text: `Mohon maaf Bapak/Ibu, SARAH mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}). Silakan coba kirim ulang ya 😊`,
           isError: true,
           retryPrompt: promptText,
         },
@@ -856,7 +997,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         throw textSettled.reason;
       }
 
-      setLkpdResult(textSettled.value.text);
+      setLkpdResult(enrichSarahFriendlyEmojis(textSettled.value.text));
       if (imgSettled.status === 'fulfilled' && imgSettled.value) {
         setLkpdIllustration(imgSettled.value);
         setGambarHistory((prev) => [imgSettled.value!, ...prev].slice(0, 8));
@@ -987,7 +1128,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         throw textSettled.reason;
       }
 
-      setModulResult(textSettled.value.text);
+      setModulResult(enrichSarahFriendlyEmojis(textSettled.value.text));
       if (imgSettled.status === 'fulfilled' && imgSettled.value) {
         setModulIllustration(imgSettled.value);
         setGambarHistory((prev) => [imgSettled.value!, ...prev].slice(0, 8));
@@ -1299,7 +1440,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         ragContext,
       });
 
-      setRisetResult(res.text);
+      setRisetResult(enrichSarahFriendlyEmojis(res.text));
       showToast('Riset & ide aktivitas pembelajaran berhasil disusun SARAH!', 'success');
     } catch (err: any) {
       showToast(err?.message || 'Gagal menghubungi asisten SARAH.', 'error');
@@ -1878,7 +2019,12 @@ export const SarahAssistantTab: React.FC<Props> = ({
               onSubmit={handleSendTeacherChat}
               className="p-4 bg-white border-t border-slate-200 flex items-center gap-2.5 shrink-0"
             >
+              <SarahEmojiPicker
+                onSelectEmoji={handleInsertChatEmoji}
+                disabled={isChatSending}
+              />
               <input
+                ref={chatInputRef}
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
