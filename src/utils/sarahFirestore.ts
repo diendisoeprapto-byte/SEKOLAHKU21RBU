@@ -3,6 +3,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   serverTimestamp,
   setDoc,
@@ -51,9 +52,86 @@ export interface SarahMediaAjarContextDoc {
   guru_nama?: string;
 }
 
+export interface SarahConfigDoc {
+  name: string;
+  fullName: string;
+  attribution: string;
+  personaNote: string;
+  studentGreetingStyle: string;
+  teacherStyle: string;
+  updatedAt?: any;
+}
+
 export const SARAH_KB_COLLECTION = 'sarah_knowledge_base';
 export const SARAH_STUDENT_LOGS_COLLECTION = 'sarah_student_logs';
 export const MEDIA_AJAR_COLLECTION = 'media_ajar';
+export const SARAH_CONFIG_DOC_PATH = 'sarah_config';
+
+export const SARAH_ATTRIBUTION_TEXT =
+  'SARAH — Sistem Asisten Adaptif, Ramah, Amanah & Humanis. Dipersembahkan dengan penuh kasih sayang untuk dunia pendidikan dan sebagai kenangan abadi bagi keluarga.';
+
+export const DEFAULT_SARAH_CONFIG: SarahConfigDoc = {
+  name: 'SARAH',
+  fullName: 'Sistem Asisten Adaptif, Ramah, Amanah & Humanis',
+  attribution: SARAH_ATTRIBUTION_TEXT,
+  personaNote:
+    'Berkepribadian lembut, sabar, santun, penuh kasih sayang, dan berjiwa welas asih seperti sosok seorang ibu yang membimbing anaknya dengan tulus dan membantu rekan guru dengan penuh keteladanan serta menanamkan nilai 7 Kebiasaan Anak Indonesia Hebat.',
+  studentGreetingStyle:
+    'Sapaan hangat seperti "Halo Nak...", "Hebat sekali pertanyaanmu...", "Mari kita pelajari pelan-pelan bersama SARAH...", tidak menghakimi, dan membimbing secara Sokratik.',
+  teacherStyle:
+    'Bahasa Indonesia sopan, suportif, empatik, dan terstruktur rapi sesuai Kurikulum Merdeka.',
+};
+
+export function subscribeToSarahConfig(
+  onUpdate: (cfg: SarahConfigDoc) => void
+): () => void {
+  try {
+    return onSnapshot(
+      doc(db, 'settings', SARAH_CONFIG_DOC_PATH),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as Partial<SarahConfigDoc>;
+          onUpdate({
+            ...DEFAULT_SARAH_CONFIG,
+            ...data,
+          });
+        } else {
+          onUpdate(DEFAULT_SARAH_CONFIG);
+        }
+      },
+      () => {
+        onUpdate(DEFAULT_SARAH_CONFIG);
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}
+
+export async function syncSarahConfigToFirestore(
+  partial?: Partial<SarahConfigDoc>,
+  updatedBy?: string
+): Promise<void> {
+  try {
+    const ref = doc(db, 'settings', SARAH_CONFIG_DOC_PATH);
+    const existing = await getDoc(ref);
+    if (!existing.exists() || partial) {
+      await setDoc(
+        ref,
+        {
+          ...DEFAULT_SARAH_CONFIG,
+          ...(existing.exists() ? existing.data() : {}),
+          ...(partial || {}),
+          updatedBy: updatedBy || 'system',
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+  } catch (err) {
+    console.warn('Sync settings/sarah_config info:', err);
+  }
+}
 
 export function resolveTimestampMillis(val: any): number {
   if (!val) return 0;
@@ -243,6 +321,7 @@ export function retrieveSarahRagContext(params: {
   knowledgeDocs: SarahKnowledgeItem[];
   mediaAjarDocs: SarahMediaAjarContextDoc[];
   subjects?: Subject[];
+  sarahConfig?: SarahConfigDoc;
 }) {
   const targetDigit = extractGradeDigit(params.kelas);
   const queryTokens = `${params.queryText || ''} ${params.mapel || ''}`
@@ -317,6 +396,9 @@ export function retrieveSarahRagContext(params: {
     knowledgeDocs: rankedKb,
     mediaAjarDocs: rankedMedia,
     subjectsList,
+    sarahConfig: params.sarahConfig
+      ? { personaNote: params.sarahConfig.personaNote }
+      : undefined,
   };
 }
 
@@ -365,10 +447,24 @@ function escapeHtmlForDoc(raw: string): string {
     .replace(/>/g, '&gt;');
 }
 
+function isTableSeparatorLine(line: string): boolean {
+  return /^\|?(\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?$/.test(line.trim());
+}
+
+function parseTableCellsLine(rowLine: string): string[] {
+  return rowLine
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((c) => c.trim());
+}
+
 function markdownToPrintableHtml(md: string): string {
   const lines = md.split(/\r?\n/);
   const out: string[] = [];
   let inList = false;
+  let i = 0;
 
   const closeList = () => {
     if (inList) {
@@ -382,12 +478,40 @@ function markdownToPrintableHtml(md: string): string {
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>');
 
-  for (const line of lines) {
+  while (i < lines.length) {
+    const line = lines[i];
     const trimmed = line.trim();
     if (!trimmed) {
       closeList();
+      i++;
       continue;
     }
+
+    if (
+      trimmed.includes('|') &&
+      i + 1 < lines.length &&
+      isTableSeparatorLine(lines[i + 1])
+    ) {
+      closeList();
+      const headers = parseTableCellsLine(trimmed);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].trim().includes('|') && lines[i].trim() !== '') {
+        rows.push(parseTableCellsLine(lines[i]));
+        i++;
+      }
+      out.push('<table><thead><tr>');
+      headers.forEach((h) => out.push(`<th>${formatInline(h)}</th>`));
+      out.push('</tr></thead><tbody>');
+      rows.forEach((r) => {
+        out.push('<tr>');
+        headers.forEach((_, cIdx) => out.push(`<td>${formatInline(r[cIdx] || '')}</td>`));
+        out.push('</tr>');
+      });
+      out.push('</tbody></table>');
+      continue;
+    }
+
     if (trimmed.startsWith('### ')) {
       closeList();
       out.push(`<h3>${formatInline(trimmed.slice(4))}</h3>`);
@@ -397,6 +521,9 @@ function markdownToPrintableHtml(md: string): string {
     } else if (trimmed.startsWith('# ')) {
       closeList();
       out.push(`<h1>${formatInline(trimmed.slice(2))}</h1>`);
+    } else if (trimmed === '---' || trimmed === '***') {
+      closeList();
+      out.push('<hr />');
     } else if (/^[-*•]\s+/.test(trimmed)) {
       if (!inList) {
         out.push('<ul>');
@@ -410,6 +537,7 @@ function markdownToPrintableHtml(md: string): string {
       closeList();
       out.push(`<p>${formatInline(trimmed)}</p>`);
     }
+    i++;
   }
   closeList();
   return out.join('\n');
@@ -438,6 +566,9 @@ export function exportSarahToWordDoc(params: {
   p { margin: 5px 0; }
   ul { margin: 4px 0 8px 18px; }
   li { margin: 3px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+  th, td { border: 1px solid #94a3b8; padding: 6px 8px; text-align: left; vertical-align: top; font-size: 10.5pt; }
+  th { background-color: #f1f5f9; font-weight: bold; }
   .meta { font-size: 9.5pt; color: #475569; margin-bottom: 14px; border-bottom: 1px solid #cbd5e1; padding-bottom: 8px; }
 </style>
 </head>

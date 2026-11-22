@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Sparkles,
   BookOpen,
@@ -20,6 +20,12 @@ import {
   GraduationCap,
   HeartHandshake,
   MessageCircle,
+  MessageSquareHeart,
+  Heart,
+  Printer,
+  ClipboardList,
+  RotateCcw,
+  X,
 } from 'lucide-react';
 import {
   ActiveUser,
@@ -38,6 +44,9 @@ import {
 import { saveCbtExamToFirestore } from '../../utils/cbtFirestore';
 import { syncAllLocalToCloud } from '../../utils/cloudSync';
 import {
+  DEFAULT_SARAH_CONFIG,
+  SARAH_ATTRIBUTION_TEXT,
+  SarahConfigDoc,
   SarahKategori,
   SarahKnowledgeItem,
   SarahMediaAjarContextDoc,
@@ -51,8 +60,10 @@ import {
   formatSarahDateTime,
   retrieveSarahRagContext,
   subscribeToMediaAjarForSarah,
+  subscribeToSarahConfig,
   subscribeToSarahKnowledgeBase,
   subscribeToSarahStudentLogs,
+  syncSarahConfigToFirestore,
 } from '../../utils/sarahFirestore';
 import { SarahMarkdown } from '../SarahMarkdown';
 import type { TabId } from '../Sidebar';
@@ -66,7 +77,13 @@ interface Props {
   onNavigateTab: (tab: TabId) => void;
 }
 
-type SarahTeacherSubTab = 'modul' | 'cbt' | 'riset' | 'memori' | 'logs';
+type SarahTeacherSubTab = 'chat' | 'lkpd' | 'modul' | 'cbt' | 'riset' | 'memori' | 'logs';
+
+interface TeacherChatMessage {
+  id: string;
+  role: 'user' | 'model';
+  text: string;
+}
 
 const DEFAULT_MAPEL_LIST = [
   'Bahasa Indonesia',
@@ -94,6 +111,14 @@ const CBT_PAKET_OPTIONS = [
   'Remedial 2',
 ];
 
+const LKPD_AKTIVITAS_OPTIONS = [
+  'Teka-Teki & Permainan',
+  'Eksplorasi Kelompok',
+  'Studi Kasus Cerita',
+  'Tabel Observasi',
+  'Proyek Mini',
+] as const;
+
 const KATEGORI_OPTIONS: SarahKategori[] = [
   'RPP/Modul Ajar',
   'Bank Soal',
@@ -109,31 +134,34 @@ export const SarahAssistantTab: React.FC<Props> = ({
   showToast,
   onNavigateTab,
 }) => {
-  const [subTab, setSubTab] = useState<SarahTeacherSubTab>('modul');
+  const [subTab, setSubTab] = useState<SarahTeacherSubTab>('chat');
+  const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
 
   // Realtime Firestore states
+  const [sarahConfig, setSarahConfig] = useState<SarahConfigDoc>(DEFAULT_SARAH_CONFIG);
   const [knowledgeDocs, setKnowledgeDocs] = useState<SarahKnowledgeItem[]>([]);
   const [mediaAjarDocs, setMediaAjarDocs] = useState<SarahMediaAjarContextDoc[]>([]);
   const [studentLogs, setStudentLogs] = useState<SarahStudentLogItem[]>([]);
 
   useEffect(() => {
+    syncSarahConfigToFirestore(undefined, activeUser.name).catch(() => {});
+    const unsubCfg = subscribeToSarahConfig(setSarahConfig);
     const unsubKb = subscribeToSarahKnowledgeBase(setKnowledgeDocs);
     const unsubMedia = subscribeToMediaAjarForSarah(setMediaAjarDocs);
     const unsubLogs = subscribeToSarahStudentLogs(setStudentLogs);
     return () => {
+      unsubCfg();
       unsubKb();
       unsubMedia();
       unsubLogs();
     };
-  }, []);
+  }, [activeUser.name]);
 
   const mapelOptions = useMemo(() => {
     const names = subjects.map((s) => s.name).filter(Boolean);
-    const merged = Array.from(new Set([...names, ...DEFAULT_MAPEL_LIST]));
-    return merged;
+    return Array.from(new Set([...names, ...DEFAULT_MAPEL_LIST]));
   }, [subjects]);
 
-  // Shared class default
   const defaultGradeKelas = useMemo(() => {
     if (activeUser.kelasDiampu && CLASSES_LIST.includes(activeUser.kelasDiampu)) {
       return activeUser.kelasDiampu;
@@ -144,6 +172,38 @@ export const SarahAssistantTab: React.FC<Props> = ({
   // Processing state
   const [isGenerating, setIsGenerating] = useState(false);
   const [processingLabel, setProcessingLabel] = useState('');
+
+  // Mode 0: Obrolan Bebas (Multi-turn Interactive Chat)
+  const buildTeacherWelcome = (): TeacherChatMessage => ({
+    id: 'sarah_teacher_welcome',
+    role: 'model',
+    text: `Assalamu'alaikum / Selamat sejahtera, **${activeUser.name}**.\n\nSaya **SARAH**, sahabat diskusi Bapak/Ibu di **${profile.name}**. Silakan ajak saya berdiskusi secara bebas—mulai dari strategi mendampingi anak di kelas, merancang ice breaking, menyusun asesmen, hingga menyelesaikan kendala belajar siswa. Apa yang sedang ingin Bapak/Ibu bahas hari ini?`,
+  });
+
+  const [chatMessages, setChatMessages] = useState<TeacherChatMessage[]>(() => [
+    buildTeacherWelcome(),
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatMapel, setChatMapel] = useState('Umum');
+  const [isChatSending, setIsChatSending] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (subTab === 'chat') {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, subTab, isChatSending]);
+
+  // Mode LKPD: Generator LKPD Menarik
+  const [lkpdKelas, setLkpdKelas] = useState(defaultGradeKelas);
+  const [lkpdMapel, setLkpdMapel] = useState(mapelOptions[0] || 'Bahasa Indonesia');
+  const [lkpdTopik, setLkpdTopik] = useState('');
+  const [lkpdAktivitas, setLkpdAktivitas] = useState<string>(LKPD_AKTIVITAS_OPTIONS[0]);
+  const [lkpdDiferensiasi, setLkpdDiferensiasi] = useState<'Reguler' | 'Pendampingan Khusus Inklusi'>(
+    'Reguler'
+  );
+  const [lkpdResult, setLkpdResult] = useState('');
+  const [isSavingLkpdKb, setIsSavingLkpdKb] = useState(false);
 
   // Mode A: Modul Ajar & RPP Berdiferensiasi
   const [modulKelas, setModulKelas] = useState(defaultGradeKelas);
@@ -194,7 +254,6 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const [logSearch, setLogSearch] = useState('');
   const [logKelasFilter, setLogKelasFilter] = useState('Semua');
 
-  // Combined reference options for CBT Generator from Firestore (media_ajar + sarah_knowledge_base)
   const firestoreMaterialRefs = useMemo(() => {
     const items: Array<{
       id: string;
@@ -227,10 +286,150 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const handleCopyText = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      showToast('Teks hasil SARAH berhasil disalin ke clipboard!', 'success');
+      showToast('Jawaban SARAH berhasil disalin ke clipboard!', 'success');
     } catch {
       showToast('Gagal menyalin teks. Silakan blok manual teks yang diinginkan.', 'error');
     }
+  };
+
+  // Handler Obrolan Bebas (Multi-Turn)
+  const handleSendTeacherChat = async (e?: React.FormEvent, overrideText?: string) => {
+    if (e) e.preventDefault();
+    const promptText = (overrideText ?? chatInput).trim();
+    if (!promptText || isChatSending) return;
+
+    const userMsg: TeacherChatMessage = {
+      id: `tu_${Date.now()}`,
+      role: 'user',
+      text: promptText,
+    };
+    const prevHistory = chatMessages.slice(-10).map((m) => ({ role: m.role, text: m.text }));
+
+    setChatMessages((prev) => [...prev, userMsg]);
+    if (!overrideText) setChatInput('');
+    setIsChatSending(true);
+
+    try {
+      const ragContext = retrieveSarahRagContext({
+        schoolName: profile.name,
+        kelas: activeClass,
+        mapel: chatMapel === 'Umum' ? '' : chatMapel,
+        queryText: promptText,
+        knowledgeDocs,
+        mediaAjarDocs,
+        subjects,
+        sarahConfig,
+      });
+
+      const res = await callSarahAiEndpoint<SarahTextGeneratedResponse>({
+        mode: 'general_chat',
+        role: activeUser.role,
+        user: { name: activeUser.name, kelas: activeClass },
+        params: { message: promptText, mapel: chatMapel },
+        history: prevHistory,
+        ragContext,
+      });
+
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `tm_${Date.now()}`,
+          role: 'model',
+          text: res.text,
+        },
+      ]);
+    } catch (err: any) {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `terr_${Date.now()}`,
+          role: 'model',
+          text: `Mohon maaf Bapak/Ibu, SARAH mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}). Silakan kirim ulang pertanyaan Anda.`,
+        },
+      ]);
+    } finally {
+      setIsChatSending(false);
+    }
+  };
+
+  const handleClearTeacherChat = () => {
+    setChatMessages([buildTeacherWelcome()]);
+    showToast('Obrolan dibersihkan. Silakan mulai topik diskusi baru!', 'success');
+  };
+
+  // Handler Generator LKPD Menarik
+  const handleGenerateLkpd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!lkpdTopik.trim()) {
+      showToast('Harap isi Topik / Tujuan Pembelajaran LKPD terlebih dahulu.', 'error');
+      return;
+    }
+    setIsGenerating(true);
+    setProcessingLabel('SARAH sedang membaca basis data sekolah...');
+    try {
+      const ragContext = retrieveSarahRagContext({
+        schoolName: profile.name,
+        kelas: lkpdKelas,
+        mapel: lkpdMapel,
+        queryText: `${lkpdTopik} ${lkpdAktivitas} ${lkpdDiferensiasi}`,
+        knowledgeDocs,
+        mediaAjarDocs,
+        subjects,
+        sarahConfig,
+      });
+
+      setTimeout(() => {
+        setProcessingLabel(`SARAH sedang merancang LKPD ${lkpdAktivitas} yang menyenangkan...`);
+      }, 600);
+
+      const res = await callSarahAiEndpoint<SarahTextGeneratedResponse>({
+        mode: 'lkpd_generator',
+        role: activeUser.role,
+        user: { name: activeUser.name, kelas: activeClass },
+        params: {
+          kelas: lkpdKelas,
+          mapel: lkpdMapel,
+          topik: lkpdTopik,
+          jenisAktivitas: lkpdAktivitas,
+          tingkatDiferensiasi: lkpdDiferensiasi,
+        },
+        ragContext,
+      });
+
+      setLkpdResult(res.text);
+      showToast('LKPD menarik siap pakai berhasil disusun oleh SARAH!', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Gagal menyusun LKPD dengan SARAH.', 'error');
+    } finally {
+      setIsGenerating(false);
+      setProcessingLabel('');
+    }
+  };
+
+  const handleSaveLkpdToMemory = async () => {
+    if (!lkpdResult.trim()) return;
+    setIsSavingLkpdKb(true);
+    try {
+      await addSarahKnowledgeItem({
+        judul: `LKPD (${lkpdAktivitas}): ${lkpdTopik.trim() || lkpdMapel}`,
+        kategori: 'Materi Ajar',
+        kelas: lkpdKelas,
+        mata_pelajaran: lkpdMapel,
+        konten_ringkasan: lkpdResult,
+        sumber: `Generator LKPD SARAH (${lkpdDiferensiasi})`,
+        disetujui_oleh: activeUser.name,
+      });
+      showToast('LKPD berhasil disimpan ke Memori Pengetahuan SARAH!', 'success');
+    } catch (err: any) {
+      showToast(`Gagal menyimpan ke memori SARAH: ${err?.message || 'error'}`, 'error');
+    } finally {
+      setIsSavingLkpdKb(false);
+    }
+  };
+
+  const handlePrintLkpd = () => {
+    if (!lkpdResult.trim()) return;
+    window.print();
   };
 
   const handleGenerateModul = async (e: React.FormEvent) => {
@@ -250,6 +449,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         knowledgeDocs,
         mediaAjarDocs,
         subjects,
+        sarahConfig,
       });
 
       setTimeout(() => {
@@ -328,6 +528,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         knowledgeDocs,
         mediaAjarDocs,
         subjects,
+        sarahConfig,
       });
 
       setTimeout(() => {
@@ -483,6 +684,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         knowledgeDocs,
         mediaAjarDocs,
         subjects,
+        sarahConfig,
       });
 
       setTimeout(() => {
@@ -605,18 +807,29 @@ export const SarahAssistantTab: React.FC<Props> = ({
   return (
     <section className="space-y-6">
       {/* Header Banner */}
-      <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-r from-rose-600 via-rose-700 to-indigo-700 p-6 sm:p-8 text-white shadow-lg">
+      <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-r from-rose-600 via-rose-700 to-indigo-700 p-6 sm:p-8 text-white shadow-lg no-print">
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
           <div className="space-y-2 max-w-2xl">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/15 border border-white/25 text-[11px] font-black uppercase tracking-wider">
-              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-              <span>Asisten AI Terintegrasi SERBU 21</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/15 border border-white/25 text-[11px] font-black uppercase tracking-wider">
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                <span>Asisten AI Terintegrasi SERBU 21</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsInfoModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-pink-500/35 hover:bg-pink-500/55 border border-pink-200/50 text-[11px] font-bold text-white transition cursor-pointer"
+                title="Tentang & Dedikasi SARAH"
+              >
+                <Heart className="w-3.5 h-3.5 text-pink-200 fill-pink-200" />
+                <span>Tentang SARAH</span>
+              </button>
             </div>
             <h1 className="font-display font-black text-2xl sm:text-3xl tracking-tight">
               SARAH — Sistem Asisten Adaptif, Ramah, Amanah &amp; Humanis
             </h1>
             <p className="text-xs sm:text-sm text-rose-100 leading-relaxed">
-              Mendukung guru menyusun Modul Ajar Berdiferensiasi, membuat soal CBT terstruktur langsung ke Bank Soal, riset pengayaan materi 7 Kebiasaan Anak Indonesia Hebat, serta memantau pertanyaan belajar siswa.
+              Sahabat pendidik berjiwa kasih sayang untuk tanya jawab bebas, membuat LKPD menarik siap cetak, Modul Ajar Berdiferensiasi, soal CBT otomatis, serta memantau diskusi belajar siswa.
             </p>
           </div>
 
@@ -638,8 +851,10 @@ export const SarahAssistantTab: React.FC<Props> = ({
       </div>
 
       {/* Sub-navigation Tabs */}
-      <div className="bg-white p-2 rounded-3xl border border-slate-200 shadow-xs flex flex-wrap gap-2">
+      <div className="bg-white p-2 rounded-3xl border border-slate-200 shadow-xs flex flex-wrap gap-2 no-print">
         {[
+          { id: 'chat', label: 'Obrolan Bebas', icon: MessageSquareHeart },
+          { id: 'lkpd', label: 'Generator LKPD', icon: ClipboardList },
           { id: 'modul', label: 'Modul Ajar & RPP', icon: BookOpen },
           { id: 'cbt', label: 'Generator Soal CBT', icon: FileQuestion },
           { id: 'riset', label: 'Riset & Pengayaan', icon: Lightbulb },
@@ -653,7 +868,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
               key={tab.id}
               type="button"
               onClick={() => setSubTab(tab.id as SarahTeacherSubTab)}
-              className={`px-4 py-2.5 rounded-2xl font-display font-extrabold text-xs flex items-center gap-2 transition cursor-pointer ${
+              className={`px-3.5 py-2.5 rounded-2xl font-display font-extrabold text-xs flex items-center gap-2 transition cursor-pointer ${
                 active
                   ? 'bg-rose-600 text-white shadow-sm'
                   : 'text-slate-700 hover:bg-rose-50 hover:text-rose-700'
@@ -668,7 +883,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
 
       {/* Active Processing Banner */}
       {isGenerating && (
-        <div className="p-4 rounded-2xl bg-indigo-50 border-2 border-indigo-200 flex items-center gap-3 animate-pulse">
+        <div className="p-4 rounded-2xl bg-indigo-50 border-2 border-indigo-200 flex items-center gap-3 animate-pulse no-print">
           <Loader2 className="w-5 h-5 text-indigo-600 animate-spin shrink-0" />
           <div>
             <p className="font-display font-black text-xs sm:text-sm text-indigo-950">
@@ -682,13 +897,378 @@ export const SarahAssistantTab: React.FC<Props> = ({
       )}
 
       {/* ===================================================================== */}
+      {/* TAB 0: OBROLAN BEBAS (RUANG TANYA JAWAB INTERAKTIF GURU & SARAH)      */}
+      {/* ===================================================================== */}
+      {subTab === 'chat' && (
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden flex flex-col h-[660px] max-h-[78vh]">
+          {/* Chat Top Bar */}
+          <div className="px-5 py-3.5 bg-gradient-to-r from-rose-50 via-pink-50/70 to-indigo-50 border-b border-rose-100 flex flex-wrap items-center justify-between gap-3 shrink-0">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-xs">
+                <MessageSquareHeart className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="font-display font-black text-sm text-slate-900">
+                  Obrolan Interaktif Bebas dengan SARAH
+                </h2>
+                <p className="text-[11px] text-slate-600">
+                  Percakapan multi-turn: SARAH mengingat alur diskusi Anda sebelumnya
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={chatMapel}
+                onChange={(e) => setChatMapel(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-rose-200 bg-white text-xs font-bold text-slate-700 outline-none"
+              >
+                <option value="Umum">Konteks Mapel: Umum</option>
+                {mapelOptions.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handleClearTeacherChat}
+                className="px-3 py-1.5 rounded-xl bg-white hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Hapus Obrolan</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Chat Message Stream */}
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-50/60">
+            {chatMessages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`max-w-[90%] sm:max-w-[78%] rounded-3xl px-4 py-3 shadow-2xs space-y-2 ${
+                    msg.role === 'user'
+                      ? 'bg-gradient-to-r from-rose-600 to-rose-700 text-white rounded-br-sm text-xs sm:text-sm font-medium leading-relaxed'
+                      : 'bg-white border border-slate-200 text-slate-800 rounded-bl-sm'
+                  }`}
+                >
+                  {msg.role === 'user' ? (
+                    <p className="whitespace-pre-wrap">{msg.text}</p>
+                  ) : (
+                    <>
+                      <SarahMarkdown content={msg.text} />
+                      <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => handleCopyText(msg.text)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span>Salin Jawaban</span>
+                        </button>
+                        {msg.id !== 'sarah_teacher_welcome' && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await addSarahKnowledgeItem({
+                                  judul: `Diskusi SARAH (${chatMapel}) - ${new Date().toLocaleDateString('id-ID')}`,
+                                  kategori: 'Materi Ajar',
+                                  kelas: activeClass || 'Semua',
+                                  mata_pelajaran: chatMapel,
+                                  konten_ringkasan: msg.text,
+                                  sumber: `Obrolan SARAH (${activeUser.name})`,
+                                  disetujui_oleh: activeUser.name,
+                                });
+                                showToast('Jawaban disimpan ke Memori SARAH!', 'success');
+                              } catch {
+                                showToast('Gagal menyimpan ke memori SARAH.', 'error');
+                              }
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition"
+                          >
+                            <Star className="w-3 h-3 text-amber-600" />
+                            <span>Simpan ke Memori</span>
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {isChatSending && (
+              <div className="flex justify-start">
+                <div className="bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-2 text-xs font-bold">
+                  <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                  <span>SARAH sedang membaca basis data sekolah &amp; merangkai jawaban...</span>
+                </div>
+              </div>
+            )}
+
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Starter Prompts */}
+          <div className="px-4 py-2 bg-white border-t border-slate-100 flex gap-2 overflow-x-auto shrink-0">
+            {[
+              'Buatkan ice breaking 5 menit yang ceria sebelum pelajaran dimulai',
+              'Bagaimana pendekatan lembut menghadapi siswa yang kurang percaya diri di kelas?',
+              'Bantu buatkan pesan pengumuman WhatsApp yang santun untuk wali murid',
+              'Rekomendasikan strategi pembelajaran berdiferensiasi untuk kelas saya',
+            ].map((chip, i) => (
+              <button
+                key={i}
+                type="button"
+                disabled={isChatSending}
+                onClick={() => handleSendTeacherChat(undefined, chip)}
+                className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-[11px] font-bold whitespace-nowrap cursor-pointer transition disabled:opacity-50"
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
+
+          {/* Chat Input */}
+          <form
+            onSubmit={handleSendTeacherChat}
+            className="p-4 bg-white border-t border-slate-200 flex items-center gap-2.5 shrink-0"
+          >
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              disabled={isChatSending}
+              placeholder="Tulis pertanyaan, ide, atau topik diskusi bebas dengan SARAH..."
+              className="flex-1 px-4 py-3 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-rose-600 outline-none text-xs sm:text-sm text-slate-800"
+            />
+            <button
+              type="submit"
+              disabled={isChatSending || !chatInput.trim()}
+              className="px-5 py-3 rounded-2xl bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 text-white font-display font-black text-xs flex items-center gap-2 shadow-sm transition cursor-pointer disabled:opacity-40 shrink-0"
+            >
+              <Send className="w-4 h-4" />
+              <span>Kirim</span>
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* TAB LKPD: GENERATOR LKPD MENARIK SIAP CETAK                           */}
+      {/* ===================================================================== */}
+      {subTab === 'lkpd' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <form
+            onSubmit={handleGenerateLkpd}
+            className="lg:col-span-5 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4 h-fit no-print"
+          >
+            <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
+              <div className="w-9 h-9 rounded-xl bg-pink-100 text-rose-600 flex items-center justify-center">
+                <ClipboardList className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="font-display font-black text-sm text-slate-900">
+                  Generator LKPD Menarik
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  Lembar Kerja Peserta Didik ramah anak SD, siap cetak A4 &amp; ekspor Word
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                  Kelas (1–6)
+                </label>
+                <select
+                  value={lkpdKelas}
+                  onChange={(e) => setLkpdKelas(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800 outline-none focus:border-rose-600"
+                >
+                  {CLASSES_LIST.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                  Mata Pelajaran
+                </label>
+                <select
+                  value={lkpdMapel}
+                  onChange={(e) => setLkpdMapel(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800 outline-none focus:border-rose-600"
+                >
+                  {mapelOptions.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                Topik / Tujuan Pembelajaran <span className="text-rose-600">*</span>
+              </label>
+              <textarea
+                rows={3}
+                value={lkpdTopik}
+                onChange={(e) => setLkpdTopik(e.target.value)}
+                placeholder="Contoh: Mengenal bagian-bagian tumbuhan dan fungsinya serta manfaat bagi manusia..."
+                className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white text-xs text-slate-800 outline-none focus:border-rose-600"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                  Jenis Aktivitas
+                </label>
+                <select
+                  value={lkpdAktivitas}
+                  onChange={(e) => setLkpdAktivitas(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800 outline-none focus:border-rose-600"
+                >
+                  {LKPD_AKTIVITAS_OPTIONS.map((akt) => (
+                    <option key={akt} value={akt}>
+                      {akt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                  Tingkat Diferensiasi
+                </label>
+                <select
+                  value={lkpdDiferensiasi}
+                  onChange={(e) =>
+                    setLkpdDiferensiasi(e.target.value as 'Reguler' | 'Pendampingan Khusus Inklusi')
+                  }
+                  className="w-full px-3 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800 outline-none focus:border-rose-600"
+                >
+                  <option value="Reguler">Reguler</option>
+                  <option value="Pendampingan Khusus Inklusi">Pendampingan Khusus Inklusi</option>
+                </select>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isGenerating}
+              className="w-full py-3 rounded-2xl bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-700 hover:to-pink-700 text-white font-display font-black text-xs flex items-center justify-center gap-2 shadow-md transition cursor-pointer disabled:opacity-60"
+            >
+              {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              <span>Buat LKPD Menarik dengan SARAH</span>
+            </button>
+          </form>
+
+          <div className="lg:col-span-7 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4 lkpd-print-sheet">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 no-print">
+              <div>
+                <h3 className="font-display font-black text-sm text-slate-900">
+                  Pratinjau LKPD Siap Cetak
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Dilengkapi Kop Identitas, Misi Seru, Langkah Visual, Tabel Kerja &amp; Refleksi Perasaan
+                </p>
+              </div>
+              {lkpdResult && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handlePrintLkpd}
+                    className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5" /> Cetak / Simpan PDF
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      exportSarahToWordDoc({
+                        title: `LKPD ${lkpdMapel} - ${lkpdKelas}`,
+                        subtitle: `${lkpdAktivitas} (${lkpdDiferensiasi}) • Topik: ${lkpdTopik}`,
+                        markdownContent: lkpdResult,
+                        schoolName: profile.name,
+                        author: activeUser.name,
+                      })
+                    }
+                    className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs flex items-center gap-1.5 border border-indigo-200 cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Unduh Word (.doc)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyText(lkpdResult)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" /> Salin
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSavingLkpdKb}
+                    onClick={handleSaveLkpdToMemory}
+                    className="px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 font-extrabold text-xs flex items-center gap-1.5 border border-amber-300 cursor-pointer disabled:opacity-50"
+                  >
+                    <Star className="w-3.5 h-3.5 text-amber-600" />
+                    <span>{isSavingLkpdKb ? 'Menyimpan...' : 'Simpan ke Memori'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {lkpdResult ? (
+              <div className="p-5 sm:p-6 rounded-2xl bg-white border-2 border-rose-100 max-h-[680px] overflow-y-auto print-expand-scroll lkpd-print-sheet space-y-4">
+                {/* School Header for Printed Sheet */}
+                <div className="border-b-2 border-slate-800 pb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-black uppercase tracking-wider text-rose-700">
+                      {profile.name || 'SDN Rawa Badak Utara 21'}
+                    </p>
+                    <h4 className="font-display font-black text-base text-slate-900">
+                      LEMBAR KERJA PESERTA DIDIK (LKPD) — {lkpdMapel.toUpperCase()}
+                    </h4>
+                  </div>
+                  <div className="text-right text-[11px] font-bold text-slate-600">
+                    <div>{lkpdKelas}</div>
+                    <div>{lkpdAktivitas}</div>
+                  </div>
+                </div>
+
+                <SarahMarkdown content={lkpdResult} />
+              </div>
+            ) : (
+              <div className="py-16 text-center space-y-2 text-slate-400 no-print">
+                <ClipboardList className="w-10 h-10 mx-auto text-rose-200" />
+                <p className="text-xs font-bold text-slate-500">
+                  Isi topik &amp; jenis aktivitas di sebelah kiri untuk membuat LKPD menarik siap cetak!
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
       {/* TAB 1: GENERATOR MODUL AJAR & RPP BERDIFERENSIASI                     */}
       {/* ===================================================================== */}
       {subTab === 'modul' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <form
             onSubmit={handleGenerateModul}
-            className="lg:col-span-5 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4 h-fit"
+            className="lg:col-span-5 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4 h-fit no-print"
           >
             <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
               <div className="w-9 h-9 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center">
@@ -1569,7 +2149,6 @@ export const SarahAssistantTab: React.FC<Props> = ({
       {/* ===================================================================== */}
       {subTab === 'logs' && (
         <div className="space-y-6">
-          {/* Top Topics Summary */}
           <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-3">
             <div className="flex items-center gap-2">
               <MessageCircle className="w-5 h-5 text-rose-600" />
@@ -1602,7 +2181,6 @@ export const SarahAssistantTab: React.FC<Props> = ({
             )}
           </div>
 
-          {/* Student Logs Table */}
           <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
               <div>
@@ -1683,6 +2261,40 @@ export const SarahAssistantTab: React.FC<Props> = ({
                 </p>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal Info Dedikasi SARAH */}
+      {isInfoModalOpen && (
+        <div className="fixed inset-0 z-[1000] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 no-print">
+          <div className="bg-white max-w-md w-full rounded-3xl p-6 shadow-2xl border-2 border-rose-200 text-center space-y-4 animate-in zoom-in-95 duration-200 relative">
+            <button
+              type="button"
+              onClick={() => setIsInfoModalOpen(false)}
+              className="absolute top-4 right-4 w-8 h-8 rounded-xl bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-600 flex items-center justify-center cursor-pointer"
+              aria-label="Tutup modal info"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-rose-500 to-pink-600 text-white flex items-center justify-center mx-auto shadow-md">
+              <Heart className="w-7 h-7 fill-white" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="font-display font-black text-base text-slate-900">
+                Tentang Asisten SARAH
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-700 leading-relaxed font-medium">
+                {sarahConfig.attribution || SARAH_ATTRIBUTION_TEXT}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsInfoModalOpen(false)}
+              className="w-full py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs shadow-sm transition cursor-pointer"
+            >
+              Tutup
+            </button>
           </div>
         </div>
       )}

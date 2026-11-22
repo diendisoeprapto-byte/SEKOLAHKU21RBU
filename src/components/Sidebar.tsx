@@ -164,6 +164,51 @@ export const Sidebar: React.FC<Props> = ({
           )}
         </div>
 
+        {/* Quick Access: Asisten SARAH (di atas Cari Menu, di bawah Nama User) */}
+        {isStudent ? (
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new Event('serbu21-open-tanya-sarah'))}
+            className="w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center justify-between gap-2 text-left transition bg-gradient-to-r from-rose-50 via-pink-50 to-indigo-50 border-2 border-rose-200 text-rose-900 hover:from-rose-100 hover:to-indigo-100 shadow-2xs cursor-pointer"
+          >
+            <span className="flex items-center gap-2.5 min-w-0">
+              <MessageCircleHeart className="w-5 h-5 text-rose-600 shrink-0" />
+              <span className="truncate">Tanya SARAH (Tutor AI)</span>
+            </span>
+            <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-600 text-white shrink-0">
+              AI
+            </span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onSelectTab('asisten-sarah')}
+            className={`w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center justify-between gap-2 text-left transition border-2 cursor-pointer ${
+              activeTab === 'asisten-sarah'
+                ? 'bg-gradient-to-r from-rose-600 via-rose-700 to-indigo-700 text-white shadow-md border-transparent'
+                : 'border-rose-200 bg-gradient-to-r from-rose-50/90 via-pink-50/80 to-indigo-50/90 text-indigo-950 hover:from-rose-100 hover:to-indigo-100'
+            }`}
+          >
+            <span className="flex items-center gap-2.5 min-w-0">
+              <Sparkles
+                className={`w-5 h-5 shrink-0 ${
+                  activeTab === 'asisten-sarah' ? 'text-amber-300' : 'text-rose-600'
+                }`}
+              />
+              <span className="truncate">Asisten SARAH (AI)</span>
+            </span>
+            <span
+              className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full shrink-0 ${
+                activeTab === 'asisten-sarah'
+                  ? 'bg-white/20 text-white'
+                  : 'bg-rose-600 text-white'
+              }`}
+            >
+              AI
+            </span>
+          </button>
+        )}
+
         {/* Search */}
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -288,15 +333,6 @@ export const Sidebar: React.FC<Props> = ({
               <Presentation className={`w-5 h-5 ${activeTab === 'media-ajar' ? 'text-white' : 'text-rose-600'}`} />
               <span>Bank Media Ajar (PPT)</span>
             </button>
-
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new Event('serbu21-open-tanya-sarah'))}
-              className="w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-3 text-left transition bg-gradient-to-r from-rose-50 to-indigo-50 border border-rose-200 text-rose-800 hover:from-rose-100 hover:to-indigo-100 cursor-pointer"
-            >
-              <MessageCircleHeart className="w-5 h-5 text-rose-600" />
-              <span>Tanya SARAH (Tutor AI)</span>
-            </button>
           </nav>
         ) : (
           /* Admin / Guru Navigation */
@@ -313,30 +349,6 @@ export const Sidebar: React.FC<Props> = ({
               >
                 <Home className="w-5 h-5" />
                 <span>Beranda Sekolah</span>
-              </button>
-            )}
-
-            {/* Asisten SARAH (Guru & Admin) */}
-            {(!searchQuery || 'asisten sarah ai rpp modul ajar generator soal cbt riset memori'.includes(searchQuery)) && (
-              <button
-                onClick={() => onSelectTab('asisten-sarah')}
-                className={`w-full px-4 py-3.5 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center justify-between gap-2 text-left transition border cursor-pointer ${
-                  activeTab === 'asisten-sarah'
-                    ? 'bg-gradient-to-r from-rose-600 via-rose-700 to-indigo-700 text-white shadow-md border-transparent'
-                    : 'border-indigo-200 bg-gradient-to-r from-rose-50/80 to-indigo-50/80 text-indigo-950 hover:from-rose-100/80 hover:to-indigo-100/80'
-                }`}
-              >
-                <span className="flex items-center gap-2.5">
-                  <Sparkles className={`w-5 h-5 ${activeTab === 'asisten-sarah' ? 'text-amber-300' : 'text-rose-600'}`} />
-                  <span>Asisten SARAH (AI)</span>
-                </span>
-                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
-                  activeTab === 'asisten-sarah'
-                    ? 'bg-white/20 text-white'
-                    : 'bg-rose-600 text-white'
-                }`}>
-                  AI
-                </span>
               </button>
             )}
 

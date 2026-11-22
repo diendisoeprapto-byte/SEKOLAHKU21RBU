@@ -8,6 +8,9 @@ import {
   HeartHandshake,
   Minimize2,
   MessageCircleHeart,
+  Heart,
+  Copy,
+  RotateCcw,
 } from 'lucide-react';
 import {
   ActiveExamHeaderStatus,
@@ -19,6 +22,9 @@ import {
 } from '../types';
 import { subscribeToCbtExamsCollection } from '../utils/cbtFirestore';
 import {
+  DEFAULT_SARAH_CONFIG,
+  SARAH_ATTRIBUTION_TEXT,
+  SarahConfigDoc,
   SarahKnowledgeItem,
   SarahMediaAjarContextDoc,
   SarahTextGeneratedResponse,
@@ -26,6 +32,7 @@ import {
   logSarahStudentQuestion,
   retrieveSarahRagContext,
   subscribeToMediaAjarForSarah,
+  subscribeToSarahConfig,
   subscribeToSarahKnowledgeBase,
 } from '../utils/sarahFirestore';
 import { SarahMarkdown } from './SarahMarkdown';
@@ -72,11 +79,13 @@ export const SarahStudentWidget: React.FC<Props> = ({
   showToast,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [isInfoModalOpen, setIsInfoModalOpen] = useState(false);
   const [selectedMapel, setSelectedMapel] = useState('Umum');
   const [inputText, setInputText] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [statusLabel, setStatusLabel] = useState('');
   const [cbtExams, setCbtExams] = useState<CBTExam[]>([]);
+  const [sarahConfig, setSarahConfig] = useState<SarahConfigDoc>(DEFAULT_SARAH_CONFIG);
   const [knowledgeDocs, setKnowledgeDocs] = useState<SarahKnowledgeItem[]>([]);
   const [mediaAjarDocs, setMediaAjarDocs] = useState<SarahMediaAjarContextDoc[]>([]);
 
@@ -95,17 +104,18 @@ export const SarahStudentWidget: React.FC<Props> = ({
 
   const studentKelas = currentStudent?.kelas || activeUser.detail || 'Kelas SD';
 
-  const [messages, setMessages] = useState<ChatMessage[]>(() => [
-    {
-      id: 'sarah_welcome',
-      role: 'model',
-      text: `Halo **${activeUser.name}**! Aku **SARAH**, teman belajarmu di SDN Rawa Badak Utara 21.\n\nAku siap membimbingmu memahami pelajaran dengan langkah demi langkah yang mudah dipahami. Ingat ya, aku tidak langsung memberi kunci jawaban, melainkan membantumu berlatih berpikir hebat! Yuk, bagian materi mana yang ingin kita pelajari bersama?`,
-    },
-  ]);
+  const buildWelcomeMessage = (): ChatMessage => ({
+    id: 'sarah_welcome',
+    role: 'model',
+    text: `Halo Nak **${activeUser.name}**! Aku **SARAH**, teman belajarmu di SDN Rawa Badak Utara 21.\n\nJangan pernah malu bertanya ya, Nak. Mari kita pelajari pelan-pelan bersama SARAH dengan langkah demi langkah yang mudah dipahami. Ingat, aku akan membimbingmu menemukan sendiri jawabannya agar kamu makin hebat! Pelajaran apa yang ingin kita bahas hari ini?`,
+  });
+
+  const [messages, setMessages] = useState<ChatMessage[]>(() => [buildWelcomeMessage()]);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    const unsubCfg = subscribeToSarahConfig(setSarahConfig);
     const unsubExams = subscribeToCbtExamsCollection(setCbtExams);
     const unsubKb = subscribeToSarahKnowledgeBase(setKnowledgeDocs);
     const unsubMedia = subscribeToMediaAjarForSarah(setMediaAjarDocs);
@@ -114,6 +124,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
     window.addEventListener('serbu21-open-tanya-sarah', handleOpenEvent);
 
     return () => {
+      unsubCfg();
       unsubExams();
       unsubKb();
       unsubMedia();
@@ -130,10 +141,9 @@ export const SarahStudentWidget: React.FC<Props> = ({
   // Automatic CBT Exam Lock (CBT LOCK)
   const isLockedForExam = useMemo(() => {
     if (activeExamStatus?.isRunning) return true;
-    const hasActiveClassCbt = cbtExams.some(
+    return cbtExams.some(
       (ex) => ex.aktif === true && doesExamMatchStudentClass(ex.kelas, studentKelas)
     );
-    return hasActiveClassCbt;
   }, [activeExamStatus?.isRunning, cbtExams, studentKelas]);
 
   const mapelChoices = useMemo(() => {
@@ -156,6 +166,20 @@ export const SarahStudentWidget: React.FC<Props> = ({
     return clean.length > 60 ? `${clean.slice(0, 57)}...` : clean;
   };
 
+  const handleCopyAnswer = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Jawaban SARAH berhasil disalin!', 'success');
+    } catch {
+      showToast('Gagal menyalin jawaban.', 'error');
+    }
+  };
+
+  const handleClearChat = () => {
+    setMessages([buildWelcomeMessage()]);
+    showToast('Obrolan dibersihkan. Yuk mulai topik belajar baru, Nak!', 'success');
+  };
+
   const handleSend = async (e?: React.FormEvent, overridePrompt?: string) => {
     if (e) e.preventDefault();
     if (isLockedForExam) {
@@ -175,8 +199,8 @@ export const SarahStudentWidget: React.FC<Props> = ({
       text: question,
     };
 
-    const nextHistory = [...messages, userMsg];
-    setMessages(nextHistory);
+    const prevHistory = messages.slice(-8).map((m) => ({ role: m.role, text: m.text }));
+    setMessages((prev) => [...prev, userMsg]);
     if (!overridePrompt) setInputText('');
     setIsThinking(true);
     setStatusLabel('SARAH sedang membaca basis data sekolah...');
@@ -190,9 +214,9 @@ export const SarahStudentWidget: React.FC<Props> = ({
         knowledgeDocs,
         mediaAjarDocs,
         subjects,
+        sarahConfig,
       });
 
-      // Catat topik/pertanyaan siswa untuk pemantauan guru kelas
       logSarahStudentQuestion({
         studentId: currentStudent?.id || activeUser.username,
         studentName: currentStudent?.nama || activeUser.name,
@@ -214,7 +238,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
           message: question,
           mapel: selectedMapel,
         },
-        history: messages.slice(-6).map((m) => ({ role: m.role, text: m.text })),
+        history: prevHistory,
         ragContext,
       });
 
@@ -232,7 +256,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
         {
           id: `err_${Date.now()}`,
           role: 'model',
-          text: `Maaf ya, SARAH sedang mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}). Coba tanyakan ulang beberapa saat lagi ya!`,
+          text: `Maaf ya Nak, SARAH sedang mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}). Coba tanyakan ulang beberapa saat lagi ya!`,
         },
       ]);
     } finally {
@@ -244,9 +268,9 @@ export const SarahStudentWidget: React.FC<Props> = ({
   return (
     <div className="fixed bottom-5 right-5 z-[950] no-print flex flex-col items-end">
       {isOpen && (
-        <div className="mb-3 w-[calc(100vw-2rem)] sm:w-[410px] h-[540px] max-h-[80vh] bg-white rounded-[2rem] shadow-2xl border-2 border-rose-200 flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+        <div className="mb-3 w-[calc(100vw-2rem)] sm:w-[420px] h-[560px] max-h-[82vh] bg-white rounded-[2rem] shadow-2xl border-2 border-rose-200 flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 relative">
           {/* Header */}
-          <div className="bg-gradient-to-r from-rose-600 via-rose-700 to-indigo-700 text-white p-4 flex items-center justify-between gap-3 shrink-0">
+          <div className="bg-gradient-to-r from-rose-600 via-rose-700 to-indigo-700 text-white p-4 flex items-center justify-between gap-2 shrink-0">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-10 h-10 rounded-2xl bg-white/20 border border-white/30 flex items-center justify-center shrink-0">
                 {isLockedForExam ? (
@@ -266,15 +290,59 @@ export const SarahStudentWidget: React.FC<Props> = ({
                 </p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setIsOpen(false)}
-              className="p-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white transition cursor-pointer"
-              title="Kecilkan Tanya SARAH"
-            >
-              <Minimize2 className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsInfoModalOpen(true)}
+                className="p-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-pink-100 transition cursor-pointer"
+                title="Tentang & Dedikasi SARAH"
+              >
+                <Heart className="w-4 h-4 fill-pink-200 text-pink-200" />
+              </button>
+              {!isLockedForExam && (
+                <button
+                  type="button"
+                  onClick={handleClearChat}
+                  className="p-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white transition cursor-pointer"
+                  title="Hapus Obrolan"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setIsOpen(false)}
+                className="p-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white transition cursor-pointer"
+                title="Kecilkan Tanya SARAH"
+              >
+                <Minimize2 className="w-4 h-4" />
+              </button>
+            </div>
           </div>
+
+          {/* Info Modal inside Widget */}
+          {isInfoModalOpen && (
+            <div className="absolute inset-0 z-20 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-5">
+              <div className="bg-white rounded-3xl p-5 shadow-xl border-2 border-rose-200 text-center space-y-3 w-full">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-rose-500 to-pink-600 text-white flex items-center justify-center mx-auto">
+                  <Heart className="w-6 h-6 fill-white" />
+                </div>
+                <h4 className="font-display font-black text-sm text-slate-900">
+                  Tentang SARAH
+                </h4>
+                <p className="text-xs text-slate-700 leading-relaxed font-medium">
+                  {sarahConfig.attribution || SARAH_ATTRIBUTION_TEXT}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIsInfoModalOpen(false)}
+                  className="w-full py-2 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs cursor-pointer"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* CBT Lock State vs Active Tutor */}
           {isLockedForExam ? (
@@ -326,13 +394,25 @@ export const SarahStudentWidget: React.FC<Props> = ({
                       className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 shadow-2xs ${
                         msg.role === 'user'
                           ? 'bg-rose-600 text-white rounded-br-sm text-xs font-medium leading-relaxed'
-                          : 'bg-white border border-slate-200 text-slate-800 rounded-bl-sm'
+                          : 'bg-white border border-slate-200 text-slate-800 rounded-bl-sm space-y-2'
                       }`}
                     >
                       {msg.role === 'user' ? (
                         <p className="whitespace-pre-wrap">{msg.text}</p>
                       ) : (
-                        <SarahMarkdown content={msg.text} compact />
+                        <>
+                          <SarahMarkdown content={msg.text} compact />
+                          <div className="flex justify-end pt-1 border-t border-slate-100">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyAnswer(msg.text)}
+                              className="px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-[10px] flex items-center gap-1 cursor-pointer transition"
+                            >
+                              <Copy className="w-2.5 h-2.5" />
+                              <span>Salin Jawaban</span>
+                            </button>
+                          </div>
+                        </>
                       )}
                     </div>
                   </div>
@@ -379,7 +459,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   disabled={isThinking}
-                  placeholder="Tanyakan materi yang belum kamu pahami..."
+                  placeholder="Tanyakan materi yang belum kamu pahami, Nak..."
                   className="flex-1 px-3.5 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white focus:border-rose-600 outline-none text-xs text-slate-800"
                 />
                 <button

@@ -193,10 +193,13 @@
     break-inside: avoid !important;
     page-break-inside: avoid !important;
   }
-  .a4-rapor-sheet, .f4-rapor-sheet {
+  .a4-rapor-sheet, .f4-rapor-sheet, .lkpd-print-sheet {
     box-shadow: none !important;
     border: none !important;
     padding: 0 !important;
     width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #ffffff !important;
   }
 }

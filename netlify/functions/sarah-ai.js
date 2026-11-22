@@ -14,6 +14,13 @@ function buildRagContextBlock(ragContext = {}) {
 
   parts.push(`PROFIL SEKOLAH: ${schoolName}${activeClass ? ` | Konteks Kelas: ${activeClass}` : ''}`);
 
+  if (ragContext.sarahConfig && typeof ragContext.sarahConfig === 'object') {
+    const customNote = sanitizeString(ragContext.sarahConfig.personaNote || '', 600);
+    if (customNote) {
+      parts.push(`ARAHAN PERSONA SEKOLAH (settings/sarah_config): ${customNote}`);
+    }
+  }
+
   if (Array.isArray(ragContext.subjectsList) && ragContext.subjectsList.length > 0) {
     const subLines = ragContext.subjectsList
       .slice(0, 15)
@@ -39,45 +46,64 @@ function buildRagContextBlock(ragContext = {}) {
 }
 
 function buildStudentSystemInstruction(ragBlock, userInfo = {}) {
-  const studentName = sanitizeString(userInfo.name || 'Siswa', 80);
+  const studentName = sanitizeString(userInfo.name || 'Nak', 80);
   const studentClass = sanitizeString(userInfo.kelas || 'SD', 40);
 
-  return `Kamu adalah SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis), tutor belajar resmi untuk siswa Sekolah Dasar di aplikasi SERBU 21 SDN Rawa Badak Utara 21.
-Saat ini kamu sedang berbicara dengan siswa bernama ${studentName} (${studentClass}).
+  return `Kamu adalah SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis), asisten belajar resmi bagi siswa Sekolah Dasar di aplikasi SERBU 21 SDN Rawa Badak Utara 21.
+Saat ini kamu sedang mendampingi siswa bernama ${studentName} (${studentClass}).
 
-PRINSIP UTAMA & SYSTEM INSTRUCTION KETAT:
-1. GAYA BAHASA & KARAKTER: Gunakan bahasa Indonesia yang baik, sopan, hangat, sabar, ramah anak SD, tidak menggurui secara kaku, dan menyemangati. Sisipkan secara natural penguatan nilai "7 Kebiasaan Anak Indonesia Hebat" (1. Bangun Pagi, 2. Beribadah, 3. Berolahraga, 4. Makan Sehat dan Bergizi, 5. Gemar Belajar, 6. Bermasyarakat, 7. Tidur Cepat) bila relevan dengan momen belajar siswa.
+JIWA, PERSONA & SYSTEM INSTRUCTION KETAT:
+1. KEPRIBADIAN PENUH KASIH SAYANG (SOSOK IBU YANG TULUS):
+   - Bersikaplah lembut, sangat sabar, santun, hangat, tulus, dan penuh welas asih—seperti sosok seorang ibu yang membimbing anaknya belajar dengan penuh kasih sayang.
+   - Gunakan sapaan hangat yang membesarkan hati seperti "Halo Nak ${studentName}...", "Hebat sekali pertanyaanmu, Nak...", "Jangan khawatir kalau masih bingung, mari kita pelajari pelan-pelan bersama SARAH...".
+   - JANGAN PERNAH menghakimi, menyalahkan dengan keras, atau membuat siswa berkecil hati saat jawabannya keliru. Selalu hargai usaha dan keberaniannya mencoba terlebih dahulu.
+   - Sisipkan secara lembut dan natural nilai "7 Kebiasaan Anak Indonesia Hebat" (1. Bangun Pagi, 2. Beribadah, 3. Berolahraga, 4. Makan Sehat dan Bergizi, 5. Gemar Belajar, 6. Bermasyarakat, 7. Tidur Cepat) sebagai nasihat hangat penyemangat.
+
 2. ATURAN ANTI-MENYONTEK (METODE SOKRATIK MUTLAK):
    - Kamu DILARANG KERAS memberikan jawaban akhir secara langsung atas soal PR, latihan, kuis, tebak pilihan A/B/C/D, atau hasil hitungan tugas siswa.
-   - Jika siswa menanyakan jawaban soal (contoh: "berapa hasil 3/4 + 2/5?", "jawaban nomor 3 apa?", "pilihannya A atau B?", "kerjakan PR ini"), kamu WAJIB menolak memberi jawaban langsung dengan cara ramah, lalu berikan:
-     (a) Penjelasan singkat konsep dasarnya,
-     (b) Analogi sehari-hari yang mudah dibayangkan anak SD,
-     (c) Petunjuk langkah pertama (scaffolding) dan 1–2 pertanyaan pemantik balik agar siswa mencoba berpikir dan menjawab langkah tersebut sendiri.
-   - Jika siswa mengirimkan percobaannya ("apakah jawabanku 10 benar?"), konfirmasi proses berpikirnya terlebih dahulu dan bimbing bila masih keliru tanpa langsung membocorkan angka/huruf akhir sebelum siswa memahami langkahnya.
+   - Jika siswa menanyakan jawaban soal (contoh: "berapa hasil 3/4 + 2/5?", "jawaban nomor 3 apa?", "pilihannya A atau B?", "kerjakan PR ini"), tolaklah memberi jawaban langsung dengan sangat halus dan penuh kasih, lalu berikan:
+     (a) Apresiasi hangat atas pertanyaannya,
+     (b) Penjelasan singkat konsep dasar menggunakan bahasa sederhana anak SD dan analogi kehidupan sehari-hari,
+     (c) Petunjuk langkah pertama (scaffolding) dan 1–2 pertanyaan pemantik lembut agar siswa mencoba berpikir dan melangkah sendiri.
+   - Jika siswa mengirimkan percobaannya ("apakah jawabanku 10 benar?"), puji usahanya dulu lalu bimbing langkah berpikirnya pelan-pelan tanpa membocorkan kunci akhir secara instan.
+
 3. BATASAN RUANG LINGKUP KURIKULUM:
    - Fokus HANYA pada materi pelajaran SD Kurikulum Merdeka, literasi/numerasi, media ajar sekolah, serta pembiasaan 7 Kebiasaan Anak Indonesia Hebat.
-   - Tolak dengan sangat sopan pertanyaan di luar konteks belajar SD (misalnya hiburan dewasa, game non-edukatif, gosip, politik, atau permintaan membuat kecurangan ujian) dan ajak kembali berdiskusi tentang pelajaran sekolah.
-4. GUNAKAN BASIS DATA SEKOLAH: Prioritaskan referensi dari materi dan memori pengetahuan sekolah di bawah ini bila relevan, dan jangan mengarang materi ajar yang tidak ada di referensi seolah-olah berasal dari dokumen guru.
+   - Tolak dengan sangat santun pertanyaan di luar konteks belajar SD (misalnya hiburan dewasa, game non-edukatif, gosip, atau meminta bantuan kecurangan ujian) dan ajak kembali belajar dengan hangat.
+
+4. BASIS DATA SEKOLAH:
+   - Prioritaskan referensi dari materi ajar dan memori pengetahuan sekolah berikut bila relevan, dan rapikan jawabanmu dengan format Markdown yang mudah dibaca anak (poin singkat, cetak tebal pada kata kunci).
 
 KONTEKS BASIS DATA SEKOLAH SAAT INI:
 ${ragBlock}`;
 }
 
-function buildTeacherPromptAndInstruction(mode, params, ragBlock, userInfo = {}) {
+function buildTeacherBaseSystem(ragBlock, userInfo = {}) {
   const teacherName = sanitizeString(userInfo.name || 'Bapak/Ibu Guru', 100);
+
+  return `Kamu adalah SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis), asisten kecerdasan buatan yang lembut, santun, sabar, penuh kasih sayang, amanah, dan berjiwa welas asih bagi Pendidik & Administrator di aplikasi sekolah SERBU 21 (SDN Rawa Badak Utara 21).
+Kepribadianmu bagaikan rekan guru yang penuh keteladanan dan sosok seorang ibu yang mengayomi dunia pendidikan dengan tulus.
+Pengguna yang sedang kamu layani adalah ${teacherName}.
+
+PRINSIP KOMUNIKASI MODE GURU:
+- Gunakan bahasa Indonesia yang sopan, suportif, empatik, hangat namun tetap profesional sesuai standar Kurikulum Merdeka Indonesia.
+- Sajikan setiap gagasan atau dokumen secara sangat terstruktur dan rapi menggunakan Markdown (heading, daftar bernomor/poin, cetak tebal, serta tabel Markdown bila diperlukan).
+- Apabila relevan, selalu integrasikan nilai-nilai karakter "7 Kebiasaan Anak Indonesia Hebat" dan prinsip pendidikan inklusif yang memanusiakan setiap anak.
+- Rujuk konteks basis data sekolah di bawah ini secara amanah apabila relevan:
+
+${ragBlock}`;
+}
+
+function buildTeacherPromptAndInstruction(mode, params, ragBlock, userInfo = {}) {
   const kelas = sanitizeString(params.kelas || 'Kelas 6', 40);
   const mapel = sanitizeString(params.mapel || 'Umum', 100);
   const topik = sanitizeString(params.topik || '', 600);
   const inklusiCatatan = sanitizeString(params.inklusiCatatan || '', 800);
 
-  const baseSystem = `Kamu adalah SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis), asisten kecerdasan buatan profesional bagi Pendidik & Administrator di aplikasi sekolah SERBU 21 (SDN Rawa Badak Utara 21).
-Pengguna saat ini adalah ${teacherName}.
-Gunakan bahasa Indonesia baku pendidikan Kurikulum Merdeka Indonesia yang rapi, terstruktur dengan Markdown (heading, daftar bernomor/poin, tebal, serta tabel Markdown bila diperlukan), praktis diterapkan di kelas SD, serta merujuk pada konteks basis data sekolah berikut bila relevan:
-
-${ragBlock}`;
+  const baseSystem = buildTeacherBaseSystem(ragBlock, userInfo);
 
   if (mode === 'modul_ajar') {
-    const userPrompt = `Buatkan **Modul Ajar / RPP Berdiferensiasi (Pendekatan Pembelajaran Mendalam / Deep Learning)** Kurikulum Merdeka SD yang siap cetak dan langsung dapat digunakan di kelas dengan rincian berikut:
+    const userPrompt = `Dengan penuh ketelitian, susunkan **Modul Ajar / RPP Berdiferensiasi (Pendekatan Pembelajaran Mendalam / Deep Learning)** Kurikulum Merdeka SD yang siap cetak dan langsung dapat digunakan di kelas dengan rincian berikut:
 - Jenjang / Kelas: ${kelas}
 - Mata Pelajaran: ${mapel}
 - Topik / Tujuan Pembelajaran (TP): ${topik}
@@ -88,10 +114,42 @@ Struktur wajib yang harus ditampilkan lengkap dan rapi:
 2. **Tujuan Pembelajaran (TP) & Kriteria Ketercapaian Tujuan Pembelajaran (KKTP)**
 3. **Pemetaan Kebutuhan Belajar & Strategi Diferensiasi** (Konten, Proses, Produk — serta akomodasi khusus siswa inklusi sesuai catatan di atas jika ada)
 4. **Kegiatan Pembelajaran Mendalam**
-   - **Pendahuluan** (apersepsi bermakna, doa/kesiapan, pertanyaan pemantik)
+   - **Pendahuluan** (apersepsi penuh kehangatan, doa/kesiapan, pertanyaan pemantik)
    - **Kegiatan Inti** (eksplorasi berkesadaran/*mindful*, aktivitas kolaboratif bermakna/*meaningful*, dan praktik menyenangkan/*joyful*, lengkap dengan penyesuaian diferensiasi)
    - **Penutup** (refleksi siswa, simpulan, tindak lanjut pembiasaan 7 Kebiasaan Anak Indonesia Hebat)
 5. **Asesmen Formatif & Sumatif** (sertakan contoh instrumen singkat, rubrik penilaian dalam tabel Markdown, serta rencana tindak lanjut remedial/pengayaan).`;
+
+    return { systemInstruction: baseSystem, userPrompt };
+  }
+
+  if (mode === 'lkpd_generator') {
+    const jenisAktivitas = sanitizeString(params.jenisAktivitas || 'Eksplorasi Kelompok', 100);
+    const tingkatDiferensiasi = sanitizeString(params.tingkatDiferensiasi || 'Reguler', 100);
+
+    const userPrompt = `Susunkan **Lembar Kerja Peserta Didik (LKPD) Menarik & Siap Cetak** untuk siswa Sekolah Dasar dengan rincian berikut:
+- Jenjang / Kelas: ${kelas}
+- Mata Pelajaran: ${mapel}
+- Topik / Tujuan Pembelajaran: ${topik}
+- Jenis Aktivitas Pilihan: ${jenisAktivitas}
+- Tingkat Diferensiasi: ${tingkatDiferensiasi}
+
+WAJIB menyusun LKPD menggunakan Markdown yang sangat bersih, ramah anak SD, dan memuat 5 komponen berikut secara berurutan:
+1. **Kop Identitas Siswa & Judul LKPD**:
+   - Judul besar yang menarik dan penuh semangat.
+   - Tabel atau baris identitas siswa yang rapi untuk diisi pensil/pulpen: **Nama Lengkap**, **Kelas**, **Hari / Tanggal**, serta **Mata Pelajaran & Topik**.
+2. **Cerita Pemantik / Misi Belajar Seru**:
+   - Kisah singkat atau tantangan petualangan belajar yang hangat dan dekat dengan kehidupan sehari-hari anak SD untuk membangkitkan rasa ingin tahu.
+3. **Langkah Kerja Bertahap (Dengan Ikon Visual Menarik)**:
+   - Daftar bernomor langkah demi langkah dengan emoji/ikon edukatif di setiap tahapannya agar anak mudah mengikuti instruksi.
+   - Jika tingkat diferensiasi adalah *Pendampingan Khusus Inklusi*, buat kalimat lebih pendek, jelas, bertahap pelan, disertai contoh panduan dan dukungan visual/pendampingan guru/teman sebaya.
+4. **Tabel Kerja / Kotak Jawaban Terstruktur**:
+   - Sajikan area kerja siswa sesuai Jenis Aktivitas (*${jenisAktivitas}*) menggunakan **Tabel Markdown** yang bersih, terstruktur, memiliki ruang kolom/baris kosong atau isian terbimbing sehingga rapi saat dicetak di kertas A4.
+5. **Kotak "Refleksi Perasaanku Hari Ini"**:
+   - Buat bagian penutup khusus dalam bentuk tabel atau kotak refleksi agar siswa dapat melingkari/mencentang perasaannya setelah belajar:
+     - 😊 **Senang Sekali** — Aku paham dan menikmati kegiatan ini!
+     - 🔥 **Semangat Terus** — Aku tertantang dan ingin tahu lebih banyak!
+     - 🤝 **Butuh Bantuan** — Aku ingin didampingi Ibu/Bapak Guru lagi di bagian tertentu.
+   - Sertakan 1 baris kosong bertuliskan: *"Satu hal baik yang aku pelajari hari ini:"*`;
 
     return { systemInstruction: baseSystem, userPrompt };
   }
@@ -114,7 +172,7 @@ Sajikan dalam format terstruktur dan inspiratif:
     return { systemInstruction: baseSystem, userPrompt };
   }
 
-  const customPrompt = sanitizeString(params.prompt || topik, 3000);
+  const customPrompt = sanitizeString(params.prompt || params.message || topik, 3000);
   return {
     systemInstruction: baseSystem,
     userPrompt: customPrompt || 'Bantu saya menyiapkan materi pembelajaran SD sesuai basis data sekolah.',
@@ -141,8 +199,8 @@ async function generateCbtQuestions({ ai, params, ragBlock }) {
 
   const bobotDefault = Math.max(1, Math.round(100 / jumlahSoal));
 
-  const systemInstruction = `Kamu adalah SARAH, pakar penyusun soal asesmen Kurikulum Merdeka Sekolah Dasar (SDN Rawa Badak Utara 21).
-Tugasmu menyusun soal berkualitas tinggi, kontekstual, menggunakan bahasa Indonesia yang jelas sesuai usia siswa ${kelas}, dan terbebas dari bias atau jawaban ambigu.
+  const systemInstruction = `Kamu adalah SARAH, asisten pendidik yang amanah, lembut, dan ahli dalam menyusun soal asesmen Kurikulum Merdeka Sekolah Dasar (SDN Rawa Badak Utara 21).
+Tugasmu menyusun soal berkualitas tinggi, kontekstual, menggunakan bahasa Indonesia yang baik dan santun sesuai usia siswa ${kelas}, serta terbebas dari bias atau jawaban ambigu.
 Prioritaskan referensi dari sumber materi dan basis data sekolah berikut:
 ${ragBlock}`;
 
@@ -157,7 +215,7 @@ ${sumberMateri ? `\nMATERI SUMBER DARI GURU / MEDIA AJAR:\n${sumberMateri}\n` : 
 ATURAN FORMAT SOAL:
 ${typeInstructions}
 - Berikan bobot skor default ${bobotDefault} per soal (total sekitar 100).
-- Sertakan field "pembahasan" yang menjelaskan alasan kunci jawaban dengan bahasa edukatif.
+- Sertakan field "pembahasan" yang menjelaskan alasan kunci jawaban dengan bahasa edukatif yang ramah.
 - Kembalikan HANYA JSON sesuai skema.`;
 
   const response = await ai.models.generateContent({
@@ -232,7 +290,6 @@ ${typeInstructions}
         const i = opsi.length;
         opsi.push(`${prefixes[i]} Pilihan ${prefixes[i].charAt(0)}`);
       }
-      // Ensure kunciJawaban matches exact string from opsi so SERBU 21 CBTTab & StudentDashboard work seamlessly
       const letterMatch = kunci.match(/^([A-D])(?:\.|\b)/i);
       const exactOpt = opsi.find((o) => o.toLowerCase() === kunci.toLowerCase());
       if (exactOpt) {
@@ -311,7 +368,7 @@ export async function processSarahRequest(body = {}) {
       throw err;
     }
 
-    const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
+    const history = Array.isArray(body.history) ? body.history.slice(-10) : [];
     const contents = [
       ...history
         .filter((h) => h && typeof h.text === 'string' && h.text.trim())
@@ -335,7 +392,43 @@ export async function processSarahRequest(body = {}) {
 
     return {
       mode: 'student_chat',
-      text: (response.text || '').trim() || 'Maaf, SARAH belum dapat memproses pertanyaanmu saat ini.',
+      text: (response.text || '').trim() || 'Maaf ya Nak, SARAH belum dapat memproses pertanyaanmu saat ini.',
+    };
+  }
+
+  if (mode === 'general_chat') {
+    const message = sanitizeString(params.message || body.message || '', 3000);
+    if (!message) {
+      const err = new Error('Pesan obrolan tidak boleh kosong.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const history = Array.isArray(body.history) ? body.history.slice(-12) : [];
+    const contents = [
+      ...history
+        .filter((h) => h && typeof h.text === 'string' && h.text.trim())
+        .map((h) => ({
+          role: h.role === 'model' ? 'model' : 'user',
+          parts: [{ text: sanitizeString(h.text, 2000) }],
+        })),
+      {
+        role: 'user',
+        parts: [{ text: message }],
+      },
+    ];
+
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents,
+      config: {
+        systemInstruction: buildTeacherBaseSystem(ragBlock, userInfo),
+      },
+    });
+
+    return {
+      mode: 'general_chat',
+      text: (response.text || '').trim() || 'Mohon maaf, SARAH belum menghasilkan balasan. Silakan coba kembali.',
     };
   }
 
@@ -356,7 +449,7 @@ export async function processSarahRequest(body = {}) {
 
   return {
     mode,
-    text: (response.text || '').trim() || 'Maaf, SARAH belum menghasilkan respons. Silakan coba lagi.',
+    text: (response.text || '').trim() || 'Mohon maaf, SARAH belum menghasilkan respons. Silakan coba lagi.',
   };
 }
 
