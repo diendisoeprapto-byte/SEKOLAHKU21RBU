@@ -157,6 +157,16 @@ export const SarahStudentWidget: React.FC<Props> = ({
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const isExamRunningRef = useRef<boolean>(Boolean(activeExamStatus?.isRunning));
+
+  useEffect(() => {
+    const running = Boolean(activeExamStatus?.isRunning);
+    isExamRunningRef.current = running;
+    if (running) {
+      setIsOpen(false);
+      setIsInfoModalOpen(false);
+    }
+  }, [activeExamStatus?.isRunning]);
 
   const handleInsertStudentEmoji = (emoji: string) => {
     const el = chatInputRef.current;
@@ -181,7 +191,10 @@ export const SarahStudentWidget: React.FC<Props> = ({
     const unsubKb = subscribeToSarahKnowledgeBase(setKnowledgeDocs);
     const unsubMedia = subscribeToMediaAjarForSarah(setMediaAjarDocs);
 
-    const handleOpenEvent = () => setIsOpen(true);
+    const handleOpenEvent = () => {
+      if (isExamRunningRef.current) return;
+      setIsOpen(true);
+    };
     window.addEventListener('serbu21-open-tanya-sarah', handleOpenEvent);
 
     return () => {
@@ -485,6 +498,11 @@ export const SarahStudentWidget: React.FC<Props> = ({
       setStatusLabel('');
     }
   };
+
+  // Hilangkan menu/widget Tanya SARAH sepenuhnya saat siswa sedang mengerjakan ujian CBT atau TKA
+  if (activeExamStatus?.isRunning) {
+    return null;
+  }
 
   return (
     <div className="fixed bottom-5 right-5 z-[950] no-print flex flex-col items-end">

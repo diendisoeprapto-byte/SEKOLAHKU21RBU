@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect } from 'react';
 import { Menu, Calendar, Clock, GraduationCap, Power, KeyRound, Lock, Camera } from 'lucide-react';
-import { SchoolProfile, ActiveUser, ActiveExamHeaderStatus } from '../types';
+import { SchoolProfile, ActiveUser, ActiveExamHeaderStatus, hasAdminMenuAccess } from '../types';
 import { ACADEMIC_YEARS, CLASSES_LIST } from '../utils/storage';
 
 interface Props {
@@ -32,6 +32,7 @@ export const Header: React.FC<Props> = ({
   activeExamStatus,
   onLogoSecretClick,
 }) => {
+  const isAdminAccess = hasAdminMenuAccess(activeUser);
   // Deteksi peran user: Kepsek, Administrator, Guru Mata Pelajaran, Tata Usaha, atau Guru Kelas
   const isGuruKelas = useMemo(() => {
     if (activeUser.role !== 'guru') return false;
@@ -213,7 +214,7 @@ export const Header: React.FC<Props> = ({
           )}
 
           {/* User profile with photo */}
-          {activeUser.role === 'admin' && onOpenAdminProfile ? (
+          {isAdminAccess && onOpenAdminProfile ? (
             <button
               type="button"
               onClick={onOpenAdminProfile}
@@ -222,7 +223,11 @@ export const Header: React.FC<Props> = ({
             >
               <div className="relative shrink-0">
                 <img
-                  src={profile.adminFotoUrl || activeUser.fotoUrl || profile.logoSekolahUrl}
+                  src={
+                    activeUser.role === 'admin'
+                      ? profile.adminFotoUrl || activeUser.fotoUrl || profile.logoSekolahUrl
+                      : activeUser.fotoUrl || profile.adminFotoUrl || profile.logoSekolahUrl
+                  }
                   alt="Foto User"
                   className="w-8 h-8 rounded-xl object-cover bg-white border border-yellow-300"
                 />
@@ -257,7 +262,7 @@ export const Header: React.FC<Props> = ({
             </div>
           )}
 
-          {activeUser.role === 'admin' && onOpenChangePassword && (
+          {isAdminAccess && onOpenChangePassword && (
             <button
               type="button"
               onClick={onOpenChangePassword}

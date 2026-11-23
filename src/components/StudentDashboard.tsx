@@ -1999,26 +1999,28 @@ export const StudentDashboard: React.FC<Props> = ({
             </button>
 
             {/* 7. Tanya SARAH (Tutor Sokratik) */}
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new Event('serbu21-open-tanya-sarah'))}
-              className="group bg-gradient-to-r from-rose-50 to-indigo-50 p-4 rounded-2xl border border-rose-200 hover:border-rose-400 shadow-2xs hover:shadow-sm transition text-left flex items-center justify-between gap-3 cursor-pointer sm:col-span-2 lg:col-span-3"
-            >
-              <div className="flex items-center gap-3.5 min-w-0">
-                <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-rose-600 to-indigo-600 text-white flex items-center justify-center transition shrink-0 shadow-xs">
-                  <MessageCircleHeart className="w-5 h-5" />
+            {!isExamRunning && (
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new Event('serbu21-open-tanya-sarah'))}
+                className="group bg-gradient-to-r from-rose-50 to-indigo-50 p-4 rounded-2xl border border-rose-200 hover:border-rose-400 shadow-2xs hover:shadow-sm transition text-left flex items-center justify-between gap-3 cursor-pointer sm:col-span-2 lg:col-span-3"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-rose-600 to-indigo-600 text-white flex items-center justify-center transition shrink-0 shadow-xs">
+                    <MessageCircleHeart className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-display font-black text-sm text-rose-900 group-hover:text-rose-700 transition truncate">
+                      Tanya SARAH (Asisten Belajar Sokratik)
+                    </h3>
+                    <p className="text-xs text-slate-600 truncate mt-0.5">
+                      Bimbingan belajar langkah demi langkah sesuai materi kelasmu &amp; 7 Kebiasaan Anak Indonesia Hebat
+                    </p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <h3 className="font-display font-black text-sm text-rose-900 group-hover:text-rose-700 transition truncate">
-                    Tanya SARAH (Asisten Belajar Sokratik)
-                  </h3>
-                  <p className="text-xs text-slate-600 truncate mt-0.5">
-                    Bimbingan belajar langkah demi langkah sesuai materi kelasmu &amp; 7 Kebiasaan Anak Indonesia Hebat
-                  </p>
-                </div>
-              </div>
-              <ChevronRight className="w-4 h-4 text-rose-500 group-hover:translate-x-0.5 transition shrink-0" />
-            </button>
+                <ChevronRight className="w-4 h-4 text-rose-500 group-hover:translate-x-0.5 transition shrink-0" />
+              </button>
+            )}
           </div>
         </div>
 

@@ -29,7 +29,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '../../utils/firebase';
-import { ActiveUser, SchoolProfile, Student } from '../../types';
+import { ActiveUser, SchoolProfile, Student, hasAdminMenuAccess } from '../../types';
 import { formatTanggalIndo } from '../../utils/dateUtils';
 
 interface Props {
@@ -367,7 +367,7 @@ export const PortalAlumniTab: React.FC<Props> = ({
   activeYear,
   showToast,
 }) => {
-  const isAdmin = activeUser.role === 'admin';
+  const isAdmin = hasAdminMenuAccess(activeUser);
 
   const [alumniList, setAlumniList] = useState<AlumniRecord[]>([]);
   const [loading, setLoading] = useState(true);

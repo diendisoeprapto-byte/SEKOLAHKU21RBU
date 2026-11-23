@@ -34,7 +34,14 @@ import {
   Presentation,
   MessageCircleHeart,
 } from 'lucide-react';
-import { ActiveUser, SchoolProfile, Student, isAbkExcludedFromTka } from '../types';
+import {
+  ActiveExamHeaderStatus,
+  ActiveUser,
+  SchoolProfile,
+  Student,
+  hasAdminMenuAccess,
+  isAbkExcludedFromTka,
+} from '../types';
 
 export type TabId =
   | 'dashboard'
@@ -84,6 +91,7 @@ interface Props {
   onOpenZoom: (url: string, title: string) => void;
   onOpenChangePassword?: () => void;
   onOpenAdminProfile?: () => void;
+  activeExamStatus?: ActiveExamHeaderStatus | null;
 }
 
 export const Sidebar: React.FC<Props> = ({
@@ -96,6 +104,7 @@ export const Sidebar: React.FC<Props> = ({
   onOpenZoom,
   onOpenChangePassword,
   onOpenAdminProfile,
+  activeExamStatus,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
@@ -116,6 +125,8 @@ export const Sidebar: React.FC<Props> = ({
   };
 
   const isStudent = activeUser.role === 'siswa';
+  const isAdminAccess = hasAdminMenuAccess(activeUser);
+  const isStudentTakingExam = isStudent && Boolean(activeExamStatus?.isRunning);
 
   if (!isOpen) return null;
 
@@ -152,7 +163,7 @@ export const Sidebar: React.FC<Props> = ({
               <p className="text-xs text-slate-500 truncate">{activeUser.detail}</p>
             </div>
           </div>
-          {activeUser.role === 'admin' && onOpenAdminProfile && (
+          {isAdminAccess && onOpenAdminProfile && (
             <button
               type="button"
               onClick={onOpenAdminProfile}
@@ -164,21 +175,23 @@ export const Sidebar: React.FC<Props> = ({
           )}
         </div>
 
-        {/* Quick Access: Asisten SARAH (di atas Cari Menu, di bawah Nama User) */}
+        {/* Quick Access: Asisten SARAH (di atas Cari Menu, di bawah Nama User; dihilangkan saat siswa ujian CBT/TKA) */}
         {isStudent ? (
-          <button
-            type="button"
-            onClick={() => window.dispatchEvent(new Event('serbu21-open-tanya-sarah'))}
-            className="w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center justify-between gap-2 text-left transition bg-gradient-to-r from-rose-50 via-pink-50 to-indigo-50 border-2 border-rose-200 text-rose-900 hover:from-rose-100 hover:to-indigo-100 shadow-2xs cursor-pointer"
-          >
-            <span className="flex items-center gap-2.5 min-w-0">
-              <MessageCircleHeart className="w-5 h-5 text-rose-600 shrink-0" />
-              <span className="truncate">Tanya SARAH (Tutor AI)</span>
-            </span>
-            <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-600 text-white shrink-0">
-              AI
-            </span>
-          </button>
+          !isStudentTakingExam && (
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new Event('serbu21-open-tanya-sarah'))}
+              className="w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center justify-between gap-2 text-left transition bg-gradient-to-r from-rose-50 via-pink-50 to-indigo-50 border-2 border-rose-200 text-rose-900 hover:from-rose-100 hover:to-indigo-100 shadow-2xs cursor-pointer"
+            >
+              <span className="flex items-center gap-2.5 min-w-0">
+                <MessageCircleHeart className="w-5 h-5 text-rose-600 shrink-0" />
+                <span className="truncate">Tanya SARAH (Tutor AI)</span>
+              </span>
+              <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-600 text-white shrink-0">
+                AI
+              </span>
+            </button>
+          )
         ) : (
           <button
             type="button"
@@ -867,7 +880,7 @@ export const Sidebar: React.FC<Props> = ({
                       <span>2 Logo & Backup Data</span>
                     </button>
                   )}
-                  {activeUser.role === 'admin' && onOpenAdminProfile && (!searchQuery || 'ubah ganti logo foto profil admin avatar sekolah kemendikbud'.includes(searchQuery)) && (
+                  {isAdminAccess && onOpenAdminProfile && (!searchQuery || 'ubah ganti logo foto profil admin avatar sekolah kemendikbud'.includes(searchQuery)) && (
                     <button
                       type="button"
                       onClick={onOpenAdminProfile}
@@ -877,7 +890,7 @@ export const Sidebar: React.FC<Props> = ({
                       <span>Ubah Logo &amp; Foto Profil Admin</span>
                     </button>
                   )}
-                  {activeUser.role === 'admin' && onOpenChangePassword && (!searchQuery || 'rubah ganti ubah password sandi admin administrator'.includes(searchQuery)) && (
+                  {isAdminAccess && onOpenChangePassword && (!searchQuery || 'rubah ganti ubah password sandi admin administrator'.includes(searchQuery)) && (
                     <button
                       type="button"
                       onClick={onOpenChangePassword}
@@ -891,7 +904,7 @@ export const Sidebar: React.FC<Props> = ({
               )}
             </div>
 
-            {activeUser.role === 'admin' && onOpenChangePassword && (!searchQuery || 'rubah ganti ubah password sandi admin administrator'.includes(searchQuery)) && (
+            {isAdminAccess && onOpenChangePassword && (!searchQuery || 'rubah ganti ubah password sandi admin administrator'.includes(searchQuery)) && (
               <button
                 type="button"
                 onClick={onOpenChangePassword}

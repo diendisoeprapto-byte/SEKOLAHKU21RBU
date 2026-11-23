@@ -18,6 +18,7 @@ import {
   KaldikDay,
   ActiveUser,
   ActiveExamHeaderStatus,
+  hasAdminMenuAccess,
 } from './types';
 import {
   getStoredProfile,
@@ -1268,6 +1269,7 @@ export default function App() {
         isOpen={isChangePasswordModalOpen}
         onClose={() => setIsChangePasswordModalOpen(false)}
         showToast={showToast}
+        allowResetAdmin={activeUser?.role === 'admin'}
       />
 
       {/* Change Admin Logo & Profile Photo Modal */}
@@ -1349,7 +1351,7 @@ export default function App() {
             onLogout={handleLogout}
             onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
             onOpenAdminProfile={
-              activeUser.role === 'admin' ? () => setIsAdminProfileModalOpen(true) : undefined
+              hasAdminMenuAccess(activeUser) ? () => setIsAdminProfileModalOpen(true) : undefined
             }
             activeExamStatus={activeExamStatus}
             onLogoSecretClick={handleSecretLogoClick}
@@ -1366,8 +1368,9 @@ export default function App() {
               onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
               onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
               onOpenAdminProfile={
-                activeUser.role === 'admin' ? () => setIsAdminProfileModalOpen(true) : undefined
+                hasAdminMenuAccess(activeUser) ? () => setIsAdminProfileModalOpen(true) : undefined
               }
+              activeExamStatus={activeExamStatus}
             />
 
             <main className="flex-1 min-w-0 space-y-6">
@@ -1736,7 +1739,8 @@ export default function App() {
                   onResetAll={handleResetAll}
                   activeUserName={activeUser.name}
                   onBackupRestored={handleRefreshStateAfterRestore}
-                  isAdmin={activeUser.role === 'admin'}
+                  isAdmin={hasAdminMenuAccess(activeUser)}
+                  allowResetAdmin={activeUser.role === 'admin'}
                   onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
                 />
               )}

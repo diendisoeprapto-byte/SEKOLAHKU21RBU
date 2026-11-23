@@ -10,9 +10,15 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   showToast: (msg: string, type?: 'success' | 'error') => void;
+  allowResetAdmin?: boolean;
 }
 
-export const ChangePasswordModal: React.FC<Props> = ({ isOpen, onClose, showToast }) => {
+export const ChangePasswordModal: React.FC<Props> = ({
+  isOpen,
+  onClose,
+  showToast,
+  allowResetAdmin = true,
+}) => {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -57,6 +63,7 @@ export const ChangePasswordModal: React.FC<Props> = ({ isOpen, onClose, showToas
   };
 
   const handleResetAdminToDefault = () => {
+    if (!allowResetAdmin) return;
     resetStoredAdminPassword();
     showToast('Password administrator berhasil di-reset ke default ("admin")!', 'success');
     setOldPassword('');
@@ -198,36 +205,42 @@ export const ChangePasswordModal: React.FC<Props> = ({ isOpen, onClose, showToas
             </span>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
-            <div>
-              {confirmResetAdmin ? (
-                <div className="flex items-center gap-1.5">
+          <div
+            className={`flex flex-wrap items-center gap-2 pt-2 ${
+              allowResetAdmin ? 'justify-between' : 'justify-end'
+            }`}
+          >
+            {allowResetAdmin && (
+              <div>
+                {confirmResetAdmin ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleResetAdminToDefault}
+                      className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-extrabold cursor-pointer"
+                    >
+                      Ya, Reset ke "admin"
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmResetAdmin(false)}
+                      className="px-2.5 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                ) : (
                   <button
                     type="button"
-                    onClick={handleResetAdminToDefault}
-                    className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-extrabold cursor-pointer"
+                    onClick={() => setConfirmResetAdmin(true)}
+                    className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition"
+                    title="Kembalikan password Administrator ke default ('admin')"
                   >
-                    Ya, Reset ke "admin"
+                    <RotateCcw className="w-3.5 h-3.5" /> Reset Admin
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmResetAdmin(false)}
-                    className="px-2.5 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold cursor-pointer"
-                  >
-                    Batal
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmResetAdmin(true)}
-                  className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition"
-                  title="Kembalikan password Administrator ke default ('admin')"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" /> Reset Admin
-                </button>
-              )}
-            </div>
+                )}
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <button
                 type="button"

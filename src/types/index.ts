@@ -80,6 +80,33 @@ export const isAbkExcludedFromTka = (
   return isSiswaInklusi(student.kebutuhanKhusus) && student.ikutTka === false;
 };
 
+export const isTataUsahaUser = (
+  user?: { role?: string; detail?: string; username?: string } | null
+): boolean => {
+  if (!user || user.role !== 'guru') return false;
+  const detailLower = (user.detail || '').trim().toLowerCase();
+  const usernameLower = (user.username || '').trim().toLowerCase();
+
+  if (detailLower.includes('tata usaha')) return true;
+  if (/(?:^|[\s._\-\/])tu(?:$|[\s._\-\/])/.test(detailLower)) return true;
+  if (
+    usernameLower.includes('tatausaha') ||
+    usernameLower.includes('tata_usaha') ||
+    usernameLower.includes('tata.usaha') ||
+    /(?:^|[._\-])tu(?:$|[._\-])/.test(usernameLower)
+  ) {
+    return true;
+  }
+  return false;
+};
+
+export const hasAdminMenuAccess = (
+  user?: { role?: string; detail?: string; username?: string } | null
+): boolean => {
+  if (!user) return false;
+  return user.role === 'admin' || isTataUsahaUser(user);
+};
+
 export interface Student {
   id: string;
   barcodeId: string;

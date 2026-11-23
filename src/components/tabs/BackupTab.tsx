@@ -52,6 +52,7 @@ interface Props {
   activeUserName?: string;
   onBackupRestored?: () => void;
   isAdmin?: boolean;
+  allowResetAdmin?: boolean;
   onOpenChangePassword?: () => void;
 }
 
@@ -74,6 +75,7 @@ export const BackupTab: React.FC<Props> = ({
   activeUserName = 'admin',
   onBackupRestored,
   isAdmin = false,
+  allowResetAdmin = true,
   onOpenChangePassword,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -973,40 +975,49 @@ export const BackupTab: React.FC<Props> = ({
                 <KeyRound className="w-4 h-4 text-amber-600" /> Akun &amp; Password Administrator
               </h4>
               <p className="text-xs text-amber-800">
-                Ubah kata sandi login akun Administrator Utama atau reset ke password default (<span className="font-mono font-bold">admin</span>) dan sinkronkan otomatis ke seluruh perangkat.
+                {allowResetAdmin ? (
+                  <>
+                    Ubah kata sandi login akun Administrator Utama atau reset ke password default (<span className="font-mono font-bold">admin</span>) dan sinkronkan otomatis ke seluruh perangkat.
+                  </>
+                ) : (
+                  <>
+                    Ubah kata sandi login akun Administrator Utama dan sinkronkan otomatis ke seluruh perangkat.
+                  </>
+                )}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
-              {confirmResetAdminPass ? (
-                <div className="flex items-center gap-1.5 bg-white px-2.5 py-1.5 rounded-xl border border-amber-300">
+              {allowResetAdmin &&
+                (confirmResetAdminPass ? (
+                  <div className="flex items-center gap-1.5 bg-white px-2.5 py-1.5 rounded-xl border border-amber-300">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetStoredAdminPassword();
+                        setConfirmResetAdminPass(false);
+                        showToast('Password akun Administrator di-reset ke default ("admin")!', 'success');
+                      }}
+                      className="bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold px-3 py-1.5 rounded-lg text-xs cursor-pointer"
+                    >
+                      Ya, Reset ke "admin"
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmResetAdminPass(false)}
+                      className="bg-slate-100 text-slate-700 font-bold px-2.5 py-1.5 rounded-lg text-xs cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                ) : (
                   <button
                     type="button"
-                    onClick={() => {
-                      resetStoredAdminPassword();
-                      setConfirmResetAdminPass(false);
-                      showToast('Password akun Administrator di-reset ke default ("admin")!', 'success');
-                    }}
-                    className="bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold px-3 py-1.5 rounded-lg text-xs cursor-pointer"
+                    onClick={() => setConfirmResetAdminPass(true)}
+                    className="bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-display font-extrabold px-4 py-2.5 rounded-xl text-xs cursor-pointer shadow-xs flex items-center gap-1.5"
                   >
-                    Ya, Reset ke "admin"
+                    <RotateCcw className="w-3.5 h-3.5 text-amber-700" /> Reset Password Admin
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmResetAdminPass(false)}
-                    className="bg-slate-100 text-slate-700 font-bold px-2.5 py-1.5 rounded-lg text-xs cursor-pointer"
-                  >
-                    Batal
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmResetAdminPass(true)}
-                  className="bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-display font-extrabold px-4 py-2.5 rounded-xl text-xs cursor-pointer shadow-xs flex items-center gap-1.5"
-                >
-                  <RotateCcw className="w-3.5 h-3.5 text-amber-700" /> Reset Password Admin
-                </button>
-              )}
+                ))}
               <button
                 type="button"
                 onClick={onOpenChangePassword}
