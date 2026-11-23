@@ -819,7 +819,7 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
 ): Promise<T & { fromCache?: boolean }> {
   const {
     signal,
-    timeoutMs = 32000,
+    timeoutMs = 24000,
     cacheKey,
     bypassCache = false,
     validateCached,
@@ -852,7 +852,7 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
         const retryMsg = 'Menghubungkan ulang ke SARAH AI...';
         onStatusChange?.(retryMsg);
         onPhaseChange?.('analyzing', retryMsg);
-        await new Promise((resolve) => setTimeout(resolve, 650));
+        await new Promise((resolve) => setTimeout(resolve, 450));
       }
 
       const controller = new AbortController();
@@ -902,10 +902,11 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
         const errMsg = sanitizeSarahErrorMessage(
           data?.error || `Permintaan ke layanan SARAH gagal (HTTP ${response.status}).`
         );
-        const isTransientStatus = [429, 502, 503, 504].includes(response.status);
+        // Server sudah menjalankan fallback multi-model; hanya retry di klien bila gangguan gateway 502
+        const isTransientGateway = response.status === 502;
         lastErr = new Error(errMsg);
 
-        if (!isTransientStatus || attempt === maxAttempts - 1) {
+        if (!isTransientGateway || attempt === maxAttempts - 1) {
           throw lastErr;
         }
       } catch (err: any) {

@@ -1271,14 +1271,12 @@ export async function processSarahRequest(body = {}, options = {}) {
         model: SARAH_GEMINI_MODEL,
         contents,
         systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo, examReviewBlock),
-        timeoutMs: 22000,
-        retries: 1,
+        timeoutMs: 10000,
+        retries: 0,
+        fastChat: true,
         useCache: cleanHistory.length === 0 && !sanitizedExamReview.requestedExamId,
         cacheScope: `student_chat_${sanitizeString(userInfo.kelas || 'sd', 20)}`,
         signal: requestSignal,
-        config: {
-          maxOutputTokens: 1800,
-        },
       });
 
       return {
@@ -1330,18 +1328,17 @@ export async function processSarahRequest(body = {}, options = {}) {
         attachmentParts.length === 0 &&
         cleanHistory.length === 0;
 
+      const hasAttachments = attachmentParts.length > 0;
       const response = await askSarahGemini({
         model: SARAH_GEMINI_MODEL,
         contents,
         systemInstruction: buildTeacherBaseSystem(ragBlock, userInfo, true, endiLocationContext),
-        timeoutMs: attachmentParts.length > 0 ? 30000 : 22000,
-        retries: 1,
+        timeoutMs: hasAttachments ? 24000 : 10000,
+        retries: 0,
+        fastChat: !hasAttachments,
         useCache: allowSharedCache,
         cacheScope: 'teacher_general_chat',
         signal: requestSignal,
-        config: {
-          maxOutputTokens: 2048,
-        },
       });
 
       let replyText = (response.text || '').trim();

@@ -4,6 +4,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { processSarahRequest } from './netlify/functions/sarah-ai.js';
+import {
+  getSarahGeminiMetrics,
+  probeSarahGeminiModels,
+} from './netlify/functions/sarah-gemini-service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,7 +19,21 @@ async function startServer() {
 
   app.use(express.json({ limit: '8mb' }));
 
-  app.get('/api/health', (_req, res) => {
+  app.get('/api/health', async (req, res) => {
+    if (req.query.probe === '1') {
+      try {
+        const probe = await probeSarahGeminiModels();
+        res.json({
+          status: 'ok',
+          service: 'serbu21-sarah-ai',
+          metrics: getSarahGeminiMetrics(),
+          probe,
+        });
+      } catch (err: any) {
+        res.status(500).json({ status: 'error', message: String(err?.message || err) });
+      }
+      return;
+    }
     res.json({ status: 'ok', service: 'serbu21-sarah-ai' });
   });
 
