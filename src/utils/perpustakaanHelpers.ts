@@ -139,13 +139,23 @@ export function extractGoogleDriveFileId(rawUrl?: string): string | null {
   const url = (rawUrl || '').trim();
   if (!url) return null;
 
-  const fileMatch = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+  const fileMatch = url.match(
+    /(?:drive|docs)\.google\.com\/(?:file|presentation|document|spreadsheets)\/d\/([a-zA-Z0-9_-]+)/i
+  );
   if (fileMatch?.[1]) return fileMatch[1];
 
   const idMatch = url.match(/drive\.google\.com\/(?:open|uc|thumbnail)\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)/i);
   if (idMatch?.[1]) return idMatch[1];
 
   return null;
+}
+
+export function isLikelyEmbeddableBookUrl(rawUrl?: string): boolean {
+  const url = (rawUrl || '').trim();
+  if (!url) return false;
+  if (extractGoogleDriveFileId(url)) return true;
+  if (/\.pdf(\?.*)?(#.*)?$/i.test(url)) return true;
+  return false;
 }
 
 /**

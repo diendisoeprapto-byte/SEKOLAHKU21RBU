@@ -183,18 +183,112 @@ function formatUploadDate(val: MediaAjarItem['created_at']): string {
   });
 }
 
-function getMapelBadgeClass(mapel: string): string {
-  const m = (mapel || '').toLowerCase();
-  if (m.includes('indonesia')) return 'bg-rose-50 text-rose-700 border-rose-200';
-  if (m.includes('matematika')) return 'bg-sky-50 text-sky-700 border-sky-200';
-  if (m.includes('ipas') || m.includes('ipa')) return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-  if (m.includes('pancasila') || m.includes('pkn')) return 'bg-amber-50 text-amber-800 border-amber-200';
-  if (m.includes('pjok')) return 'bg-orange-50 text-orange-700 border-orange-200';
-  if (m.includes('pai') || m.includes('agama')) return 'bg-teal-50 text-teal-700 border-teal-200';
-  if (m.includes('inggris')) return 'bg-indigo-50 text-indigo-700 border-indigo-200';
-  if (m.includes('seni')) return 'bg-purple-50 text-purple-700 border-purple-200';
-  return 'bg-slate-100 text-slate-700 border-slate-200';
+function getMediaThumbnailUrl(driveUrl?: string, embedUrl?: string): string | null {
+  const fileId = extractGoogleDriveFileId(driveUrl || '') || extractGoogleDriveFileId(embedUrl || '');
+  if (!fileId) return null;
+  return `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`;
 }
+
+function getMapelSlideTheme(mapel: string): { bar: string; surface: string; ink: string } {
+  const m = (mapel || '').toLowerCase();
+  if (m.includes('indonesia')) {
+    return { bar: 'bg-rose-600', surface: 'from-rose-50/90 via-white to-slate-50', ink: 'text-rose-700' };
+  }
+  if (m.includes('matematika')) {
+    return { bar: 'bg-sky-600', surface: 'from-sky-50/90 via-white to-slate-50', ink: 'text-sky-700' };
+  }
+  if (m.includes('ipas') || m.includes('ipa')) {
+    return { bar: 'bg-emerald-600', surface: 'from-emerald-50/90 via-white to-slate-50', ink: 'text-emerald-700' };
+  }
+  if (m.includes('pancasila') || m.includes('pkn')) {
+    return { bar: 'bg-amber-600', surface: 'from-amber-50/90 via-white to-slate-50', ink: 'text-amber-700' };
+  }
+  if (m.includes('pjok')) {
+    return { bar: 'bg-orange-600', surface: 'from-orange-50/90 via-white to-slate-50', ink: 'text-orange-700' };
+  }
+  if (m.includes('pai') || m.includes('agama')) {
+    return { bar: 'bg-teal-600', surface: 'from-teal-50/90 via-white to-slate-50', ink: 'text-teal-700' };
+  }
+  if (m.includes('inggris')) {
+    return { bar: 'bg-indigo-600', surface: 'from-indigo-50/90 via-white to-slate-50', ink: 'text-indigo-700' };
+  }
+  if (m.includes('seni')) {
+    return { bar: 'bg-violet-600', surface: 'from-violet-50/90 via-white to-slate-50', ink: 'text-violet-700' };
+  }
+  return { bar: 'bg-slate-800', surface: 'from-slate-100/80 via-white to-slate-50', ink: 'text-slate-700' };
+}
+
+interface MediaSlidePreviewProps {
+  driveUrl?: string;
+  embedUrl?: string;
+  judul: string;
+  mapel: string;
+  bab: string;
+  pertemuan: string;
+  guruNama: string;
+}
+
+const MediaSlidePreview: React.FC<MediaSlidePreviewProps> = ({
+  driveUrl,
+  embedUrl,
+  judul,
+  mapel,
+  bab,
+  pertemuan,
+  guruNama,
+}) => {
+  const thumbUrl = useMemo(() => getMediaThumbnailUrl(driveUrl, embedUrl), [driveUrl, embedUrl]);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [thumbUrl]);
+
+  const theme = useMemo(() => getMapelSlideTheme(mapel), [mapel]);
+
+  if (thumbUrl && !hasError) {
+    return (
+      <img
+        src={thumbUrl}
+        alt={`Pratinjau slide ${judul}`}
+        referrerPolicy="no-referrer"
+        onError={() => setHasError(true)}
+        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`w-full h-full bg-gradient-to-br ${theme.surface} p-4 flex flex-col justify-between select-none relative overflow-hidden`}
+    >
+      <div className={`absolute top-0 inset-x-0 h-1 ${theme.bar}`} />
+      <div className="flex items-center justify-between text-[10px] font-semibold text-slate-500">
+        <span className={`truncate max-w-[70%] font-bold ${theme.ink}`}>
+          {mapel || 'Media Ajar'}
+        </span>
+        <span className="inline-flex items-center gap-1 text-slate-400 shrink-0">
+          <Presentation className="w-3 h-3" />
+          <span>PPT</span>
+        </span>
+      </div>
+
+      <div className="my-auto py-1 space-y-1">
+        <div className="text-[10px] font-medium text-slate-400 truncate">
+          {bab} · {pertemuan}
+        </div>
+        <div className="font-display font-extrabold text-sm text-slate-900 leading-snug line-clamp-2">
+          {judul || 'Judul Slide Materi'}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between text-[10px] text-slate-400 border-t border-slate-200/70 pt-1.5">
+        <span className="truncate">{guruNama || 'Guru SERBU 21'}</span>
+        <span className="font-mono text-[9px] shrink-0">Slide 1</span>
+      </div>
+    </div>
+  );
+};
 
 export const MediaAjarTab: React.FC<Props> = ({
   activeUser,
@@ -727,100 +821,110 @@ export const MediaAjarTab: React.FC<Props> = ({
             return (
               <article
                 key={item.id}
-                className="bg-white rounded-3xl p-5 border border-slate-200/90 hover:border-rose-300 shadow-xs hover:shadow-md transition flex flex-col justify-between gap-4"
+                className="group bg-white rounded-2xl border border-slate-200/80 hover:border-slate-300 shadow-2xs hover:shadow-md transition-all overflow-hidden flex flex-col justify-between"
               >
-                <div className="space-y-3">
-                  {/* Top Row: Mapel Badge & Kelas / Edit-Delete */}
-                  <div className="flex items-start justify-between gap-2">
-                    <span
-                      className={`inline-flex items-center px-2.5 py-1 rounded-lg border text-[11px] font-bold ${getMapelBadgeClass(
-                        item.mapel
-                      )}`}
-                    >
-                      {item.mapel || 'Umum'}
-                    </span>
+                <div>
+                  {/* Preview Slide PPT 16:9 */}
+                  <div
+                    onClick={() => setViewingItem(item)}
+                    className="relative aspect-[16/9] bg-slate-100 border-b border-slate-100 overflow-hidden cursor-pointer"
+                    title="Klik untuk membuka presentasi slide"
+                  >
+                    <MediaSlidePreview
+                      driveUrl={item.drive_url}
+                      embedUrl={item.embed_url}
+                      judul={item.judul}
+                      mapel={item.mapel}
+                      bab={item.bab}
+                      pertemuan={item.pertemuan}
+                      guruNama={item.guru_nama}
+                    />
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[11px] font-bold">
-                        Kelas {item.kelas}
+                    {/* Subtle hover scrim */}
+                    <div className="absolute inset-0 bg-slate-950/0 group-hover:bg-slate-950/20 transition-colors flex items-center justify-center">
+                      <span className="opacity-0 group-hover:opacity-100 transition-opacity px-3 py-1.5 rounded-lg bg-white/95 text-slate-900 text-[11px] font-bold shadow-sm inline-flex items-center gap-1.5">
+                        <Eye className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Pratinjau Slide</span>
                       </span>
-                      {accessProfile.canManage && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(item)}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-sky-600 hover:bg-sky-50 transition cursor-pointer"
-                            title="Edit Media Ajar"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDeletingItem(item)}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
-                            title="Hapus Media Ajar"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </>
-                      )}
                     </div>
+
+                    {/* Staff Edit / Delete quick actions */}
+                    {accessProfile.canManage && (
+                      <div
+                        className="absolute top-2.5 right-2.5 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(item)}
+                          className="w-7 h-7 rounded-lg bg-white/95 hover:bg-sky-600 text-slate-600 hover:text-white flex items-center justify-center shadow-xs transition cursor-pointer"
+                          title="Edit Media Ajar"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeletingItem(item)}
+                          className="w-7 h-7 rounded-lg bg-white/95 hover:bg-rose-600 text-slate-600 hover:text-white flex items-center justify-center shadow-xs transition cursor-pointer"
+                          title="Hapus Media Ajar"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Bab & Pertemuan (Terpisah) serta Judul */}
-                  <div>
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
-                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700">
-                        {item.bab}
-                      </span>
-                      <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-700">
-                        {item.pertemuan}
+                  {/* Minimalist Content Body */}
+                  <div className="p-4 space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 truncate">
+                      <span className="font-semibold text-rose-700 truncate">{item.mapel || 'Umum'}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="shrink-0">Kelas {item.kelas}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="truncate">
+                        {item.bab} · {item.pertemuan}
                       </span>
                     </div>
-                    <h3 className="font-display font-black text-base text-slate-900 leading-snug mt-1.5 line-clamp-2">
+
+                    <h3
+                      onClick={() => setViewingItem(item)}
+                      className="font-display font-bold text-sm sm:text-[15px] text-slate-900 leading-snug line-clamp-2 cursor-pointer group-hover:text-rose-700 transition-colors"
+                    >
                       {item.judul}
                     </h3>
                   </div>
-
-                  {/* Meta Guru & Tanggal */}
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500 pt-1">
-                    <span className="inline-flex items-center gap-1 font-medium text-slate-600">
-                      <UserCheck className="w-3.5 h-3.5 text-slate-400" />
-                      {item.guru_nama}
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                      {formatUploadDate(item.created_at)}
-                    </span>
-                  </div>
                 </div>
 
-                {/* 2 Tombol Aksi Utama */}
-                <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setViewingItem(item)}
-                    className="bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold px-3 py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-2xs"
-                  >
-                    <Eye className="w-4 h-4" />
-                    <span>Lihat Slide</span>
-                  </button>
+                {/* Minimal Footer Actions */}
+                <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between gap-3">
+                  <div className="min-w-0 text-[11px] text-slate-500 flex items-center gap-1.5 truncate">
+                    <span className="truncate font-medium text-slate-600">{item.guru_nama}</span>
+                    <span aria-hidden="true">·</span>
+                    <span className="shrink-0">{formatUploadDate(item.created_at)}</span>
+                  </div>
 
-                  {safeDriveHref ? (
-                    <a
-                      href={safeDriveHref}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-display font-bold px-3 py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 transition text-center"
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setViewingItem(item)}
+                      className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-rose-600 text-white font-display font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
                     >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>Unduh / Drive</span>
-                    </a>
-                  ) : (
-                    <span className="bg-slate-50 text-slate-400 font-bold px-3 py-2.5 rounded-xl text-xs flex items-center justify-center">
-                      Tautan Invalid
-                    </span>
-                  )}
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>Lihat Slide</span>
+                    </button>
+
+                    {safeDriveHref && (
+                      <a
+                        href={safeDriveHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Buka atau unduh di Google Drive"
+                        className="w-8 h-8 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 flex items-center justify-center transition shrink-0"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </div>
                 </div>
               </article>
             );
@@ -976,17 +1080,30 @@ export const MediaAjarTab: React.FC<Props> = ({
                 </div>
 
                 {formDriveUrl.trim() && (
-                  <div className="mt-2">
+                  <div className="mt-2.5 space-y-2.5">
                     {previewEmbedUrl ? (
-                      <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-start gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                        <div className="min-w-0 text-[11px]">
-                          <span className="font-bold block">Tautan Pratinjau Siap:</span>
-                          <span className="font-mono break-all text-emerald-700">
-                            {previewEmbedUrl}
-                          </span>
+                      <>
+                        <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-start gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                          <div className="min-w-0 text-[11px]">
+                            <span className="font-bold block">Tautan Pratinjau Siap:</span>
+                            <span className="font-mono break-all text-emerald-700">
+                              {previewEmbedUrl}
+                            </span>
+                          </div>
                         </div>
-                      </div>
+                        <div className="rounded-xl border border-slate-200 overflow-hidden aspect-[16/9] bg-slate-50">
+                          <MediaSlidePreview
+                            driveUrl={formDriveUrl}
+                            embedUrl={previewEmbedUrl}
+                            judul={formJudul || 'Pratinjau Slide Materi'}
+                            mapel={formMapel}
+                            bab={formBab}
+                            pertemuan={formPertemuan}
+                            guruNama={activeUser.name || 'Guru'}
+                          />
+                        </div>
+                      </>
                     ) : (
                       <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 flex items-center gap-2 text-[11px] font-semibold">
                         <AlertTriangle className="w-4 h-4 shrink-0" />
