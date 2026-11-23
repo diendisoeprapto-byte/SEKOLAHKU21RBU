@@ -1484,7 +1484,7 @@ export const AbsensiTab: React.FC<Props> = ({
     }
 
     setIsEnrollingCamera(true);
-    setEnrollProgressText('Mengekstrak fitur wajah dari foto...');
+    setEnrollProgressText('Memperkecil foto & mengekstrak fitur wajah...');
     try {
       const extracted = await extractDescriptorFromFile(file);
       if (!extracted) {
@@ -1506,7 +1506,8 @@ export const AbsensiTab: React.FC<Props> = ({
       setFaceProfiles(nextMap);
       saveStoredFaceProfiles(nextMap);
       playBeep('success');
-      showToast(`Wajah ${target.nama} berhasil didaftarkan dari foto!`, 'success');
+      const kbSize = Math.max(1, Math.round(extracted.compressedBytes / 1024));
+      showToast(`Wajah ${target.nama} berhasil didaftarkan (foto dikompres ${kbSize} KB)!`, 'success');
     } catch {
       playBeep('error');
       showToast('Gagal memproses foto wajah siswa.', 'error');
@@ -2246,9 +2247,10 @@ export const AbsensiTab: React.FC<Props> = ({
                             type="button"
                             onClick={() => faceFileInputRef.current?.click()}
                             disabled={isScanningFaceFile}
-                            className="bg-white/10 hover:bg-white/20 text-indigo-200 text-xs font-bold px-3 py-1.5 rounded-xl border border-white/20 transition flex items-center gap-1.5 cursor-pointer"
+                            title="Unggah foto wajah (otomatis diperkecil agar ringan)"
+                            className="bg-white/10 hover:bg-white/20 text-indigo-200 text-[11px] font-bold px-2.5 py-1 rounded-lg border border-white/20 transition flex items-center gap-1 cursor-pointer"
                           >
-                            <FileImage className="w-3.5 h-3.5" />
+                            <FileImage className="w-3 h-3" />
                             <span>{isScanningFaceFile ? 'Mengenali...' : 'Foto Wajah'}</span>
                           </button>
                           <button
@@ -2342,9 +2344,10 @@ export const AbsensiTab: React.FC<Props> = ({
                             type="button"
                             onClick={() => faceFileInputRef.current?.click()}
                             disabled={isScanningFaceFile}
-                            className="bg-white/10 hover:bg-white/20 text-indigo-200 text-xs font-bold px-3 py-1.5 rounded-xl border border-white/20 transition flex items-center gap-1.5 cursor-pointer"
+                            title="Unggah foto wajah (otomatis diperkecil agar ringan)"
+                            className="bg-white/10 hover:bg-white/20 text-indigo-200 text-[11px] font-bold px-2.5 py-1 rounded-lg border border-white/20 transition flex items-center gap-1 cursor-pointer"
                           >
-                            <Upload className="w-3.5 h-3.5" />
+                            <Upload className="w-3 h-3" />
                             <span>{isScanningFaceFile ? 'Mengenali...' : 'Foto Wajah'}</span>
                           </button>
                         </div>
@@ -2429,10 +2432,10 @@ export const AbsensiTab: React.FC<Props> = ({
                       type="button"
                       onClick={() => faceFileInputRef.current?.click()}
                       disabled={isScanningFaceFile}
-                      className="bg-white hover:bg-indigo-100 text-indigo-800 border border-indigo-300 text-xs font-bold px-3 py-2 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
-                      title="Pindai kehadiran dari file foto wajah"
+                      className="bg-white hover:bg-indigo-100 text-indigo-800 border border-indigo-300 text-[11px] font-bold px-2.5 py-1.5 rounded-lg transition flex items-center gap-1 cursor-pointer"
+                      title="Pindai kehadiran dari file foto wajah (otomatis diperkecil)"
                     >
-                      <FileImage className="w-3.5 h-3.5" />
+                      <FileImage className="w-3 h-3" />
                       <span>Scan File</span>
                     </button>
                   </div>
@@ -3447,12 +3450,12 @@ export const AbsensiTab: React.FC<Props> = ({
                     </div>
                   )}
 
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
                       onClick={handleEnrollFaceFromCamera}
                       disabled={isEnrollingCamera || !selectedTarget}
-                      className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-display font-black text-xs px-4 py-2.5 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                      className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-display font-black text-xs px-4 py-2 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                     >
                       <Camera className="w-4 h-4" />
                       <span>{isEnrollingCamera ? 'Memproses...' : 'Rekam Wajah dari Kamera'}</span>
@@ -3461,9 +3464,10 @@ export const AbsensiTab: React.FC<Props> = ({
                       type="button"
                       onClick={() => enrollFileInputRef.current?.click()}
                       disabled={isEnrollingCamera || !selectedTarget}
-                      className="bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-800 border border-slate-300 font-display font-extrabold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 cursor-pointer"
+                      title="Unggah foto wajah (otomatis diperkecil ke ukuran ringan)"
+                      className="bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-800 border border-slate-300 font-display font-bold text-[11px] px-2.5 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer"
                     >
-                      <Upload className="w-4 h-4 text-indigo-600" />
+                      <Upload className="w-3.5 h-3.5 text-indigo-600" />
                       <span>Unggah Foto</span>
                     </button>
                     <input

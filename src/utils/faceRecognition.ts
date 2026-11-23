@@ -228,7 +228,8 @@ export async function extractDescriptorFromImageUrl(url: string): Promise<number
     img.onload = async () => {
       window.clearTimeout(timer);
       try {
-        const res = await extractSingleFaceDescriptor(img, { inputSize: 320, scoreThreshold: 0.35 });
+        const resized = downscaleImageElementToCanvas(img, 480);
+        const res = await extractSingleFaceDescriptor(resized, { inputSize: 320, scoreThreshold: 0.35 });
         resolve(res ? res.descriptor : null);
       } catch {
         resolve(null);
@@ -242,33 +243,66 @@ export async function extractDescriptorFromImageUrl(url: string): Promise<number
   });
 }
 
+function downscaleImageElementToCanvas(
+  img: HTMLImageElement,
+  maxDimension = 480
+): HTMLCanvasElement {
+  const origW = img.naturalWidth || img.width || maxDimension;
+  const origH = img.naturalHeight || img.height || maxDimension;
+  const scale = Math.min(1, maxDimension / Math.max(origW, origH));
+  const targetW = Math.max(1, Math.round(origW * scale));
+  const targetH = Math.max(1, Math.round(origH * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, targetW, targetH);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+  }
+  return canvas;
+}
+
 export async function extractDescriptorFromFile(file: File): Promise<{
   descriptor: number[];
   thumbnailDataUrl: string;
+  compressedBytes: number;
 } | null> {
   await loadFaceRecognitionModels();
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('Gagal membaca file foto'));
-    reader.readAsDataURL(file);
-  });
+  const objectUrl = URL.createObjectURL(file);
 
-  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const el = new Image();
-    el.onload = () => resolve(el);
-    el.onerror = () => reject(new Error('Gambar tidak valid'));
-    el.src = dataUrl;
-  });
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('Gambar tidak valid'));
+      el.src = objectUrl;
+    });
 
-  const res = await extractSingleFaceDescriptor(img, { inputSize: 416, scoreThreshold: 0.35 });
-  if (!res) return null;
+    // Perkecil & kompres gambar unggahan ke maks 480px agar proses deteksi wajah ringan & cepat
+    const resizedCanvas = downscaleImageElementToCanvas(img, 480);
+    const compressedDataUrl = resizedCanvas.toDataURL('image/jpeg', 0.76);
+    const compressedBytes = Math.round((compressedDataUrl.length * 3) / 4);
 
-  const thumbnailDataUrl = cropFaceThumbnail(img, res.box);
-  return {
-    descriptor: res.descriptor,
-    thumbnailDataUrl,
-  };
+    const res = await extractSingleFaceDescriptor(resizedCanvas, {
+      inputSize: 320,
+      scoreThreshold: 0.35,
+    });
+    if (!res) return null;
+
+    const thumbnailDataUrl = cropFaceThumbnail(resizedCanvas, res.box);
+    return {
+      descriptor: res.descriptor,
+      thumbnailDataUrl,
+      compressedBytes,
+    };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 export function cropFaceThumbnail(
@@ -277,8 +311,8 @@ export function cropFaceThumbnail(
 ): string {
   try {
     const canvas = document.createElement('canvas');
-    canvas.width = 96;
-    canvas.height = 96;
+    canvas.width = 72;
+    canvas.height = 72;
     const ctx = canvas.getContext('2d');
     if (!ctx) return '';
 
@@ -291,8 +325,8 @@ export function cropFaceThumbnail(
     const sw = Math.min(srcW - sx, box.width + padX * 2);
     const sh = Math.min(srcH - sy, box.height + padY * 2);
 
-    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, 96, 96);
-    return canvas.toDataURL('image/jpeg', 0.72);
+    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, 72, 72);
+    return canvas.toDataURL('image/jpeg', 0.64);
   } catch {
     return '';
   }
