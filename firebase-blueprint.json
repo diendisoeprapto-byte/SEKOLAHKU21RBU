@@ -228,6 +228,38 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["sender", "text"]
+    },
+    "HasilUjian": {
+      "title": "HasilUjian",
+      "description": "Status pengerjaan & hasil ujian CBT/TKA siswa dengan kunci ${nisn}_${id_ujian} untuk aturan penguncian akses ketat SARAH",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nisn": { "type": "string" },
+        "id_ujian": { "type": "string" },
+        "studentId": { "type": "string" },
+        "nama_siswa": { "type": "string" },
+        "kelas": { "type": "string" },
+        "category": { "type": "string", "enum": ["cbt", "tka"] },
+        "mapel": { "type": "string" },
+        "paketName": { "type": "string" },
+        "status": { "type": "string", "enum": ["mengerjakan", "selesai"] },
+        "skor": { "type": "number" },
+        "no_soal_betul": { "type": "array" },
+        "no_soal_salah": { "type": "array" }
+      },
+      "required": ["id_ujian", "status", "category"]
+    },
+    "SarahPrivateChat": {
+      "title": "SarahPrivateChat",
+      "description": "Ruang percakapan privat terisolasi khusus akun Endi Soeprapto",
+      "type": "object",
+      "properties": {
+        "owner": { "type": "string" },
+        "isolated": { "type": "boolean" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["owner", "isolated"]
     }
   },
   "firestore": {
@@ -294,6 +326,18 @@
     "/sarah_chat_sessions/{sessionId}/messages/{messageId}": {
       "schema": "SarahChatMessage",
       "description": "Sub-koleksi isi pesan percakapan SARAH per sesi (dibatasi 30 pesan terakhir)"
+    },
+    "/hasil_ujian/{docId}": {
+      "schema": "HasilUjian",
+      "description": "Status pengerjaan ujian CBT/TKA (${nisn}_${id_ujian}) untuk validasi penguncian akses ketat SARAH"
+    },
+    "/sarah_private_chats/{ownerId}": {
+      "schema": "SarahPrivateChat",
+      "description": "Ruang obrolan privat terisolasi eksklusif untuk Endi Soeprapto"
+    },
+    "/sarah_private_chats/{ownerId}/messages/{messageId}": {
+      "schema": "SarahChatMessage",
+      "description": "Sub-koleksi isi pesan privat eksklusif Endi Soeprapto"
     }
   }
 }

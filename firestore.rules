@@ -195,5 +195,37 @@ service cloud.firestore {
         allow delete: if true;
       }
     }
+
+    // Penguncian Akses Ketat CBT & TKA - Dokumen Status Pengerjaan Ujian (${nisn}_${id_ujian})
+    match /hasil_ujian/{docId} {
+      allow read: if true;
+      allow create, update: if
+        request.resource.data.id_ujian is string &&
+        request.resource.data.id_ujian.size() > 0 &&
+        request.resource.data.id_ujian.size() <= 160 &&
+        request.resource.data.status in ['mengerjakan', 'selesai'] &&
+        request.resource.data.category in ['cbt', 'tka'];
+      allow delete: if true;
+    }
+
+    // Ruang Chat Privat Terisolasi Eksklusif Endi Soeprapto (`sarah_private_chats/endi_soeprapto`)
+    match /sarah_private_chats/{ownerId} {
+      allow read: if ownerId == 'endi_soeprapto';
+      allow create, update: if
+        ownerId == 'endi_soeprapto' &&
+        request.resource.data.isolated == true;
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if ownerId == 'endi_soeprapto';
+        allow create, update: if
+          ownerId == 'endi_soeprapto' &&
+          request.resource.data.sender in ['user', 'sarah'] &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() > 0 &&
+          request.resource.data.text.size() <= 40000;
+        allow delete: if ownerId == 'endi_soeprapto';
+      }
+    }
   }
 }

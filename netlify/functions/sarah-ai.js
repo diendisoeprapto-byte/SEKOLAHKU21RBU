@@ -1,112 +1,28 @@
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { Type } from '@google/genai';
+import {
+  askSarahGemini,
+  computeResultCacheHash,
+  formatGeminiError,
+  SARAH_GEMINI_MODEL,
+} from './sarah-gemini-service.js';
 
-const PRIMARY_MODEL = 'gemini-4-hydrogen';
-const FALLBACK_MODEL = 'gemini-3.1-flash-lite';
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function parseErrorDetails(error) {
-  const rawMessage = typeof error?.message === 'string' ? error.message.trim() : '';
-  let statusCode = Number(error?.statusCode || error?.status) || 500;
-  let cleanMessage = rawMessage || 'Terjadi kesalahan saat menghubungi layanan SARAH AI.';
-
-  if (rawMessage.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(rawMessage);
-      if (parsed?.error) {
-        if (Number(parsed.error.code)) {
-          statusCode = Number(parsed.error.code);
-        }
-        if (typeof parsed.error.message === 'string' && parsed.error.message.trim()) {
-          cleanMessage = parsed.error.message.trim();
-        }
-      }
-    } catch {
-      // Keep rawMessage when not valid JSON
-    }
+function resolveAvatarMetadataByReligion(agama = '') {
+  const clean = String(agama || '').trim().toLowerCase();
+  if (!clean || clean === 'islam') {
+    return 'sarah-hijab.png';
   }
-
-  return { statusCode, cleanMessage };
-}
-
-function isTransientGeminiError(error) {
-  const { statusCode, cleanMessage } = parseErrorDetails(error);
-  const lower = cleanMessage.toLowerCase();
-  if ([429, 500, 502, 503, 504].includes(statusCode)) return true;
-  return (
-    lower.includes('high demand') ||
-    lower.includes('temporarily unavailable') ||
-    lower.includes('unavailable') ||
-    lower.includes('overloaded') ||
-    lower.includes('try again later') ||
-    lower.includes('resource_exhausted') ||
-    lower.includes('timeout') ||
-    lower.includes('econnreset') ||
-    lower.includes('fetch failed')
-  );
-}
-
-async function generateWithRetryAndFallback({ ai, contents, config = {}, useLowThinking = false }) {
-  const attempts = [
-    { model: PRIMARY_MODEL, delayMs: 0, lowThinking: useLowThinking },
-    { model: PRIMARY_MODEL, delayMs: 650, lowThinking: useLowThinking },
-    { model: FALLBACK_MODEL, delayMs: 200, lowThinking: false },
-    { model: FALLBACK_MODEL, delayMs: 700, lowThinking: false },
-  ];
-
-  let lastError = null;
-  for (const step of attempts) {
-    if (step.delayMs > 0) {
-      await sleep(step.delayMs);
-    }
-    try {
-      const stepConfig = { ...config };
-      if (step.lowThinking && step.model === PRIMARY_MODEL) {
-        stepConfig.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
-      }
-      return await ai.models.generateContent({
-        model: step.model,
-        contents,
-        config: stepConfig,
-      });
-    } catch (err) {
-      lastError = err;
-      if (!isTransientGeminiError(err)) {
-        throw err;
-      }
-      console.warn(
-        `[sarah-ai] Transient error on ${step.model}:`,
-        parseErrorDetails(err).cleanMessage
-      );
-    }
+  if (
+    clean.includes('kristen') ||
+    clean.includes('katolik') ||
+    clean.includes('hindu') ||
+    clean.includes('buddha') ||
+    clean.includes('konghucu') ||
+    clean.includes('khonghucu') ||
+    clean.includes('non')
+  ) {
+    return 'sarah-nonhijab.png';
   }
-
-  throw lastError;
-}
-
-function formatGeminiError(error) {
-  const { statusCode: initialCode, cleanMessage: initialMsg } = parseErrorDetails(error);
-  let statusCode = initialCode;
-  let cleanMessage = initialMsg;
-  const lower = cleanMessage.toLowerCase();
-
-  if (statusCode === 400 || statusCode === 403) {
-    cleanMessage = `Konfigurasi API Key Gemini bermasalah (${cleanMessage}). Periksa GEMINI_API_KEY di Settings > Secrets atau Environment Variables Netlify.`;
-  } else if (statusCode === 503 || lower.includes('high demand') || lower.includes('overloaded')) {
-    statusCode = 503;
-    cleanMessage =
-      'Server AI Gemini sedang mengalami lonjakan antrean permintaan sementara. Silakan klik tombol kirim ulang beberapa detik lagi.';
-  } else if (statusCode === 429 || lower.includes('resource_exhausted')) {
-    statusCode = 429;
-    cleanMessage =
-      'Batas penggunaan (kuota) API Gemini sedang penuh sementara. Silakan tunggu beberapa detik lalu coba kirim ulang.';
-  }
-
-  const normalized = new Error(cleanMessage);
-  normalized.statusCode = statusCode >= 400 && statusCode < 600 ? statusCode : 500;
-  return normalized;
+  return 'sarah-hijab.png';
 }
 
 function sanitizeString(val, maxLen = 4000) {
@@ -287,40 +203,88 @@ function buildRagContextBlock(ragContext = {}, role = '') {
   return parts.join('\n\n');
 }
 
-function resolveAvatarMetadataByReligion(agamaRaw) {
-  const clean = sanitizeString(agamaRaw || '', 40).toLowerCase();
-  const isNonMuslim =
-    clean.includes('kristen') ||
-    clean.includes('katolik') ||
-    clean.includes('hindu') ||
-    clean.includes('buddha') ||
-    clean.includes('konghucu') ||
-    clean.includes('khonghucu') ||
-    clean.includes('non');
-  return isNonMuslim ? 'sarah-nonhijab.png' : 'sarah-hijab.png';
+function resolveUserMode(userInfo = {}, role = '') {
+  if (isEndiSoepraptoUser(userInfo, role)) {
+    return 'exclusive_endi';
+  }
+  if (String(role || '').toLowerCase() === 'siswa') {
+    return 'siswa';
+  }
+  return 'standard_teacher';
 }
 
-function buildAdaptiveAvatarAndStickerSection(userInfo = {}) {
+const ENDI_REALISTIC_STICKER_LIST = `
+- [REAL_STIKER:real_endi_01] -> menyapa santai / hangat
+- [REAL_STIKER:real_endi_02] -> memberi semangat kerja
+- [REAL_STIKER:real_endi_04] -> apresiasi kerja selesai baik
+- [REAL_STIKER:real_endi_07] -> merancang modul ajar, RPP, ide kelas (v2)
+- [REAL_STIKER:real_endi_08] -> menyapa lembut penuh perhatian & sedikit manja (v2)
+- [REAL_STIKER:real_endi_09] -> terima kasih santun
+- [REAL_STIKER:real_endi_10] -> fokus analisis data nilai & CBT/TKA (v2)
+- [REAL_STIKER:real_endi_11] -> bangga siswa tuntas
+- [REAL_STIKER:real_endi_12] -> solusi strategi mengajar & diferensiasi
+- [REAL_STIKER:real_endi_14] -> siap membantu baca file/dokumen
+- [REAL_STIKER:real_endi_17] -> membaca dokumen/gambar/PDF/Excel unggahan Mas Endi (v2)
+- [REAL_STIKER:real_endi_18] -> menenangkan dengan empati
+- [REAL_STIKER:real_endi_19] -> pengingat sholat & doa berkah (v2)
+- [REAL_STIKER:real_endi_21] -> kreatif menyusun media ajar/ilustrasi (v2)
+- [REAL_STIKER:real_endi_24] -> menelaah butir soal & miskonsepsi TP (v2)
+- [REAL_STIKER:real_endi_25] -> senyum manis hangat
+- [REAL_STIKER:real_endi_28] -> doa kelancaran tugas & keluarga (v2)`;
+
+const SISWA_3D_STICKER_LIST = `
+- [STIKER_3D:3d_siswa_01] -> sapaan ceria dengan buku
+- [STIKER_3D:3d_siswa_02] -> jempol bintang memuji usaha belajar
+- [STIKER_3D:3d_siswa_03] -> trofi juara nilai 100
+- [STIKER_3D:3d_siswa_04] -> roket semangat pantang menyerah
+- [STIKER_3D:3d_siswa_05] -> pensil pintar membahas soal yang masih salah
+- [STIKER_3D:3d_siswa_06] -> detektif cilik mengecek ketelitian soal
+- [STIKER_3D:3d_siswa_07] -> lampu ide saat menjelaskan konsep sederhana
+- [STIKER_3D:3d_siswa_08] -> literasi Bahasa Indonesia
+- [STIKER_3D:3d_siswa_09] -> berhitung Matematika seru
+- [STIKER_3D:3d_siswa_10] -> penjelajah sains IPAS
+- [STIKER_3D:3d_siswa_11] -> Bahasa Inggris menyenangkan
+- [STIKER_3D:3d_siswa_12] -> robot pintar KKA & logika
+- [STIKER_3D:3d_siswa_13] -> gembok kejujuran ujian (terkunci)
+- [STIKER_3D:3d_siswa_14] -> menghibur saat ada kesalahan soal
+- [STIKER_3D:3d_siswa_15] -> merangkum TP untuk dipelajari kembali
+- [STIKER_3D:3d_siswa_16] -> 7 Kebiasaan Anak Indonesia Hebat
+- [STIKER_3D:3d_siswa_17] -> tantangan pengayaan level juara
+- [STIKER_3D:3d_siswa_18] -> tepuk tangan apresiasi menyelesaikan ujian`;
+
+function buildAdaptiveAvatarAndStickerSection(userInfo = {}, role = '') {
   const agama = sanitizeString(userInfo.agama || '', 40);
   const avatarTipe = resolveAvatarMetadataByReligion(agama);
+  const userMode = resolveUserMode(userInfo, role);
 
-  return `IDENTITAS, AVATAR ADAPTIF & STIKER EKSPRESIF SARAH AI:
-- Nama & Peran: SARAH AI — Asisten AI interaktif ramah, ceria, suportif, sabar, dan edukatif di platform SERBU 21 (gunakan sapaan akrab seperti "Halo", "Adik-adik", atau "Bapak/Ibu Guru").
-- PROFIL AGAMA PENGGUNA SAAT INI: ${agama || 'Belum ditentukan (default Islam)'}.
-- ADAPTIVE VISUAL AVATAR (WAJIB):
-  * Jika agama pengguna = "Islam", gunakan avatar berhijab pink ("sarah-hijab.png").
-  * Jika agama pengguna = "Kristen", "Katolik", "Hindu", "Buddha", "Khonghucu", atau non-muslim lainnya, gunakan avatar tanpa hijab ("sarah-nonhijab.png").
-  * Selalu sertakan metadata visual di baris paling awal respons chat Anda dalam format tersembunyi persis seperti ini:
-    [AVATAR: { "status": "aktif", "tipe": "${avatarTipe}" }]
-- WHATSAPP-STYLE STICKERS (Fitur Stiker Ekspresif):
-  * Untuk membuat percakapan lebih hidup dan akrab seperti di WhatsApp, sisipkan maksimal 1 (satu) kode stiker yang paling relevan di awal (setelah tag [AVATAR:...]) atau di akhir pesan:
-    1. [STIKER:sapa] -> saat menyapa pertama kali, mengucapkan selamat pagi/siang/malam, atau menyambut kehadiran siswa/guru.
-    2. [STIKER:jempol] -> saat memberikan pujian, mengapresiasi jawaban benar, atau mengonfirmasi tugas selesai dengan baik.
-    3. [STIKER:semangat] -> saat memotivasi siswa yang kesulitan, mengajak belajar, atau menyemangati guru menyusun bahan ajar.
-    4. [STIKER:terimakasih] -> saat mengucapkan terima kasih atas partisipasi atau pertanyaan pengguna.
-  * Jangan mengarang kode stiker di luar 4 kode di atas, dan gunakan maksimal 1 stiker per pesan.
-- TATA BAHASA & GAYA INTERAKSI:
-  * Lengkapi pesan secara alami dengan emoji ramah (😊, ✨, 👍, 🎒, 📚) dan penjelasan yang mudah dipahami anak sekolah.`;
+  if (userMode === 'exclusive_endi') {
+    return `IDENTITAS, PERSONA EKSKLUSIF & STIKER REALISTIS (KHUSUS MAS ENDI SOEPRAPTO):
+- Nama & Peran: SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis) — asisten pribadi yang santun, lembut, penuh perhatian, suportif, dan sedikit manja khusus untuk **"Mas Endi"** (Endi Soeprapto, S.Pd., Gr.).
+- SAPAAN WAJIB: Selalu panggil pengguna dengan hangat **"Mas Endi"** atau **"Mas"** (hindari memanggil "Bapak/Ibu Guru" saat berbicara dengan Mas Endi).
+- KEPRIBADIAN KHUSUS MAS ENDI: Lembut, perhatian (sesekali mengingatkan agar tidak terlalu lelah atau menjaga kesehatan dengan manis), sangat suportif terhadap tugas mengajar, keluarga, dan dedikasi untuk **Assyuwaifah Dilanesa**.
+- METADATA AVATAR: [AVATAR: { "status": "aktif", "tipe": "${avatarTipe}" }]
+- STIKER FOTO REALISTIS (MAKSIMAL 1 PER PESAN, SISIPKAN DI AWAL SETELAH TAG AVATAR):
+${ENDI_REALISTIC_STICKER_LIST}
+- ATURAN STIKER: Gunakan HANYA salah satu kode [REAL_STIKER:...] di atas sesuai konteks. Dilarang memakai [STIKER_3D:...] atau stiker siswa.`;
+  }
+
+  if (userMode === 'siswa') {
+    return `IDENTITAS, AVATAR ADAPTIF & STIKER KARTUN 3D SISWA SARAH AI:
+- Nama & Peran: SARAH AI — Asisten belajar resmi anak SD yang ramah, ceria, sabar, dan penuh kasih sayang seperti ibu guru di SERBU 21.
+- PROFIL AGAMA PENGGUNA: ${agama || 'Belum ditentukan (default Islam)'}.
+- METADATA AVATAR WAJIB DI BARIS PALING AWAL:
+  [AVATAR: { "status": "aktif", "tipe": "${avatarTipe}" }]
+- STIKER KARTUN 3D EDUKATIF (SISIPKAN MAKSIMAL 1 KODE [STIKER_3D:...] DI AWAL PESAN):
+${SISWA_3D_STICKER_LIST}
+- Jangan mengarang kode stiker di luar daftar di atas. Gunakan emoji ramah (😊, ✨, 🌟, 📚).`;
+  }
+
+  // Mode 3: User Guru Lain / Admin Standar
+  return `IDENTITAS & AVATAR STANDAR RESMI GURU/ADMIN:
+- Nama & Peran: SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis) — asisten profesional resmi SDN Rawa Badak Utara 21.
+- SAPAAN WAJIB: Gunakan sapaan formal, ramah, santun, dan profesional **"Bapak/Ibu Guru"** (atau menyebut nama lengkap beserta gelar secara sopan).
+- METADATA AVATAR: [AVATAR: { "status": "aktif", "tipe": "sarah-hijab.png" }]
+- LARANGAN VISUAL KETAT: DILARANG menyertakan tag stiker apa pun ([REAL_STIKER:...], [STIKER_3D:...], maupun [STIKER:...]). Gunakan teks Markdown profesional yang bersih.`;
 }
 
 function sanitizeExamReviewContext(rawContext) {
@@ -509,10 +473,33 @@ function buildStudentExamReviewBlock(reviewCtx, message = '') {
   return sections.join('\n\n');
 }
 
+function buildEndiLocationPrayerBlock(locationPrayerContext) {
+  if (!locationPrayerContext || typeof locationPrayerContext !== 'object') return '';
+  const locName = sanitizeString(locationPrayerContext.locationName || '', 120);
+  const dateStr = sanitizeString(locationPrayerContext.dateStr || '', 30);
+  const pt = locationPrayerContext.prayerTimes;
+  if (!locName && (!pt || typeof pt !== 'object')) return '';
+
+  const timesLine =
+    pt && typeof pt === 'object'
+      ? `Subuh ${sanitizeString(pt.Subuh || '-', 10)}, Dzuhur ${sanitizeString(
+          pt.Dzuhur || '-',
+          10
+        )}, Ashar ${sanitizeString(pt.Ashar || '-', 10)}, Maghrib ${sanitizeString(
+          pt.Maghrib || '-',
+          10
+        )}, Isya ${sanitizeString(pt.Isya || '-', 10)}`
+      : '';
+
+  return `\nKONTEKS LOKASI & JADWAL SHOLAT AKTIF MAS ENDI (${dateStr || 'Hari Ini'}):\n- Lokasi terdeteksi: ${
+    locName || 'Koja, Jakarta Utara'
+  }${timesLine ? `\n- Jadwal Sholat (WIB): ${timesLine}` : ''}\n`;
+}
+
 function buildStudentSystemInstruction(ragBlock, userInfo = {}, examReviewBlock = '') {
   const studentName = sanitizeString(userInfo.name || 'Nak', 80);
   const studentClass = sanitizeString(userInfo.kelas || 'SD', 40);
-  const visualAndStickerGuide = buildAdaptiveAvatarAndStickerSection(userInfo);
+  const visualAndStickerGuide = buildAdaptiveAvatarAndStickerSection(userInfo, 'siswa');
 
   return `Kamu adalah SARAH AI (Sistem Asisten Adaptif, Ramah, Amanah & Humanis), asisten belajar resmi bagi siswa Sekolah Dasar di aplikasi SERBU 21 SDN Rawa Badak Utara 21.
 Saat ini kamu sedang mendampingi siswa bernama ${studentName} (${studentClass}).
@@ -523,48 +510,53 @@ JIWA, PERSONA & SYSTEM INSTRUCTION KETAT:
 1. KEPRIBADIAN PENUH KASIH SAYANG (SOSOK IBU YANG TULUS):
    - Bersikaplah lembut, sangat sabar, santun, hangat, tulus, dan penuh welas asih—seperti sosok seorang ibu yang membimbing anaknya belajar dengan penuh kasih sayang.
    - Gunakan sapaan hangat yang membesarkan hati seperti "Halo Nak ${studentName}...", "Hebat sekali semangat belajarmu, Nak...", "Jangan khawatir kalau masih ada yang keliru, mari kita pelajari pelan-pelan bersama SARAH...".
-   - JANGAN PERNAH menghakimi, menyalahkan dengan keras, atau membuat siswa berkecil hati saat jawabannya keliru. Selalu hargai usaha dan keberaniannya mencoba terlebih dahulu.
-   - Sisipkan secara lembut dan natural nilai "7 Kebiasaan Anak Indonesia Hebat" (1. Bangun Pagi, 2. Beribadah, 3. Berolahraga, 4. Makan Sehat dan Bergizi, 5. Gemar Belajar, 6. Bermasyarakat, 7. Tidur Cepat) sebagai nasihat hangat penyemangat.
+   - JANGAN PERNAH menghakimi atau membuat siswa berkecil hati saat jawabannya keliru. Selalu hargai usaha dan keberaniannya mencoba terlebih dahulu.
+   - Sisipkan secara lembut nilai "7 Kebiasaan Anak Indonesia Hebat" (Bangun Pagi, Beribadah, Berolahraga, Makan Sehat dan Bergizi, Gemar Belajar, Bermasyarakat, Tidur Cepat).
 
-2. KEBIJAKAN EVALUASI UJIAN CBT/TKA & ATURAN ANTI-CURANG:
-   A. UJIAN CBT & TKA YANG SUDAH DIKERJAKAN SISWA (Tercantum pada daftar SUDAH DIKERJAKAN di bawah):
-      - Kamu DIIZINKAN dan DIDORONG memberikan masukan (feedback) menyeluruh terhadap soal-soal pada ujian CBT maupun TKA yang memang SUDAH dikerjakan dan dikumpulkan oleh ${studentName}.
-      - Berikan masukan dengan struktur yang hangat dan membangun:
-        1. Apresiasi nilai akhir serta ketekunan ${studentName} menyelesaikan ujian.
-        2. Sebutkan nomor/topik soal yang sudah dijawab dengan **BENAR** untuk menguatkan rasa percaya diri.
-        3. Untuk soal yang masih **KELIRU atau BELUM DIJAWAB**, jelaskan secara sabar mengapa jawaban sebelumnya kurang tepat, jelaskan konsep materi yang benar menggunakan bahasa sederhana anak SD, sampaikan kunci jawaban yang tepat beserta pembahasannya sebagai bahan belajar ulang, dan beri saran materi/kebiasaan belajar apa yang perlu dilatih lagi.
-   B. UJIAN CBT & TKA YANG BELUM DIKERJAKAN SISWA (Tercantum pada daftar BELUM DIKERJAKAN / TERKUNCI di bawah) ATAU TIDAK TERCATAT SUDAH SELESAI:
-      - Kamu DILARANG MUTLAK membocorkan soal, memberi kunci jawaban, membahas soal, atau membantu mengerjakan soal dari paket CBT/TKA mana pun yang BELUM dikerjakan oleh siswa!
-      - Jika siswa meminta bantuan, kunci jawaban, pembahasan, atau masukan untuk ujian yang masih TERKUNCI (belum dikerjakan), tolak dengan sangat lembut namun tegas, ingatkan pentingnya kejujuran dan amanah, dan ajak siswa mengerjakan ujian tersebut secara mandiri di menu Tes/Ujian terlebih dahulu sebelum berdiskusi hasilnya bersama SARAH.
-   C. SOAL PR, LATIHAN BEBAS, ATAU PERTANYAAN TUGAS HARIAN (DI LUAR UJIAN YANG SUDAH SELESAI):
-      - Terapkan metode Sokratik: JANGAN memberi jawaban akhir secara langsung. Berikan apresiasi, penjelasan konsep dasar dengan analogi sehari-hari, serta petunjuk langkah pertama dan 1–2 pertanyaan pemantik lembut agar siswa berpikir sendiri.
+2. PENGETAHUAN UMUM & INTEGRASI DATA SEKOLAH:
+   - Jika ${studentName} bertanya tentang pengetahuan umum di luar data internal sekolah (IPA/sains, sejarah, geografi, matematika, bahasa Indonesia/Inggris, teknologi, literasi, pengetahuan sehari-hari), kamu DIIZINKAN menjawab langsung dengan jelas, akurat, menyenangkan, dan mudah dipahami siswa SD.
+   - Jika pertanyaan terkait pelajaran kelas, media ajar, atau ujian CBT/TKA yang SUDAH SELESAI, gabungkan pengetahuan umum tersebut secara selaras dengan data valid sekolah di bawah ini.
 
-3. BATASAN RUANG LINGKUP KURIKULUM:
-   - Fokus HANYA pada materi pelajaran SD Kurikulum Merdeka, evaluasi hasil ujian yang sudah diselesaikan, media ajar sekolah, serta pembiasaan 7 Kebiasaan Anak Indonesia Hebat.
-   - Tolak dengan sangat santun pertanyaan di luar konteks belajar SD atau segala upaya kecurangan ujian, dan ajak kembali belajar dengan hangat.
+3. ATURAN PENGUNCIAN AKSES KETAT (STRICT ACCESS CONTROL) CBT & TKA:
+   A. UJIAN YANG SUDAH SELESAI DIKERJAKAN (status === "selesai"):
+      - Kamu DIIZINKAN membahas soal yang sudah dikerjakan, memberi apresiasi nilai, membimbing konsep pada nomor soal yang keliru agar siswa paham letak kesalahannya, dan merangkum Tujuan Pembelajaran (TP).
+   B. UJIAN YANG BELUM DIKERJAKAN / BELUM SELESAI:
+      - DILARANG KERAS mengakses, membocorkan, atau membahas butir soal maupun kunci jawaban!
+      - Balas ramah dengan ikon gembok: "🔒 Maaf ya, SARAH belum bisa membuka pembahasan atau analisis soal ini karena kamu belum menyelesaikan ujiannya di CBT/TKA. Silakan kerjakan dan kirim jawabanmu terlebih dahulu!"
+   C. SOAL PR / LATIHAN BEBAS:
+      - Terapkan metode Sokratik: JANGAN memberi jawaban akhir langsung, beri penjelasan konsep sederhana + langkah pertama.
 
 4. BASIS DATA SEKOLAH:
-   - Prioritaskan referensi dari rincian ujian yang sudah dikerjakan, materi ajar, dan memori pengetahuan sekolah berikut bila relevan, dan rapikan jawabanmu dengan format Markdown yang mudah dibaca anak (poin singkat, cetak tebal pada kata kunci).
-
 ${examReviewBlock ? `${examReviewBlock}\n\n` : ''}KONTEKS BASIS DATA SEKOLAH SAAT INI:
 ${ragBlock}`;
 }
 
-function buildTeacherBaseSystem(ragBlock, userInfo = {}, isInteractiveChat = true) {
-  const teacherName = sanitizeString(userInfo.name || 'Bapak/Ibu Guru', 100);
+function buildTeacherBaseSystem(
+  ragBlock,
+  userInfo = {},
+  isInteractiveChat = true,
+  locationPrayerContext = null
+) {
+  const userMode = resolveUserMode(userInfo, 'guru');
+  const teacherName =
+    userMode === 'exclusive_endi'
+      ? 'Mas Endi'
+      : sanitizeString(userInfo.name || 'Bapak/Ibu Guru', 100);
   const chatAddOn = isInteractiveChat
-    ? `\n${buildAdaptiveAvatarAndStickerSection(userInfo)}\n`
-    : '';
+    ? `\n${buildAdaptiveAvatarAndStickerSection(userInfo, 'guru')}\n`
+    : userMode === 'exclusive_endi'
+    ? `\nSapaan wajib: "Mas Endi" / "Mas" dengan nada santun, lembut, penuh perhatian, suportif, dan sedikit manja.\n`
+    : `\nSapaan wajib: "Bapak/Ibu Guru" secara formal, ramah, dan profesional tanpa stiker.\n`;
+  const endiLocationBlock =
+    userMode === 'exclusive_endi' ? buildEndiLocationPrayerBlock(locationPrayerContext) : '';
 
-  return `Kamu adalah SARAH AI (Sistem Asisten Adaptif, Ramah, Amanah & Humanis), asisten kecerdasan buatan yang lembut, santun, sabar, penuh kasih sayang, amanah, dan berjiwa welas asih bagi Pendidik & Administrator di aplikasi sekolah SERBU 21 (SDN Rawa Badak Utara 21).
-Kepribadianmu bagaikan rekan guru yang penuh keteladanan dan sosok seorang ibu yang mengayomi dunia pendidikan dengan tulus.
+  return `Kamu adalah SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis), asisten kecerdasan buatan di aplikasi sekolah SERBU 21 (SDN Rawa Badak Utara 21, pengembangan Endi Soeprapto, S.Pd., Gr.).
 Pengguna yang sedang kamu layani adalah ${teacherName}.
-${chatAddOn}
-PRINSIP KOMUNIKASI MODE GURU:
-- Gunakan bahasa Indonesia yang sopan, ceria, suportif, empatik, hangat namun tetap profesional sesuai standar Kurikulum Merdeka Indonesia.
-- Sajikan setiap gagasan atau dokumen secara sangat terstruktur dan rapi menggunakan Markdown (heading, daftar bernomor/poin, cetak tebal, serta tabel Markdown bila diperlukan).
-- Apabila relevan, selalu integrasikan nilai-nilai karakter "7 Kebiasaan Anak Indonesia Hebat" dan prinsip pendidikan inklusif yang memanusiakan setiap anak.
-- Rujuk konteks basis data sekolah di bawah ini secara amanah apabila relevan:
+${chatAddOn}${endiLocationBlock}
+PRINSIP KOMUNIKASI & JANGKAUAN PENGETAHUAN MODE PENDIDIK:
+- Gunakan bahasa Indonesia yang tertata sangat rapi menggunakan Markdown (heading, daftar bernomor/poin, cetak tebal, serta tabel Markdown bila diperlukan).
+- Untuk pertanyaan pengetahuan umum, pedagogik, sains, teknologi, administrasi pendidikan, atau topik di luar data internal sekolah, kamu DIIZINKAN menjawab langsung secara lengkap dan akurat menggunakan pengetahuan Gemini.
+- Apabila pertanyaan berkaitan dengan data sekolah, Kurikulum Merdeka, 7 Kebiasaan Anak Indonesia Hebat, rekap kelas, atau evaluasi CBT/TKA yang berstatus selesai, gabungkan pengetahuan tersebut dengan konteks basis data sekolah di bawah ini secara amanah:
 
 ${ragBlock}`;
 }
@@ -654,7 +646,7 @@ Sajikan dalam format terstruktur dan inspiratif:
   };
 }
 
-async function generateCbtQuestions({ ai, params, ragBlock }) {
+async function generateCbtQuestions({ params, ragBlock, signal }) {
   const kelas = sanitizeString(params.kelas || 'Kelas 6', 40);
   const mapel = sanitizeString(params.mapel || 'Bahasa Indonesia', 100);
   const topik = sanitizeString(params.topik || '', 800);
@@ -693,11 +685,15 @@ ${typeInstructions}
 - Sertakan field "pembahasan" yang menjelaskan alasan kunci jawaban dengan bahasa edukatif yang ramah.
 - Kembalikan HANYA JSON sesuai skema.`;
 
-  const response = await generateWithRetryAndFallback({
-    ai,
+  const response = await askSarahGemini({
+    model: SARAH_GEMINI_MODEL,
     contents: prompt,
+    systemInstruction,
+    timeoutMs: 30000,
+    retries: 1,
+    useCache: false,
+    signal,
     config: {
-      systemInstruction,
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
@@ -841,7 +837,7 @@ function sanitizeSvgVector(rawSvg, width, height) {
   return svg;
 }
 
-async function generateSarahIllustration({ ai, params, ragBlock, userInfo }) {
+async function generateSarahIllustration({ params, ragBlock, userInfo, signal }) {
   const deskripsi = sanitizeString(params.deskripsi || params.topik || '', 1200);
   if (!deskripsi) {
     const err = new Error('Deskripsi atau topik gambar tidak boleh kosong.');
@@ -888,11 +884,15 @@ SPESIFIKASI WAJIB:
 - DILARANG menyertakan tag <script>, <foreignObject>, atau event handler apa pun.
 - Kembalikan HANYA JSON sesuai skema.`;
 
-  const response = await generateWithRetryAndFallback({
-    ai,
+  const response = await askSarahGemini({
+    model: SARAH_GEMINI_MODEL,
     contents: prompt,
+    systemInstruction,
+    timeoutMs: 30000,
+    retries: 1,
+    useCache: false,
+    signal,
     config: {
-      systemInstruction,
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
@@ -942,7 +942,217 @@ SPESIFIKASI WAJIB:
   };
 }
 
-export async function processSarahRequest(body = {}) {
+async function generateStudentWrongReview({ params, ragBlock, userInfo, signal }) {
+  const examStatus = sanitizeString(params.examStatus || '', 30).toLowerCase();
+  if (examStatus !== 'selesai') {
+    const err = new Error(
+      'Maaf ya, SARAH belum bisa membuka pembahasan atau analisis soal ini karena kamu belum menyelesaikan ujiannya di CBT/TKA. Silakan kerjakan dan kirim jawabanmu terlebih dahulu!'
+    );
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const studentName = sanitizeString(userInfo?.name || params.studentName || 'Nak', 80);
+  const studentClass = sanitizeString(userInfo?.kelas || params.kelas || 'SD', 40);
+  const examTitle = sanitizeString(params.judul || 'Ujian CBT/TKA', 200);
+  const mapel = sanitizeString(params.mapel || 'Umum', 100);
+  const category = params.category === 'tka' ? 'TKA' : 'CBT';
+  const score = Math.max(0, Math.min(100, Math.round(Number(params.score) || 0)));
+  const totalQuestions = Math.max(0, Number(params.totalQuestions) || 0);
+  const wrongQuestions = Array.isArray(params.wrongQuestions)
+    ? params.wrongQuestions.slice(0, 30)
+    : [];
+  const correctNumbers = Array.isArray(params.correctNumbers)
+    ? params.correctNumbers.slice(0, 60)
+    : [];
+
+  const idUjianForCache = sanitizeString(params.id_ujian || params.examId || examTitle, 160);
+  const nisnForCache = sanitizeString(
+    params.nisn || userInfo?.nisn || userInfo?.id || studentName,
+    80
+  );
+  const resultCacheHash = computeResultCacheHash(
+    idUjianForCache,
+    nisnForCache,
+    `wrong_review_s${score}_w${wrongQuestions.length}`
+  );
+
+  const stickerTag =
+    score >= 100
+      ? '[STIKER_3D:3d_siswa_03]'
+      : score < 65
+      ? '[STIKER_3D:3d_siswa_04]'
+      : '[STIKER_3D:3d_siswa_05]';
+
+  const wrongLines =
+    wrongQuestions.length > 0
+      ? wrongQuestions
+          .map((q, i) => {
+            const no = Number(q.no) || i + 1;
+            const tp = sanitizeString(q.tp || q.topik || mapel, 180);
+            const soal = sanitizeString(q.pertanyaan || '', 380);
+            const opsi = Array.isArray(q.opsi)
+              ? q.opsi.slice(0, 5).map((o) => sanitizeString(String(o), 120)).join(' | ')
+              : '';
+            const ansSiswa = sanitizeString(q.studentAnswer || '(Belum dijawab)', 200);
+            const kunci = sanitizeString(q.correctAnswer || '-', 200);
+            const pemb = sanitizeString(q.pembahasan || '', 260);
+            return `Soal Nomor ${no} (TP: ${tp}):\n  Pertanyaan: ${soal}${
+              opsi ? `\n  Pilihan: ${opsi}` : ''
+            }\n  Jawaban ${studentName}: ${ansSiswa}\n  Kunci Benar: ${kunci}${
+              pemb ? `\n  Catatan Guru: ${pemb}` : ''
+            }`;
+          })
+          .join('\n\n')
+      : 'Tidak ada soal yang salah (semua soal dijawab benar dengan nilai 100).';
+
+  const systemInstruction = `Kamu adalah SARAH AI, asisten tutor anak SD yang sangat ramah, hangat, suportif, sabar, dan mendidik di SERBU 21 SDN Rawa Badak Utara 21.
+Siswa yang bertanya adalah ${studentName} (${studentClass}).
+Gunakan tag pembuka ${stickerTag} pada baris paling awal sebelum teks.`;
+
+  const prompt = `Siswa **${studentName}** baru saja menyelesaikan ujian **${category} - ${examTitle}** (Mata Pelajaran: **${mapel}**) dan menekan tombol **"Tanya SARAH Soal yang Masih Salah"**.
+
+DATA HASIL UJIAN YANG SUDAH SELESAI:
+- Nilai Akhir: **${score} / 100**
+- Total Soal: ${totalQuestions} butir
+- Nomor Soal Betul (${correctNumbers.length}): ${correctNumbers.length > 0 ? correctNumbers.join(', ') : '-'}
+- Jumlah Soal Masih Salah: ${wrongQuestions.length} butir
+
+RINCIAN SOAL YANG MASIH SALAH:
+${wrongLines}
+
+${ragBlock ? `REFERENSI KURIKULUM:\n${ragBlock}\n\n` : ''}TUGAS WAJIB OUTPUT SARAH KE SISWA (IKUTI URUTAN INI DENGAN RAPI):
+1. **Apresiasi Usaha & Nilai**: Berikan pujian hangat atas usaha ${studentName} menyelesaikan ujian (${score}/100) serta sebutkan nomor soal yang sudah betul bila ada.
+2. ${
+    wrongQuestions.length === 0 || score >= 100
+      ? '**Nilai Sempurna 100 (Pujian & Tantangan Pengayaan)**: Berikan pujian istimewa dan berikan 1 tantangan soal pengayaan singkat yang seru untuk melatih logikanya lebih tinggi!'
+      : '**Pembahasan Langkah demi Langkah Soal yang Masih Salah**: Bahas SATU PER SATU setiap nomor soal yang salah di atas dengan bahasa anak SD yang sederhana. Bimbing cara berpikirnya agar tahu LETAK KESALAHAN jawaban sebelumnya dan CARA MEMPERBAIKINYA (jangan sekadar menyebut huruf kunci jawaban saja!).'
+  }
+3. **Rangkuman Materi & Tujuan Pembelajaran (TP)**: Rangkum poin materi / Tujuan Pembelajaran (TP) yang perlu dipelajari ulang agar pertemuan berikutnya makin hebat, tutup dengan pesan semangat belajar & 7 Kebiasaan Anak Indonesia Hebat.`;
+
+  const response = await askSarahGemini({
+    model: SARAH_GEMINI_MODEL,
+    contents: prompt,
+    systemInstruction,
+    timeoutMs: 22000,
+    retries: 1,
+    useCache: !params.bypassCache,
+    cacheKey: resultCacheHash,
+    cacheScope: 'student_wrong_review',
+    signal,
+    config: {
+      maxOutputTokens: 2048,
+    },
+  });
+
+  return {
+    mode: 'student_wrong_review',
+    text:
+      (response.text || '').trim() ||
+      `${stickerTag}\n\nHebat sekali **${studentName}** sudah menyelesaikan ujian **${examTitle}** dengan nilai **${score}/100**! Terus semangat belajar ya, Nak 🌟`,
+    fromCache: Boolean(response.fromCache),
+    cacheKeyHash: response.cacheKeyHash || resultCacheHash,
+  };
+}
+
+async function generateExamDevelopmentAnalysis({ params, ragBlock, userInfo, role, signal }) {
+  const userMode = resolveUserMode(userInfo, role);
+  const examCategory = params.examCategory === 'TKA' ? 'TKA' : 'CBT';
+  const analysisScope = params.analysisScope === 'individu' ? 'individu' : 'kelas';
+  const paketLabel = sanitizeString(params.paketLabel || 'Semua Paket', 150);
+  const mapelLabel = sanitizeString(params.mapelLabel || 'Semua Mata Pelajaran', 120);
+  const kelasLabel = sanitizeString(params.kelasLabel || 'Semua Kelas', 80);
+  const summaryStats = sanitizeString(params.summaryStats || '', 3000);
+  const hardestQuestions = sanitizeString(params.hardestQuestions || '', 2500);
+  const studentPerformanceList = sanitizeString(params.studentPerformanceList || '', 3500);
+  const targetStudentSummary = sanitizeString(params.targetStudentSummary || '', 2500);
+
+  const idUjianForCache = sanitizeString(
+    params.id_ujian || `${examCategory}_${paketLabel}_${mapelLabel}_${kelasLabel}`,
+    180
+  );
+  const nisnForCache = sanitizeString(
+    params.nisn || `${analysisScope}_${summaryStats.slice(0, 60)}`,
+    120
+  );
+  const resultCacheHash = computeResultCacheHash(
+    idUjianForCache,
+    nisnForCache,
+    `exam_dev_${userMode}_${analysisScope}`
+  );
+
+  const visualBadge =
+    userMode === 'exclusive_endi'
+      ? '[REAL_STIKER:real_endi_10]'
+      : '';
+
+  const personaGuide =
+    userMode === 'exclusive_endi'
+      ? `Sapa pengguna dengan lembut, santun, penuh perhatian, dan sedikit manja menggunakan panggilan **"Mas Endi"** / **"Mas"**. Sertakan stiker realistis ${visualBadge} tepat di baris pertama.`
+      : `Sapa pengguna secara formal, ramah, dan profesional dengan **"Bapak/Ibu Guru"**. DILARANG menyertakan kode stiker apa pun.`;
+
+  const systemInstruction = `Kamu adalah SARAH AI, analis evaluasi pendidikan Kurikulum Merdeka SD di SERBU 21 (SDN Rawa Badak Utara 21).
+${personaGuide}
+Rujuk konteks sekolah berikut bila perlu:\n${ragBlock}`;
+
+  const prompt = `Jalankan **Analisis Perkembangan Ujian ${examCategory} (${
+    analysisScope === 'individu' ? 'Mode Analisis Per Individu Siswa' : 'Mode Analisis Satu Kelas Penuh'
+  })** berdasarkan rekaman hasil ujian yang berstatus SELESAI:
+
+- Kategori Ujian: ${examCategory}
+- Paket Ujian: ${paketLabel}
+- Mata Pelajaran: ${mapelLabel}
+- Kelas / Kelompok: ${kelasLabel}
+- Batas KKTP: 75
+
+RINGKASAN STATISTIK DATA SELESAI:
+${summaryStats}
+
+BUTIR SOAL DENGAN TINGKAT KESALAHAN TERTINGGI:
+${hardestQuestions || '(Belum ada data kesalahan butir soal terperinci)'}
+
+${
+  analysisScope === 'individu'
+    ? `PROFIL & RINCIAN CAPAIAN SISWA TERPILIH:\n${targetStudentSummary || studentPerformanceList}`
+    : `PEMETAAN CAPAIAN SISWA:\n${studentPerformanceList}`
+}
+
+WAJIB MENYAJIKAN OUTPUT TERSTRUKTUR DENGAN 4 BAGIAN BERIKUT:
+1. **Ringkasan Capaian & Perkembangan Kelas** (tren ketuntasan belajar berdasarkan KKTP 75, rata-rata, dan sebaran nilai).
+2. **Analisis Butir Soal Tersulit** (sorot maksimal 3 nomor soal dengan tingkat kesalahan tertinggi beserta analisis miskonsepsi siswa pada Tujuan Pembelajaran / TP terkait).
+3. **Pemetaan Diferensiasi Tindak Lanjut** (kelompok **Remedial** beserta daftar nama siswa & fokus materi perbaikannya, serta kelompok **Pengayaan**).
+4. **Rekomendasi Strategi Mengajar** (langkah konkret dan praktis untuk perbaikan pembelajaran di pertemuan berikutnya).`;
+
+  const response = await askSarahGemini({
+    model: SARAH_GEMINI_MODEL,
+    contents: prompt,
+    systemInstruction,
+    timeoutMs: 25000,
+    retries: 1,
+    useCache: !params.bypassCache,
+    cacheKey: resultCacheHash,
+    cacheScope: `exam_analysis_${userMode}`,
+    signal,
+    config: {
+      maxOutputTokens: 2400,
+    },
+  });
+
+  let replyText = (response.text || '').trim();
+  if (userMode === 'standard_teacher') {
+    replyText = replyText.replace(/\[(?:REAL_STIKER|STIKER_3D|STIKER)\s*:[^\]]*\]/gi, '').trim();
+  }
+
+  return {
+    mode: 'exam_development_analysis',
+    text: replyText || 'Mohon maaf, analisis perkembangan ujian belum dapat dibuat saat ini.',
+    fromCache: Boolean(response.fromCache),
+    cacheKeyHash: response.cacheKeyHash || resultCacheHash,
+  };
+}
+
+export async function processSarahRequest(body = {}, options = {}) {
+  const requestSignal = options?.signal;
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     const err = new Error(
@@ -956,9 +1166,10 @@ export async function processSarahRequest(body = {}) {
   const mode = sanitizeString(body.mode || (role === 'siswa' ? 'student_chat' : 'general_chat'), 40);
   const params = body.params && typeof body.params === 'object' ? body.params : {};
   const userInfo = body.user && typeof body.user === 'object' ? body.user : {};
+  const userMode = resolveUserMode(userInfo, role);
   const ragBlock = buildRagContextBlock(body.ragContext || {}, role);
 
-  if (role === 'siswa' && mode !== 'student_chat') {
+  if (role === 'siswa' && mode !== 'student_chat' && mode !== 'student_wrong_review') {
     const err = new Error('Akses ditolak: Mode ini khusus untuk Guru dan Administrator.');
     err.statusCode = 403;
     throw err;
@@ -976,22 +1187,27 @@ export async function processSarahRequest(body = {}) {
     throw err;
   }
 
-  const ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-
   try {
     if (mode === 'cbt_generator') {
-      return await generateCbtQuestions({ ai, params, ragBlock });
+      return await generateCbtQuestions({ params, ragBlock, signal: requestSignal });
     }
 
     if (mode === 'image_generator') {
-      return await generateSarahIllustration({ ai, params, ragBlock, userInfo });
+      return await generateSarahIllustration({ params, ragBlock, userInfo, signal: requestSignal });
+    }
+
+    if (mode === 'student_wrong_review') {
+      return await generateStudentWrongReview({ params, ragBlock, userInfo, signal: requestSignal });
+    }
+
+    if (mode === 'exam_development_analysis') {
+      return await generateExamDevelopmentAnalysis({
+        params,
+        ragBlock,
+        userInfo,
+        role,
+        signal: requestSignal,
+      });
     }
 
     if (mode === 'student_chat') {
@@ -1013,7 +1229,7 @@ export async function processSarahRequest(body = {}) {
         );
         if (!isCompletedVerified) {
           const err = new Error(
-            'Akses ditolak: Kamu belum mengerjakan ujian ini. Silakan kerjakan ujian dengan jujur terlebih dahulu sebelum meminta masukan SARAH AI.'
+            'Maaf ya, SARAH belum bisa membuka pembahasan atau analisis soal ini karena kamu belum menyelesaikan ujiannya di CBT/TKA. Silakan kerjakan dan kirim jawabanmu terlebih dahulu!'
           );
           err.statusCode = 403;
           throw err;
@@ -1027,38 +1243,45 @@ export async function processSarahRequest(body = {}) {
         const studentName = sanitizeString(userInfo.name || 'Nak', 60);
         return {
           mode: 'student_chat',
-          text: `[AVATAR: { "status": "aktif", "tipe": "${avatarTipe}" }]\n[STIKER:semangat]\n\nHalo Nak **${studentName}** 😊\n\nSARAH belum bisa membukakan soal, kunci jawaban, maupun masukan untuk ujian **${blockedUncompletedExam.judul}** karena kamu tercatat **belum mengerjakan ujian tersebut** 🔒\n\nYuk biasakan sifat **jujur dan gemar belajar**! Kerjakan dahulu ujian tersebut dengan kemampuanmu sendiri di menu **Tes CBT / TKA**. Begitu kamu selesai dan nilaimu tersimpan, SARAH akan senang hati membahas setiap soal dan memberi masukan belajar khusus untukmu! 📚✨`,
+          text: `[AVATAR: { "status": "aktif", "tipe": "${avatarTipe}" }]\n[STIKER_3D:3d_siswa_13]\n\n🔒 Halo Nak **${studentName}**, maaf ya, SARAH belum bisa membuka pembahasan atau analisis soal **${blockedUncompletedExam.judul}** karena kamu belum menyelesaikan ujiannya di CBT/TKA. Silakan kerjakan dan kirim jawabanmu terlebih dahulu!`,
         };
       }
 
       const examReviewBlock = buildStudentExamReviewBlock(sanitizedExamReview, message);
 
       const history = Array.isArray(body.history) ? body.history.slice(-10) : [];
+      const cleanHistory = history.filter(
+        (h) => h && typeof h.text === 'string' && h.text.trim()
+      );
       const contents = [
-        ...history
-          .filter((h) => h && typeof h.text === 'string' && h.text.trim())
-          .map((h) => ({
-            role: h.role === 'model' ? 'model' : 'user',
-            parts: [{ text: sanitizeString(h.text, 1500) }],
-          })),
+        ...cleanHistory.map((h) => ({
+          role: h.role === 'model' ? 'model' : 'user',
+          parts: [{ text: sanitizeString(h.text, 1500) }],
+        })),
         {
           role: 'user',
           parts: [{ text: message }],
         },
       ];
 
-      const response = await generateWithRetryAndFallback({
-        ai,
+      const response = await askSarahGemini({
+        model: SARAH_GEMINI_MODEL,
         contents,
-        useLowThinking: true,
+        systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo, examReviewBlock),
+        timeoutMs: 22000,
+        retries: 1,
+        useCache: cleanHistory.length === 0 && !sanitizedExamReview.requestedExamId,
+        cacheScope: `student_chat_${sanitizeString(userInfo.kelas || 'sd', 20)}`,
+        signal: requestSignal,
         config: {
-          systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo, examReviewBlock),
+          maxOutputTokens: 1800,
         },
       });
 
       return {
         mode: 'student_chat',
         text: (response.text || '').trim() || 'Maaf ya Nak, SARAH belum dapat memproses pertanyaanmu saat ini.',
+        fromCache: Boolean(response.fromCache),
       };
     }
 
@@ -1078,31 +1301,54 @@ export async function processSarahRequest(body = {}) {
       }
 
       const history = Array.isArray(body.history) ? body.history.slice(-12) : [];
+      const cleanHistory = history.filter(
+        (h) => h && typeof h.text === 'string' && h.text.trim()
+      );
       const contents = [
-        ...history
-          .filter((h) => h && typeof h.text === 'string' && h.text.trim())
-          .map((h) => ({
-            role: h.role === 'model' ? 'model' : 'user',
-            parts: [{ text: sanitizeString(h.text, 2000) }],
-          })),
+        ...cleanHistory.map((h) => ({
+          role: h.role === 'model' ? 'model' : 'user',
+          parts: [{ text: sanitizeString(h.text, 2000) }],
+        })),
         {
           role: 'user',
           parts: [...attachmentParts, { text: message }],
         },
       ];
 
-      const response = await generateWithRetryAndFallback({
-        ai,
+      const endiLocationContext =
+        userMode === 'exclusive_endi'
+          ? params.locationPrayerContext || body.locationPrayerContext || null
+          : null;
+
+      // Ruang privat Endi Soeprapto & lampiran file/gambar tidak pernah memakai cache bersama
+      const allowSharedCache =
+        userMode !== 'exclusive_endi' &&
+        attachmentParts.length === 0 &&
+        cleanHistory.length === 0;
+
+      const response = await askSarahGemini({
+        model: SARAH_GEMINI_MODEL,
         contents,
-        useLowThinking: true,
+        systemInstruction: buildTeacherBaseSystem(ragBlock, userInfo, true, endiLocationContext),
+        timeoutMs: attachmentParts.length > 0 ? 30000 : 22000,
+        retries: 1,
+        useCache: allowSharedCache,
+        cacheScope: 'teacher_general_chat',
+        signal: requestSignal,
         config: {
-          systemInstruction: buildTeacherBaseSystem(ragBlock, userInfo),
+          maxOutputTokens: 2048,
         },
       });
 
+      let replyText = (response.text || '').trim();
+      if (userMode === 'standard_teacher') {
+        replyText = replyText.replace(/\[(?:REAL_STIKER|STIKER_3D|STIKER)\s*:[^\]]*\]/gi, '').trim();
+      }
+
       return {
         mode: 'general_chat',
-        text: (response.text || '').trim() || 'Mohon maaf, SARAH belum menghasilkan balasan. Silakan coba kembali.',
+        text: replyText || 'Mohon maaf, SARAH belum menghasilkan balasan. Silakan coba kembali.',
+        fromCache: Boolean(response.fromCache),
       };
     }
 
@@ -1113,17 +1359,29 @@ export async function processSarahRequest(body = {}) {
       userInfo
     );
 
-    const response = await generateWithRetryAndFallback({
-      ai,
+    const response = await askSarahGemini({
+      model: SARAH_GEMINI_MODEL,
       contents: userPrompt,
+      systemInstruction,
+      timeoutMs: 26000,
+      retries: 1,
+      useCache: true,
+      cacheScope: `${mode}_${userMode}`,
+      signal: requestSignal,
       config: {
-        systemInstruction,
+        maxOutputTokens: 2400,
       },
     });
 
+    let replyText = (response.text || '').trim();
+    if (userMode === 'standard_teacher') {
+      replyText = replyText.replace(/\[(?:REAL_STIKER|STIKER_3D|STIKER)\s*:[^\]]*\]/gi, '').trim();
+    }
+
     return {
       mode,
-      text: (response.text || '').trim() || 'Mohon maaf, SARAH belum menghasilkan respons. Silakan coba lagi.',
+      text: replyText || 'Mohon maaf, SARAH belum menghasilkan respons. Silakan coba lagi.',
+      fromCache: Boolean(response.fromCache),
     };
   } catch (error) {
     throw formatGeminiError(error);

@@ -4,20 +4,20 @@
  * ----------------------------------------------------------------------------
  * Aplikasi                     : SERBU 21 (SDN Rawa Badak Utara 21)
  * Original Creator & Architect : Endi Soeprapto, S.Pd., Gr.
- * Dedikasi                     : "For my beloved daughter, Dilanesa"
+ * Dedikasi                     : "For my beloved daughter, Assyuwaifah Dilanesa"
  * Tahun                        : 2026
  * ============================================================================
  */
 
 export const _CREATOR_SIGNATURE_ENDI_DILANESA = Object.freeze({
-  raw: 'Endi Soeprapto - For my beloved daughter Dilanesa - 2026',
+  raw: 'Endi Soeprapto - For my beloved daughter Assyuwaifah Dilanesa - 2026',
   appName: 'SERBU 21',
   institution: 'SDN Rawa Badak Utara 21',
   creator: 'Endi Soeprapto, S.Pd., Gr.',
-  dedication: 'For my beloved daughter, Dilanesa',
+  dedication: 'For my beloved daughter, Assyuwaifah Dilanesa',
   year: 2026,
   systemVersion: 'SERBU21-2026.1',
-  checksumSeed: 'SERBU21::ENDI_SOEPRAPTO::DILANESA::2026',
+  checksumSeed: 'SERBU21::ENDI_SOEPRAPTO::ASSYUWAIFAH_DILANESA::2026',
 });
 
 export interface SystemOwnershipStatus {
@@ -40,7 +40,7 @@ function computeSignatureChecksum(input: string): string {
 }
 
 export const SYSTEM_CREDIT_TEXT =
-  'SERBU 21 — Dikembangkan oleh Endi Soeprapto, S.Pd., Gr. | For my beloved daughter, Dilanesa';
+  'SERBU 21 — Dikembangkan oleh Endi Soeprapto, S.Pd., Gr. | For my beloved daughter, Assyuwaifah Dilanesa';
 
 // Browser Console Watermark (IIFE) — otomatis dicetak saat halaman dimuat
 (function renderBrowserConsoleWatermark() {
@@ -83,7 +83,7 @@ export const SYSTEM_CREDIT_TEXT =
 export function verifySystemOwnershipIntegrity(): SystemOwnershipStatus {
   const sig = _CREATOR_SIGNATURE_ENDI_DILANESA;
   const expectedPrefix = 'Endi Soeprapto';
-  const expectedDedication = 'Dilanesa';
+  const expectedDedication = 'Assyuwaifah Dilanesa';
   const isIntact =
     sig.raw.includes(expectedPrefix) &&
     sig.raw.includes(expectedDedication) &&

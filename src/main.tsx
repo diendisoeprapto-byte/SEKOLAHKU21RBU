@@ -2,7 +2,7 @@
  * ============================================================================
  * Aplikasi                     : SERBU 21 (SDN Rawa Badak Utara 21)
  * Original Creator & Architect : Endi Soeprapto, S.Pd., Gr.
- * Dedikasi                     : "For my beloved daughter, Dilanesa"
+ * Dedikasi                     : "For my beloved daughter, Assyuwaifah Dilanesa"
  * Tahun                        : 2026
  * ============================================================================
  */

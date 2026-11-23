@@ -4,14 +4,23 @@ import {
   SarahStickerCode,
   extractSarahResponseMetadata,
 } from '../utils/sarahVisuals';
+import {
+  SarahStickerItem,
+  SarahUserMode,
+  findRealisticEndiSticker,
+  findStudent3DSticker,
+} from '../utils/sarahStickers';
 
 interface Props {
   content: string;
   compact?: boolean;
+  userMode?: SarahUserMode;
 }
 
 const VALID_STICKER_CODES: SarahStickerCode[] = ['sapa', 'jempol', 'semangat', 'terimakasih'];
-const STICKER_TOKEN_REGEX = /\[STIKER\s*:\s*([a-zA-Z_]+)\s*\]/gi;
+const STICKER_TOKEN_REGEX = /\[STIKER\s*:\s*([a-zA-Z0-9_]+)\s*\]/gi;
+const REAL_STICKER_TOKEN_REGEX = /\[REAL_STIKER\s*:\s*([a-zA-Z0-9_]+)\s*\]/gi;
+const STUDENT_3D_STICKER_TOKEN_REGEX = /\[STIKER_3D\s*:\s*([a-zA-Z0-9_]+)\s*\]/gi;
 
 const SarahStickerView: React.FC<{ code: SarahStickerCode }> = ({ code }) => {
   const asset = SARAH_STICKER_ASSETS[code];
@@ -26,15 +35,71 @@ const SarahStickerView: React.FC<{ code: SarahStickerCode }> = ({ code }) => {
           title={asset.label}
           referrerPolicy="no-referrer"
           onError={() => setImgError(true)}
-          className="w-[120px] h-[120px] object-cover rounded-2xl border-2 border-white shadow-md sarah-sticker-anim select-none bg-rose-50"
+          className="w-[120px] h-[120px] object-cover rounded-2xl border-4 border-white shadow-lg sarah-sticker-anim select-none bg-rose-50"
         />
       ) : (
-        <div className="w-[120px] h-[120px] rounded-2xl border-2 border-rose-200 bg-gradient-to-br from-rose-50 to-amber-50 shadow-sm flex flex-col items-center justify-center p-2 text-center sarah-sticker-anim">
+        <div className="w-[120px] h-[120px] rounded-2xl border-4 border-white ring-1 ring-rose-200 bg-gradient-to-br from-rose-50 to-amber-50 shadow-md flex flex-col items-center justify-center p-2 text-center sarah-sticker-anim">
           <span className="font-display font-black text-xs text-rose-700">
             {asset.badgeText}
           </span>
         </div>
       )}
+    </div>
+  );
+};
+
+const SarahModeStickerView: React.FC<{
+  item: SarahStickerItem;
+  variant: 'realistic' | 'student3d';
+}> = ({ item, variant }) => {
+  const [imgError, setImgError] = useState(false);
+
+  if (!imgError) {
+    return (
+      <div className="my-2 inline-flex flex-col items-center">
+        <div className="p-1 rounded-[1.25rem] bg-white shadow-[0_10px_24px_-6px_rgba(15,23,42,0.22)] border-2 border-white inline-block sarah-sticker-anim">
+          <img
+            src={item.path}
+            alt={item.label}
+            title={item.label}
+            onError={() => setImgError(true)}
+            className="w-[124px] h-[124px] object-cover rounded-2xl select-none bg-rose-50"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-2 inline-flex flex-col items-center">
+      <div
+        title={item.label}
+        className={`w-[132px] min-h-[112px] p-3 rounded-[1.25rem] border-4 border-white shadow-[0_8px_22px_-6px_rgba(15,23,42,0.2)] flex flex-col items-center justify-center text-center gap-1.5 sarah-sticker-anim select-none ${
+          variant === 'realistic'
+            ? 'bg-gradient-to-br from-rose-100 via-pink-50 to-amber-50 ring-1 ring-rose-200'
+            : 'bg-gradient-to-br from-sky-100 via-indigo-50 to-amber-50 ring-1 ring-indigo-200'
+        }`}
+      >
+        <span className="text-3xl leading-none drop-shadow-xs">{item.emoji}</span>
+        <span
+          className={`font-display font-black text-[11px] leading-tight ${
+            variant === 'realistic' ? 'text-rose-900' : 'text-indigo-950'
+          }`}
+        >
+          {item.label}
+        </span>
+        {(item.hijabStyle || item.iconTheme) && (
+          <span
+            className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+              variant === 'realistic'
+                ? 'bg-white/80 text-rose-700'
+                : 'bg-white/80 text-indigo-700'
+            }`}
+          >
+            {item.hijabStyle ? `Hijab ${item.hijabStyle}` : item.iconTheme}
+          </span>
+        )}
+      </div>
     </div>
   );
 };
@@ -92,12 +157,82 @@ function isTableSeparator(line: string): boolean {
   return /^\|?(\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?$/.test(trimmed);
 }
 
-export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => {
+export const SarahMarkdown: React.FC<Props> = ({
+  content,
+  compact = false,
+  userMode = 'standard_teacher',
+}) => {
   const { cleanText } = extractSarahResponseMetadata(content || '');
   const lines = cleanText.split(/\r?\n/);
   const elements: React.ReactNode[] = [];
   let idx = 0;
   let stickerUsedCount = 0;
+
+  const renderLineStickers = (raw: string, keyPrefix: string): { cleanedLine: string; rendered: React.ReactNode[] } => {
+    const rendered: React.ReactNode[] = [];
+    let cleaned = raw;
+
+    // 1. Stiker Realistis (HANYA boleh tampil pada Mode 1: exclusive_endi)
+    const realMatches = Array.from(cleaned.matchAll(REAL_STICKER_TOKEN_REGEX));
+    if (realMatches.length > 0) {
+      if (userMode === 'exclusive_endi') {
+        for (const m of realMatches) {
+          if (stickerUsedCount < 2) {
+            const item = findRealisticEndiSticker(m[1]);
+            if (item) {
+              stickerUsedCount += 1;
+              rendered.push(
+                <div key={`${keyPrefix}_real_${stickerUsedCount}`} className="flex justify-start">
+                  <SarahModeStickerView item={item} variant="realistic" />
+                </div>
+              );
+            }
+          }
+        }
+      }
+      cleaned = cleaned.replace(REAL_STICKER_TOKEN_REGEX, '').trim();
+    }
+
+    // 2. Stiker Kartun 3D Siswa (HANYA boleh tampil pada Mode 2: siswa)
+    const student3DMatches = Array.from(cleaned.matchAll(STUDENT_3D_STICKER_TOKEN_REGEX));
+    if (student3DMatches.length > 0) {
+      if (userMode === 'siswa') {
+        for (const m of student3DMatches) {
+          if (stickerUsedCount < 2) {
+            const item = findStudent3DSticker(m[1]);
+            if (item) {
+              stickerUsedCount += 1;
+              rendered.push(
+                <div key={`${keyPrefix}_3d_${stickerUsedCount}`} className="flex justify-start">
+                  <SarahModeStickerView item={item} variant="student3d" />
+                </div>
+              );
+            }
+          }
+        }
+      }
+      cleaned = cleaned.replace(STUDENT_3D_STICKER_TOKEN_REGEX, '').trim();
+    }
+
+    // 3. Stiker WA klasik (hanya untuk mode siswa; standard_teacher tanpa stiker)
+    const classicMatches = Array.from(cleaned.matchAll(STICKER_TOKEN_REGEX));
+    if (classicMatches.length > 0) {
+      if (userMode === 'siswa' && stickerUsedCount === 0) {
+        const candidate = String(classicMatches[0][1] || '').toLowerCase() as SarahStickerCode;
+        if (VALID_STICKER_CODES.includes(candidate)) {
+          stickerUsedCount += 1;
+          rendered.push(
+            <div key={`${keyPrefix}_stk`} className="flex justify-start">
+              <SarahStickerView code={candidate} />
+            </div>
+          );
+        }
+      }
+      cleaned = cleaned.replace(STICKER_TOKEN_REGEX, '').trim();
+    }
+
+    return { cleanedLine: cleaned, rendered };
+  };
 
   while (idx < lines.length) {
     const rawLine = lines[idx];
@@ -108,47 +243,21 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
       continue;
     }
 
-    // Extract optional sticker tokens on this line (render max 1 sticker per message)
-    let lineStickerBefore: SarahStickerCode | null = null;
-    let lineStickerAfter: SarahStickerCode | null = null;
-    const stickerMatches = Array.from(trimmedRaw.matchAll(STICKER_TOKEN_REGEX));
-    let line = trimmedRaw;
+    const { cleanedLine: line, rendered: lineStickerNodes } = renderLineStickers(
+      trimmedRaw,
+      `l_${idx}`
+    );
 
-    if (stickerMatches.length > 0) {
-      for (const m of stickerMatches) {
-        const candidate = String(m[1] || '').toLowerCase() as SarahStickerCode;
-        if (VALID_STICKER_CODES.includes(candidate) && stickerUsedCount === 0) {
-          stickerUsedCount += 1;
-          const matchIndex = m.index ?? 0;
-          if (matchIndex <= 4) {
-            lineStickerBefore = candidate;
-          } else {
-            lineStickerAfter = candidate;
-          }
-        }
+    if (!line) {
+      if (lineStickerNodes.length > 0) {
+        elements.push(...lineStickerNodes);
       }
-      line = trimmedRaw.replace(STICKER_TOKEN_REGEX, '').trim();
-
-      if (!line) {
-        const loneSticker = lineStickerBefore || lineStickerAfter;
-        if (loneSticker) {
-          elements.push(
-            <div key={`stk_only_${idx}`} className="flex justify-start">
-              <SarahStickerView code={loneSticker} />
-            </div>
-          );
-        }
-        idx++;
-        continue;
-      }
+      idx++;
+      continue;
     }
 
-    if (lineStickerBefore) {
-      elements.push(
-        <div key={`stk_pre_${idx}`} className="flex justify-start">
-          <SarahStickerView code={lineStickerBefore} />
-        </div>
-      );
+    if (lineStickerNodes.length > 0) {
+      elements.push(...lineStickerNodes);
     }
 
     // Markdown Table
@@ -196,13 +305,6 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
           </table>
         </div>
       );
-      if (lineStickerAfter) {
-        elements.push(
-          <div key={`stk_post_${idx}`} className="flex justify-start">
-            <SarahStickerView code={lineStickerAfter} />
-          </div>
-        );
-      }
       continue;
     }
 
@@ -261,7 +363,13 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
       const items: string[] = [];
       while (idx < lines.length && /^[-*•]\s+/.test(lines[idx].trim())) {
         items.push(
-          lines[idx].trim().replace(/^[-*•]\s+/, '').replace(STICKER_TOKEN_REGEX, '').trim()
+          lines[idx]
+            .trim()
+            .replace(/^[-*•]\s+/, '')
+            .replace(REAL_STICKER_TOKEN_REGEX, '')
+            .replace(STUDENT_3D_STICKER_TOKEN_REGEX, '')
+            .replace(STICKER_TOKEN_REGEX, '')
+            .trim()
         );
         idx++;
       }
@@ -274,13 +382,6 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
           ))}
         </ul>
       );
-      if (lineStickerAfter) {
-        elements.push(
-          <div key={`stk_post_${idx}`} className="flex justify-start">
-            <SarahStickerView code={lineStickerAfter} />
-          </div>
-        );
-      }
       continue;
     }
 
@@ -289,7 +390,13 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
       const items: string[] = [];
       while (idx < lines.length && /^\d+\.\s+/.test(lines[idx].trim())) {
         items.push(
-          lines[idx].trim().replace(/^\d+\.\s+/, '').replace(STICKER_TOKEN_REGEX, '').trim()
+          lines[idx]
+            .trim()
+            .replace(/^\d+\.\s+/, '')
+            .replace(REAL_STICKER_TOKEN_REGEX, '')
+            .replace(STUDENT_3D_STICKER_TOKEN_REGEX, '')
+            .replace(STICKER_TOKEN_REGEX, '')
+            .trim()
         );
         idx++;
       }
@@ -302,13 +409,6 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
           ))}
         </ol>
       );
-      if (lineStickerAfter) {
-        elements.push(
-          <div key={`stk_post_${idx}`} className="flex justify-start">
-            <SarahStickerView code={lineStickerAfter} />
-          </div>
-        );
-      }
       continue;
     }
 
@@ -324,13 +424,6 @@ export const SarahMarkdown: React.FC<Props> = ({ content, compact = false }) => 
       </p>
     );
 
-    if (lineStickerAfter) {
-      elements.push(
-        <div key={`stk_post_${idx}`} className="flex justify-start">
-          <SarahStickerView code={lineStickerAfter} />
-        </div>
-      );
-    }
     idx++;
   }
 

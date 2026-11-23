@@ -43,6 +43,10 @@ import {
   ChevronDown,
   User,
   Settings,
+  Database,
+  Loader2,
+  CheckCircle2,
+  Zap,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {
@@ -167,6 +171,19 @@ import {
   countAnsweredQuestions,
   isQuestionAnswerFilled,
 } from '../../utils/examDraft';
+import { saveHasilUjianToFirestore } from '../../utils/sarahExamAccess';
+import {
+  SarahExamAnalysisPanel,
+  SarahAnalysisHardestQuestion,
+  SarahAnalysisStudentRow,
+} from '../SarahExamAnalysisPanel';
+
+function slugifyTkaId(val: string): string {
+  return String(val || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
 
 interface Props {
   subType: 'siswa-tka' | 'cp-tp-tka' | 'bank-soal-tka' | 'pengaturan-tka' | 'analisis-tka' | 'hasil-tka' | 'tes-tka-siswa';
@@ -380,6 +397,7 @@ export const TKATabs: React.FC<Props> = ({
   const [activeExamDurationSeconds, setActiveExamDurationSeconds] = useState(3600);
   const [isExamCompleted, setIsExamCompleted] = useState(false);
   const [lastExamResult, setLastExamResult] = useState<any | null>(null);
+  const [tkaFirestoreSaveStatus, setTkaFirestoreSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [selectedTestStudentId, setSelectedTestStudentId] = useState<string>(tkaStudents[0]?.id || '');
   const handleFinishTkaExamRef = useRef<() => void>(() => {});
   const handleSubmitSimRef = useRef<() => void>(() => {});
@@ -6438,6 +6456,66 @@ export const TKATabs: React.FC<Props> = ({
               </div>
             </div>
             </div>
+
+            {(() => {
+              const tkaAnalysisStudents: SarahAnalysisStudentRow[] = relevantSubmissions.map((sub) => {
+                const wrongNumbers: number[] = [];
+                const correctNumbers: number[] = [];
+                if (sub.answers && filteredAnalisisQuestions.length > 0) {
+                  filteredAnalisisQuestions.forEach((q, qIdx) => {
+                    const evalRes = evaluateQuestionScore(
+                      q.tipe,
+                      sub.answers[q.id],
+                      q.kunciJawaban,
+                      q.bobot || 10,
+                      q.opsi,
+                      q
+                    );
+                    if (evalRes.isCorrect) {
+                      correctNumbers.push(qIdx + 1);
+                    } else {
+                      wrongNumbers.push(qIdx + 1);
+                    }
+                  });
+                }
+                return {
+                  id: sub.id,
+                  nama: sub.studentName || 'Siswa',
+                  nisn: sub.nisn,
+                  kelas: sub.kelas || 'Kelas 6',
+                  score: Number(sub.skorTotal) || 0,
+                  status: sub.status || ((Number(sub.skorTotal) || 0) >= 75 ? 'Tuntas' : 'Belum Tuntas'),
+                  wrongNumbers,
+                  correctNumbers,
+                  mapelBreakdown: sub.scoresPerMapel,
+                };
+              });
+
+              const tkaHardestQuestions: SarahAnalysisHardestQuestion[] = analisisList
+                .filter((q) => q.pesertaCount > 0)
+                .map((q, idx) => ({
+                  no: idx + 1,
+                  pertanyaan: stripQuestionTags(q.pertanyaan) || `Butir Soal TKA ${idx + 1}`,
+                  tp: (q as any).tpCode || (q as any).kodeTp || q.mapel,
+                  pctCorrect: q.pct,
+                  wrongCount: Math.max(0, q.pesertaCount - q.correctCount),
+                  totalParticipants: q.pesertaCount,
+                }));
+
+              return (
+                <SarahExamAnalysisPanel
+                  activeUser={activeUser}
+                  profile={profile}
+                  examCategory="TKA"
+                  paketLabel={analisisPaketTka === 'all' ? 'Semua Paket TKA' : analisisPaketTka}
+                  mapelLabel={activeMapelLabel}
+                  kelasLabel="Semua Kelas 6"
+                  hardestQuestions={tkaHardestQuestions}
+                  studentPerformanceList={tkaAnalysisStudents}
+                  showToast={showToast}
+                />
+              );
+            })()}
           </div>
         );
       })()}
@@ -7985,6 +8063,95 @@ export const TKATabs: React.FC<Props> = ({
               </>
             )}
 
+            {(() => {
+              const tkaHasilQuestions = tkaQuestions.filter(
+                (q) => hasilPaketTka === 'all' || q.jenisTka === hasilPaketTka
+              );
+              const qStatMap = new Map<
+                string,
+                { no: number; pertanyaan: string; tp?: string; wrongCount: number; totalParticipants: number }
+              >();
+              const tkaHasilStudents: SarahAnalysisStudentRow[] = rankedPool.map((sub) => {
+                const wrongNumbers: number[] = [];
+                const correctNumbers: number[] = [];
+                if (sub.answers && tkaHasilQuestions.length > 0) {
+                  tkaHasilQuestions.forEach((q, qIdx) => {
+                    const qNormMapel = normalizeTkaMapelKey(q.mapel);
+                    const didTakeMapel =
+                      (sub.answers && q.id in sub.answers) ||
+                      !sub.completedMapels ||
+                      sub.completedMapels.length === 0 ||
+                      sub.completedMapels.includes(qNormMapel);
+                    if (!didTakeMapel) return;
+                    const evalRes = evaluateQuestionScore(
+                      q.tipe,
+                      sub.answers[q.id],
+                      q.kunciJawaban,
+                      q.bobot || 10,
+                      q.opsi,
+                      q
+                    );
+                    if (evalRes.isCorrect) {
+                      correctNumbers.push(qIdx + 1);
+                    } else {
+                      wrongNumbers.push(qIdx + 1);
+                    }
+                    const cur = qStatMap.get(q.id) || {
+                      no: qIdx + 1,
+                      pertanyaan: stripQuestionTags(q.pertanyaan) || `Soal TKA ${qIdx + 1}`,
+                      tp: (q as any).tpCode || (q as any).kodeTp || q.mapel,
+                      wrongCount: 0,
+                      totalParticipants: 0,
+                    };
+                    cur.totalParticipants += 1;
+                    if (!evalRes.isCorrect) cur.wrongCount += 1;
+                    qStatMap.set(q.id, cur);
+                  });
+                }
+                return {
+                  id: sub.id,
+                  nama: sub.nama || sub.studentName || 'Siswa',
+                  nisn: sub.nisn,
+                  kelas: sub.kelas || 'Kelas 6',
+                  score: Number(sub.skorTotal) || 0,
+                  status: sub.status || ((Number(sub.skorTotal) || 0) >= 75 ? 'Tuntas' : 'Belum Tuntas'),
+                  wrongNumbers,
+                  correctNumbers,
+                  mapelBreakdown: sub.scoresPerMapel,
+                };
+              });
+
+              const tkaHasilHardest: SarahAnalysisHardestQuestion[] = Array.from(qStatMap.values()).map(
+                (item) => ({
+                  no: item.no,
+                  pertanyaan: item.pertanyaan,
+                  tp: item.tp,
+                  wrongCount: item.wrongCount,
+                  totalParticipants: item.totalParticipants,
+                  pctCorrect:
+                    item.totalParticipants > 0
+                      ? Math.round(
+                          ((item.totalParticipants - item.wrongCount) / item.totalParticipants) * 100
+                        )
+                      : 0,
+                })
+              );
+
+              return (
+                <SarahExamAnalysisPanel
+                  activeUser={activeUser}
+                  profile={profile}
+                  examCategory="TKA"
+                  paketLabel={hasilPaketTka === 'all' ? 'Semua Paket TKA' : hasilPaketTka}
+                  mapelLabel="Semua Mata Pelajaran TKA"
+                  kelasLabel={hasilKelasTka === 'all' ? 'Semua Kelas 6' : hasilKelasTka}
+                  hardestQuestions={tkaHasilHardest}
+                  studentPerformanceList={tkaHasilStudents}
+                  showToast={showToast}
+                />
+              );
+            })()}
+
             {/* Blok Pengesahan Resmi Kepala Sekolah & Wali Kelas (Khusus Cetak / PDF) */}
             <div className="hidden print-only print-avoid-break mt-6 pt-4 text-xs text-slate-900">
               <div className="grid grid-cols-2 gap-8 text-center">
@@ -8491,6 +8658,44 @@ export const TKATabs: React.FC<Props> = ({
               },
               { immediateSync: true }
             );
+
+            const distinctMapels = Array.from(
+              new Set(list.map((q) => normalizeTkaMapelKey(q.mapel)).filter(Boolean))
+            );
+            distinctMapels.forEach((mKey) => {
+              const idUjian = `tka_live_${slugifyTkaId(paketName)}_${slugifyTkaId(mKey)}`;
+              const alreadyDone = tkaSubmissions.some((sub) => {
+                const sameStudent =
+                  sub.studentId === currentStudent.id ||
+                  (currentStudent.nisn && sub.nisn === currentStudent.nisn);
+                const samePaket =
+                  (sub.paketDasar || extractBaseTkaPaket(sub.paket || '')).toLowerCase() ===
+                  paketName.toLowerCase();
+                const hasMapel =
+                  Array.isArray(sub.completedMapels) && sub.completedMapels.includes(mKey);
+                return sameStudent && samePaket && hasMapel;
+              });
+              if (!alreadyDone) {
+                const mapelQs = list.filter((q) => normalizeTkaMapelKey(q.mapel) === mKey);
+                void saveHasilUjianToFirestore({
+                  nisn: currentStudent.nisn || currentStudent.id,
+                  id_ujian: idUjian,
+                  studentId: currentStudent.id,
+                  nama_siswa: currentStudent.nama,
+                  kelas: currentStudent.kelas,
+                  category: 'tka',
+                  mapel: mKey,
+                  paketName,
+                  judul: `${paketName} - ${mKey}`,
+                  status: 'mengerjakan',
+                  skor: 0,
+                  total_soal: mapelQs.length,
+                  no_soal_betul: [],
+                  no_soal_salah: [],
+                  jawaban_siswa: {},
+                });
+              }
+            });
           }
 
           showToast(
@@ -8559,6 +8764,60 @@ export const TKATabs: React.FC<Props> = ({
             semester: activeSemester,
           });
           setTkaSubmissions(updatedList);
+
+          // Simpan status "selesai" per mata pelajaran ke koleksi Firestore `hasil_ujian` secara non-blocking
+          // untuk menegakkan Strict Access Control SARAH setelah siswa mengirim jawaban.
+          setTkaFirestoreSaveStatus('saving');
+          const firestoreSavePromises: Promise<any>[] = [];
+          completedMapelKeys.forEach((mKey) => {
+            const canonicalMapelQs = getMatchingTkaQuestions(paketBase, mKey);
+            const mapelQs =
+              canonicalMapelQs.length > 0
+                ? canonicalMapelQs
+                : displayExamQuestions.filter((q) => normalizeTkaMapelKey(q.mapel) === mKey);
+            const noBetul: number[] = [];
+            const noSalah: number[] = [];
+            mapelQs.forEach((q, qIdx) => {
+              const evalRes = evaluateQuestionScore(
+                q.tipe,
+                studentAnswers[q.id],
+                q.kunciJawaban,
+                q.bobot || 10,
+                q.opsi,
+                q
+              );
+              if (evalRes.isCorrect) {
+                noBetul.push(qIdx + 1);
+              } else {
+                noSalah.push(qIdx + 1);
+              }
+            });
+            const idUjian = `tka_live_${slugifyTkaId(paketBase)}_${slugifyTkaId(mKey)}`;
+            firestoreSavePromises.push(
+              saveHasilUjianToFirestore({
+                nisn: currentStudent.nisn || currentStudent.id,
+                id_ujian: idUjian,
+                studentId: currentStudent.id,
+                nama_siswa: currentStudent.nama,
+                kelas: currentStudent.kelas,
+                category: 'tka',
+                mapel: mKey,
+                paketName: paketBase,
+                judul: `${paketBase} - ${mKey}`,
+                status: 'selesai',
+                skor: Number(mapelScores[mKey] ?? mergedSub.skorTotal) || 0,
+                total_soal: mapelQs.length,
+                no_soal_betul: noBetul,
+                no_soal_salah: noSalah,
+                jawaban_siswa: studentAnswers,
+                waktu_selesai: new Date().toLocaleTimeString('id-ID'),
+              })
+            );
+          });
+          void Promise.allSettled(firestoreSavePromises).then(() => {
+            setTkaFirestoreSaveStatus('saved');
+          });
+          window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
 
           setConfirmFinishTkaExam(false);
           setLastExamResult(mergedSub);
@@ -9144,7 +9403,86 @@ export const TKATabs: React.FC<Props> = ({
                 );
               })()}
 
+              {/* Indikator Status Terpisah: Simpan Jawaban Firestore (Instan) vs Analisis SARAH AI (Async Queue) */}
+              <div className="max-w-xl mx-auto grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-left pt-1">
+                <div
+                  className={`px-3.5 py-2.5 rounded-2xl border flex items-center gap-2.5 ${
+                    tkaFirestoreSaveStatus === 'saving'
+                      ? 'bg-amber-50 border-amber-200'
+                      : 'bg-emerald-50/80 border-emerald-200'
+                  }`}
+                >
+                  <div
+                    className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 text-white ${
+                      tkaFirestoreSaveStatus === 'saving' ? 'bg-amber-500' : 'bg-emerald-600'
+                    }`}
+                  >
+                    {tkaFirestoreSaveStatus === 'saving' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Database className="w-3.5 h-3.5" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-slate-800">
+                      1. Simpan Firestore (Instan)
+                    </p>
+                    <p className="text-[11px] font-semibold text-emerald-800 truncate">
+                      {tkaFirestoreSaveStatus === 'saving'
+                        ? 'Mengirim jawaban TKA ke Firestore...'
+                        : '✓ Jawaban & status selesai tersimpan'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="px-3.5 py-2.5 rounded-2xl border bg-indigo-50/70 border-indigo-200 flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                    <Zap className="w-3.5 h-3.5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-wide text-indigo-950">
+                      2. Analisis SARAH (Async)
+                    </p>
+                    <p className="text-[11px] font-semibold text-indigo-800 truncate">
+                      Siap via antrean AbortController &amp; Cache
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               <div className="flex flex-wrap items-center justify-center gap-3 pt-3">
+                {activeUser.role === 'siswa' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetPaket =
+                        lastExamResult.paketDasar || extractBaseTkaPaket(lastExamResult.paket || '');
+                      const firstMapel =
+                        activeExamMapel ||
+                        (Array.isArray(lastExamResult.completedMapels)
+                          ? lastExamResult.completedMapels[0]
+                          : '');
+                      window.dispatchEvent(
+                        new CustomEvent('serbu21-open-tanya-sarah', {
+                          detail: {
+                            examId:
+                              targetPaket && firstMapel
+                                ? `tka_live_${slugifyTkaId(targetPaket)}_${slugifyTkaId(firstMapel)}`
+                                : undefined,
+                            paketName: targetPaket,
+                            mapel: firstMapel,
+                            category: 'tka',
+                            autoRequestFeedback: true,
+                          },
+                        })
+                      );
+                    }}
+                    className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 text-white font-display font-black text-xs shadow-md transition cursor-pointer flex items-center gap-2"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>Tanya SARAH Soal yang Masih Salah</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -9160,6 +9498,7 @@ export const TKATabs: React.FC<Props> = ({
                     setActiveExamPaket(null);
                     setIsExamCompleted(false);
                     setLastExamResult(null);
+                    setTkaFirestoreSaveStatus('idle');
                   }}
                   className="px-5 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-display font-black text-xs transition cursor-pointer"
                 >

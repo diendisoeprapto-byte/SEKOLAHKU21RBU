@@ -666,55 +666,344 @@ export async function rasterizeSvgToPngDataUrl(
   });
 }
 
-export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
-  payload: Record<string, any>
-): Promise<T> {
-  const maxAttempts = 2;
-  let lastErr: Error | null = null;
+const SARAH_AI_MAX_CONCURRENT = 3;
+let sarahAiInFlightCount = 0;
+const sarahAiWaitQueue: Array<() => void> = [];
+const sarahMemoryCache = new Map<string, { value: any; cachedAt: number }>();
+const SARAH_CACHE_LOCAL_PREFIX = 'serbu21_sarah_ai_cache_';
+const SARAH_CACHE_TTL_MS = 1000 * 60 * 45; // 45 menit untuk ulasan soal / analisis
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (attempt > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 900));
+export type SarahAnalysisPhase =
+  | 'idle'
+  | 'cache_check'
+  | 'queued'
+  | 'analyzing'
+  | 'cached_hit'
+  | 'done'
+  | 'cancelled'
+  | 'error';
+
+export interface CallSarahAiOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  cacheKey?: string;
+  bypassCache?: boolean;
+  validateCached?: (cached: any) => boolean;
+  onStatusChange?: (statusText: string) => void;
+  onPhaseChange?: (phase: SarahAnalysisPhase, statusText: string) => void;
+}
+
+function fnv1aHexFallback(input: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input.charCodeAt(i);
+    h1 ^= ch;
+    h1 = Math.imul(h1, 0x01000193);
+    h2 ^= ch + i;
+    h2 = Math.imul(h2, 0x85ebca6b);
+  }
+  return `${(h1 >>> 0).toString(16).padStart(8, '0')}${(h2 >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+/**
+ * Menghasilkan hash deterministik dari pasangan (id_ujian, nisn)
+ * untuk Result Caching hasil analisis SARAH di sisi klien.
+ */
+export async function computeSarahResultCacheHash(
+  idUjian: string,
+  nisn: string,
+  extraScope: string = ''
+): Promise<string> {
+  const normExam = String(idUjian || '').trim().toLowerCase();
+  const normNisn = String(nisn || '').trim().toLowerCase();
+  const normScope = String(extraScope || '').trim().toLowerCase();
+  const raw = `${normExam}::${normNisn}${normScope ? `::${normScope}` : ''}`;
+
+  try {
+    if (typeof window !== 'undefined' && window.crypto?.subtle) {
+      const encoded = new TextEncoder().encode(raw);
+      const digest = await window.crypto.subtle.digest('SHA-256', encoded);
+      return Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('')
+        .slice(0, 32);
     }
+  } catch {
+    // Fallback ke FNV-1a jika subtle crypto tidak tersedia
+  }
+  return fnv1aHexFallback(raw);
+}
 
+function readSarahResponseCache<T>(cacheKey?: string): T | null {
+  if (!cacheKey) return null;
+  const now = Date.now();
+  const mem = sarahMemoryCache.get(cacheKey);
+  if (mem && now - mem.cachedAt < SARAH_CACHE_TTL_MS) {
+    return mem.value as T;
+  }
+  if (typeof window !== 'undefined') {
     try {
-      const response = await fetch('/.netlify/functions/sarah-ai', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      let data: any = null;
-      try {
-        data = await response.json();
-      } catch {
-        data = null;
+      const raw = window.localStorage.getItem(`${SARAH_CACHE_LOCAL_PREFIX}${cacheKey}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && now - Number(parsed.cachedAt || 0) < SARAH_CACHE_TTL_MS && parsed.value) {
+          sarahMemoryCache.set(cacheKey, parsed);
+          return parsed.value as T;
+        }
       }
+    } catch {
+      // ignore storage errors
+    }
+  }
+  return null;
+}
 
-      if (response.ok) {
-        return data as T;
-      }
+function writeSarahResponseCache(cacheKey: string | undefined, value: any): void {
+  if (!cacheKey || !value) return;
+  const entry = { value, cachedAt: Date.now() };
+  sarahMemoryCache.set(cacheKey, entry);
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(`${SARAH_CACHE_LOCAL_PREFIX}${cacheKey}`, JSON.stringify(entry));
+    } catch {
+      // ignore quota error
+    }
+  }
+}
 
-      const errMsg =
-        data?.error || `Permintaan ke layanan SARAH gagal (HTTP ${response.status}).`;
-      const isTransientStatus = [502, 503, 504].includes(response.status);
-      lastErr = new Error(errMsg);
+async function acquireSarahQueueSlot(
+  signal?: AbortSignal,
+  onStatusChange?: (statusText: string) => void,
+  onPhaseChange?: (phase: SarahAnalysisPhase, statusText: string) => void
+): Promise<void> {
+  if (signal?.aborted) {
+    throw new DOMException('Permintaan dibatalkan.', 'AbortError');
+  }
+  if (sarahAiInFlightCount < SARAH_AI_MAX_CONCURRENT) {
+    sarahAiInFlightCount += 1;
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const position = sarahAiWaitQueue.length + 1;
+    const waitMsg = `Menunggu antrean layanan SARAH (#${position})...`;
+    onStatusChange?.(waitMsg);
+    onPhaseChange?.('queued', waitMsg);
+    const wake = () => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      sarahAiInFlightCount += 1;
+      resolve();
+    };
+    const onAbort = () => {
+      const idx = sarahAiWaitQueue.indexOf(wake);
+      if (idx >= 0) sarahAiWaitQueue.splice(idx, 1);
+      reject(new DOMException('Permintaan dibatalkan oleh pengguna.', 'AbortError'));
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    sarahAiWaitQueue.push(wake);
+  });
+}
 
-      if (!isTransientStatus || attempt === maxAttempts - 1) {
-        throw lastErr;
-      }
-    } catch (err: any) {
-      const isNetworkError = err instanceof TypeError;
-      lastErr = err instanceof Error ? err : new Error('Gagal terhubung ke layanan SARAH.');
-      if (!isNetworkError || attempt === maxAttempts - 1) {
-        throw lastErr;
-      }
+function releaseSarahQueueSlot(): void {
+  sarahAiInFlightCount = Math.max(0, sarahAiInFlightCount - 1);
+  const next = sarahAiWaitQueue.shift();
+  if (next) {
+    next();
+  }
+}
+
+export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
+  payload: Record<string, any>,
+  options: CallSarahAiOptions = {}
+): Promise<T & { fromCache?: boolean }> {
+  const {
+    signal,
+    timeoutMs = 32000,
+    cacheKey,
+    bypassCache = false,
+    validateCached,
+    onStatusChange,
+    onPhaseChange,
+  } = options;
+
+  if (cacheKey && !bypassCache) {
+    onPhaseChange?.('cache_check', 'Memeriksa Result Cache (id_ujian, nisn)...');
+    const cached = readSarahResponseCache<T>(cacheKey);
+    if (cached && (!validateCached || validateCached(cached))) {
+      onPhaseChange?.('cached_hit', 'Hasil analisis dimuat instan dari Result Cache.');
+      return {
+        ...cached,
+        fromCache: true,
+      };
     }
   }
 
-  throw lastErr || new Error('Permintaan ke layanan SARAH gagal.');
+  await acquireSarahQueueSlot(signal, onStatusChange, onPhaseChange);
+  try {
+    const maxAttempts = 2;
+    let lastErr: Error | null = null;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (signal?.aborted) {
+        throw new DOMException('Permintaan ke SARAH dibatalkan.', 'AbortError');
+      }
+      if (attempt > 0) {
+        const retryMsg = 'Menghubungkan ulang ke SARAH AI...';
+        onStatusChange?.(retryMsg);
+        onPhaseChange?.('analyzing', retryMsg);
+        await new Promise((resolve) => setTimeout(resolve, 650));
+      }
+
+      const controller = new AbortController();
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+
+      const forwardAbort = () => controller.abort();
+      if (signal) {
+        signal.addEventListener('abort', forwardAbort, { once: true });
+      }
+
+      try {
+        const analyzeMsg = 'SARAH sedang menganalisis secara async (gemini-2.5-flash)...';
+        onStatusChange?.(analyzeMsg);
+        onPhaseChange?.('analyzing', analyzeMsg);
+
+        const response = await fetch('/.netlify/functions/sarah-ai', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+
+        let data: any = null;
+        try {
+          data = await response.json();
+        } catch {
+          data = null;
+        }
+
+        if (response.ok) {
+          writeSarahResponseCache(cacheKey, data);
+          onPhaseChange?.(
+            data?.fromCache ? 'cached_hit' : 'done',
+            data?.fromCache
+              ? 'Hasil analisis dimuat dari Result Cache server.'
+              : 'Analisis SARAH selesai.'
+          );
+          return data as T & { fromCache?: boolean };
+        }
+
+        const errMsg =
+          data?.error || `Permintaan ke layanan SARAH gagal (HTTP ${response.status}).`;
+        const isTransientStatus = [429, 502, 503, 504].includes(response.status);
+        lastErr = new Error(errMsg);
+
+        if (!isTransientStatus || attempt === maxAttempts - 1) {
+          throw lastErr;
+        }
+      } catch (err: any) {
+        if (timedOut) {
+          lastErr = new Error(
+            'Koneksi ke SARAH melebihi batas waktu tunggu (timeout). Silakan klik ulangi lagi.'
+          );
+          if (attempt === maxAttempts - 1) throw lastErr;
+        } else if (err?.name === 'AbortError' || signal?.aborted) {
+          onPhaseChange?.('cancelled', 'Proses analisis SARAH dibatalkan.');
+          throw new DOMException('Permintaan ke SARAH dibatalkan.', 'AbortError');
+        } else {
+          const isNetworkError = err instanceof TypeError;
+          lastErr = err instanceof Error ? err : new Error('Gagal terhubung ke layanan SARAH.');
+          if (!isNetworkError || attempt === maxAttempts - 1) {
+            throw lastErr;
+          }
+        }
+      } finally {
+        clearTimeout(timer);
+        if (signal) {
+          signal.removeEventListener('abort', forwardAbort);
+        }
+      }
+    }
+
+    throw lastErr || new Error('Permintaan ke layanan SARAH gagal.');
+  } finally {
+    releaseSarahQueueSlot();
+  }
+}
+
+const activeAnalysisControllers = new Map<string, AbortController>();
+
+export function cancelSarahAnalysisQueueGroup(queueGroupKey: string): void {
+  const existing = activeAnalysisControllers.get(queueGroupKey);
+  if (existing) {
+    existing.abort();
+    activeAnalysisControllers.delete(queueGroupKey);
+  }
+}
+
+/**
+ * Sistem Antrean (Queue) berbasis AbortController khusus modul analisis SARAH
+ * dengan Result Caching berdasarkan hash SHA-256 dari (id_ujian, nisn).
+ */
+export async function enqueueSarahAnalysisRequest<T = SarahTextGeneratedResponse>(params: {
+  queueGroupKey: string;
+  idUjian: string;
+  nisn: string;
+  cacheScope?: string;
+  payload: Record<string, any>;
+  bypassCache?: boolean;
+  validateCached?: (cached: T) => boolean;
+  timeoutMs?: number;
+  externalController?: AbortController;
+  onPhaseChange?: (phase: SarahAnalysisPhase, statusText: string) => void;
+}): Promise<T & { fromCache?: boolean; resultCacheHash: string }> {
+  const resultCacheHash = await computeSarahResultCacheHash(
+    params.idUjian,
+    params.nisn,
+    params.cacheScope || ''
+  );
+
+  // Batalkan antrean sebelumnya pada grup analisis yang sama agar tidak terjadi tabrakan / wait response menumpuk
+  cancelSarahAnalysisQueueGroup(params.queueGroupKey);
+
+  const controller = params.externalController || new AbortController();
+  activeAnalysisControllers.set(params.queueGroupKey, controller);
+
+  try {
+    const res = await callSarahAiEndpoint<T>(
+      {
+        ...params.payload,
+        params: {
+          ...(params.payload.params || {}),
+          id_ujian: params.idUjian,
+          nisn: params.nisn,
+          resultCacheHash,
+        },
+      },
+      {
+        signal: controller.signal,
+        timeoutMs: params.timeoutMs ?? 28000,
+        cacheKey: resultCacheHash,
+        bypassCache: params.bypassCache,
+        validateCached: params.validateCached,
+        onPhaseChange: params.onPhaseChange,
+      }
+    );
+
+    return {
+      ...res,
+      resultCacheHash,
+    };
+  } finally {
+    if (activeAnalysisControllers.get(params.queueGroupKey) === controller) {
+      activeAnalysisControllers.delete(params.queueGroupKey);
+    }
+  }
 }
 
 function escapeHtmlForDoc(raw: string): string {

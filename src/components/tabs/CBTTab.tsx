@@ -116,8 +116,14 @@ import {
   formatBenarSalahKeySummary,
   resolveMenjodohkanData,
   formatMenjodohkanKeySummary,
+  stripQuestionTags,
 } from '../../utils/questionFormat';
 import { isQuestionAnswerFilled } from '../../utils/examDraft';
+import {
+  SarahExamAnalysisPanel,
+  SarahAnalysisHardestQuestion,
+  SarahAnalysisStudentRow,
+} from '../SarahExamAnalysisPanel';
 import {
   exportQuestionsToWord,
   exportCbtQuestionsToExcel,
@@ -4055,6 +4061,84 @@ export const CBTTab: React.FC<Props> = ({
                   </div>
                 </>
               )}
+
+              {(() => {
+                const questionStatMap = new Map<
+                  string,
+                  { no: number; pertanyaan: string; wrongCount: number; totalParticipants: number }
+                >();
+                const sarahStudents: SarahAnalysisStudentRow[] = filteredCbtRows.map((row) => {
+                  const linkedExam = examLookup.get(row.raw.examId);
+                  const wrongNumbers: number[] = [];
+                  const correctNumbers: number[] = [];
+                  if (linkedExam?.soalList && row.raw.jawabanSiswa) {
+                    linkedExam.soalList.forEach((q, qIdx) => {
+                      const evalRes = evaluateQuestionScore(
+                        q.tipe,
+                        row.raw.jawabanSiswa[q.id],
+                        q.kunciJawaban,
+                        q.bobot || 10,
+                        q.opsi,
+                        q
+                      );
+                      if (evalRes.isCorrect) {
+                        correctNumbers.push(qIdx + 1);
+                      } else {
+                        wrongNumbers.push(qIdx + 1);
+                      }
+                      const qKey = `${linkedExam.id}_${qIdx + 1}`;
+                      const cur = questionStatMap.get(qKey) || {
+                        no: qIdx + 1,
+                        pertanyaan: stripQuestionTags(q.pertanyaan) || `Butir Soal No. ${qIdx + 1}`,
+                        wrongCount: 0,
+                        totalParticipants: 0,
+                      };
+                      cur.totalParticipants += 1;
+                      if (!evalRes.isCorrect) cur.wrongCount += 1;
+                      questionStatMap.set(qKey, cur);
+                    });
+                  }
+                  return {
+                    id: row.id,
+                    nama: row.nama,
+                    nisn: row.nisn,
+                    kelas: row.kelas,
+                    score: row.nilai,
+                    status: row.status,
+                    wrongNumbers,
+                    correctNumbers,
+                  };
+                });
+
+                const sarahHardest: SarahAnalysisHardestQuestion[] = Array.from(
+                  questionStatMap.values()
+                ).map((item) => ({
+                  no: item.no,
+                  pertanyaan: item.pertanyaan,
+                  wrongCount: item.wrongCount,
+                  totalParticipants: item.totalParticipants,
+                  pctCorrect:
+                    item.totalParticipants > 0
+                      ? Math.round(
+                          ((item.totalParticipants - item.wrongCount) / item.totalParticipants) * 100
+                        )
+                      : 0,
+                }));
+
+                return (
+                  <SarahExamAnalysisPanel
+                    activeUser={activeUser}
+                    profile={profile}
+                    examCategory="CBT"
+                    paketLabel={reportPaketFilter === 'all' ? 'Semua Paket CBT' : reportPaketFilter}
+                    mapelLabel={reportMapelFilter === 'all' ? 'Semua Mata Pelajaran' : reportMapelFilter}
+                    kelasLabel={reportClassFilter === 'all' ? 'Semua Kelas' : reportClassFilter}
+                    hardestQuestions={sarahHardest}
+                    studentPerformanceList={sarahStudents}
+                    showToast={showToast}
+                  />
+                );
+              })()}
 
               {/* Blok Pengesahan Resmi Kepala Sekolah & Wali Kelas (Khusus Cetak / PDF) */}
               <div className="hidden print-only print-avoid-break pt-6 mt-4 text-xs text-slate-900">

@@ -32,6 +32,9 @@ import {
   Trash2,
   Presentation,
   MessageCircleHeart,
+  Database,
+  Loader2,
+  Zap,
 } from 'lucide-react';
 import { collection, addDoc, doc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../utils/firebase';
@@ -88,6 +91,7 @@ import { MathRenderer } from './MathRenderer';
 import { BenarSalahTableView, MenjodohkanColumnsView } from './StructuredQuestionViews';
 import { resolveBenarSalahItems, resolveMenjodohkanData } from '../utils/questionFormat';
 import { StudentPerformanceStats } from './StudentPerformanceStats';
+import { saveHasilUjianToFirestore } from '../utils/sarahExamAccess';
 
 
 interface Props {
@@ -215,6 +219,7 @@ export const StudentDashboard: React.FC<Props> = ({
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [examResult, setExamResult] = useState<{ score: number; maxScore: number } | null>(null);
+  const [firestoreSaveStatus, setFirestoreSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [resumedNotice, setResumedNotice] = useState<string | null>(null);
   const [draftRevisionTick, setDraftRevisionTick] = useState<number>(0);
   const [timeUpModal, setTimeUpModal] = useState<{
@@ -1484,6 +1489,32 @@ export const StudentDashboard: React.FC<Props> = ({
         },
         { immediateSync: false }
       );
+
+      const alreadyDone = getStoredCBTResults().some(
+        (r) =>
+          r.examId === currentExam.id &&
+          (r.studentId === currentStudent.id ||
+            (currentStudent.nisn && r.nisn === currentStudent.nisn))
+      );
+      if (!alreadyDone) {
+        void saveHasilUjianToFirestore({
+          nisn: currentStudent.nisn || currentStudent.id,
+          id_ujian: currentExam.id,
+          studentId: currentStudent.id,
+          nama_siswa: currentStudent.nama,
+          kelas: currentStudent.kelas,
+          category: currentExam.category === 'tka' ? 'tka' : 'cbt',
+          mapel: currentExam.mapel,
+          paketName: currentExam.paketName,
+          judul: currentExam.judul,
+          status: 'mengerjakan',
+          skor: 0,
+          total_soal: preparedList.length,
+          no_soal_betul: [],
+          no_soal_salah: [],
+          jawaban_siswa: {},
+        });
+      }
     }
 
     showToast(`Ujian "${currentExam.judul}" dimulai! Jawaban tersimpan otomatis.`, 'success');
@@ -1505,6 +1536,21 @@ export const StudentDashboard: React.FC<Props> = ({
       const ans = answers[q.id];
       const evalRes = gradeQuestionAnswer(q, ans);
       earned += evalRes.earnedScore;
+    });
+
+    const canonicalList =
+      finishedExam.soalList && finishedExam.soalList.length > 0
+        ? finishedExam.soalList
+        : evaluatedQuestions;
+    const noSoalBetul: number[] = [];
+    const noSoalSalah: number[] = [];
+    canonicalList.forEach((q, idx) => {
+      const evalRes = gradeQuestionAnswer(q, answers[q.id]);
+      if (evalRes.isCorrect) {
+        noSoalBetul.push(idx + 1);
+      } else {
+        noSoalSalah.push(idx + 1);
+      }
     });
 
     const rawGrade = max > 0 ? Math.round((earned / max) * 100) : 100;
@@ -1550,6 +1596,31 @@ export const StudentDashboard: React.FC<Props> = ({
       semester: activeFilters.semester,
     });
     saveStoredCBTResults(storedRes);
+
+    // Rekam status "selesai" ke koleksi Firestore `hasil_ujian/${nisn}_${id_ujian}` secara non-blocking
+    // agar Strict Access Control SARAH langsung terbuka setelah siswa selesai mengirim ujian.
+    setFirestoreSaveStatus('saving');
+    void saveHasilUjianToFirestore({
+      nisn: currentStudent.nisn || currentStudent.id,
+      id_ujian: finishedExam.id,
+      studentId: currentStudent.id,
+      nama_siswa: currentStudent.nama,
+      kelas: currentStudent.kelas,
+      category: finishedExam.category === 'tka' ? 'tka' : 'cbt',
+      mapel: finishedExam.mapel,
+      paketName: finishedExam.paketName,
+      judul: finishedExam.judul,
+      status: 'selesai',
+      skor: finalGrade,
+      total_soal: canonicalList.length,
+      no_soal_betul: noSoalBetul,
+      no_soal_salah: noSoalSalah,
+      jawaban_siswa: answers,
+      waktu_selesai: new Date().toLocaleTimeString('id-ID'),
+    }).finally(() => {
+      setFirestoreSaveStatus('saved');
+    });
+    window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
 
     // Jika TKA, kirim & tunggu (await) penulisan langsung ke koleksi Firestore 'tka_submissions'
     // agar Admin langsung melihat hasilnya secara real-time lintas perangkat.
@@ -3385,6 +3456,53 @@ export const StudentDashboard: React.FC<Props> = ({
               Nilai Anda telah otomatis tersimpan ke data penilaian sekolah dan langsung terintegrasi dengan Rekap Nilai (Leger) serta e-Rapor resmi.
             </p>
 
+            {/* Indikator Status Terpisah: Simpan Jawaban Firestore (Instan) vs Analisis SARAH AI (Async Queue) */}
+            <div className="max-w-xl mx-auto grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-left pt-1">
+              <div
+                className={`px-3.5 py-2.5 rounded-2xl border flex items-center gap-2.5 ${
+                  firestoreSaveStatus === 'saving'
+                    ? 'bg-amber-50 border-amber-200'
+                    : 'bg-emerald-50/80 border-emerald-200'
+                }`}
+              >
+                <div
+                  className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 text-white ${
+                    firestoreSaveStatus === 'saving' ? 'bg-amber-500' : 'bg-emerald-600'
+                  }`}
+                >
+                  {firestoreSaveStatus === 'saving' ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Database className="w-3.5 h-3.5" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-black uppercase tracking-wide text-slate-800">
+                    1. Simpan Firestore (Instan)
+                  </p>
+                  <p className="text-[11px] font-semibold text-emerald-800 truncate">
+                    {firestoreSaveStatus === 'saving'
+                      ? 'Mengirim jawaban ke Firestore...'
+                      : '✓ Jawaban & status selesai tersimpan'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="px-3.5 py-2.5 rounded-2xl border bg-indigo-50/70 border-indigo-200 flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                  <Zap className="w-3.5 h-3.5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-black uppercase tracking-wide text-indigo-950">
+                    2. Analisis SARAH (Async)
+                  </p>
+                  <p className="text-[11px] font-semibold text-indigo-800 truncate">
+                    Siap via antrean AbortController &amp; Cache
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <div className="flex flex-wrap items-center justify-center gap-3 pt-3">
               <button
                 type="button"
@@ -3404,13 +3522,14 @@ export const StudentDashboard: React.FC<Props> = ({
                 className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 text-white font-display font-black text-xs shadow-md transition cursor-pointer flex items-center gap-1.5"
               >
                 <Sparkles className="w-4 h-4" />
-                <span>Minta Masukan SARAH AI</span>
+                <span>Tanya SARAH Soal yang Masih Salah</span>
               </button>
               <button
                 type="button"
                 onClick={() => {
                   setSelectedExamId('');
                   setExamResult(null);
+                  setFirestoreSaveStatus('idle');
                   setRunningExamSnapshot(null);
                   setViewMode('home');
                 }}

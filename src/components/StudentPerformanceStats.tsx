@@ -901,10 +901,10 @@ export const StudentPerformanceStats: React.FC<Props> = ({
                             );
                           }}
                           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[11px] cursor-pointer transition"
-                          title="Minta masukan & pembahasan soal ujian ini dari SARAH AI"
+                          title="Tanya SARAH soal yang masih salah pada ujian ini"
                         >
                           <Sparkles className="w-3 h-3" />
-                          <span>Masukan</span>
+                          <span>Tanya Soal Salah</span>
                         </button>
                       </td>
                     </tr>

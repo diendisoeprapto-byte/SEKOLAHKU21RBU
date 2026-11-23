@@ -28,7 +28,7 @@ import {
   Cell,
   ReferenceLine,
 } from 'recharts';
-import { CBTExam, CBTExamResult, SchoolProfile, Student, Teacher, isSiswaInklusi } from '../../types';
+import { ActiveUser, CBTExam, CBTExamResult, SchoolProfile, Student, Teacher, isSiswaInklusi } from '../../types';
 import { MAPEL_LIST } from '../../data/defaultData';
 import {
   CLASSES_LIST,
@@ -47,6 +47,11 @@ import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../ut
 import { doesRecordMatchTerm, isSemesterOneLabel } from '../../utils/semesterUtils';
 import { findLiveStudentForRecord } from '../../utils/tkaFirestore';
 import { exportCbtAnalisisToPdf } from '../../utils/analisisReportExport';
+import {
+  SarahExamAnalysisPanel,
+  SarahAnalysisHardestQuestion,
+  SarahAnalysisStudentRow,
+} from '../SarahExamAnalysisPanel';
 
 export const PAKET_SOAL_LIST = [
   'Sumatif 1 (AS 1)',
@@ -81,6 +86,7 @@ export const PAKET_SOAL_LIST = [
 ] as const;
 
 interface Props {
+  activeUser?: ActiveUser;
   students?: Student[];
   teachers?: Teacher[];
   profile?: SchoolProfile;
@@ -91,6 +97,7 @@ interface Props {
 }
 
 export const AnalisisSoalTab: React.FC<Props> = ({
+  activeUser,
   students: propStudents,
   teachers = [],
   profile,
@@ -887,6 +894,63 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     month: 'long',
     year: 'numeric',
   });
+
+  const sarahCompletedStudentRows: SarahAnalysisStudentRow[] = useMemo(() => {
+    return studentAnalysisRows
+      .filter((row) => Boolean(row.matchedResult))
+      .map((row) => {
+        const res = row.matchedResult!;
+        const wrongNumbers: number[] = [];
+        const correctNumbers: number[] = [];
+        if (matchingExam?.soalList && res.jawabanSiswa) {
+          matchingExam.soalList.forEach((q, qIdx) => {
+            const evalRes = evaluateQuestionScore(
+              q.tipe,
+              res.jawabanSiswa[q.id],
+              q.kunciJawaban,
+              q.bobot || 10,
+              q.opsi,
+              q
+            );
+            if (evalRes.isCorrect) {
+              correctNumbers.push(qIdx + 1);
+            } else {
+              wrongNumbers.push(qIdx + 1);
+            }
+          });
+        }
+        return {
+          id: row.student.id,
+          nama: row.student.nama,
+          nisn: row.student.nisn,
+          kelas: row.student.kelas,
+          score: row.score,
+          status: row.isTuntas ? 'Tuntas' : 'Belum Tuntas',
+          wrongNumbers,
+          correctNumbers,
+        };
+      });
+  }, [studentAnalysisRows, matchingExam]);
+
+  const sarahHardestQuestions: SarahAnalysisHardestQuestion[] = useMemo(() => {
+    const totalP = matchingExamResults.length;
+    if (totalP === 0) return [];
+    return questionsData.map((q) => ({
+      no: q.no,
+      pertanyaan: q.pertanyaan,
+      pctCorrect: q.ketuntasanPct,
+      wrongCount: Math.max(0, Math.round(((100 - q.ketuntasanPct) / 100) * totalP)),
+      totalParticipants: totalP,
+    }));
+  }, [questionsData, matchingExamResults.length]);
+
+  const effectiveActiveUser: ActiveUser = activeUser || {
+    role: 'guru',
+    name: waliAnalisis?.nama || 'Bapak/Ibu Guru',
+    username: waliAnalisis?.username || 'guru',
+    detail: selectedClass === 'all' ? 'Semua Kelas' : selectedClass,
+    fotoUrl: '',
+  };
 
   return (
     <section className="space-y-6">
@@ -1899,6 +1963,18 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           </div>
         </div>
       </div>
+
+      <SarahExamAnalysisPanel
+        activeUser={effectiveActiveUser}
+        profile={profile}
+        examCategory="CBT"
+        paketLabel={selectedPaket}
+        mapelLabel={selectedMapel}
+        kelasLabel={selectedClass === 'all' ? 'Semua Kelas' : selectedClass}
+        hardestQuestions={sarahHardestQuestions}
+        studentPerformanceList={sarahCompletedStudentRows}
+        showToast={showToast}
+      />
 
       {isClearModalOpen && (
         <div className="no-print fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">

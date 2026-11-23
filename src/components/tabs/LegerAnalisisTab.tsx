@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { BarChart3, Table } from 'lucide-react';
-import { SchoolProfile, Student, Subject, Teacher } from '../../types';
+import { ActiveUser, SchoolProfile, Student, Subject, Teacher } from '../../types';
 import { LegerTab } from './LegerTab';
 import { AnalisisSoalTab } from './AnalisisSoalTab';
 
 interface Props {
+  activeUser?: ActiveUser;
   profile: SchoolProfile;
   subjects: Subject[];
   students: Student[];
@@ -18,6 +19,7 @@ interface Props {
 }
 
 export const LegerAnalisisTab: React.FC<Props> = ({
+  activeUser,
   profile,
   subjects,
   students,
@@ -78,6 +80,7 @@ export const LegerAnalisisTab: React.FC<Props> = ({
         />
       ) : (
         <AnalisisSoalTab
+          activeUser={activeUser}
           students={students}
           teachers={teachers}
           profile={profile}

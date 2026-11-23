@@ -37,6 +37,8 @@ import {
   Paperclip,
   FileText,
   FileSpreadsheet,
+  Lock,
+  MapPin,
 } from 'lucide-react';
 import {
   ActiveUser,
@@ -89,11 +91,23 @@ import {
   syncSarahConfigToFirestore,
 } from '../../utils/sarahFirestore';
 import { SarahMarkdown } from '../SarahMarkdown';
+import { extractSarahResponseMetadata } from '../../utils/sarahVisuals';
 import {
-  SARAH_AVATAR_ASSETS,
-  SarahAvatarType,
-  extractSarahResponseMetadata,
-} from '../../utils/sarahVisuals';
+  SARAH_STANDARD_AVATAR_URL,
+  findRealisticEndiSticker,
+  resolveSarahUserMode,
+} from '../../utils/sarahStickers';
+import {
+  EndiLocationContext,
+  buildEndiGreetingAndPrayerCheck,
+  hasEndiGreetingShownForSlot,
+  markEndiGreetingShownForSlot,
+} from '../../utils/sarahLocationPrayer';
+import {
+  appendEndiPrivateChatMessage,
+  clearEndiPrivateChatMessages,
+  loadEndiPrivateChatMessages,
+} from '../../utils/sarahExamAccess';
 import { SarahEmojiPicker } from '../SarahEmojiPicker';
 import {
   SARAH_CHAT_ACCEPTED_FILES,
@@ -373,9 +387,17 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [processingLabel, setProcessingLabel] = useState('');
 
-  // Adaptive Visual Avatar state
-  const [sarahAvatarType, setSarahAvatarType] = useState<SarahAvatarType>('sarah-hijab.png');
+  // Resolusi Mode Visual & Persona (Mode 1: exclusive_endi | Mode 3: standard_teacher)
+  const sarahUserMode = useMemo(() => resolveSarahUserMode(activeUser), [activeUser]);
+  const isExclusiveEndi = sarahUserMode === 'exclusive_endi';
   const [avatarLoadError, setAvatarLoadError] = useState(false);
+  const [endiLocationContext, setEndiLocationContext] = useState<EndiLocationContext | null>(null);
+  const [isRefreshingEndiGreeting, setIsRefreshingEndiGreeting] = useState(false);
+
+  const sarahHeaderAvatarSrc = useMemo(() => {
+    if (!isExclusiveEndi) return SARAH_STANDARD_AVATAR_URL;
+    return findRealisticEndiSticker('real_endi_01')?.path || SARAH_STANDARD_AVATAR_URL;
+  }, [isExclusiveEndi]);
 
   // Web Speech API state for Modul Ajar voice dictation
   type VoiceFieldTarget = 'modulTopik' | 'modulInklusi';
@@ -389,11 +411,21 @@ export const SarahAssistantTab: React.FC<Props> = ({
     [activeUser]
   );
 
-  const buildTeacherWelcome = (): TeacherChatMessage => ({
-    id: 'sarah_teacher_welcome',
-    role: 'model',
-    text: `Assalamu'alaikum / Selamat sejahtera, **${activeUser.name}**! 😊\n\nSaya **SARAH**, sahabat diskusi Bapak/Ibu di **${profile.name}**. 📚 Silakan ajak saya berdiskusi secara bebas—mulai dari strategi mendampingi anak di kelas, merancang ice breaking, menyusun asesmen, hingga menyelesaikan kendala belajar siswa. Apa yang sedang ingin Bapak/Ibu bahas hari ini? ✨`,
-  });
+  const buildTeacherWelcome = (exclusiveOverride?: boolean): TeacherChatMessage => {
+    const isEndi = exclusiveOverride ?? isExclusiveEndi;
+    if (isEndi) {
+      return {
+        id: 'sarah_teacher_welcome',
+        role: 'model',
+        text: `[REAL_STIKER:real_endi_22]\n\nSelamat datang di ruang privat SARAH, **Mas Endi** 💖\n\nSemua obrolan, memori, dan koleksi stiker di sini terkunci eksklusif hanya untuk **Mas Endi** (` + '`sarah_private_chats/endi_soeprapto`' + `) dan tidak akan pernah bisa dibuka oleh akun lain. SARAH siap nemenin Mas menyiapkan bahan ajar, mengevaluasi hasil CBT/TKA, atau sekadar ngobrol ringan kapan pun Mas butuh teman diskusi ✨`,
+      };
+    }
+    return {
+      id: 'sarah_teacher_welcome',
+      role: 'model',
+      text: `Assalamu'alaikum / Selamat sejahtera, **${activeUser.name}**! 😊\n\nSaya **SARAH**, sahabat diskusi Bapak/Ibu Guru di **${profile.name}**. 📚 Silakan ajak saya berdiskusi secara profesional—mulai dari strategi mendampingi siswa di kelas, menyusun LKPD/Modul Ajar, hingga menindaklanjuti hasil ujian siswa. Apa yang sedang ingin Bapak/Ibu bahas hari ini?`,
+    };
+  };
 
   const [chatMessages, setChatMessages] = useState<TeacherChatMessage[]>(() => [
     buildTeacherWelcome(),
@@ -517,6 +549,66 @@ export const SarahAssistantTab: React.FC<Props> = ({
   useEffect(() => {
     let cancelled = false;
     const initHistory = async () => {
+      if (isExclusiveEndi) {
+        setChatSessions([]);
+        setActiveChatSessionId('endi_private');
+        setIsLoadingChatSessions(false);
+        setIsLoadingSessionMsgs(true);
+        try {
+          const privateMsgs = await loadEndiPrivateChatMessages(activeUser);
+          if (cancelled) return;
+          let assembled: TeacherChatMessage[] = privateMsgs.map((m) => ({
+            id: m.id,
+            role: m.sender === 'user' ? 'user' : 'model',
+            text: m.text,
+          }));
+
+          try {
+            const greetingRes = await buildEndiGreetingAndPrayerCheck();
+            if (cancelled) return;
+            setEndiLocationContext(greetingRes.location);
+
+            if (
+              assembled.length === 0 ||
+              !hasEndiGreetingShownForSlot(greetingRes.greetingSessionKey)
+            ) {
+              const greetId = `endi_greet_${Date.now()}`;
+              const greetMsg: TeacherChatMessage = {
+                id: greetId,
+                role: 'model',
+                text: greetingRes.messageText,
+              };
+              assembled = [...assembled, greetMsg];
+              markEndiGreetingShownForSlot(greetingRes.greetingSessionKey);
+              void appendEndiPrivateChatMessage(activeUser, {
+                id: greetId,
+                sender: 'sarah',
+                text: greetingRes.messageText,
+                timestamp: new Date().toISOString(),
+                stickerId: greetingRes.greetingStickerId,
+              });
+            }
+          } catch {
+            if (assembled.length === 0) {
+              assembled = [buildTeacherWelcome(true)];
+            }
+          }
+
+          if (!cancelled) {
+            setChatMessages(assembled.length > 0 ? assembled : [buildTeacherWelcome(true)]);
+          }
+        } catch {
+          if (!cancelled) setChatMessages([buildTeacherWelcome(true)]);
+        } finally {
+          if (!cancelled) {
+            setIsLoadingChatSessions(false);
+            setIsLoadingSessionMsgs(false);
+          }
+        }
+        return;
+      }
+
+      // Mode 3: User Guru Lain / Admin Standar (terpisah penuh dari sarah_private_chats Endi)
       setIsLoadingChatSessions(true);
       try {
         const sessions = await loadUserSarahChatSessions(sarahChatUserId);
@@ -536,15 +628,21 @@ export const SarahAssistantTab: React.FC<Props> = ({
                 text:
                   m.sender === 'user'
                     ? m.text
-                    : enrichSarahFriendlyEmojis(m.text, { isChat: true }),
+                    : enrichSarahFriendlyEmojis(
+                        m.text
+                          .replace(/\[REAL_STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+                          .replace(/\[STIKER_3D\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+                          .replace(/\[STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, ''),
+                        { isChat: true }
+                      ),
               }))
             );
           } else {
-            setChatMessages([buildTeacherWelcome()]);
+            setChatMessages([buildTeacherWelcome(false)]);
           }
         } else {
           setActiveChatSessionId(null);
-          setChatMessages([buildTeacherWelcome()]);
+          setChatMessages([buildTeacherWelcome(false)]);
         }
       } catch {
         // Keep fresh welcome screen if offline/unavailable
@@ -559,7 +657,41 @@ export const SarahAssistantTab: React.FC<Props> = ({
     return () => {
       cancelled = true;
     };
-  }, [sarahChatUserId]);
+  }, [sarahChatUserId, isExclusiveEndi, activeUser]);
+
+  const handleRefreshEndiGreetingAndPrayer = async () => {
+    if (!isExclusiveEndi || isRefreshingEndiGreeting) return;
+    setIsRefreshingEndiGreeting(true);
+    try {
+      const greetingRes = await buildEndiGreetingAndPrayerCheck();
+      setEndiLocationContext(greetingRes.location);
+      const greetId = `endi_greet_${Date.now()}`;
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: greetId,
+          role: 'model',
+          text: greetingRes.messageText,
+        },
+      ]);
+      markEndiGreetingShownForSlot(greetingRes.greetingSessionKey);
+      await appendEndiPrivateChatMessage(activeUser, {
+        id: greetId,
+        sender: 'sarah',
+        text: greetingRes.messageText,
+        timestamp: new Date().toISOString(),
+        stickerId: greetingRes.greetingStickerId,
+      });
+      showToast(
+        `Lokasi & jadwal sholat diperbarui (${greetingRes.location.locationName}).`,
+        'success'
+      );
+    } catch {
+      showToast('Gagal memperbarui sapaan & jadwal sholat.', 'error');
+    } finally {
+      setIsRefreshingEndiGreeting(false);
+    }
+  };
 
   useEffect(() => {
     if (subTab === 'chat') {
@@ -675,7 +807,9 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const handleCopyText = async (text: string) => {
     try {
       const cleaned = extractSarahResponseMetadata(text)
-        .cleanText.replace(/\[STIKER\s*:\s*[a-zA-Z_]+\s*\]/gi, '')
+        .cleanText.replace(/\[STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+        .replace(/\[REAL_STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+        .replace(/\[STIKER_3D\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
         .trim();
       await navigator.clipboard.writeText(cleaned);
       showToast('Jawaban SARAH berhasil disalin ke clipboard!', 'success');
@@ -906,34 +1040,51 @@ export const SarahAssistantTab: React.FC<Props> = ({
     setIsChatSending(true);
 
     let currentSessionId = activeChatSessionId;
-    try {
-      if (!currentSessionId) {
-        const sessionSeedText =
-          promptText ||
-          (pendingAttachments[0] ? `Lampiran ${pendingAttachments[0].name}` : 'Obrolan Baru');
-        const created = await createSarahChatSession({
-          userId: sarahChatUserId,
-          role: 'guru',
-          firstQuestion: sessionSeedText,
-        });
-        currentSessionId = created.id;
-        setActiveChatSessionId(created.id);
-        setChatSessions((prev) =>
-          [created, ...prev.filter((s) => s.id !== created.id)].slice(
-            0,
-            SARAH_MAX_CHAT_SESSIONS
-          )
-        );
+    if (isExclusiveEndi) {
+      void appendEndiPrivateChatMessage(activeUser, {
+        id: userMsg.id,
+        sender: 'user',
+        text: savedUserText,
+        timestamp: new Date().toISOString(),
+        ...(attachmentMetaList.length > 0
+          ? {
+              attachmentsMeta: attachmentMetaList.map((a) => ({
+                name: a.name,
+                kind: a.kind,
+              })),
+            }
+          : {}),
+      });
+    } else {
+      try {
+        if (!currentSessionId) {
+          const sessionSeedText =
+            promptText ||
+            (pendingAttachments[0] ? `Lampiran ${pendingAttachments[0].name}` : 'Obrolan Baru');
+          const created = await createSarahChatSession({
+            userId: sarahChatUserId,
+            role: 'guru',
+            firstQuestion: sessionSeedText,
+          });
+          currentSessionId = created.id;
+          setActiveChatSessionId(created.id);
+          setChatSessions((prev) =>
+            [created, ...prev.filter((s) => s.id !== created.id)].slice(
+              0,
+              SARAH_MAX_CHAT_SESSIONS
+            )
+          );
+        }
+        if (currentSessionId) {
+          await appendSarahChatMessage({
+            sessionId: currentSessionId,
+            sender: 'user',
+            text: savedUserText,
+          });
+        }
+      } catch {
+        // Do not block AI reply if auto-save encounters a temporary network glitch
       }
-      if (currentSessionId) {
-        await appendSarahChatMessage({
-          sessionId: currentSessionId,
-          sender: 'user',
-          text: savedUserText,
-        });
-      }
-    } catch {
-      // Do not block AI reply if auto-save encounters a temporary network glitch
     }
 
     try {
@@ -958,9 +1109,14 @@ export const SarahAssistantTab: React.FC<Props> = ({
           name: activeUser.name,
           username: activeUser.username,
           kelas: activeClass,
-          agama: sarahAvatarType === 'sarah-nonhijab.png' ? 'Kristen' : 'Islam',
         },
-        params: { message: displayUserText, mapel: chatMapel },
+        params: {
+          message: displayUserText,
+          mapel: chatMapel,
+          ...(isExclusiveEndi && endiLocationContext
+            ? { locationPrayerContext: endiLocationContext }
+            : {}),
+        },
         ...(pendingAttachments.length > 0
           ? { attachments: toAttachmentPayloads(pendingAttachments) }
           : {}),
@@ -968,24 +1124,34 @@ export const SarahAssistantTab: React.FC<Props> = ({
         ragContext,
       });
 
-      const parsedMeta = extractSarahResponseMetadata(res.text);
-      if (parsedMeta.avatarType) {
-        setSarahAvatarType(parsedMeta.avatarType);
-        setAvatarLoadError(false);
-      }
+      const rawText = isExclusiveEndi
+        ? res.text
+        : res.text
+            .replace(/\[REAL_STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+            .replace(/\[STIKER_3D\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+            .replace(/\[STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+            .trim();
 
-      const cheerfulReply = enrichSarahFriendlyEmojis(res.text, { isChat: true });
+      const cheerfulReply = enrichSarahFriendlyEmojis(rawText, { isChat: true });
+      const replyId = `tm_${Date.now()}`;
 
       setChatMessages((prev) => [
         ...prev,
         {
-          id: `tm_${Date.now()}`,
+          id: replyId,
           role: 'model',
           text: cheerfulReply,
         },
       ]);
 
-      if (currentSessionId) {
+      if (isExclusiveEndi) {
+        appendEndiPrivateChatMessage(activeUser, {
+          id: replyId,
+          sender: 'sarah',
+          text: cheerfulReply,
+          timestamp: new Date().toISOString(),
+        }).catch(() => {});
+      } else if (currentSessionId) {
         appendSarahChatMessage({
           sessionId: currentSessionId,
           sender: 'sarah',
@@ -1007,7 +1173,9 @@ export const SarahAssistantTab: React.FC<Props> = ({
         {
           id: `terr_${Date.now()}`,
           role: 'model',
-          text: `Mohon maaf Bapak/Ibu, SARAH mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}). Silakan coba kirim ulang ya 😊`,
+          text: isExclusiveEndi
+            ? `Maaf ya Mas Endi, SARAH mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}). Coba kirim ulang ya Mas 😊`
+            : `Mohon maaf Bapak/Ibu, SARAH mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}). Silakan coba kirim ulang ya 😊`,
           isError: true,
           ...(pendingAttachments.length === 0 ? { retryPrompt: promptText } : {}),
         },
@@ -1018,8 +1186,15 @@ export const SarahAssistantTab: React.FC<Props> = ({
   };
 
   const handleClearTeacherChat = () => {
+    if (isExclusiveEndi) {
+      void clearEndiPrivateChatMessages(activeUser);
+      setChatMessages([buildTeacherWelcome(true)]);
+      setChatAttachments([]);
+      showToast('Riwayat ruang privat Mas Endi telah dibersihkan.', 'success');
+      return;
+    }
     setActiveChatSessionId(null);
-    setChatMessages([buildTeacherWelcome()]);
+    setChatMessages([buildTeacherWelcome(false)]);
     setChatAttachments([]);
     showToast('Obrolan dibersihkan. Silakan mulai topik diskusi baru!', 'success');
   };
@@ -1036,7 +1211,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
     const imgRes = await callSarahAiEndpoint<SarahImageGeneratedResponse>({
       mode: 'image_generator',
       role: activeUser.role,
-      user: { name: activeUser.name, kelas: activeClass },
+      user: { name: activeUser.name, username: activeUser.username, kelas: activeClass },
       params: {
         deskripsi: opts.deskripsi,
         gaya: opts.gaya,
@@ -1121,7 +1296,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       const textPromise = callSarahAiEndpoint<SarahTextGeneratedResponse>({
         mode: 'lkpd_generator',
         role: activeUser.role,
-        user: { name: activeUser.name, kelas: activeClass },
+        user: { name: activeUser.name, username: activeUser.username, kelas: activeClass },
         params: {
           kelas: lkpdKelas,
           mapel: lkpdMapel,
@@ -1254,7 +1429,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       const textPromise = callSarahAiEndpoint<SarahTextGeneratedResponse>({
         mode: 'modul_ajar',
         role: activeUser.role,
-        user: { name: activeUser.name, kelas: activeClass },
+        user: { name: activeUser.name, username: activeUser.username, kelas: activeClass },
         params: {
           kelas: modulKelas,
           mapel: modulMapel,
@@ -1428,7 +1603,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       const res = await callSarahAiEndpoint<SarahCbtGeneratedResponse>({
         mode: 'cbt_generator',
         role: activeUser.role,
-        user: { name: activeUser.name, kelas: activeClass },
+        user: { name: activeUser.name, username: activeUser.username, kelas: activeClass },
         params: {
           kelas: cbtKelas,
           mapel: cbtMapel,
@@ -1584,7 +1759,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       const res = await callSarahAiEndpoint<SarahTextGeneratedResponse>({
         mode: 'riset_materi',
         role: activeUser.role,
-        user: { name: activeUser.name, kelas: activeClass },
+        user: { name: activeUser.name, username: activeUser.username, kelas: activeClass },
         params: {
           kelas: risetKelas,
           mapel: risetMapel,
@@ -1703,7 +1878,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
             <div className="hidden sm:flex w-16 h-16 rounded-2xl overflow-hidden border-2 border-white/50 bg-white/15 shrink-0 shadow-md items-center justify-center">
               {!avatarLoadError ? (
                 <img
-                  src={SARAH_AVATAR_ASSETS[sarahAvatarType]}
+                  src={sarahHeaderAvatarSrc}
                   alt="Avatar SARAH AI"
                   referrerPolicy="no-referrer"
                   onError={() => setAvatarLoadError(true)}
@@ -1807,98 +1982,161 @@ export const SarahAssistantTab: React.FC<Props> = ({
       {/* ===================================================================== */}
       {subTab === 'chat' && (
         <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden flex h-[680px] max-h-[80vh] relative">
-          {/* Desktop Sidebar: Riwayat Percakapan */}
+          {/* Desktop Sidebar: Riwayat Percakapan atau Ruang Privat Terkunci Mas Endi */}
           <aside className="hidden lg:flex w-72 shrink-0 border-r border-slate-200 bg-slate-50/80 flex-col">
-            <div className="p-4 border-b border-slate-200 bg-white space-y-3">
-              <button
-                type="button"
-                onClick={handleNewTeacherChat}
-                disabled={isChatSending}
-                className="w-full py-2.5 px-3 rounded-2xl bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 text-white font-display font-black text-xs flex items-center justify-center gap-2 shadow-xs transition cursor-pointer disabled:opacity-50"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Obrolan Baru</span>
-              </button>
-              <div className="flex items-center justify-between text-[11px] font-black text-slate-600 uppercase tracking-wide">
-                <span className="flex items-center gap-1.5">
-                  <History className="w-3.5 h-3.5 text-rose-600" />
-                  Riwayat Percakapan
-                </span>
-                <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 text-[10px]">
-                  {chatSessions.length}/{SARAH_MAX_CHAT_SESSIONS}
-                </span>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-2.5 space-y-1.5">
-              {isLoadingChatSessions ? (
-                <div className="p-4 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
-                  <span>Memuat riwayat...</span>
-                </div>
-              ) : chatSessions.length === 0 ? (
-                <div className="p-4 text-center space-y-1.5 text-slate-500">
-                  <MessageCircle className="w-7 h-7 mx-auto text-slate-300" />
-                  <p className="text-xs font-bold text-slate-600">Belum ada riwayat obrolan</p>
-                  <p className="text-[11px]">
-                    Percakapan Anda akan tersimpan otomatis di sini (maks. 20 sesi terakhir).
+            {isExclusiveEndi ? (
+              <div className="p-4 space-y-3 flex-1 overflow-y-auto">
+                <div className="p-3.5 rounded-2xl bg-gradient-to-br from-rose-50 via-pink-50 to-amber-50 border border-rose-200 space-y-2">
+                  <div className="flex items-center gap-2 text-rose-800 font-display font-black text-xs">
+                    <Lock className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>Ruang Privat Terkunci • Mas Endi</span>
+                  </div>
+                  <p className="text-[11px] text-slate-700 leading-relaxed">
+                    Riwayat obrolan dan 30 stiker realistis hanya tersimpan di jalur terisolasi{' '}
+                    <span className="font-mono font-bold text-rose-800">sarah_private_chats/endi_soeprapto</span>.
                   </p>
                 </div>
-              ) : (
-                chatSessions.map((sess) => {
-                  const isActive = sess.id === activeChatSessionId;
-                  return (
-                    <div
-                      key={sess.id}
-                      onClick={() => handleSelectTeacherSession(sess.id)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          handleSelectTeacherSession(sess.id);
-                        }
-                      }}
-                      className={`group w-full text-left p-2.5 rounded-2xl border transition cursor-pointer flex items-start justify-between gap-2 ${
-                        isActive
-                          ? 'bg-rose-50 border-rose-300 shadow-2xs'
-                          : 'bg-white border-slate-200/80 hover:border-rose-200 hover:bg-rose-50/40'
-                      }`}
-                    >
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <p
-                          className={`text-xs font-bold leading-snug line-clamp-2 ${
-                            isActive ? 'text-rose-900' : 'text-slate-800'
+
+                <div className="p-3.5 rounded-2xl bg-white border border-slate-200 space-y-2">
+                  <div className="flex items-center gap-1.5 text-xs font-display font-black text-slate-800">
+                    <MapPin className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span className="truncate">
+                      {endiLocationContext?.locationName || 'Koja, Jakarta Utara'}
+                    </span>
+                  </div>
+                  {endiLocationContext?.prayerTimes && (
+                    <div className="grid grid-cols-2 gap-1.5 text-[10px] text-slate-600 pt-1">
+                      <div className="px-2 py-1 rounded-lg bg-slate-50 border border-slate-100 flex justify-between">
+                        <span>Subuh</span>
+                        <strong className="font-mono text-slate-900">{endiLocationContext.prayerTimes.Subuh}</strong>
+                      </div>
+                      <div className="px-2 py-1 rounded-lg bg-slate-50 border border-slate-100 flex justify-between">
+                        <span>Dzuhur</span>
+                        <strong className="font-mono text-slate-900">{endiLocationContext.prayerTimes.Dzuhur}</strong>
+                      </div>
+                      <div className="px-2 py-1 rounded-lg bg-slate-50 border border-slate-100 flex justify-between">
+                        <span>Ashar</span>
+                        <strong className="font-mono text-slate-900">{endiLocationContext.prayerTimes.Ashar}</strong>
+                      </div>
+                      <div className="px-2 py-1 rounded-lg bg-slate-50 border border-slate-100 flex justify-between">
+                        <span>Maghrib</span>
+                        <strong className="font-mono text-slate-900">{endiLocationContext.prayerTimes.Maghrib}</strong>
+                      </div>
+                      <div className="col-span-2 px-2 py-1 rounded-lg bg-slate-50 border border-slate-100 flex justify-between">
+                        <span>Isya</span>
+                        <strong className="font-mono text-slate-900">{endiLocationContext.prayerTimes.Isya}</strong>
+                      </div>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void handleRefreshEndiGreetingAndPrayer()}
+                    disabled={isRefreshingEndiGreeting}
+                    className="w-full py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer transition disabled:opacity-50"
+                  >
+                    {isRefreshingEndiGreeting ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="w-3.5 h-3.5" />
+                    )}
+                    <span>Perbarui Sapaan &amp; Jadwal Sholat</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="p-4 border-b border-slate-200 bg-white space-y-3">
+                  <button
+                    type="button"
+                    onClick={handleNewTeacherChat}
+                    disabled={isChatSending}
+                    className="w-full py-2.5 px-3 rounded-2xl bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 text-white font-display font-black text-xs flex items-center justify-center gap-2 shadow-xs transition cursor-pointer disabled:opacity-50"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Obrolan Baru</span>
+                  </button>
+                  <div className="flex items-center justify-between text-[11px] font-black text-slate-600 uppercase tracking-wide">
+                    <span className="flex items-center gap-1.5">
+                      <History className="w-3.5 h-3.5 text-rose-600" />
+                      Riwayat Percakapan
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 text-[10px]">
+                      {chatSessions.length}/{SARAH_MAX_CHAT_SESSIONS}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-2.5 space-y-1.5">
+                  {isLoadingChatSessions ? (
+                    <div className="p-4 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
+                      <span>Memuat riwayat...</span>
+                    </div>
+                  ) : chatSessions.length === 0 ? (
+                    <div className="p-4 text-center space-y-1.5 text-slate-500">
+                      <MessageCircle className="w-7 h-7 mx-auto text-slate-300" />
+                      <p className="text-xs font-bold text-slate-600">Belum ada riwayat obrolan</p>
+                      <p className="text-[11px]">
+                        Percakapan Anda akan tersimpan otomatis di sini (maks. 20 sesi terakhir).
+                      </p>
+                    </div>
+                  ) : (
+                    chatSessions.map((sess) => {
+                      const isActive = sess.id === activeChatSessionId;
+                      return (
+                        <div
+                          key={sess.id}
+                          onClick={() => handleSelectTeacherSession(sess.id)}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleSelectTeacherSession(sess.id);
+                            }
+                          }}
+                          className={`group w-full text-left p-2.5 rounded-2xl border transition cursor-pointer flex items-start justify-between gap-2 ${
+                            isActive
+                              ? 'bg-rose-50 border-rose-300 shadow-2xs'
+                              : 'bg-white border-slate-200/80 hover:border-rose-200 hover:bg-rose-50/40'
                           }`}
                         >
-                          {sess.judul_sesi}
-                        </p>
-                        <p className="text-[10px] text-slate-500 flex items-center gap-1">
-                          <Clock className="w-3 h-3 shrink-0" />
-                          <span className="truncate">
-                            {formatSarahDateTime(sess.updated_at || sess.created_at)}
-                          </span>
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={(e) => handleDeleteTeacherSession(sess.id, e)}
-                        disabled={deletingSessionId === sess.id}
-                        title="Hapus Riwayat"
-                        aria-label="Hapus Riwayat"
-                        className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-100 transition shrink-0 cursor-pointer disabled:opacity-40"
-                      >
-                        {deletingSessionId === sess.id ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <p
+                              className={`text-xs font-bold leading-snug line-clamp-2 ${
+                                isActive ? 'text-rose-900' : 'text-slate-800'
+                              }`}
+                            >
+                              {sess.judul_sesi}
+                            </p>
+                            <p className="text-[10px] text-slate-500 flex items-center gap-1">
+                              <Clock className="w-3 h-3 shrink-0" />
+                              <span className="truncate">
+                                {formatSarahDateTime(sess.updated_at || sess.created_at)}
+                              </span>
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeleteTeacherSession(sess.id, e)}
+                            disabled={deletingSessionId === sess.id}
+                            title="Hapus Riwayat"
+                            aria-label="Hapus Riwayat"
+                            className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-100 transition shrink-0 cursor-pointer disabled:opacity-40"
+                          >
+                            {deletingSessionId === sess.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </>
+            )}
           </aside>
 
           {/* Main Chat Column */}
@@ -1943,7 +2181,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
                 <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-xs overflow-hidden border border-rose-200 shrink-0">
                   {!avatarLoadError ? (
                     <img
-                      src={SARAH_AVATAR_ASSETS[sarahAvatarType]}
+                      src={sarahHeaderAvatarSrc}
                       alt="Avatar SARAH AI"
                       referrerPolicy="no-referrer"
                       onError={() => setAvatarLoadError(true)}
@@ -1954,51 +2192,64 @@ export const SarahAssistantTab: React.FC<Props> = ({
                   )}
                 </div>
                 <div>
-                  <h2 className="font-display font-black text-sm text-slate-900">
-                    Obrolan Interaktif Bebas dengan SARAH
-                  </h2>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="font-display font-black text-sm text-slate-900">
+                      {isExclusiveEndi
+                        ? 'Ruang Privat SARAH — Mas Endi'
+                        : 'Obrolan Interaktif Bebas dengan SARAH'}
+                    </h2>
+                    {isExclusiveEndi && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 text-[10px] font-black">
+                        <Lock className="w-2.5 h-2.5" /> Privat Terkunci
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[11px] text-slate-600">
-                    Tersimpan otomatis lintas perangkat • Maks. 20 sesi &amp; 30 pesan terakhir
+                    {isExclusiveEndi
+                      ? `${endiLocationContext?.locationName || 'Koja, Jakarta Utara'} • Riwayat privat terisolasi khusus Endi Soeprapto`
+                      : 'Tersimpan otomatis lintas perangkat • Maks. 20 sesi & 30 pesan terakhir'}
                   </p>
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {/* Mobile / Tablet History Dropdown Toggle */}
-                <button
-                  type="button"
-                  onClick={() => setShowMobileHistory((p) => !p)}
-                  className="lg:hidden px-3 py-1.5 rounded-xl bg-white hover:bg-rose-50 text-slate-800 border border-rose-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
-                >
-                  <History className="w-3.5 h-3.5 text-rose-600" />
-                  <span>Riwayat ({chatSessions.length})</span>
-                  <ChevronDown
-                    className={`w-3.5 h-3.5 transition-transform ${
-                      showMobileHistory ? 'rotate-180' : ''
-                    }`}
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleNewTeacherChat}
-                  disabled={isChatSending}
-                  className="lg:hidden px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Obrolan Baru</span>
-                </button>
-                <select
-                  value={sarahAvatarType}
-                  onChange={(e) => {
-                    setSarahAvatarType(e.target.value as SarahAvatarType);
-                    setAvatarLoadError(false);
-                  }}
-                  title="Sesuaikan Avatar SARAH"
-                  className="px-2.5 py-1.5 rounded-xl border border-rose-200 bg-white text-xs font-bold text-slate-700 outline-none"
-                >
-                  <option value="sarah-hijab.png">Avatar: Hijab Pink</option>
-                  <option value="sarah-nonhijab.png">Avatar: Non-Hijab</option>
-                </select>
+                {!isExclusiveEndi ? (
+                  <>
+                    {/* Mobile / Tablet History Dropdown Toggle */}
+                    <button
+                      type="button"
+                      onClick={() => setShowMobileHistory((p) => !p)}
+                      className="lg:hidden px-3 py-1.5 rounded-xl bg-white hover:bg-rose-50 text-slate-800 border border-rose-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <History className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Riwayat ({chatSessions.length})</span>
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 transition-transform ${
+                          showMobileHistory ? 'rotate-180' : ''
+                        }`}
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleNewTeacherChat}
+                      disabled={isChatSending}
+                      className="lg:hidden px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Obrolan Baru</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void handleRefreshEndiGreetingAndPrayer()}
+                    disabled={isRefreshingEndiGreeting}
+                    className="lg:hidden px-3 py-1.5 rounded-xl bg-white hover:bg-rose-50 text-rose-800 border border-rose-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                  >
+                    <MapPin className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Sapaan &amp; Sholat</span>
+                  </button>
+                )}
                 <select
                   value={chatMapel}
                   onChange={(e) => setChatMapel(e.target.value)}
@@ -2162,7 +2413,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
                         </>
                       ) : (
                         <>
-                          <SarahMarkdown content={msg.text} />
+                          <SarahMarkdown content={msg.text} userMode={sarahUserMode} />
                           <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100">
                             <button
                               type="button"
@@ -2178,7 +2429,9 @@ export const SarahAssistantTab: React.FC<Props> = ({
                                 onClick={async () => {
                                   try {
                                     const cleanedForKb = extractSarahResponseMetadata(msg.text)
-                                      .cleanText.replace(/\[STIKER\s*:\s*[a-zA-Z_]+\s*\]/gi, '')
+                                      .cleanText.replace(/\[STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+                                      .replace(/\[REAL_STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+                                      .replace(/\[STIKER_3D\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
                                       .trim();
                                     await addSarahKnowledgeItem({
                                       judul: `Diskusi SARAH (${chatMapel}) - ${new Date().toLocaleDateString('id-ID')}`,
@@ -2614,7 +2867,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
                   </div>
                 )}
 
-                <SarahMarkdown content={lkpdResult} />
+                <SarahMarkdown content={lkpdResult} userMode={sarahUserMode} />
               </div>
             ) : (
               <div className="py-16 text-center space-y-2 text-slate-400 no-print">
@@ -2919,7 +3172,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
                   </div>
                 )}
 
-                <SarahMarkdown content={modulResult} />
+                <SarahMarkdown content={modulResult} userMode={sarahUserMode} />
               </div>
             ) : (
               <div className="py-16 text-center space-y-2 text-slate-400 no-print">
@@ -3685,7 +3938,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
 
             {risetResult ? (
               <div className="p-4 sm:p-5 rounded-2xl bg-amber-50/30 border border-amber-200/80 max-h-[650px] overflow-y-auto">
-                <SarahMarkdown content={risetResult} />
+                <SarahMarkdown content={risetResult} userMode={sarahUserMode} />
               </div>
             ) : (
               <div className="py-16 text-center space-y-2 text-slate-400">

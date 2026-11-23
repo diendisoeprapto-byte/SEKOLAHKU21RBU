@@ -18,6 +18,9 @@ import {
   ChevronDown,
   ClipboardCheck,
   CheckCircle2,
+  Database,
+  Zap,
+  StopCircle,
 } from 'lucide-react';
 import {
   ActiveExamHeaderStatus,
@@ -32,6 +35,7 @@ import {
   DEFAULT_SARAH_CONFIG,
   SARAH_ATTRIBUTION_TEXT,
   SARAH_MAX_CHAT_SESSIONS,
+  SarahAnalysisPhase,
   SarahChatSessionItem,
   SarahConfigDoc,
   SarahKnowledgeItem,
@@ -40,8 +44,10 @@ import {
   appendSarahChatMessage,
   buildSarahChatUserId,
   callSarahAiEndpoint,
+  cancelSarahAnalysisQueueGroup,
   createSarahChatSession,
   deleteSarahChatSession,
+  enqueueSarahAnalysisRequest,
   formatSarahDateTime,
   loadSarahSessionMessages,
   loadUserSarahChatSessions,
@@ -63,6 +69,11 @@ import {
   buildStudentExamReviewBundle,
   SarahCompletedExamReview,
 } from '../utils/sarahExamReview';
+import {
+  SARAH_EXAM_LOCK_MESSAGE,
+  verifyHasilUjianSelesai,
+} from '../utils/sarahExamAccess';
+import { pickStudent3DStickerForReview } from '../utils/sarahStickers';
 
 interface Props {
   activeUser: ActiveUser;
@@ -113,6 +124,16 @@ export const SarahStudentWidget: React.FC<Props> = ({
   const [inputText, setInputText] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [statusLabel, setStatusLabel] = useState('');
+  const [firestoreCheckState, setFirestoreCheckState] = useState<'idle' | 'checking' | 'verified' | 'locked'>('idle');
+  const [analysisPhase, setAnalysisPhase] = useState<SarahAnalysisPhase>('idle');
+  const wrongReviewAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      wrongReviewAbortRef.current?.abort();
+      cancelSarahAnalysisQueueGroup('student_wrong_review');
+    };
+  }, []);
   const [cbtExams, setCbtExams] = useState<CBTExam[]>([]);
   const [sarahConfig, setSarahConfig] = useState<SarahConfigDoc>(DEFAULT_SARAH_CONFIG);
   const [knowledgeDocs, setKnowledgeDocs] = useState<SarahKnowledgeItem[]>([]);
@@ -141,7 +162,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
   const buildWelcomeMessage = (): ChatMessage => ({
     id: 'sarah_welcome',
     role: 'model',
-    text: `Halo Nak **${activeUser.name}**! Aku **SARAH**, teman belajarmu di SDN Rawa Badak Utara 21.\n\nJangan pernah malu bertanya ya, Nak. Mari kita pelajari pelan-pelan bersama SARAH dengan langkah demi langkah yang mudah dipahami. Ingat, aku akan membimbingmu menemukan sendiri jawabannya agar kamu makin hebat! Pelajaran apa yang ingin kita bahas hari ini?`,
+    text: `[STIKER_3D:3d_siswa_01]\n\nHalo Nak **${activeUser.name}**! Aku **SARAH**, teman belajarmu di SDN Rawa Badak Utara 21.\n\nJangan pernah malu bertanya ya, Nak. Mari kita pelajari pelan-pelan bersama SARAH dengan langkah demi langkah yang mudah dipahami. Ingat, aku akan membimbingmu menemukan sendiri jawabannya agar kamu makin hebat! Pelajaran apa yang ingin kita bahas hari ini?`,
   });
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => [buildWelcomeMessage()]);
@@ -174,6 +195,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
   const handleSendRef = useRef<
     (e?: React.FormEvent, overridePrompt?: string, overrideExamId?: string | null) => void
   >(() => {});
+  const handleRequestWrongReviewRef = useRef<(exam: SarahCompletedExamReview) => void>(() => {});
 
   useEffect(() => {
     const running = Boolean(activeExamStatus?.isRunning);
@@ -268,9 +290,8 @@ export const SarahStudentWidget: React.FC<Props> = ({
         setPinnedReviewExamId(matchedCompleted.examId);
         setIsExamReviewOpen(false);
         if (detail.autoRequestFeedback) {
-          const promptText = `Tolong berikan masukan dan evaluasi atas soal-soal ujian [${matchedCompleted.category.toUpperCase()}] "${matchedCompleted.judul}" (Nilai saya: ${matchedCompleted.score}/100) yang sudah saya kerjakan! Jelaskan soal mana yang masih keliru beserta pembahasannya dan topik apa yang perlu saya pelajari lagi.`;
           setTimeout(() => {
-            handleSendRef.current(undefined, promptText, matchedCompleted!.examId);
+            handleRequestWrongReviewRef.current(matchedCompleted!);
           }, 120);
         }
       } else if (detail.examId || detail.paketName) {
@@ -280,11 +301,16 @@ export const SarahStudentWidget: React.FC<Props> = ({
             (detail.paketName &&
               u.paketName.toLowerCase() === String(detail.paketName).toLowerCase())
         );
-        if (isInUncompleted) {
-          showToast(
-            'Ujian ini belum kamu kerjakan, Nak. Kerjakan dengan jujur terlebih dahulu sebelum meminta masukan SARAH!',
-            'error'
-          );
+        if (isInUncompleted || detail.autoRequestFeedback) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `lock_${Date.now()}`,
+              role: 'model',
+              text: `[STIKER_3D:3d_siswa_13]\n\n🔒 ${SARAH_EXAM_LOCK_MESSAGE}`,
+            },
+          ]);
+          showToast(SARAH_EXAM_LOCK_MESSAGE, 'error');
         } else {
           setIsExamReviewOpen(true);
         }
@@ -396,7 +422,9 @@ export const SarahStudentWidget: React.FC<Props> = ({
   const handleCopyAnswer = async (text: string) => {
     try {
       const cleaned = extractSarahResponseMetadata(text)
-        .cleanText.replace(/\[STIKER\s*:\s*[a-zA-Z_]+\s*\]/gi, '')
+        .cleanText.replace(/\[STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+        .replace(/\[REAL_STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+        .replace(/\[STIKER_3D\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
         .trim();
       await navigator.clipboard.writeText(cleaned);
       showToast('Jawaban SARAH berhasil disalin!', 'success');
@@ -553,26 +581,32 @@ export const SarahStudentWidget: React.FC<Props> = ({
         pertanyaan: question,
       }).catch(() => {});
 
-      const res = await callSarahAiEndpoint<SarahTextGeneratedResponse>({
-        mode: 'student_chat',
-        role: 'siswa',
-        user: {
-          name: currentStudent?.nama || activeUser.name,
-          kelas: studentKelas,
-          agama: currentStudent?.agama || '',
+      const res = await callSarahAiEndpoint<SarahTextGeneratedResponse>(
+        {
+          mode: 'student_chat',
+          role: 'siswa',
+          user: {
+            name: currentStudent?.nama || activeUser.name,
+            kelas: studentKelas,
+            agama: currentStudent?.agama || '',
+          },
+          params: {
+            message: question,
+            mapel: selectedMapel,
+          },
+          examReviewContext: {
+            requestedExamId: activeExamIdToSend || undefined,
+            completedExams: freshExamBundle.completedExams,
+            uncompletedExams: freshExamBundle.uncompletedExams,
+          },
+          history: prevHistory,
+          ragContext,
         },
-        params: {
-          message: question,
-          mapel: selectedMapel,
-        },
-        examReviewContext: {
-          requestedExamId: activeExamIdToSend || undefined,
-          completedExams: freshExamBundle.completedExams,
-          uncompletedExams: freshExamBundle.uncompletedExams,
-        },
-        history: prevHistory,
-        ragContext,
-      });
+        {
+          timeoutMs: 24000,
+          onStatusChange: (statusText) => setStatusLabel(statusText),
+        }
+      );
 
       const parsedMeta = extractSarahResponseMetadata(res.text);
       if (parsedMeta.avatarType) {
@@ -623,6 +657,249 @@ export const SarahStudentWidget: React.FC<Props> = ({
   };
 
   handleSendRef.current = handleSend;
+
+  const handleCancelWrongReview = () => {
+    wrongReviewAbortRef.current?.abort();
+    cancelSarahAnalysisQueueGroup('student_wrong_review');
+    setIsThinking(false);
+    setAnalysisPhase('cancelled');
+    setStatusLabel('Analisis SARAH dibatalkan.');
+    showToast('Proses analisis SARAH dibatalkan.', 'success');
+  };
+
+  const handleRequestWrongReview = async (exam: SarahCompletedExamReview) => {
+    if (isLockedForExam) {
+      showToast(
+        'SARAH sedang beristirahat selama ujian CBT/TKA berlangsung. Selamat mengerjakan dengan jujur!',
+        'error'
+      );
+      return;
+    }
+
+    wrongReviewAbortRef.current?.abort();
+    const controller = new AbortController();
+    wrongReviewAbortRef.current = controller;
+
+    setPinnedReviewExamId(exam.examId);
+    setIsExamReviewOpen(false);
+
+    const userPrompt = `Tanya SARAH soal yang masih salah pada [${exam.category.toUpperCase()}] "${exam.judul}" (Nilai saya: ${exam.score}/100)`;
+    const userMsg: ChatMessage = {
+      id: `u_rev_${Date.now()}`,
+      role: 'user',
+      text: userPrompt,
+    };
+
+    setMessages((prev) => [...prev, userMsg]);
+    setIsThinking(true);
+    setFirestoreCheckState('checking');
+    setAnalysisPhase('cache_check');
+    setStatusLabel('Memeriksa status ujian di Firestore...');
+
+    let currentSessionId = activeSessionId;
+    try {
+      if (!currentSessionId) {
+        const created = await createSarahChatSession({
+          userId: sarahChatUserId,
+          role: 'siswa',
+          firstQuestion: userPrompt,
+        });
+        currentSessionId = created.id;
+        setActiveSessionId(created.id);
+        setChatSessions((prev) =>
+          [created, ...prev.filter((s) => s.id !== created.id)].slice(
+            0,
+            SARAH_MAX_CHAT_SESSIONS
+          )
+        );
+      }
+      if (currentSessionId) {
+        await appendSarahChatMessage({
+          sessionId: currentSessionId,
+          sender: 'user',
+          text: userPrompt,
+        });
+      }
+    } catch {
+      // Proceed even if auto-save fails
+    }
+
+    try {
+      const verification = await verifyHasilUjianSelesai({
+        student: currentStudentRef.current,
+        idUjian: exam.examId,
+        paketName: exam.paketName,
+        mapel: exam.mapel,
+      });
+
+      if (controller.signal.aborted) return;
+
+      if (!verification.allowed) {
+        setFirestoreCheckState('locked');
+        const lockReply = `[STIKER_3D:3d_siswa_13]\n\n🔒 ${verification.lockMessage || SARAH_EXAM_LOCK_MESSAGE}`;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `m_lock_${Date.now()}`,
+            role: 'model',
+            text: lockReply,
+          },
+        ]);
+        if (currentSessionId) {
+          appendSarahChatMessage({
+            sessionId: currentSessionId,
+            sender: 'sarah',
+            text: lockReply,
+          }).catch(() => {});
+        }
+        return;
+      }
+
+      setFirestoreCheckState('verified');
+      setStatusLabel('Memeriksa Result Cache (id_ujian, nisn)...');
+
+      const wrongQuestions = exam.questions
+        .filter((q) => !q.isCorrect)
+        .map((q) => ({
+          no: q.no,
+          pertanyaan: q.pertanyaan,
+          opsi: q.opsi,
+          studentAnswer: q.studentAnswer,
+          correctAnswer: q.correctAnswer,
+          pembahasan: q.pembahasan,
+        }));
+      const correctNumbers = exam.questions
+        .filter((q) => q.isCorrect)
+        .map((q) => q.no);
+
+      const ragContext = retrieveSarahRagContext({
+        schoolName: profile.name,
+        kelas: studentKelas,
+        mapel: exam.mapel || '',
+        queryText: `${exam.judul} ${exam.mapel}`,
+        knowledgeDocs,
+        mediaAjarDocs,
+        subjects,
+        sarahConfig,
+        excludeBankSoal: true,
+      });
+
+      logSarahStudentQuestion({
+        studentId: currentStudent?.id || activeUser.username,
+        studentName: currentStudent?.nama || activeUser.name,
+        nisn: currentStudent?.nisn || '',
+        kelas: studentKelas,
+        mata_pelajaran: exam.mapel || selectedMapel,
+        topik: `Evaluasi Soal Salah: ${exam.judul}`,
+        pertanyaan: userPrompt,
+      }).catch(() => {});
+
+      const studentNisnKey = (
+        currentStudent?.nisn ||
+        currentStudent?.id ||
+        activeUser.username ||
+        'siswa'
+      ).trim();
+
+      const res = await enqueueSarahAnalysisRequest<
+        SarahTextGeneratedResponse & { cachedScore?: number }
+      >({
+        queueGroupKey: 'student_wrong_review',
+        idUjian: exam.examId,
+        nisn: studentNisnKey,
+        cacheScope: 'student_wrong_review',
+        timeoutMs: 24000,
+        externalController: controller,
+        validateCached: (cached) =>
+          typeof cached.cachedScore !== 'number' || cached.cachedScore === exam.score,
+        onPhaseChange: (phase, nextStatusText) => {
+          setAnalysisPhase(phase);
+          setStatusLabel(nextStatusText);
+        },
+        payload: {
+          mode: 'student_wrong_review',
+          role: 'siswa',
+          user: {
+            name: currentStudent?.nama || activeUser.name,
+            nisn: studentNisnKey,
+            kelas: studentKelas,
+            agama: currentStudent?.agama || '',
+          },
+          params: {
+            examStatus: 'selesai',
+            studentName: currentStudent?.nama || activeUser.name,
+            kelas: studentKelas,
+            judul: exam.judul,
+            mapel: exam.mapel,
+            category: exam.category,
+            score: exam.score,
+            totalQuestions: exam.totalQuestions || exam.questions.length,
+            wrongQuestions,
+            correctNumbers,
+          },
+          ragContext,
+        },
+      });
+
+      let replyText = res.text || '';
+      if (!/\[STIKER_3D\s*:/i.test(replyText)) {
+        const chosenSticker = pickStudent3DStickerForReview(exam.score, exam.mapel);
+        replyText = `[STIKER_3D:${chosenSticker.id}]\n\n${replyText}`;
+      }
+      if (res.fromCache) {
+        replyText = `${replyText}\n\n_⚡ Dimuat instan dari Result Cache (hash id_ujian + nisn) tanpa panggilan API berulang._`;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `m_rev_${Date.now()}`,
+          role: 'model',
+          text: replyText,
+        },
+      ]);
+
+      if (currentSessionId) {
+        appendSarahChatMessage({
+          sessionId: currentSessionId,
+          sender: 'sarah',
+          text: replyText,
+        }).catch(() => {});
+        setChatSessions((prev) => {
+          const target = prev.find((s) => s.id === currentSessionId);
+          if (!target) return prev;
+          const updated = { ...target, updated_at: Date.now() };
+          return [updated, ...prev.filter((s) => s.id !== currentSessionId)].slice(
+            0,
+            SARAH_MAX_CHAT_SESSIONS
+          );
+        });
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError' || controller.signal.aborted) {
+        setAnalysisPhase('cancelled');
+        return;
+      }
+      setAnalysisPhase('error');
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `err_rev_${Date.now()}`,
+          role: 'model',
+          text: `Maaf ya Nak, SARAH mengalami kendala koneksi saat menyiapkan evaluasi soal (${err?.message || 'coba lagi'}).`,
+          isError: true,
+        },
+      ]);
+    } finally {
+      if (wrongReviewAbortRef.current === controller) {
+        wrongReviewAbortRef.current = null;
+        setIsThinking(false);
+        setStatusLabel('');
+        setFirestoreCheckState('idle');
+      }
+    }
+  };
+  handleRequestWrongReviewRef.current = handleRequestWrongReview;
 
   // Hilangkan menu/widget Tanya SARAH sepenuhnya saat siswa sedang mengerjakan ujian CBT atau TKA
   if (activeExamStatus?.isRunning) {
@@ -838,14 +1115,11 @@ export const SarahStudentWidget: React.FC<Props> = ({
                               type="button"
                               disabled={isThinking}
                               onClick={() => {
-                                setPinnedReviewExamId(ex.examId);
-                                setIsExamReviewOpen(false);
-                                const reviewPrompt = `Tolong berikan masukan dan evaluasi atas soal-soal ujian [${ex.category.toUpperCase()}] "${ex.judul}" (Nilai saya: ${ex.score}/100) yang sudah saya kerjakan! Jelaskan soal mana yang masih keliru beserta pembahasannya dan topik apa yang perlu saya ulang.`;
-                                void handleSend(undefined, reviewPrompt, ex.examId);
+                                void handleRequestWrongReview(ex);
                               }}
                               className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] whitespace-nowrap cursor-pointer shrink-0 disabled:opacity-50"
                             >
-                              Minta Masukan
+                              Tanya Soal Salah
                             </button>
                           </div>
                         ))
@@ -1016,7 +1290,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
                           </>
                         ) : (
                           <>
-                            <SarahMarkdown content={msg.text} compact />
+                            <SarahMarkdown content={msg.text} compact userMode="siswa" />
                             <div className="flex justify-end pt-1 border-t border-slate-100">
                               <button
                                 type="button"
@@ -1036,9 +1310,42 @@ export const SarahStudentWidget: React.FC<Props> = ({
 
                 {isThinking && (
                   <div className="flex justify-start">
-                    <div className="bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-2xl rounded-bl-sm px-3.5 py-2.5 flex items-center gap-2 text-xs font-bold">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
-                      <span>{statusLabel || 'SARAH sedang membaca basis data sekolah...'}</span>
+                    <div className="w-full max-w-[92%] bg-white border border-indigo-200 rounded-2xl rounded-bl-sm p-3 space-y-2 shadow-2xs">
+                      {firestoreCheckState !== 'idle' && (
+                        <div className="flex items-center gap-2 text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-2.5 py-1.5">
+                          <Database className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span>
+                            {firestoreCheckState === 'checking'
+                              ? 'Tahap 1: Verifikasi jawaban Firestore (Instan)...'
+                              : firestoreCheckState === 'verified'
+                              ? '✓ Tahap 1: Jawaban tersimpan & terverifikasi di Firestore (Instan)'
+                              : '🔒 Tahap 1: Ujian belum selesai di Firestore'}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-indigo-900 bg-indigo-50 border border-indigo-200 rounded-xl px-2.5 py-1.5">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {analysisPhase === 'cached_hit' ? (
+                            <Zap className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          ) : (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600 shrink-0" />
+                          )}
+                          <span className="truncate">
+                            {statusLabel || 'Tahap 2: SARAH menganalisis secara async...'}
+                          </span>
+                        </div>
+                        {wrongReviewAbortRef.current && (
+                          <button
+                            type="button"
+                            onClick={handleCancelWrongReview}
+                            className="px-2 py-0.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                            title="Batalkan antrean analisis SARAH"
+                          >
+                            <StopCircle className="w-3 h-3" />
+                            <span>Batal</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
