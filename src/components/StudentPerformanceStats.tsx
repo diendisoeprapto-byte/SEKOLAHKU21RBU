@@ -57,6 +57,8 @@ interface Props {
 
 interface PerformanceEntry {
   key: string;
+  examId?: string;
+  paketName?: string;
   urutan: number;
   labelPendek: string;
   judul: string;
@@ -188,6 +190,8 @@ export const StudentPerformanceStats: React.FC<Props> = ({
 
       collected.push({
         key: `res_${res.examId}_${idx}`,
+        examId: res.examId,
+        paketName: res.paketName || examLookup.get(res.examId)?.paketName,
         urutan: collected.length + 1,
         labelPendek: `${meta.category} ${collected.length + 1}`,
         judul: meta.judul,
@@ -210,6 +214,7 @@ export const StudentPerformanceStats: React.FC<Props> = ({
         const score = Math.max(0, Math.min(100, Math.round(Number(sub.skorTotal) || 0)));
         collected.push({
           key: `sub_${sub.id || idx}`,
+          paketName: sub.paketDasar || paketName,
           urutan: collected.length + 1,
           labelPendek: `TKA ${collected.length + 1}`,
           judul: `${paketName} (Rekap Terpadu)`,
@@ -850,6 +855,7 @@ export const StudentPerformanceStats: React.FC<Props> = ({
                     <th className="py-2.5 px-4 font-bold">Waktu</th>
                     <th className="py-2.5 px-4 font-bold text-right">Nilai</th>
                     <th className="py-2.5 px-4 font-bold">Keterangan</th>
+                    <th className="py-2.5 px-4 font-bold text-right">Ulasan SARAH</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
@@ -877,6 +883,29 @@ export const StudentPerformanceStats: React.FC<Props> = ({
                             <AlertCircle className="w-3.5 h-3.5" /> Perlu Latihan
                           </span>
                         )}
+                      </td>
+                      <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            window.dispatchEvent(
+                              new CustomEvent('serbu21-open-tanya-sarah', {
+                                detail: {
+                                  examId: row.examId,
+                                  paketName: row.paketName,
+                                  mapel: row.mapel,
+                                  category: row.category.toLowerCase() as 'cbt' | 'tka',
+                                  autoRequestFeedback: true,
+                                },
+                              })
+                            );
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[11px] cursor-pointer transition"
+                          title="Minta masukan & pembahasan soal ujian ini dari SARAH AI"
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          <span>Masukan</span>
+                        </button>
                       </td>
                     </tr>
                   ))}

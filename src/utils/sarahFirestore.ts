@@ -510,6 +510,7 @@ export function retrieveSarahRagContext(params: {
   mediaAjarDocs: SarahMediaAjarContextDoc[];
   subjects?: Subject[];
   sarahConfig?: SarahConfigDoc;
+  excludeBankSoal?: boolean;
 }) {
   const targetDigit = extractGradeDigit(params.kelas);
   const queryTokens = `${params.queryText || ''} ${params.mapel || ''}`
@@ -536,7 +537,16 @@ export function retrieveSarahRagContext(params: {
     return score;
   };
 
-  const rankedKb = [...params.knowledgeDocs]
+  const eligibleKbDocs = params.excludeBankSoal
+    ? params.knowledgeDocs.filter(
+        (docItem) =>
+          !String(docItem.kategori || '')
+            .toLowerCase()
+            .includes('bank soal')
+      )
+    : params.knowledgeDocs;
+
+  const rankedKb = [...eligibleKbDocs]
     .map((docItem) => ({
       docItem,
       score: scoreDoc(

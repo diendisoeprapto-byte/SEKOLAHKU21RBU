@@ -341,6 +341,8 @@ export const TKATabs: React.FC<Props> = ({
 
   // 5. Report & Hasil TKA State (mendukung 120+ siswa & multi-rombel)
   const [tkaSubmissions, setTkaSubmissions] = useState<TKASubmissionItem[]>(getStoredTKASubmissions());
+  const [hasilViewMode, setHasilViewMode] = useState<'per_paket' | 'rekap_semua_simulasi'>('per_paket');
+  const [showAllSimulasiCols, setShowAllSimulasiCols] = useState<boolean>(false);
   const [rankingScope, setRankingScope] = useState<string>('semua');
   const [hasilPaketTka, setHasilPaketTka] = useState<string>('all');
   const [hasilKelasTka, setHasilKelasTka] = useState<string>('all');
@@ -4934,6 +4936,288 @@ export const TKATabs: React.FC<Props> = ({
               : '#F43F5E',
         }));
 
+        // Analisis Lengkap Per Mata Pelajaran TKA (berdasarkan paket terpilih + partisipasi siswa)
+        const allMapelsInScope = Array.from(
+          new Set([
+            ...TKA_MAPEL_LIST,
+            ...questionsForSelectedPaket.map((q) => normalizeTkaMapelKey(q.mapel)),
+          ])
+        );
+
+        const perMapelAnalisisSummary = allMapelsInScope.map((mapelKey) => {
+          const normKey = normalizeTkaMapelKey(mapelKey);
+          const mapelQuestions = questionsForSelectedPaket.filter(
+            (q) => q.mapel === mapelKey || normalizeTkaMapelKey(q.mapel) === normKey
+          );
+
+          let mudah = 0;
+          let sedang = 0;
+          let sukar = 0;
+          let validDp = 0;
+          let dpSum = 0;
+          let dpTestedCount = 0;
+          let pctSum = 0;
+          let pctTestedCount = 0;
+
+          mapelQuestions.forEach((q) => {
+            const participants = relevantSubmissions.filter((sub) => {
+              if (sub.answers && q.id in sub.answers) return true;
+              if (!sub.completedMapels || sub.completedMapels.length === 0) return true;
+              return sub.completedMapels.map((m) => normalizeTkaMapelKey(m)).includes(normKey);
+            });
+
+            if (participants.length === 0) {
+              const rawK = (q as any).tingkatKesukaran || 'Sedang';
+              if (rawK === 'Mudah') mudah++;
+              else if (rawK === 'Sukar') sukar++;
+              else sedang++;
+              return;
+            }
+
+            let correctC = 0;
+            participants.forEach((sub) => {
+              const ev = evaluateQuestionScore(
+                q.tipe,
+                sub.answers ? sub.answers[q.id] : undefined,
+                q.kunciJawaban,
+                q.bobot || 10,
+                q.opsi,
+                q
+              );
+              if (ev.isCorrect) correctC++;
+            });
+
+            const pctQ = Math.round((correctC / participants.length) * 100);
+            if (pctQ >= 70) mudah++;
+            else if (pctQ >= 30) sedang++;
+            else sukar++;
+
+            pctSum += pctQ;
+            pctTestedCount++;
+
+            const sortedP = [...participants].sort((a, b) => b.skorTotal - a.skorTotal);
+            const halfP = Math.max(1, Math.floor(sortedP.length / 2));
+            const upperP = sortedP.slice(0, halfP);
+            const lowerP = sortedP.slice(sortedP.length - halfP);
+            let uCorr = 0;
+            upperP.forEach((sub) => {
+              const ev = evaluateQuestionScore(
+                q.tipe,
+                sub.answers ? sub.answers[q.id] : undefined,
+                q.kunciJawaban,
+                q.bobot || 10,
+                q.opsi,
+                q
+              );
+              if (ev.isCorrect) uCorr++;
+            });
+            let lCorr = 0;
+            lowerP.forEach((sub) => {
+              const ev = evaluateQuestionScore(
+                q.tipe,
+                sub.answers ? sub.answers[q.id] : undefined,
+                q.kunciJawaban,
+                q.bobot || 10,
+                q.opsi,
+                q
+              );
+              if (ev.isCorrect) lCorr++;
+            });
+            const dpVal = Number(((uCorr - lCorr) / halfP).toFixed(2));
+            dpSum += dpVal;
+            dpTestedCount++;
+            if (dpVal >= 0.2) validDp++;
+          });
+
+          const subsWithMapelScore = relevantSubmissions.filter((sub) => {
+            const hasComp =
+              Array.isArray(sub.completedMapels) &&
+              sub.completedMapels.map((m) => normalizeTkaMapelKey(m)).includes(normKey);
+            const scoreVal = Number(sub.scoresPerMapel?.[normKey] ?? 0);
+            return hasComp || scoreVal > 0;
+          });
+
+          const avgNilaiSiswa =
+            subsWithMapelScore.length > 0
+              ? Number(
+                  (
+                    subsWithMapelScore.reduce(
+                      (acc, sub) => acc + Number(sub.scoresPerMapel?.[normKey] ?? 0),
+                      0
+                    ) / subsWithMapelScore.length
+                  ).toFixed(1)
+                )
+              : 0;
+
+          const siswaTuntasMapel = subsWithMapelScore.filter(
+            (sub) => Number(sub.scoresPerMapel?.[normKey] ?? 0) >= 75
+          ).length;
+
+          const avgKetuntasanSoal =
+            pctTestedCount > 0 ? Math.round(pctSum / pctTestedCount) : 0;
+          const avgDp =
+            dpTestedCount > 0 ? Number((dpSum / dpTestedCount).toFixed(2)) : 0;
+
+          const shortLabel =
+            normKey === 'Bahasa Indonesia'
+              ? 'B. Indo'
+              : normKey === 'Koding dan Kecerdasan Artifisial (KKA)'
+              ? 'KKA'
+              : normKey === 'Bahasa Inggris'
+              ? 'B. Inggris'
+              : normKey;
+
+          const statusMapel =
+            mapelQuestions.length === 0 && subsWithMapelScore.length === 0
+              ? 'Belum Ada Data'
+              : avgNilaiSiswa >= 80 || avgKetuntasanSoal >= 80
+              ? 'Optimal'
+              : avgNilaiSiswa >= 75 || avgKetuntasanSoal >= 65
+              ? 'Cukup Baik'
+              : 'Perlu Penguatan';
+
+          return {
+            mapel: mapelKey,
+            shortLabel,
+            jumlahSoal: mapelQuestions.length,
+            pesertaCount: subsWithMapelScore.length,
+            avgNilaiSiswa,
+            siswaTuntasPct:
+              subsWithMapelScore.length > 0
+                ? Math.round((siswaTuntasMapel / subsWithMapelScore.length) * 100)
+                : 0,
+            avgKetuntasanSoal,
+            mudah,
+            sedang,
+            sukar,
+            validDp,
+            avgDp,
+            statusMapel,
+          };
+        });
+
+        // Rekap Nilai & Capaian Total Semua Simulasi & Try Out TKA (Seluruh Paket)
+        const eligibleAllPaketsSubs = alignedAllSubmissions.filter((s) => {
+          const liveStudent = findLiveStudentForRecord(students, s);
+          if (liveStudent && (isAbkExcludedFromTka(liveStudent) || !isKelas6Class(liveStudent.kelas))) {
+            return false;
+          }
+          if (isExcludedTkaSubmission(s)) return false;
+          return true;
+        });
+        const yearMatchedAllPaketsSubs = eligibleAllPaketsSubs.filter(
+          (s) =>
+            showAllTkaTerms ||
+            doesRecordMatchTerm(s, activeYear, activeSemester) ||
+            (s.tahunPelajaran && s.tahunPelajaran.trim() === activeYear.trim())
+        );
+        const termAllPaketsSubs =
+          yearMatchedAllPaketsSubs.length > 0 ? yearMatchedAllPaketsSubs : eligibleAllPaketsSubs;
+
+        const allSimulasiPaketsOrder = Array.from(
+          new Set([
+            ...TKA_JENIS_LIST,
+            ...tkaQuestions.map((q) => q.jenisTka).filter(Boolean),
+            ...termAllPaketsSubs.map((s) => s.paketDasar || extractBaseTkaPaket(s.paket)).filter(Boolean),
+          ])
+        );
+
+        const rekapSemuaSimulasiAnalisis = allSimulasiPaketsOrder.map((paketName) => {
+          const soalPaketCount = tkaQuestions.filter((q) => q.jenisTka === paketName).length;
+          const subsInPaket = termAllPaketsSubs.filter((s) => {
+            const baseSub = s.paketDasar || extractBaseTkaPaket(s.paket);
+            return baseSub === paketName || s.paket === paketName;
+          });
+          const pesertaCount = subsInPaket.length;
+
+          const avgForMapel = (key: TKAMapelScoreKey): number | null => {
+            const vals = subsInPaket
+              .filter((sub) => {
+                const comp = Array.isArray(sub.completedMapels)
+                  ? sub.completedMapels.map((m) => normalizeTkaMapelKey(m))
+                  : [];
+                const val = Number(sub.scoresPerMapel?.[key] ?? 0);
+                return comp.includes(key) || val > 0;
+              })
+              .map((sub) => Number(sub.scoresPerMapel?.[key] ?? 0));
+            if (vals.length === 0) return null;
+            return Number((vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1));
+          };
+
+          const avgTotal =
+            pesertaCount > 0
+              ? Number(
+                  (subsInPaket.reduce((acc, s) => acc + (Number(s.skorTotal) || 0), 0) / pesertaCount).toFixed(1)
+                )
+              : 0;
+          const highest =
+            pesertaCount > 0 ? Math.max(...subsInPaket.map((s) => Number(s.skorTotal) || 0)) : 0;
+          const tuntasP = subsInPaket.filter((s) => (Number(s.skorTotal) || 0) >= 75).length;
+          const tuntasPctP = pesertaCount > 0 ? Math.round((tuntasP / pesertaCount) * 100) : 0;
+
+          return {
+            paketName,
+            shortName: paketName.replace('Simulasi ', 'Sim ').replace('Try Out ', 'TO '),
+            soalPaketCount,
+            pesertaCount,
+            avgIndo: avgForMapel('Bahasa Indonesia'),
+            avgMtk: avgForMapel('Matematika'),
+            avgIpas: avgForMapel('IPAS'),
+            avgInggris: avgForMapel('Bahasa Inggris'),
+            avgKka: avgForMapel('Koding dan Kecerdasan Artifisial (KKA)'),
+            avgTotal,
+            highest,
+            tuntasCount: tuntasP,
+            tuntasPct: tuntasPctP,
+          };
+        });
+
+        const activeSimulasiRows = rekapSemuaSimulasiAnalisis.filter(
+          (r) => r.pesertaCount > 0 || r.soalPaketCount > 0
+        );
+        const testedSimulasiRows = rekapSemuaSimulasiAnalisis.filter((r) => r.pesertaCount > 0);
+
+        const calcGlobalMapelAvgAllSims = (key: TKAMapelScoreKey): number | null => {
+          const vals = termAllPaketsSubs
+            .filter((sub) => {
+              const comp = Array.isArray(sub.completedMapels)
+                ? sub.completedMapels.map((m) => normalizeTkaMapelKey(m))
+                : [];
+              return comp.includes(key) || Number(sub.scoresPerMapel?.[key] ?? 0) > 0;
+            })
+            .map((sub) => Number(sub.scoresPerMapel?.[key] ?? 0));
+          if (vals.length === 0) return null;
+          return Number((vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1));
+        };
+
+        const overallSimulasiAggregate = {
+          totalSimulasiTerlaksana: testedSimulasiRows.length,
+          totalSubmissions: termAllPaketsSubs.length,
+          totalSoalAll: tkaQuestions.length,
+          avgIndo: calcGlobalMapelAvgAllSims('Bahasa Indonesia'),
+          avgMtk: calcGlobalMapelAvgAllSims('Matematika'),
+          avgIpas: calcGlobalMapelAvgAllSims('IPAS'),
+          avgInggris: calcGlobalMapelAvgAllSims('Bahasa Inggris'),
+          avgKka: calcGlobalMapelAvgAllSims('Koding dan Kecerdasan Artifisial (KKA)'),
+          grandAvgTotal:
+            termAllPaketsSubs.length > 0
+              ? Number(
+                  (
+                    termAllPaketsSubs.reduce((acc, s) => acc + (Number(s.skorTotal) || 0), 0) /
+                    termAllPaketsSubs.length
+                  ).toFixed(1)
+                )
+              : 0,
+          overallKetuntasanPct:
+            termAllPaketsSubs.length > 0
+              ? Math.round(
+                  (termAllPaketsSubs.filter((s) => (Number(s.skorTotal) || 0) >= 75).length /
+                    termAllPaketsSubs.length) *
+                    100
+                )
+              : 0,
+        };
+
         const handleExportExcelTka = () => {
           const wsData = [
             ['ANALISIS BUTIR SOAL TES KEMAMPUAN AKADEMIK (TKA)'],
@@ -4956,9 +5240,71 @@ export const TKATabs: React.FC<Props> = ({
             ]),
           ];
 
+          const wsMapelData = [
+            ['REKAP ANALISIS TKA PER MATA PELAJARAN'],
+            [`Paket TKA: ${analisisPaketTka === 'all' ? 'Semua Paket' : analisisPaketTka}`],
+            [],
+            ['No', 'Mata Pelajaran TKA', 'Jumlah Soal', 'Peserta Tes', 'Rata-rata Nilai Siswa', 'Ketuntasan Siswa >=75 (%)', 'Ketuntasan Butir Soal (%)', 'Mudah', 'Sedang', 'Sukar', 'DP Valid (>=0.20)', 'Rata-rata DP', 'Status'],
+            ...perMapelAnalisisSummary.map((m, idx) => [
+              idx + 1,
+              m.mapel,
+              m.jumlahSoal,
+              m.pesertaCount,
+              m.pesertaCount > 0 ? m.avgNilaiSiswa : '-',
+              m.pesertaCount > 0 ? `${m.siswaTuntasPct}%` : '-',
+              `${m.avgKetuntasanSoal}%`,
+              m.mudah,
+              m.sedang,
+              m.sukar,
+              `${m.validDp}/${m.jumlahSoal}`,
+              m.avgDp,
+              m.statusMapel,
+            ]),
+          ];
+
+          const wsAllSimsData = [
+            ['REKAP NILAI & CAPAIAN TOTAL SEMUA SIMULASI & TRY OUT TKA'],
+            [`Tahun Pelajaran: ${activeYear} · Semester: ${activeSemester}`],
+            [],
+            ['No', 'Paket Simulasi / Try Out', 'Jumlah Soal', 'Peserta', 'B. Indonesia', 'Matematika', 'IPAS', 'B. Inggris', 'KKA', 'Rata-rata Nilai Total', 'Tertinggi', 'Tuntas >=75 (%)'],
+            ...rekapSemuaSimulasiAnalisis.map((r, idx) => [
+              idx + 1,
+              r.paketName,
+              r.soalPaketCount,
+              r.pesertaCount,
+              r.avgIndo ?? '-',
+              r.avgMtk ?? '-',
+              r.avgIpas ?? '-',
+              r.avgInggris ?? '-',
+              r.avgKka ?? '-',
+              r.pesertaCount > 0 ? r.avgTotal : '-',
+              r.pesertaCount > 0 ? r.highest : '-',
+              r.pesertaCount > 0 ? `${r.tuntasPct}%` : '-',
+            ]),
+            [],
+            [
+              'TOTAL / RATA-RATA',
+              `${overallSimulasiAggregate.totalSimulasiTerlaksana} Simulasi Terlaksana`,
+              overallSimulasiAggregate.totalSoalAll,
+              overallSimulasiAggregate.totalSubmissions,
+              overallSimulasiAggregate.avgIndo ?? '-',
+              overallSimulasiAggregate.avgMtk ?? '-',
+              overallSimulasiAggregate.avgIpas ?? '-',
+              overallSimulasiAggregate.avgInggris ?? '-',
+              overallSimulasiAggregate.avgKka ?? '-',
+              overallSimulasiAggregate.grandAvgTotal,
+              '-',
+              `${overallSimulasiAggregate.overallKetuntasanPct}%`,
+            ],
+          ];
+
           const ws = XLSX.utils.aoa_to_sheet(wsData);
+          const wsMapel = XLSX.utils.aoa_to_sheet(wsMapelData);
+          const wsAllSims = XLSX.utils.aoa_to_sheet(wsAllSimsData);
           const wb = XLSX.utils.book_new();
-          XLSX.utils.book_append_sheet(wb, ws, 'Analisis TKA');
+          XLSX.utils.book_append_sheet(wb, ws, 'Analisis Butir Soal');
+          XLSX.utils.book_append_sheet(wb, wsMapel, 'Analisis Per Mapel');
+          XLSX.utils.book_append_sheet(wb, wsAllSims, 'Rekap Semua Simulasi');
           XLSX.writeFile(wb, `Analisis_TKA_${analisisMapelTka === 'all' ? 'Semua_Mapel' : analisisMapelTka}_${analisisPaketTka}.xlsx`);
         };
 
@@ -5233,6 +5579,372 @@ export const TKATabs: React.FC<Props> = ({
                   <span className="text-[11px] text-slate-500 block">
                     Soal dengan DP &ge; 0.20
                   </span>
+                </div>
+              </div>
+
+              {/* 1. ANALISIS TKA PER MATA PELAJARAN */}
+              <div className="p-5 rounded-3xl bg-white border border-slate-200 shadow-2xs space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                  <div>
+                    <h3 className="font-display font-black text-sm sm:text-base text-slate-900 flex items-center gap-2">
+                      <BookOpen className="w-4 h-4 text-amber-600" />
+                      <span>Analisis TKA Per Mata Pelajaran</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Ringkasan capaian nilai siswa, komposisi kesukaran, dan validitas daya pembeda tiap mata pelajaran TKA ({analisisPaketTka === 'all' ? 'Semua Paket' : analisisPaketTka}). Klik mapel untuk memfilter rincian butir soal.
+                    </p>
+                  </div>
+                  {analisisMapelTka !== 'all' && (
+                    <button
+                      type="button"
+                      onClick={() => setAnalisisMapelTka('all')}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition whitespace-nowrap"
+                    >
+                      Tampilkan Semua Mapel
+                    </button>
+                  )}
+                </div>
+
+                {/* Bar Chart Perbandingan Antar Mata Pelajaran TKA */}
+                <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-center">
+                  <div className="xl:col-span-5 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-black text-slate-800">
+                        Grafik Rata-rata Nilai &amp; Ketuntasan Per Mapel
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-500">Target: 75</span>
+                    </div>
+                    <div className="w-full h-[210px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={perMapelAnalisisSummary}
+                          margin={{ top: 10, right: 12, left: -16, bottom: 4 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
+                          <XAxis
+                            dataKey="shortLabel"
+                            tick={{ fontSize: 10, fontWeight: 700, fill: '#334155' }}
+                            axisLine={{ stroke: '#CBD5E1' }}
+                            tickLine={false}
+                          />
+                          <YAxis
+                            domain={[0, 100]}
+                            tick={{ fontSize: 10, fontWeight: 600, fill: '#64748B' }}
+                            axisLine={false}
+                            tickLine={false}
+                          />
+                          <Tooltip
+                            content={({ active, payload }) => {
+                              if (!active || !payload || !payload.length) return null;
+                              const m = payload[0].payload as (typeof perMapelAnalisisSummary)[number];
+                              return (
+                                <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-lg text-xs space-y-1">
+                                  <div className="font-display font-black text-slate-900">{m.mapel}</div>
+                                  <div className="text-slate-600 tabular-nums">
+                                    Rata-rata Nilai Siswa: <strong>{m.pesertaCount > 0 ? m.avgNilaiSiswa : '-'}</strong>
+                                  </div>
+                                  <div className="text-slate-600 tabular-nums">
+                                    Ketuntasan Butir Soal: <strong>{m.avgKetuntasanSoal}%</strong>
+                                  </div>
+                                  <div className="text-slate-600 tabular-nums">
+                                    Jumlah Soal: <strong>{m.jumlahSoal}</strong> · DP Valid: <strong>{m.validDp}</strong>
+                                  </div>
+                                </div>
+                              );
+                            }}
+                          />
+                          <ReferenceLine y={75} stroke="#E11D48" strokeDasharray="4 4" />
+                          <Bar
+                            dataKey="avgNilaiSiswa"
+                            name="Rata-rata Nilai Siswa"
+                            fill="#6366F1"
+                            radius={[6, 6, 0, 0]}
+                            maxBarSize={28}
+                          />
+                          <Bar
+                            dataKey="avgKetuntasanSoal"
+                            name="Ketuntasan Soal (%)"
+                            fill="#10B981"
+                            radius={[6, 6, 0, 0]}
+                            maxBarSize={28}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="xl:col-span-7 overflow-x-auto border border-slate-200 rounded-2xl">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-700 font-black uppercase text-[10px] border-b border-slate-200">
+                          <th className="p-2.5">Mata Pelajaran</th>
+                          <th className="p-2.5 text-center">Soal</th>
+                          <th className="p-2.5 text-center">Peserta</th>
+                          <th className="p-2.5 text-center">Rata Nilai</th>
+                          <th className="p-2.5 text-center">Tuntas (%)</th>
+                          <th className="p-2.5 text-center">M / S / Sk</th>
+                          <th className="p-2.5 text-center">DP Valid</th>
+                          <th className="p-2.5 text-center">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {perMapelAnalisisSummary.map((m) => {
+                          const isSelected =
+                            analisisMapelTka === m.mapel ||
+                            (analisisMapelTka !== 'all' &&
+                              normalizeTkaMapelKey(analisisMapelTka) === normalizeTkaMapelKey(m.mapel));
+                          return (
+                            <tr
+                              key={m.mapel}
+                              onClick={() =>
+                                setAnalisisMapelTka(isSelected ? 'all' : m.mapel)
+                              }
+                              className={`cursor-pointer transition ${
+                                isSelected ? 'bg-amber-50/90' : 'hover:bg-slate-50'
+                              }`}
+                            >
+                              <td className="p-2.5 font-bold text-slate-900">
+                                {m.mapel}
+                                {isSelected && (
+                                  <span className="ml-1.5 text-[10px] font-black text-amber-700">
+                                    (Aktif)
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-2.5 text-center font-mono font-bold tabular-nums text-slate-700">
+                                {m.jumlahSoal}
+                              </td>
+                              <td className="p-2.5 text-center font-mono tabular-nums text-slate-600">
+                                {m.pesertaCount}
+                              </td>
+                              <td className="p-2.5 text-center font-mono font-black tabular-nums text-indigo-700">
+                                {m.pesertaCount > 0 ? m.avgNilaiSiswa : '—'}
+                              </td>
+                              <td className="p-2.5 text-center font-mono font-black tabular-nums text-emerald-700">
+                                {m.pesertaCount > 0 ? `${m.siswaTuntasPct}%` : `${m.avgKetuntasanSoal}%`}
+                              </td>
+                              <td className="p-2.5 text-center font-mono text-[11px] tabular-nums text-slate-600">
+                                {m.mudah}/{m.sedang}/{m.sukar}
+                              </td>
+                              <td className="p-2.5 text-center font-mono tabular-nums text-slate-700">
+                                {m.validDp}/{m.jumlahSoal}
+                              </td>
+                              <td className="p-2.5 text-center whitespace-nowrap">
+                                <span
+                                  className={`text-[11px] font-black ${
+                                    m.statusMapel === 'Optimal'
+                                      ? 'text-emerald-700'
+                                      : m.statusMapel === 'Cukup Baik'
+                                      ? 'text-sky-700'
+                                      : m.statusMapel === 'Perlu Penguatan'
+                                      ? 'text-rose-700'
+                                      : 'text-slate-400'
+                                  }`}
+                                >
+                                  {m.statusMapel}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. REKAP NILAI & CAPAIAN TOTAL SEMUA SIMULASI & TRY OUT TKA */}
+              <div className="p-5 rounded-3xl bg-white border border-slate-200 shadow-2xs space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                  <div>
+                    <h3 className="font-display font-black text-sm sm:text-base text-slate-900 flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-purple-600" />
+                      <span>Nilai Rekap Total Semua Simulasi &amp; Try Out TKA</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
+                      Akumulasi capaian siswa Kelas 6 lintas paket (Simulasi 1–6 &amp; Try Out 1–6) · {overallSimulasiAggregate.totalSimulasiTerlaksana} simulasi terlaksana · Rata-rata total keseluruhan: <strong className="text-purple-800">{overallSimulasiAggregate.grandAvgTotal}</strong>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInternalSubType('hasil-tka');
+                      setHasilViewMode('rekap_semua_simulasi');
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-display font-black text-xs flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap"
+                  >
+                    <Trophy className="w-3.5 h-3.5" />
+                    <span>Buka Matriks Nilai Siswa Semua Simulasi</span>
+                  </button>
+                </div>
+
+                {testedSimulasiRows.length > 0 && (
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-black text-slate-800">
+                        Tren Rata-rata Skor Keseluruhan Antar Simulasi &amp; Try Out
+                      </span>
+                      <span className="text-[11px] font-bold text-purple-700 tabular-nums">
+                        Rata-rata Gabungan: {overallSimulasiAggregate.grandAvgTotal}
+                      </span>
+                    </div>
+                    <div className="w-full h-[180px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={activeSimulasiRows}
+                          margin={{ top: 8, right: 12, left: -16, bottom: 2 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
+                          <XAxis
+                            dataKey="shortName"
+                            tick={{ fontSize: 10, fontWeight: 700, fill: '#334155' }}
+                            axisLine={{ stroke: '#CBD5E1' }}
+                            tickLine={false}
+                          />
+                          <YAxis
+                            domain={[0, 100]}
+                            tick={{ fontSize: 10, fontWeight: 600, fill: '#64748B' }}
+                            axisLine={false}
+                            tickLine={false}
+                          />
+                          <Tooltip
+                            content={({ active, payload }) => {
+                              if (!active || !payload || !payload.length) return null;
+                              const s = payload[0].payload as (typeof rekapSemuaSimulasiAnalisis)[number];
+                              return (
+                                <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-lg text-xs space-y-1">
+                                  <div className="font-display font-black text-slate-900">{s.paketName}</div>
+                                  <div className="tabular-nums text-slate-600">
+                                    Peserta: <strong>{s.pesertaCount} siswa</strong> · Soal: <strong>{s.soalPaketCount}</strong>
+                                  </div>
+                                  <div className="tabular-nums text-purple-700 font-bold">
+                                    Rata-rata Skor Total: {s.avgTotal} ({s.tuntasPct}% Tuntas)
+                                  </div>
+                                </div>
+                              );
+                            }}
+                          />
+                          <ReferenceLine y={75} stroke="#E11D48" strokeDasharray="4 4" />
+                          <Bar
+                            dataKey="avgTotal"
+                            name="Rata-rata Nilai Total"
+                            fill="#7C3AED"
+                            radius={[6, 6, 0, 0]}
+                            maxBarSize={32}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+
+                <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-purple-50 text-purple-950 font-black uppercase text-[10px] border-b border-purple-200">
+                        <th className="p-2.5">Paket Simulasi / Try Out</th>
+                        <th className="p-2.5 text-center">Soal</th>
+                        <th className="p-2.5 text-center">Peserta</th>
+                        <th className="p-2.5 text-center">B. Indo</th>
+                        <th className="p-2.5 text-center">Matematika</th>
+                        <th className="p-2.5 text-center">IPAS</th>
+                        <th className="p-2.5 text-center">B. Inggris</th>
+                        <th className="p-2.5 text-center">KKA</th>
+                        <th className="p-2.5 text-center bg-purple-100/70">Rata Total</th>
+                        <th className="p-2.5 text-center">Tuntas (%)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {rekapSemuaSimulasiAnalisis.map((row) => {
+                        const isActivePaket = analisisPaketTka === row.paketName;
+                        return (
+                          <tr
+                            key={row.paketName}
+                            onClick={() =>
+                              setAnalisisPaketTka(isActivePaket ? 'all' : row.paketName)
+                            }
+                            className={`cursor-pointer transition ${
+                              isActivePaket
+                                ? 'bg-amber-50'
+                                : row.pesertaCount > 0
+                                ? 'hover:bg-purple-50/40'
+                                : 'opacity-65 hover:bg-slate-50'
+                            }`}
+                          >
+                            <td className="p-2.5 font-bold text-slate-900 whitespace-nowrap">
+                              {row.paketName}
+                              {isActivePaket && (
+                                <span className="ml-1.5 text-[10px] font-black text-amber-700">
+                                  (Aktif)
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-2.5 text-center font-mono tabular-nums text-slate-600">
+                              {row.soalPaketCount}
+                            </td>
+                            <td className="p-2.5 text-center font-mono font-bold tabular-nums text-slate-700">
+                              {row.pesertaCount}
+                            </td>
+                            <td className="p-2.5 text-center font-mono tabular-nums text-slate-800">
+                              {row.avgIndo ?? '—'}
+                            </td>
+                            <td className="p-2.5 text-center font-mono tabular-nums text-slate-800">
+                              {row.avgMtk ?? '—'}
+                            </td>
+                            <td className="p-2.5 text-center font-mono tabular-nums text-slate-800">
+                              {row.avgIpas ?? '—'}
+                            </td>
+                            <td className="p-2.5 text-center font-mono tabular-nums text-slate-800">
+                              {row.avgInggris ?? '—'}
+                            </td>
+                            <td className="p-2.5 text-center font-mono tabular-nums text-indigo-700">
+                              {row.avgKka ?? '—'}
+                            </td>
+                            <td className="p-2.5 text-center font-mono font-black tabular-nums text-purple-800 bg-purple-50/60">
+                              {row.pesertaCount > 0 ? row.avgTotal : '—'}
+                            </td>
+                            <td className="p-2.5 text-center font-mono font-bold tabular-nums text-emerald-700">
+                              {row.pesertaCount > 0 ? `${row.tuntasPct}%` : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-slate-900 text-white font-black text-xs">
+                        <td className="p-3 whitespace-nowrap">
+                          TOTAL / RATA-RATA SEMUA SIMULASI ({overallSimulasiAggregate.totalSimulasiTerlaksana} Paket)
+                        </td>
+                        <td className="p-3 text-center font-mono tabular-nums">
+                          {overallSimulasiAggregate.totalSoalAll}
+                        </td>
+                        <td className="p-3 text-center font-mono tabular-nums">
+                          {overallSimulasiAggregate.totalSubmissions}
+                        </td>
+                        <td className="p-3 text-center font-mono tabular-nums">
+                          {overallSimulasiAggregate.avgIndo ?? '—'}
+                        </td>
+                        <td className="p-3 text-center font-mono tabular-nums">
+                          {overallSimulasiAggregate.avgMtk ?? '—'}
+                        </td>
+                        <td className="p-3 text-center font-mono tabular-nums">
+                          {overallSimulasiAggregate.avgIpas ?? '—'}
+                        </td>
+                        <td className="p-3 text-center font-mono tabular-nums">
+                          {overallSimulasiAggregate.avgInggris ?? '—'}
+                        </td>
+                        <td className="p-3 text-center font-mono tabular-nums">
+                          {overallSimulasiAggregate.avgKka ?? '—'}
+                        </td>
+                        <td className="p-3 text-center font-mono tabular-nums text-amber-300 text-sm">
+                          {overallSimulasiAggregate.grandAvgTotal}
+                        </td>
+                        <td className="p-3 text-center font-mono tabular-nums text-emerald-300">
+                          {overallSimulasiAggregate.overallKetuntasanPct}%
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
                 </div>
               </div>
 
@@ -6190,6 +6902,447 @@ export const TKATabs: React.FC<Props> = ({
               </div>
             </div>
 
+            {/* Mode Switcher: Laporan Per Paket vs Rekap Nilai Total Semua Simulasi */}
+            <div className="no-print bg-white p-2 rounded-2xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setHasilViewMode('per_paket')}
+                  className={`px-4 py-2 rounded-xl font-display font-black text-xs flex items-center gap-1.5 transition cursor-pointer ${
+                    hasilViewMode === 'per_paket'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Laporan Hasil Per Paket</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHasilViewMode('rekap_semua_simulasi')}
+                  className={`px-4 py-2 rounded-xl font-display font-black text-xs flex items-center gap-1.5 transition cursor-pointer ${
+                    hasilViewMode === 'rekap_semua_simulasi'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Nilai Rekap Total Semua Simulasi (Matriks Siswa)</span>
+                </button>
+              </div>
+              <span className="text-[11px] font-semibold text-slate-500 px-2">
+                {hasilViewMode === 'rekap_semua_simulasi'
+                  ? 'Menggabungkan nilai Simulasi 1–6 & Try Out 1–6 per peserta didik'
+                  : 'Menampilkan peringkat & cetak rapor berdasarkan paket TKA terpilih'}
+              </span>
+            </div>
+
+            {hasilViewMode === 'rekap_semua_simulasi' ? (() => {
+              const allKnownPakets = Array.from(
+                new Set([
+                  ...TKA_JENIS_LIST,
+                  ...termTkaSubmissions.map((s) => s.paket).filter(Boolean),
+                  ...tkaQuestions.map((q) => q.jenisTka).filter(Boolean),
+                ])
+              );
+
+              const activeSimCols = showAllSimulasiCols
+                ? allKnownPakets
+                : allKnownPakets.filter(
+                    (p) =>
+                      termTkaSubmissions.some((s) => s.paket === p) ||
+                      tkaQuestions.some((q) => q.jenisTka === p)
+                  );
+
+              const visibleCols =
+                activeSimCols.length > 0 ? activeSimCols : TKA_JENIS_LIST.slice(0, 6);
+
+              const targetPoolStudents = tkaStudents.filter((st) => {
+                if (rankingScope !== 'semua' && st.kelas !== rankingScope) return false;
+                if (hasilKelasTka !== 'all' && st.kelas !== hasilKelasTka) return false;
+                if (
+                  searchHasilTka &&
+                  !st.nama.toLowerCase().includes(searchHasilTka.toLowerCase()) &&
+                  !st.nisn.includes(searchHasilTka)
+                ) {
+                  return false;
+                }
+                return true;
+              });
+
+              const studentMatrixRows = targetPoolStudents
+                .map((st) => {
+                  const stSubs = termTkaSubmissions.filter((sub) => {
+                    const live =
+                      studentByIdLookup.get(sub.studentId) ||
+                      findLiveStudentForRecord(students, sub);
+                    return (
+                      (live && live.id === st.id) ||
+                      sub.studentId === st.id ||
+                      (st.nisn && sub.nisn === st.nisn)
+                    );
+                  });
+
+                  const scoreByPaket: Record<string, number | null> = {};
+                  visibleCols.forEach((p) => {
+                    const matched = stSubs.find((s) => s.paket === p);
+                    scoreByPaket[p] = matched ? matched.skorTotal : null;
+                  });
+
+                  const completedScores = Object.values(scoreByPaket).filter(
+                    (v): v is number => v !== null
+                  );
+                  const jumlahDiikuti = stSubs.length;
+                  const totalSkorSemua = stSubs.reduce(
+                    (acc, s) => acc + (Number(s.skorTotal) || 0),
+                    0
+                  );
+                  const rataRataSemua =
+                    jumlahDiikuti > 0
+                      ? Number((totalSkorSemua / jumlahDiikuti).toFixed(1))
+                      : 0;
+
+                  const predikatAll: 'A' | 'B' | 'C' | 'D' =
+                    rataRataSemua >= 88
+                      ? 'A'
+                      : rataRataSemua >= 78
+                      ? 'B'
+                      : rataRataSemua >= 68
+                      ? 'C'
+                      : 'D';
+                  const statusAll: 'Tuntas' | 'Remedial' =
+                    jumlahDiikuti > 0 && rataRataSemua >= 75 ? 'Tuntas' : 'Remedial';
+
+                  return {
+                    id: st.id,
+                    nama: st.nama,
+                    nisn: st.nisn,
+                    kelas: st.kelas,
+                    fotoUrl: st.fotoUrl || DEFAULT_STUDENT_AVATAR_URL,
+                    scoreByPaket,
+                    completedCountInCols: completedScores.length,
+                    jumlahDiikuti,
+                    totalSkorSemua,
+                    rataRataSemua,
+                    predikat: predikatAll,
+                    status: statusAll,
+                  };
+                })
+                .filter((row) => {
+                  if (hasilStatusTka === 'all') return true;
+                  return row.status === hasilStatusTka;
+                })
+                .sort((a, b) => {
+                  if (b.rataRataSemua !== a.rataRataSemua) return b.rataRataSemua - a.rataRataSemua;
+                  if (b.totalSkorSemua !== a.totalSkorSemua) return b.totalSkorSemua - a.totalSkorSemua;
+                  return a.nama.localeCompare(b.nama, 'id');
+                });
+
+              const participantsOnly = studentMatrixRows.filter((r) => r.jumlahDiikuti > 0);
+              const grandAvgMatrix =
+                participantsOnly.length > 0
+                  ? Number(
+                      (
+                        participantsOnly.reduce((acc, r) => acc + r.rataRataSemua, 0) /
+                        participantsOnly.length
+                      ).toFixed(1)
+                    )
+                  : 0;
+              const highestAvgMatrix =
+                participantsOnly.length > 0
+                  ? Math.max(...participantsOnly.map((r) => r.rataRataSemua))
+                  : 0;
+              const tuntasMatrixCount = participantsOnly.filter(
+                (r) => r.status === 'Tuntas'
+              ).length;
+
+              const colAverages: Record<string, string> = {};
+              visibleCols.forEach((p) => {
+                const vals = studentMatrixRows
+                  .map((r) => r.scoreByPaket[p])
+                  .filter((v): v is number => v !== null);
+                colAverages[p] =
+                  vals.length > 0
+                    ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1)
+                    : '—';
+              });
+
+              const handleExportExcelMatrix = () => {
+                const headers = [
+                  'Rank',
+                  'Nama Siswa',
+                  'NISN',
+                  'Kelas',
+                  ...visibleCols,
+                  'Jml Simulasi',
+                  'Total Nilai',
+                  'Rata-rata Semua Simulasi',
+                  'Predikat',
+                  'Status',
+                ];
+                const bodyRows = studentMatrixRows.map((r, idx) => [
+                  idx + 1,
+                  r.nama,
+                  r.nisn,
+                  r.kelas,
+                  ...visibleCols.map((p) => r.scoreByPaket[p] ?? '-'),
+                  r.jumlahDiikuti,
+                  r.totalSkorSemua,
+                  r.jumlahDiikuti > 0 ? r.rataRataSemua : '-',
+                  r.jumlahDiikuti > 0 ? r.predikat : '-',
+                  r.jumlahDiikuti > 0 ? r.status : 'Belum Mengikuti',
+                ]);
+                const footerRow = [
+                  '',
+                  'RATA-RATA ANGKATAN / KELAS',
+                  '',
+                  hasilKelasTka === 'all' ? 'Semua Kelas 6' : hasilKelasTka,
+                  ...visibleCols.map((p) => colAverages[p]),
+                  participantsOnly.length,
+                  '-',
+                  grandAvgMatrix,
+                  '-',
+                  `${participantsOnly.length > 0 ? Math.round((tuntasMatrixCount / participantsOnly.length) * 100) : 0}% Tuntas`,
+                ];
+
+                const ws = XLSX.utils.aoa_to_sheet([
+                  ['REKAP NILAI TOTAL SEMUA SIMULASI & TRY OUT TKA'],
+                  [`Tahun Pelajaran: ${activeYear} · Rombel: ${hasilKelasTka === 'all' ? 'Semua Kelas 6' : hasilKelasTka}`],
+                  [],
+                  headers,
+                  ...bodyRows,
+                  [],
+                  footerRow,
+                ]);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, 'Rekap Semua Simulasi');
+                XLSX.writeFile(wb, `Rekap_Total_Semua_Simulasi_TKA_${activeYear.replace('/', '-')}.xlsx`);
+                showToast('Rekap nilai total semua simulasi TKA (.XLSX) berhasil diunduh.', 'success');
+              };
+
+              return (
+                <div className="space-y-5">
+                  <div className="no-print bg-white p-5 rounded-3xl shadow-sm border border-slate-200/80 space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                      <div>
+                        <label className="block text-xs font-black text-slate-700 mb-1">Filter Rombel / Kelas:</label>
+                        <select
+                          value={hasilKelasTka}
+                          onChange={(e) => setHasilKelasTka(e.target.value)}
+                          className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-slate-50 focus:bg-white focus:border-indigo-600 outline-none cursor-pointer"
+                        >
+                          <option value="all">Semua Rombel Kelas 6 ({availableHasilClasses.length} Kelas)</option>
+                          {availableHasilClasses.map((cls) => (
+                            <option key={cls} value={cls}>Hanya {cls}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-black text-slate-700 mb-1">Status Rata-rata (KKTP 75):</label>
+                        <select
+                          value={hasilStatusTka}
+                          onChange={(e) => setHasilStatusTka(e.target.value as any)}
+                          className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-slate-50 focus:bg-white focus:border-indigo-600 outline-none cursor-pointer"
+                        >
+                          <option value="all">Semua Status</option>
+                          <option value="Tuntas">Hanya Tuntas (&gt;= 75)</option>
+                          <option value="Remedial">Perlu Remedial (&lt; 75)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-black text-slate-700 mb-1">Cari Nama / NISN Siswa:</label>
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                          <input
+                            type="text"
+                            value={searchHasilTka}
+                            onChange={(e) => setSearchHasilTka(e.target.value)}
+                            placeholder="Ketik nama atau NISN..."
+                            className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-slate-50 focus:bg-white focus:border-indigo-600 outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setShowAllSimulasiCols((p) => !p)}
+                          className="px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-700 cursor-pointer flex-1 whitespace-nowrap"
+                        >
+                          {showAllSimulasiCols ? 'Kolom Aktif Saja' : 'Semua 12 Paket'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleExportExcelMatrix}
+                          className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                        >
+                          <FileSpreadsheet className="w-4 h-4" />
+                          <span>Unduh Excel</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Summary Strip */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 print:grid-cols-4">
+                    <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-1">
+                      <span className="text-[11px] font-bold text-indigo-700">Peserta Kelas 6</span>
+                      <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
+                        {studentMatrixRows.length} Siswa
+                      </div>
+                      <span className="text-[11px] text-slate-500 block">
+                        {participantsOnly.length} siswa sudah mengikuti tes
+                      </span>
+                    </div>
+                    <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-1">
+                      <span className="text-[11px] font-bold text-purple-700">Paket Simulasi Ditampilkan</span>
+                      <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
+                        {visibleCols.length} Paket
+                      </div>
+                      <span className="text-[11px] text-slate-500 block">Simulasi &amp; Try Out TKA</span>
+                    </div>
+                    <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-1">
+                      <span className="text-[11px] font-bold text-emerald-700">Rata-rata Total Semua Simulasi</span>
+                      <div className="text-2xl font-display font-black text-emerald-700 tabular-nums">
+                        {grandAvgMatrix}
+                      </div>
+                      <span className="text-[11px] text-slate-500 block tabular-nums">
+                        {tuntasMatrixCount} siswa rata-rata tuntas (&ge;75)
+                      </span>
+                    </div>
+                    <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-1">
+                      <span className="text-[11px] font-bold text-amber-700">Rata-rata Tertinggi</span>
+                      <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
+                        {highestAvgMatrix}
+                      </div>
+                      <span className="text-[11px] text-slate-500 block">Skala gabungan 0 – 100</span>
+                    </div>
+                  </div>
+
+                  {/* Consolidated Multi-Simulation Matrix Table */}
+                  <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden p-5 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                      <h3 className="font-display font-black text-base text-slate-900 flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-indigo-600" />
+                        <span>Matriks Nilai Rekap Total Semua Simulasi &amp; Try Out ({studentMatrixRows.length} Siswa)</span>
+                      </h3>
+                      <span className="text-xs text-slate-500 font-semibold">
+                        Diurutkan berdasarkan Rata-rata Semua Simulasi tertinggi
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto print-expand-scroll">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-indigo-50 text-indigo-950 font-black uppercase text-[10px] border-b-2 border-indigo-200">
+                            <th className="p-2.5 text-center w-12">Rank</th>
+                            <th className="p-2.5 min-w-[180px]">Nama Peserta Didik</th>
+                            <th className="p-2.5 text-center">Kelas</th>
+                            {visibleCols.map((paket) => (
+                              <th key={paket} className="p-2.5 text-center whitespace-nowrap">
+                                {paket.replace('Simulasi ', 'Sim ').replace('Try Out ', 'TO ')}
+                              </th>
+                            ))}
+                            <th className="p-2.5 text-center">Diikuti</th>
+                            <th className="p-2.5 text-center bg-slate-100">Total Skor</th>
+                            <th className="p-2.5 text-center bg-indigo-100">Rata Total</th>
+                            <th className="p-2.5 text-center">Predikat</th>
+                            <th className="p-2.5 text-center">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {studentMatrixRows.map((row, idx) => (
+                            <tr key={row.id} className="hover:bg-indigo-50/30 even:bg-slate-50/40">
+                              <td className="p-2.5 text-center font-mono font-black tabular-nums text-slate-700">
+                                #{idx + 1}
+                              </td>
+                              <td className="p-2.5">
+                                <div className="font-bold text-slate-900">{row.nama}</div>
+                                <div className="text-[10px] text-slate-500 font-mono tabular-nums">
+                                  NISN: {row.nisn}
+                                </div>
+                              </td>
+                              <td className="p-2.5 text-center font-bold text-slate-700 whitespace-nowrap">
+                                {row.kelas}
+                              </td>
+                              {visibleCols.map((paket) => {
+                                const val = row.scoreByPaket[paket];
+                                return (
+                                  <td
+                                    key={paket}
+                                    className={`p-2.5 text-center font-mono font-bold tabular-nums ${
+                                      val === null
+                                        ? 'text-slate-300'
+                                        : val >= 75
+                                        ? 'text-slate-900'
+                                        : 'text-rose-600'
+                                    }`}
+                                  >
+                                    {val ?? '—'}
+                                  </td>
+                                );
+                              })}
+                              <td className="p-2.5 text-center font-mono font-bold tabular-nums text-slate-600">
+                                {row.jumlahDiikuti}
+                              </td>
+                              <td className="p-2.5 text-center font-mono font-black tabular-nums text-slate-800 bg-slate-50">
+                                {row.jumlahDiikuti > 0 ? row.totalSkorSemua : '—'}
+                              </td>
+                              <td className="p-2.5 text-center font-mono font-black tabular-nums text-sm text-indigo-800 bg-indigo-50/70">
+                                {row.jumlahDiikuti > 0 ? row.rataRataSemua : '—'}
+                              </td>
+                              <td className="p-2.5 text-center font-black">
+                                {row.jumlahDiikuti > 0 ? row.predikat : '—'}
+                              </td>
+                              <td className="p-2.5 text-center font-bold text-[11px] whitespace-nowrap">
+                                {row.jumlahDiikuti === 0 ? (
+                                  <span className="text-slate-400">Belum Tes</span>
+                                ) : (
+                                  <span className={row.status === 'Tuntas' ? 'text-emerald-700' : 'text-rose-700'}>
+                                    {row.status}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                          {studentMatrixRows.length === 0 && (
+                            <tr>
+                              <td colSpan={8 + visibleCols.length} className="p-8 text-center text-slate-400 italic">
+                                Tidak ada peserta didik Kelas 6 yang sesuai filter.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-slate-900 text-white font-black text-xs">
+                            <td colSpan={3} className="p-3">
+                              RATA-RATA ANGKATAN / KELAS PER SIMULASI
+                            </td>
+                            {visibleCols.map((paket) => (
+                              <td key={paket} className="p-3 text-center font-mono tabular-nums">
+                                {colAverages[paket]}
+                              </td>
+                            ))}
+                            <td className="p-3 text-center font-mono tabular-nums">
+                              {participantsOnly.length}
+                            </td>
+                            <td className="p-3 text-center font-mono tabular-nums">—</td>
+                            <td className="p-3 text-center font-mono tabular-nums text-amber-300 text-sm">
+                              {grandAvgMatrix}
+                            </td>
+                            <td colSpan={2} className="p-3 text-center">
+                              {participantsOnly.length > 0
+                                ? `${Math.round((tuntasMatrixCount / participantsOnly.length) * 100)}% Tuntas`
+                                : '—'}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              );
+            })() : (
+              <>
             {/* Empty State Banner if no submissions */}
             {totalPeserta === 0 && (
               <div className="bg-amber-50 p-6 rounded-3xl border-2 border-amber-300 shadow-sm space-y-3">
@@ -6829,6 +7982,8 @@ export const TKATabs: React.FC<Props> = ({
                 </div>
               )}
             </div>
+              </>
+            )}
 
             {/* Blok Pengesahan Resmi Kepala Sekolah & Wali Kelas (Khusus Cetak / PDF) */}
             <div className="hidden print-only print-avoid-break mt-6 pt-4 text-xs text-slate-900">

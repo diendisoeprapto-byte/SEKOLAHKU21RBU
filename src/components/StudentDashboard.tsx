@@ -3389,6 +3389,26 @@ export const StudentDashboard: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => {
+                  window.dispatchEvent(
+                    new CustomEvent('serbu21-open-tanya-sarah', {
+                      detail: {
+                        examId: activeExamObj.id,
+                        paketName: activeExamObj.paketName,
+                        mapel: activeExamObj.mapel,
+                        category: activeExamObj.category,
+                        autoRequestFeedback: true,
+                      },
+                    })
+                  );
+                }}
+                className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-700 hover:to-indigo-700 text-white font-display font-black text-xs shadow-md transition cursor-pointer flex items-center gap-1.5"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>Minta Masukan SARAH AI</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
                   setSelectedExamId('');
                   setExamResult(null);
                   setRunningExamSnapshot(null);

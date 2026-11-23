@@ -240,10 +240,11 @@ function buildValidatedAttachmentParts(rawAttachments, userInfo, role) {
   return parts;
 }
 
-function buildRagContextBlock(ragContext = {}) {
+function buildRagContextBlock(ragContext = {}, role = '') {
   const parts = [];
   const schoolName = sanitizeString(ragContext.schoolName || 'SDN Rawa Badak Utara 21', 150);
   const activeClass = sanitizeString(ragContext.activeClass || '', 60);
+  const isStudentRole = String(role || '').toLowerCase() === 'siswa';
 
   parts.push(`PROFIL SEKOLAH: ${schoolName}${activeClass ? ` | Konteks Kelas: ${activeClass}` : ''}`);
 
@@ -262,10 +263,18 @@ function buildRagContextBlock(ragContext = {}) {
   }
 
   if (Array.isArray(ragContext.knowledgeDocs) && ragContext.knowledgeDocs.length > 0) {
-    const kbLines = ragContext.knowledgeDocs.slice(0, 8).map((doc, i) => {
-      return `[KB-${i + 1}] Judul: ${sanitizeString(doc.judul, 160)} | Kategori: ${sanitizeString(doc.kategori, 60)} | Kelas: ${sanitizeString(doc.kelas, 30)} | Mapel: ${sanitizeString(doc.mata_pelajaran, 80)} | Sumber: ${sanitizeString(doc.sumber, 120)}\nRingkasan: ${sanitizeString(doc.konten_ringkasan, 1200)}`;
-    });
-    parts.push(`MEMORI PENGETAHUAN SEKOLAH (sarah_knowledge_base):\n${kbLines.join('\n\n')}`);
+    const filteredDocs = isStudentRole
+      ? ragContext.knowledgeDocs.filter(
+          (doc) => !String(doc?.kategori || '').toLowerCase().includes('bank soal')
+        )
+      : ragContext.knowledgeDocs;
+
+    if (filteredDocs.length > 0) {
+      const kbLines = filteredDocs.slice(0, 8).map((doc, i) => {
+        return `[KB-${i + 1}] Judul: ${sanitizeString(doc.judul, 160)} | Kategori: ${sanitizeString(doc.kategori, 60)} | Kelas: ${sanitizeString(doc.kelas, 30)} | Mapel: ${sanitizeString(doc.mata_pelajaran, 80)} | Sumber: ${sanitizeString(doc.sumber, 120)}\nRingkasan: ${sanitizeString(doc.konten_ringkasan, 1200)}`;
+      });
+      parts.push(`MEMORI PENGETAHUAN SEKOLAH (sarah_knowledge_base):\n${kbLines.join('\n\n')}`);
+    }
   }
 
   if (Array.isArray(ragContext.mediaAjarDocs) && ragContext.mediaAjarDocs.length > 0) {
@@ -314,7 +323,193 @@ function buildAdaptiveAvatarAndStickerSection(userInfo = {}) {
   * Lengkapi pesan secara alami dengan emoji ramah (😊, ✨, 👍, 🎒, 📚) dan penjelasan yang mudah dipahami anak sekolah.`;
 }
 
-function buildStudentSystemInstruction(ragBlock, userInfo = {}) {
+function sanitizeExamReviewContext(rawContext) {
+  if (!rawContext || typeof rawContext !== 'object') {
+    return {
+      requestedExamId: '',
+      completedExams: [],
+      uncompletedExams: [],
+    };
+  }
+
+  const requestedExamId = sanitizeString(rawContext.requestedExamId || '', 160);
+
+  // Hanya terima ujian dengan bukti kelulusan/penyelesaian valid (`hasCompleted === true` & skor numerik)
+  const completedExams = Array.isArray(rawContext.completedExams)
+    ? rawContext.completedExams
+        .filter(
+          (ex) =>
+            ex &&
+            typeof ex === 'object' &&
+            ex.hasCompleted === true &&
+            typeof ex.score === 'number' &&
+            Number.isFinite(ex.score) &&
+            sanitizeString(ex.judul || '', 200)
+        )
+        .slice(0, 25)
+        .map((ex) => ({
+          examId: sanitizeString(ex.examId || '', 160),
+          category: ex.category === 'tka' ? 'tka' : 'cbt',
+          judul: sanitizeString(ex.judul || '', 200),
+          mapel: sanitizeString(ex.mapel || '', 100),
+          paketName: sanitizeString(ex.paketName || '', 120),
+          score: Math.max(0, Math.min(100, Math.round(ex.score))),
+          waktuSelesai: sanitizeString(ex.waktuSelesai || '-', 80),
+          totalQuestions: Number(ex.totalQuestions) || 0,
+          correctCount: Number(ex.correctCount) || 0,
+          questions: Array.isArray(ex.questions)
+            ? ex.questions.slice(0, 50).map((q, idx) => ({
+                no: Number(q?.no) || idx + 1,
+                tipe: sanitizeString(q?.tipe || 'pg', 30),
+                pertanyaan: sanitizeString(q?.pertanyaan || '', 450),
+                opsi: Array.isArray(q?.opsi)
+                  ? q.opsi.slice(0, 6).map((o) => sanitizeString(String(o || ''), 180))
+                  : [],
+                studentAnswer: sanitizeString(q?.studentAnswer || '(Belum dijawab)', 240),
+                correctAnswer: sanitizeString(q?.correctAnswer || '-', 240),
+                isCorrect: Boolean(q?.isCorrect),
+                pembahasan: sanitizeString(q?.pembahasan || '', 320),
+              }))
+            : [],
+        }))
+    : [];
+
+  // Ujian belum dikerjakan hanya menyimpan metadata nama/paket/mapel tanpa soal maupun kunci
+  const uncompletedExams = Array.isArray(rawContext.uncompletedExams)
+    ? rawContext.uncompletedExams
+        .filter((ex) => ex && typeof ex === 'object' && sanitizeString(ex.judul || '', 200))
+        .slice(0, 40)
+        .map((ex) => ({
+          examId: sanitizeString(ex.examId || '', 160),
+          category: ex.category === 'tka' ? 'tka' : 'cbt',
+          judul: sanitizeString(ex.judul || '', 200),
+          mapel: sanitizeString(ex.mapel || '', 100),
+          paketName: sanitizeString(ex.paketName || '', 120),
+        }))
+    : [];
+
+  return {
+    requestedExamId,
+    completedExams,
+    uncompletedExams,
+  };
+}
+
+function detectUncompletedExamCheatAttempt(message, reviewCtx) {
+  if (!reviewCtx || !Array.isArray(reviewCtx.uncompletedExams) || reviewCtx.uncompletedExams.length === 0) {
+    return null;
+  }
+  const msgLower = String(message || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!msgLower) return null;
+
+  const examIntentRegex =
+    /\b(kunci|jawaban|bocoran|soal|pembahasan|kerjakan|jawab|masukan|ulas|ulasan|review|bahas|bantu|nomor\s*\d+)\b/i;
+  if (!examIntentRegex.test(msgLower)) {
+    return null;
+  }
+
+  for (const uncomp of reviewCtx.uncompletedExams) {
+    const judulLower = (uncomp.judul || '').toLowerCase();
+    const paketLower = (uncomp.paketName || '').toLowerCase();
+    const mapelLower = (uncomp.mapel || '').toLowerCase();
+
+    const completedSameName = reviewCtx.completedExams.some(
+      (c) =>
+        (c.judul || '').toLowerCase() === judulLower ||
+        ((c.paketName || '').toLowerCase() === paketLower &&
+          (c.mapel || '').toLowerCase() === mapelLower)
+    );
+    if (completedSameName) continue;
+
+    const exactJudulMatch = judulLower.length >= 8 && msgLower.includes(judulLower);
+    const paketMatch =
+      paketLower.length >= 5 &&
+      msgLower.includes(paketLower) &&
+      (!mapelLower ||
+        msgLower.includes(mapelLower) ||
+        (mapelLower.includes('indonesia') && msgLower.includes('indo')) ||
+        (mapelLower.includes('matematika') && (msgLower.includes('matematika') || msgLower.includes('mtk'))) ||
+        (mapelLower.includes('ipas') && msgLower.includes('ipas')) ||
+        (mapelLower.includes('inggris') && msgLower.includes('inggris')) ||
+        (mapelLower.includes('koding') && (msgLower.includes('koding') || msgLower.includes('kka'))) ||
+        /\b(simulasi\s*\d+|try\s*out\s*\d+|tryout\s*\d+|sumatif\s*\d+|asts|asas)\b/i.test(msgLower));
+
+    if (exactJudulMatch || paketMatch) {
+      return uncomp;
+    }
+  }
+
+  return null;
+}
+
+function buildStudentExamReviewBlock(reviewCtx, message = '') {
+  if (!reviewCtx) return '';
+  const { requestedExamId, completedExams, uncompletedExams } = reviewCtx;
+  const sections = [];
+
+  if (completedExams.length === 0) {
+    sections.push(
+      'STATUS PENGERJAAN UJIAN CBT/TKA SISWA:\n- Siswa ini belum menyelesaikan ujian CBT maupun TKA apa pun yang tercatat.'
+    );
+  } else {
+    const summaryLines = completedExams.map(
+      (ex, idx) =>
+        `${idx + 1}. [${ex.category.toUpperCase()}] ${ex.judul} (Mapel: ${ex.mapel} | Paket: ${ex.paketName}) -> SUDAH DIKERJAKAN | Nilai: ${ex.score}/100 | Benar: ${ex.correctCount}/${ex.totalQuestions || ex.questions.length} | Waktu: ${ex.waktuSelesai}`
+    );
+    sections.push(
+      `DAFTAR UJIAN CBT & TKA YANG SUDAH DIKERJAKAN SISWA (BOLEH DIULAS & DIBERI MASUKAN):\n${summaryLines.join('\n')}`
+    );
+
+    const msgLower = String(message || '').toLowerCase();
+    let targetExams = [];
+    if (requestedExamId) {
+      const pinned = completedExams.find((e) => e.examId === requestedExamId);
+      if (pinned) targetExams = [pinned];
+    }
+    if (targetExams.length === 0) {
+      targetExams = completedExams.filter(
+        (e) =>
+          (e.judul && msgLower.includes(e.judul.toLowerCase())) ||
+          (e.paketName && msgLower.includes(e.paketName.toLowerCase())) ||
+          (e.mapel && msgLower.includes(e.mapel.toLowerCase()))
+      );
+    }
+    if (targetExams.length === 0) {
+      targetExams = completedExams.slice(0, 2);
+    } else {
+      targetExams = targetExams.slice(0, 2);
+    }
+
+    const detailedBlocks = targetExams
+      .filter((ex) => ex.questions && ex.questions.length > 0)
+      .map((ex) => {
+        const qLines = ex.questions.slice(0, 35).map((q) => {
+          const statusLabel = q.isCorrect ? 'BENAR' : 'PERLU PERBAIKAN / SALAH';
+          const opsiStr = q.opsi.length > 0 ? `\n   Pilihan: ${q.opsi.join(' | ')}` : '';
+          const pembStr = q.pembahasan ? `\n   Pembahasan Guru: ${q.pembahasan}` : '';
+          return `Soal No.${q.no} [${q.tipe.toUpperCase()}] (${statusLabel}):\n   Pertanyaan: ${q.pertanyaan}${opsiStr}\n   Jawaban Siswa: ${q.studentAnswer}\n   Kunci Jawaban: ${q.correctAnswer}${pembStr}`;
+        });
+        return `RINCIAN SOAL & JAWABAN SISWA UNTUK "${ex.judul}" (Nilai ${ex.score}/100):\n${qLines.join('\n')}`;
+      });
+
+    if (detailedBlocks.length > 0) {
+      sections.push(detailedBlocks.join('\n\n'));
+    }
+  }
+
+  if (uncompletedExams.length > 0) {
+    const lockedLines = uncompletedExams.map(
+      (ex, idx) => `${idx + 1}. [${ex.category.toUpperCase()}] ${ex.judul} (${ex.mapel}) -> BELUM DIKERJAKAN (TERKUNCI KETAT)`
+    );
+    sections.push(
+      `DAFTAR UJIAN CBT & TKA YANG BELUM DIKERJAKAN SISWA (TERKUNCI ANTI-CURANG — DILARANG MEMBERI BOCORAN/JAWABAN/PEMBAHASAN):\n${lockedLines.join('\n')}`
+    );
+  }
+
+  return sections.join('\n\n');
+}
+
+function buildStudentSystemInstruction(ragBlock, userInfo = {}, examReviewBlock = '') {
   const studentName = sanitizeString(userInfo.name || 'Nak', 80);
   const studentClass = sanitizeString(userInfo.kelas || 'SD', 40);
   const visualAndStickerGuide = buildAdaptiveAvatarAndStickerSection(userInfo);
@@ -327,26 +522,31 @@ ${visualAndStickerGuide}
 JIWA, PERSONA & SYSTEM INSTRUCTION KETAT:
 1. KEPRIBADIAN PENUH KASIH SAYANG (SOSOK IBU YANG TULUS):
    - Bersikaplah lembut, sangat sabar, santun, hangat, tulus, dan penuh welas asih—seperti sosok seorang ibu yang membimbing anaknya belajar dengan penuh kasih sayang.
-   - Gunakan sapaan hangat yang membesarkan hati seperti "Halo Nak ${studentName}...", "Hebat sekali pertanyaanmu, Nak...", "Jangan khawatir kalau masih bingung, mari kita pelajari pelan-pelan bersama SARAH...".
+   - Gunakan sapaan hangat yang membesarkan hati seperti "Halo Nak ${studentName}...", "Hebat sekali semangat belajarmu, Nak...", "Jangan khawatir kalau masih ada yang keliru, mari kita pelajari pelan-pelan bersama SARAH...".
    - JANGAN PERNAH menghakimi, menyalahkan dengan keras, atau membuat siswa berkecil hati saat jawabannya keliru. Selalu hargai usaha dan keberaniannya mencoba terlebih dahulu.
    - Sisipkan secara lembut dan natural nilai "7 Kebiasaan Anak Indonesia Hebat" (1. Bangun Pagi, 2. Beribadah, 3. Berolahraga, 4. Makan Sehat dan Bergizi, 5. Gemar Belajar, 6. Bermasyarakat, 7. Tidur Cepat) sebagai nasihat hangat penyemangat.
 
-2. ATURAN ANTI-MENYONTEK (METODE SOKRATIK MUTLAK):
-   - Kamu DILARANG KERAS memberikan jawaban akhir secara langsung atas soal PR, latihan, kuis, tebak pilihan A/B/C/D, atau hasil hitungan tugas siswa.
-   - Jika siswa menanyakan jawaban soal (contoh: "berapa hasil 3/4 + 2/5?", "jawaban nomor 3 apa?", "pilihannya A atau B?", "kerjakan PR ini"), tolaklah memberi jawaban langsung dengan sangat halus dan penuh kasih, lalu berikan:
-     (a) Apresiasi hangat atas pertanyaannya,
-     (b) Penjelasan singkat konsep dasar menggunakan bahasa sederhana anak SD dan analogi kehidupan sehari-hari,
-     (c) Petunjuk langkah pertama (scaffolding) dan 1–2 pertanyaan pemantik lembut agar siswa mencoba berpikir dan melangkah sendiri.
-   - Jika siswa mengirimkan percobaannya ("apakah jawabanku 10 benar?"), puji usahanya dulu lalu bimbing langkah berpikirnya pelan-pelan tanpa membocorkan kunci akhir secara instan.
+2. KEBIJAKAN EVALUASI UJIAN CBT/TKA & ATURAN ANTI-CURANG:
+   A. UJIAN CBT & TKA YANG SUDAH DIKERJAKAN SISWA (Tercantum pada daftar SUDAH DIKERJAKAN di bawah):
+      - Kamu DIIZINKAN dan DIDORONG memberikan masukan (feedback) menyeluruh terhadap soal-soal pada ujian CBT maupun TKA yang memang SUDAH dikerjakan dan dikumpulkan oleh ${studentName}.
+      - Berikan masukan dengan struktur yang hangat dan membangun:
+        1. Apresiasi nilai akhir serta ketekunan ${studentName} menyelesaikan ujian.
+        2. Sebutkan nomor/topik soal yang sudah dijawab dengan **BENAR** untuk menguatkan rasa percaya diri.
+        3. Untuk soal yang masih **KELIRU atau BELUM DIJAWAB**, jelaskan secara sabar mengapa jawaban sebelumnya kurang tepat, jelaskan konsep materi yang benar menggunakan bahasa sederhana anak SD, sampaikan kunci jawaban yang tepat beserta pembahasannya sebagai bahan belajar ulang, dan beri saran materi/kebiasaan belajar apa yang perlu dilatih lagi.
+   B. UJIAN CBT & TKA YANG BELUM DIKERJAKAN SISWA (Tercantum pada daftar BELUM DIKERJAKAN / TERKUNCI di bawah) ATAU TIDAK TERCATAT SUDAH SELESAI:
+      - Kamu DILARANG MUTLAK membocorkan soal, memberi kunci jawaban, membahas soal, atau membantu mengerjakan soal dari paket CBT/TKA mana pun yang BELUM dikerjakan oleh siswa!
+      - Jika siswa meminta bantuan, kunci jawaban, pembahasan, atau masukan untuk ujian yang masih TERKUNCI (belum dikerjakan), tolak dengan sangat lembut namun tegas, ingatkan pentingnya kejujuran dan amanah, dan ajak siswa mengerjakan ujian tersebut secara mandiri di menu Tes/Ujian terlebih dahulu sebelum berdiskusi hasilnya bersama SARAH.
+   C. SOAL PR, LATIHAN BEBAS, ATAU PERTANYAAN TUGAS HARIAN (DI LUAR UJIAN YANG SUDAH SELESAI):
+      - Terapkan metode Sokratik: JANGAN memberi jawaban akhir secara langsung. Berikan apresiasi, penjelasan konsep dasar dengan analogi sehari-hari, serta petunjuk langkah pertama dan 1–2 pertanyaan pemantik lembut agar siswa berpikir sendiri.
 
 3. BATASAN RUANG LINGKUP KURIKULUM:
-   - Fokus HANYA pada materi pelajaran SD Kurikulum Merdeka, literasi/numerasi, media ajar sekolah, serta pembiasaan 7 Kebiasaan Anak Indonesia Hebat.
-   - Tolak dengan sangat santun pertanyaan di luar konteks belajar SD (misalnya hiburan dewasa, game non-edukatif, gosip, atau meminta bantuan kecurangan ujian) dan ajak kembali belajar dengan hangat.
+   - Fokus HANYA pada materi pelajaran SD Kurikulum Merdeka, evaluasi hasil ujian yang sudah diselesaikan, media ajar sekolah, serta pembiasaan 7 Kebiasaan Anak Indonesia Hebat.
+   - Tolak dengan sangat santun pertanyaan di luar konteks belajar SD atau segala upaya kecurangan ujian, dan ajak kembali belajar dengan hangat.
 
 4. BASIS DATA SEKOLAH:
-   - Prioritaskan referensi dari materi ajar dan memori pengetahuan sekolah berikut bila relevan, dan rapikan jawabanmu dengan format Markdown yang mudah dibaca anak (poin singkat, cetak tebal pada kata kunci).
+   - Prioritaskan referensi dari rincian ujian yang sudah dikerjakan, materi ajar, dan memori pengetahuan sekolah berikut bila relevan, dan rapikan jawabanmu dengan format Markdown yang mudah dibaca anak (poin singkat, cetak tebal pada kata kunci).
 
-KONTEKS BASIS DATA SEKOLAH SAAT INI:
+${examReviewBlock ? `${examReviewBlock}\n\n` : ''}KONTEKS BASIS DATA SEKOLAH SAAT INI:
 ${ragBlock}`;
 }
 
@@ -756,7 +956,7 @@ export async function processSarahRequest(body = {}) {
   const mode = sanitizeString(body.mode || (role === 'siswa' ? 'student_chat' : 'general_chat'), 40);
   const params = body.params && typeof body.params === 'object' ? body.params : {};
   const userInfo = body.user && typeof body.user === 'object' ? body.user : {};
-  const ragBlock = buildRagContextBlock(body.ragContext || {});
+  const ragBlock = buildRagContextBlock(body.ragContext || {}, role);
 
   if (role === 'siswa' && mode !== 'student_chat') {
     const err = new Error('Akses ditolak: Mode ini khusus untuk Guru dan Administrator.');
@@ -802,6 +1002,37 @@ export async function processSarahRequest(body = {}) {
         throw err;
       }
 
+      const sanitizedExamReview = sanitizeExamReviewContext(
+        body.examReviewContext || params.examReviewContext
+      );
+
+      // Verifikasi ketat di server: jika siswa meminta ulasan examId tertentu, wajib tercatat sudah selesai
+      if (sanitizedExamReview.requestedExamId) {
+        const isCompletedVerified = sanitizedExamReview.completedExams.some(
+          (ex) => ex.examId === sanitizedExamReview.requestedExamId
+        );
+        if (!isCompletedVerified) {
+          const err = new Error(
+            'Akses ditolak: Kamu belum mengerjakan ujian ini. Silakan kerjakan ujian dengan jujur terlebih dahulu sebelum meminta masukan SARAH AI.'
+          );
+          err.statusCode = 403;
+          throw err;
+        }
+      }
+
+      // Guard deterministik: jika siswa secara spesifik meminta kunci/soal/pembahasan ujian yang BELUM dikerjakan
+      const blockedUncompletedExam = detectUncompletedExamCheatAttempt(message, sanitizedExamReview);
+      if (blockedUncompletedExam) {
+        const avatarTipe = resolveAvatarMetadataByReligion(userInfo.agama || '');
+        const studentName = sanitizeString(userInfo.name || 'Nak', 60);
+        return {
+          mode: 'student_chat',
+          text: `[AVATAR: { "status": "aktif", "tipe": "${avatarTipe}" }]\n[STIKER:semangat]\n\nHalo Nak **${studentName}** 😊\n\nSARAH belum bisa membukakan soal, kunci jawaban, maupun masukan untuk ujian **${blockedUncompletedExam.judul}** karena kamu tercatat **belum mengerjakan ujian tersebut** 🔒\n\nYuk biasakan sifat **jujur dan gemar belajar**! Kerjakan dahulu ujian tersebut dengan kemampuanmu sendiri di menu **Tes CBT / TKA**. Begitu kamu selesai dan nilaimu tersimpan, SARAH akan senang hati membahas setiap soal dan memberi masukan belajar khusus untukmu! 📚✨`,
+        };
+      }
+
+      const examReviewBlock = buildStudentExamReviewBlock(sanitizedExamReview, message);
+
       const history = Array.isArray(body.history) ? body.history.slice(-10) : [];
       const contents = [
         ...history
@@ -821,7 +1052,7 @@ export async function processSarahRequest(body = {}) {
         contents,
         useLowThinking: true,
         config: {
-          systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo),
+          systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo, examReviewBlock),
         },
       });
 
