@@ -1,7 +1,12 @@
 import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 
-export const SARAH_GEMINI_MODEL = 'gemini-2.5-flash';
+export const SARAH_GEMINI_MODEL = 'gemini-3.8-flash';
+export const SARAH_GEMINI_FALLBACK_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.5-flash',
+  'gemini-2.5-flash',
+];
 export const MAX_CONCURRENT_REQUESTS = Math.max(
   1,
   Number(process.env.SARAH_MAX_CONCURRENT_REQUESTS) || 4
@@ -75,8 +80,61 @@ export function parseGeminiErrorDetails(error) {
   return { statusCode, cleanMessage };
 }
 
+export function buildModelCandidateList(
+  primaryModel = SARAH_GEMINI_MODEL,
+  fallbackModels = SARAH_GEMINI_FALLBACK_MODELS
+) {
+  const ordered = [
+    String(primaryModel || '').trim(),
+    ...(Array.isArray(fallbackModels) ? fallbackModels : SARAH_GEMINI_FALLBACK_MODELS).map((m) =>
+      String(m || '').trim()
+    ),
+  ].filter(Boolean);
+  return [...new Set(ordered)];
+}
+
+export function isInvalidApiKeyError(error) {
+  if (error?.isAppError) return false;
+  const { statusCode, cleanMessage } = parseGeminiErrorDetails(error);
+  const lower = cleanMessage.toLowerCase();
+  if (statusCode === 401 || statusCode === 403) {
+    return true;
+  }
+  return (
+    lower.includes('api_key_invalid') ||
+    lower.includes('api key not valid') ||
+    lower.includes('api key expired') ||
+    lower.includes('permission_denied') ||
+    lower.includes('unauthenticated') ||
+    lower.includes('gemini_api_key belum dikonfigurasi')
+  );
+}
+
+export function isModelUnavailableError(error) {
+  if (error?.isAppError) return false;
+  const { statusCode, cleanMessage } = parseGeminiErrorDetails(error);
+  const lower = cleanMessage.toLowerCase();
+  if (statusCode === 404) return true;
+  if (
+    lower.includes('no longer available') ||
+    lower.includes('not available to new users') ||
+    lower.includes('update your code to use') ||
+    lower.includes('is not found') ||
+    lower.includes('model not found') ||
+    lower.includes('does not exist') ||
+    lower.includes('not supported for generatecontent') ||
+    lower.includes('unsupported model') ||
+    lower.includes('deprecated') ||
+    (statusCode === 400 && lower.includes('models/'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function isTransientGeminiError(error) {
   if (error?.isTimeout) return true;
+  if (isModelUnavailableError(error) || isInvalidApiKeyError(error)) return false;
   const { statusCode, cleanMessage } = parseGeminiErrorDetails(error);
   const lower = cleanMessage.toLowerCase();
   if ([408, 429, 500, 502, 503, 504].includes(statusCode)) return true;
@@ -91,7 +149,37 @@ export function isTransientGeminiError(error) {
     lower.includes('timed out') ||
     lower.includes('econnreset') ||
     lower.includes('etimedout') ||
+    lower.includes('enotfound') ||
     lower.includes('fetch failed')
+  );
+}
+
+function isCleanIndonesianAppMessage(msg = '') {
+  const s = String(msg || '').trim();
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  if (
+    lower.includes('models/') ||
+    lower.includes('gemini-') ||
+    lower.includes('no longer available') ||
+    lower.includes('please update your code') ||
+    lower.includes('api_key_invalid') ||
+    lower.includes('permission_denied') ||
+    lower.includes('resource_exhausted') ||
+    lower.includes('exception') ||
+    s.startsWith('{') ||
+    s.includes('http://') ||
+    s.includes('https://')
+  ) {
+    return false;
+  }
+  return (
+    lower.includes('sarah') ||
+    lower.includes('ujian') ||
+    lower.includes('akses ditolak') ||
+    lower.includes('lampiran') ||
+    lower.includes('tidak boleh kosong') ||
+    lower.includes('dibatalkan')
   );
 }
 
@@ -101,20 +189,56 @@ export function formatGeminiError(error) {
   let cleanMessage = initialMsg;
   const lower = cleanMessage.toLowerCase();
 
-  if (error?.isTimeout || statusCode === 504) {
+  if (error?.name === 'AbortError' || statusCode === 499) {
+    const abortErr = new Error('Permintaan analisis SARAH dibatalkan.');
+    abortErr.name = 'AbortError';
+    abortErr.statusCode = 499;
+    return abortErr;
+  }
+
+  if (error?.isAppError || isCleanIndonesianAppMessage(cleanMessage)) {
+    const appErr = new Error(cleanMessage);
+    appErr.statusCode = statusCode >= 400 && statusCode < 600 ? statusCode : 400;
+    appErr.isAppError = true;
+    return appErr;
+  }
+
+  if (error?.isTimeout || statusCode === 504 || lower.includes('timeout') || lower.includes('timed out')) {
     statusCode = 504;
     cleanMessage =
-      'Layanan SARAH AI sedang padat sehingga waktu tunggu habis. Silakan klik kirim ulang ya.';
-  } else if (statusCode === 400 || statusCode === 403) {
-    cleanMessage = `Konfigurasi API Key Gemini bermasalah (${cleanMessage}). Periksa GEMINI_API_KEY di Settings > Secrets atau Environment Variables Netlify.`;
+      'Koneksi ke layanan SARAH AI sedang padat sehingga waktu tunggu habis. Silakan coba kirim ulang sebentar lagi.';
+  } else if (isInvalidApiKeyError(error)) {
+    statusCode = statusCode === 401 || statusCode === 403 ? statusCode : 500;
+    cleanMessage =
+      'Konfigurasi layanan SARAH AI di server sedang perlu diperiksa oleh administrator. Silakan coba beberapa saat lagi.';
+  } else if (isModelUnavailableError(error)) {
+    statusCode = 503;
+    cleanMessage =
+      'Layanan model SARAH AI sedang diperbarui atau belum tersedia sementara. Silakan coba kirim ulang beberapa saat lagi.';
   } else if (statusCode === 503 || lower.includes('high demand') || lower.includes('overloaded')) {
     statusCode = 503;
     cleanMessage =
-      'Server AI Gemini sedang mengalami lonjakan antrean permintaan sementara. Silakan klik tombol kirim ulang beberapa detik lagi.';
-  } else if (statusCode === 429 || lower.includes('resource_exhausted')) {
+      'Server layanan SARAH AI sedang mengalami antrean padat sementara. Silakan coba kirim ulang beberapa detik lagi.';
+  } else if (statusCode === 429 || lower.includes('resource_exhausted') || lower.includes('quota')) {
     statusCode = 429;
     cleanMessage =
-      'Batas penggunaan (kuota) API Gemini sedang penuh sementara. Silakan tunggu beberapa detik lalu coba kirim ulang.';
+      'Batas antrean penggunaan layanan SARAH AI sedang penuh sementara. Silakan tunggu sejenak lalu coba kirim ulang.';
+  } else if (
+    lower.includes('fetch failed') ||
+    lower.includes('econnreset') ||
+    lower.includes('etimedout') ||
+    lower.includes('enotfound') ||
+    lower.includes('network')
+  ) {
+    statusCode = 502;
+    cleanMessage =
+      'Koneksi jaringan ke server SARAH AI terputus sementara. Silakan coba kirim ulang beberapa saat lagi.';
+  } else if (statusCode === 400) {
+    cleanMessage =
+      'Permintaan belum dapat diproses oleh layanan SARAH AI saat ini. Silakan periksa kembali pesan atau lampiran lalu coba kirim ulang.';
+  } else {
+    cleanMessage =
+      'Layanan SARAH AI sedang mengalami kendala koneksi sementara. Silakan coba kirim ulang beberapa saat lagi.';
   }
 
   const normalized = new Error(cleanMessage);
@@ -322,8 +446,9 @@ async function runAttemptWithAbortAndTimeout({
 }
 
 /**
- * Layanan terpusat SARAH Gemini (`gemini-2.5-flash`) dengan:
+ * Layanan terpusat SARAH Gemini (`gemini-3.8-flash` + fallback berurutan) dengan:
  * - Sistem Antrean terkontrol (`MAX_CONCURRENT_REQUESTS`) berbasis `AbortController`
+ * - Fallback model berurutan: ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
  * - Pembatalan instan & `timeoutMs` per permintaan
  * - Retry ringan untuk gangguan sementara (429/503/504/timeout)
  * - Result Caching (`responseCache`) berbasis hash SHA-256 & deduplikasi permintaan identik
@@ -333,6 +458,7 @@ export async function askSarahGemini({
   systemInstruction = '',
   config = {},
   model = SARAH_GEMINI_MODEL,
+  fallbackModels = SARAH_GEMINI_FALLBACK_MODELS,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retries = DEFAULT_MAX_RETRIES,
   useCache = true,
@@ -347,6 +473,7 @@ export async function askSarahGemini({
 
   const ai = getGeminiClient(apiKey);
   const effectiveModel = model || SARAH_GEMINI_MODEL;
+  const candidateModels = buildModelCandidateList(effectiveModel, fallbackModels);
 
   const finalConfig = { ...config };
   if (systemInstruction && !finalConfig.systemInstruction) {
@@ -387,54 +514,82 @@ export async function askSarahGemini({
       const totalAttempts = Math.max(1, 1 + Math.max(0, Number(retries) || 0));
       let lastError = null;
 
-      for (let attempt = 0; attempt < totalAttempts; attempt++) {
-        if (signal?.aborted) {
-          throw createAbortError();
-        }
-        if (attempt > 0) {
-          const jitterMs = 350 + Math.floor(Math.random() * 250);
-          await sleep(jitterMs);
+      for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
+        const candidateModel = candidateModels[mIdx];
+        const hasNextFallback = mIdx < candidateModels.length - 1;
+
+        for (let attempt = 0; attempt < totalAttempts; attempt++) {
           if (signal?.aborted) {
             throw createAbortError();
           }
-        }
-
-        try {
-          const rawResponse = await runAttemptWithAbortAndTimeout({
-            ai,
-            model: effectiveModel,
-            contents,
-            config: finalConfig,
-            timeoutMs,
-            externalSignal: signal,
-          });
-
-          const text = typeof rawResponse?.text === 'string' ? rawResponse.text : '';
-          const result = {
-            text,
-            rawResponse,
-            fromCache: false,
-            cacheKeyHash: effectiveCacheKey || '',
-            model: effectiveModel,
-          };
-
-          if (effectiveCacheKey && text.trim()) {
-            writeResponseCache(effectiveCacheKey, result);
+          if (attempt > 0) {
+            const jitterMs = 350 + Math.floor(Math.random() * 250);
+            await sleep(jitterMs);
+            if (signal?.aborted) {
+              throw createAbortError();
+            }
           }
 
-          return result;
-        } catch (err) {
-          if (err?.name === 'AbortError' || signal?.aborted) {
+          try {
+            const rawResponse = await runAttemptWithAbortAndTimeout({
+              ai,
+              model: candidateModel,
+              contents,
+              config: finalConfig,
+              timeoutMs,
+              externalSignal: signal,
+            });
+
+            const text = typeof rawResponse?.text === 'string' ? rawResponse.text : '';
+            const result = {
+              text,
+              rawResponse,
+              fromCache: false,
+              cacheKeyHash: effectiveCacheKey || '',
+              model: candidateModel,
+            };
+
+            if (effectiveCacheKey && text.trim()) {
+              writeResponseCache(effectiveCacheKey, result);
+            }
+
+            return result;
+          } catch (err) {
+            if (err?.name === 'AbortError' || signal?.aborted) {
+              throw err;
+            }
+            lastError = err;
+
+            if (isInvalidApiKeyError(err)) {
+              throw err;
+            }
+
+            if (isModelUnavailableError(err)) {
+              console.warn(
+                `[sarah-gemini-service] Model ${candidateModel} tidak tersedia (${parseGeminiErrorDetails(err).cleanMessage})${
+                  hasNextFallback ? `, beralih ke fallback ${candidateModels[mIdx + 1]}.` : '.'
+                }`
+              );
+              break;
+            }
+
+            if (isTransientGeminiError(err) && attempt < totalAttempts - 1) {
+              console.warn(
+                `[sarah-gemini-service] Retry ringan (${attempt + 1}/${totalAttempts - 1}) pada ${candidateModel}:`,
+                parseGeminiErrorDetails(err).cleanMessage
+              );
+              continue;
+            }
+
+            if (hasNextFallback && isTransientGeminiError(err)) {
+              console.warn(
+                `[sarah-gemini-service] ${candidateModel} gagal sementara, mencoba model cadangan ${candidateModels[mIdx + 1]}.`
+              );
+              break;
+            }
+
             throw err;
           }
-          lastError = err;
-          if (!isTransientGeminiError(err) || attempt === totalAttempts - 1) {
-            throw err;
-          }
-          console.warn(
-            `[sarah-gemini-service] Retry ringan (${attempt + 1}/${totalAttempts - 1}) pada ${effectiveModel}:`,
-            parseGeminiErrorDetails(err).cleanMessage
-          );
         }
       }
 
@@ -458,6 +613,7 @@ export async function askSarahGemini({
 export function getSarahGeminiMetrics() {
   return {
     model: SARAH_GEMINI_MODEL,
+    fallbackModels: SARAH_GEMINI_FALLBACK_MODELS,
     maxConcurrentRequests: MAX_CONCURRENT_REQUESTS,
     activeRequestsCount,
     queuedRequestsCount: pendingQueue.length,

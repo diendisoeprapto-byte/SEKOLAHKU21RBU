@@ -609,6 +609,7 @@ export interface SarahCbtGeneratedResponse {
 export interface SarahTextGeneratedResponse {
   mode: string;
   text: string;
+  model?: string;
 }
 
 export interface SarahImageGeneratedResponse {
@@ -867,7 +868,7 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
       }
 
       try {
-        const analyzeMsg = 'SARAH sedang menganalisis secara async (gemini-2.5-flash)...';
+        const analyzeMsg = 'SARAH sedang menganalisis secara async (gemini-3.8-flash)...';
         onStatusChange?.(analyzeMsg);
         onPhaseChange?.('analyzing', analyzeMsg);
 
@@ -898,8 +899,9 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
           return data as T & { fromCache?: boolean };
         }
 
-        const errMsg =
-          data?.error || `Permintaan ke layanan SARAH gagal (HTTP ${response.status}).`;
+        const errMsg = sanitizeSarahErrorMessage(
+          data?.error || `Permintaan ke layanan SARAH gagal (HTTP ${response.status}).`
+        );
         const isTransientStatus = [429, 502, 503, 504].includes(response.status);
         lastErr = new Error(errMsg);
 
@@ -909,7 +911,7 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
       } catch (err: any) {
         if (timedOut) {
           lastErr = new Error(
-            'Koneksi ke SARAH melebihi batas waktu tunggu (timeout). Silakan klik ulangi lagi.'
+            'Koneksi ke layanan SARAH AI sedang padat sehingga waktu tunggu habis. Silakan coba kirim ulang sebentar lagi.'
           );
           if (attempt === maxAttempts - 1) throw lastErr;
         } else if (err?.name === 'AbortError' || signal?.aborted) {
@@ -917,7 +919,11 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
           throw new DOMException('Permintaan ke SARAH dibatalkan.', 'AbortError');
         } else {
           const isNetworkError = err instanceof TypeError;
-          lastErr = err instanceof Error ? err : new Error('Gagal terhubung ke layanan SARAH.');
+          lastErr = new Error(
+            sanitizeSarahErrorMessage(
+              err instanceof Error ? err.message : 'Gagal terhubung ke layanan SARAH.'
+            )
+          );
           if (!isNetworkError || attempt === maxAttempts - 1) {
             throw lastErr;
           }
@@ -930,10 +936,137 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
       }
     }
 
-    throw lastErr || new Error('Permintaan ke layanan SARAH gagal.');
+    throw lastErr || new Error('Layanan SARAH AI sedang mengalami kendala koneksi sementara.');
   } finally {
     releaseSarahQueueSlot();
   }
+}
+
+export function sanitizeSarahErrorMessage(rawMessage?: unknown): string {
+  const raw =
+    typeof rawMessage === 'string'
+      ? rawMessage.trim()
+      : rawMessage instanceof Error
+      ? String(rawMessage.message || '').trim()
+      : '';
+
+  if (!raw) {
+    return 'Koneksi ke layanan SARAH AI sedang mengalami gangguan sementara. Silakan coba kirim ulang ya.';
+  }
+
+  const lower = raw.toLowerCase();
+
+  // Pertahankan pesan domain aplikasi yang memang sudah ramah berbahasa Indonesia
+  if (lower.includes('belum menyelesaikan ujiannya')) {
+    return raw;
+  }
+
+  if (
+    lower.includes('no longer available') ||
+    lower.includes('not available to new users') ||
+    lower.includes('update your code to use') ||
+    lower.includes('models/') ||
+    lower.includes('gemini-') ||
+    lower.includes('model not found') ||
+    lower.includes('deprecated')
+  ) {
+    return 'Layanan model SARAH AI sedang disinkronkan atau beralih ke jalur cadangan sementara. Silakan coba kirim ulang sebentar lagi.';
+  }
+
+  if (
+    lower.includes('timeout') ||
+    lower.includes('timed out') ||
+    lower.includes('batas waktu') ||
+    lower.includes('504')
+  ) {
+    return 'Koneksi ke layanan SARAH AI sedang padat sehingga waktu tunggu habis. Silakan coba kirim ulang sebentar lagi.';
+  }
+
+  if (
+    lower.includes('resource_exhausted') ||
+    lower.includes('quota') ||
+    lower.includes('429') ||
+    lower.includes('batas penggunaan') ||
+    lower.includes('batas antrean')
+  ) {
+    return 'Antrean permintaan ke layanan SARAH AI sedang penuh sementara. Silakan tunggu sejenak lalu coba kirim ulang.';
+  }
+
+  if (
+    lower.includes('overloaded') ||
+    lower.includes('high demand') ||
+    lower.includes('unavailable') ||
+    lower.includes('503')
+  ) {
+    return 'Server layanan SARAH AI sedang padat sementara. Silakan coba kirim ulang beberapa detik lagi.';
+  }
+
+  if (
+    lower.includes('api_key') ||
+    lower.includes('api key') ||
+    lower.includes('permission_denied') ||
+    lower.includes('unauthenticated') ||
+    lower.includes('401') ||
+    lower.includes('403')
+  ) {
+    return 'Konfigurasi akses layanan SARAH AI di server sedang perlu diperiksa. Silakan coba beberapa saat lagi.';
+  }
+
+  if (
+    lower.includes('failed to fetch') ||
+    lower.includes('networkerror') ||
+    lower.includes('network request failed') ||
+    lower.includes('fetch failed') ||
+    lower.includes('econn') ||
+    lower.includes('http ') ||
+    raw.startsWith('{') ||
+    raw.includes('{"error"') ||
+    raw.length > 180
+  ) {
+    return 'Koneksi ke server SARAH AI sedang mengalami kendala sementara. Silakan coba kirim ulang sebentar lagi.';
+  }
+
+  return raw;
+}
+
+export function formatFriendlySarahChatError(
+  rawError: unknown,
+  audience: 'endi' | 'guru' | 'siswa'
+): string {
+  const cleanDetail = sanitizeSarahErrorMessage(rawError);
+  const lower = cleanDetail.toLowerCase();
+
+  if (lower.includes('belum menyelesaikan ujiannya')) {
+    return `🔒 ${cleanDetail}`;
+  }
+
+  const isBusyOrTimeout =
+    lower.includes('padat') ||
+    lower.includes('waktu tunggu') ||
+    lower.includes('antrean') ||
+    lower.includes('penuh');
+
+  if (audience === 'endi') {
+    if (isBusyOrTimeout) {
+      return 'Maaf ya Mas Endi, layanan SARAH sedang sedikit padat dan butuh waktu sebentar. Mas silakan tekan tombol Coba Kirim Ulang di bawah ya 😊';
+    }
+    if (lower.includes('model') || lower.includes('konfigurasi')) {
+      return 'Maaf ya Mas Endi, sambungan ke server SARAH AI sedang disinkronkan sementara. Mas boleh klik tombol Coba Kirim Ulang beberapa saat lagi ya 😊';
+    }
+    return 'Maaf ya Mas Endi, SARAH mengalami kendala koneksi sebentar saat menjawab pesan Mas. Yuk klik tombol Coba Kirim Ulang di bawah ya 😊';
+  }
+
+  if (audience === 'siswa') {
+    if (isBusyOrTimeout) {
+      return 'Maaf ya Nak, teman-teman sedang ramai bertanya sehingga SARAH perlu antre sebentar. Yuk klik tombol Coba Kirim Ulang di bawah ya! 😊';
+    }
+    return 'Maaf ya Nak, SARAH sedang mengalami kendala koneksi sebentar. Yuk tekan tombol Coba Kirim Ulang di bawah ya! 😊';
+  }
+
+  if (isBusyOrTimeout) {
+    return 'Mohon maaf Bapak/Ibu, antrean layanan SARAH AI sedang padat sementara. Silakan klik tombol Coba Kirim Ulang beberapa detik lagi.';
+  }
+  return 'Mohon maaf Bapak/Ibu, koneksi ke layanan SARAH AI sedang mengalami kendala sementara. Silakan klik tombol Coba Kirim Ulang beberapa saat lagi.';
 }
 
 const activeAnalysisControllers = new Map<string, AbortController>();

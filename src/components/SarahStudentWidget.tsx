@@ -48,6 +48,7 @@ import {
   createSarahChatSession,
   deleteSarahChatSession,
   enqueueSarahAnalysisRequest,
+  formatFriendlySarahChatError,
   formatSarahDateTime,
   loadSarahSessionMessages,
   loadUserSarahChatSessions,
@@ -90,6 +91,7 @@ interface ChatMessage {
   text: string;
   isError?: boolean;
   retryPrompt?: string;
+  retryExam?: SarahCompletedExamReview;
 }
 
 function normalizeKelas(raw?: string): string {
@@ -645,7 +647,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
         {
           id: `err_${Date.now()}`,
           role: 'model',
-          text: `Maaf ya Nak, SARAH sedang mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}).`,
+          text: formatFriendlySarahChatError(err, 'siswa'),
           isError: true,
           retryPrompt: question,
         },
@@ -886,8 +888,9 @@ export const SarahStudentWidget: React.FC<Props> = ({
         {
           id: `err_rev_${Date.now()}`,
           role: 'model',
-          text: `Maaf ya Nak, SARAH mengalami kendala koneksi saat menyiapkan evaluasi soal (${err?.message || 'coba lagi'}).`,
+          text: formatFriendlySarahChatError(err, 'siswa'),
           isError: true,
+          retryExam: exam,
         },
       ]);
     } finally {
@@ -1274,12 +1277,18 @@ export const SarahStudentWidget: React.FC<Props> = ({
                         ) : msg.isError ? (
                           <>
                             <p className="text-xs leading-relaxed">{msg.text}</p>
-                            {msg.retryPrompt && (
+                            {(msg.retryPrompt || msg.retryExam) && (
                               <div className="flex justify-end pt-1 border-t border-amber-200/70">
                                 <button
                                   type="button"
                                   disabled={isThinking}
-                                  onClick={() => handleSend(undefined, msg.retryPrompt)}
+                                  onClick={() => {
+                                    if (msg.retryExam) {
+                                      void handleRequestWrongReview(msg.retryExam);
+                                    } else if (msg.retryPrompt) {
+                                      void handleSend(undefined, msg.retryPrompt);
+                                    }
+                                  }}
                                   className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] flex items-center gap-1 cursor-pointer transition disabled:opacity-50"
                                 >
                                   <RotateCcw className="w-2.5 h-2.5" />

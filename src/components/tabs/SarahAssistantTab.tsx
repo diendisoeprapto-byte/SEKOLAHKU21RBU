@@ -78,11 +78,13 @@ import {
   deleteSarahChatSession,
   deleteSarahKnowledgeItem,
   exportSarahToWordDoc,
+  formatFriendlySarahChatError,
   formatSarahDateTime,
   loadSarahSessionMessages,
   loadUserSarahChatSessions,
   rasterizeSvgToPngDataUrl,
   retrieveSarahRagContext,
+  sanitizeSarahErrorMessage,
   subscribeToMediaAjarForSarah,
   subscribeToSarahConfig,
   subscribeToSarahKnowledgeBase,
@@ -183,6 +185,7 @@ interface TeacherChatMessage {
   attachments?: TeacherChatAttachmentView[];
   isError?: boolean;
   retryPrompt?: string;
+  retryAttachments?: SarahChatAttachment[];
 }
 
 const DEFAULT_MAPEL_LIST = [
@@ -989,11 +992,18 @@ export const SarahAssistantTab: React.FC<Props> = ({
     }
   };
 
-  const handleSendTeacherChat = async (e?: React.FormEvent, overrideText?: string) => {
+  const handleSendTeacherChat = async (
+    e?: React.FormEvent,
+    overrideText?: string,
+    overrideAttachments?: SarahChatAttachment[]
+  ) => {
     if (e) e.preventDefault();
     const promptText = (overrideText ?? chatInput).trim();
-    const pendingAttachments =
-      !overrideText && canUploadChatFiles ? [...chatAttachments] : [];
+    const pendingAttachments = Array.isArray(overrideAttachments)
+      ? overrideAttachments
+      : !overrideText && canUploadChatFiles
+      ? [...chatAttachments]
+      : [];
 
     if ((!promptText && pendingAttachments.length === 0) || isChatSending || isReadingAttachment) {
       return;
@@ -1173,11 +1183,10 @@ export const SarahAssistantTab: React.FC<Props> = ({
         {
           id: `terr_${Date.now()}`,
           role: 'model',
-          text: isExclusiveEndi
-            ? `Maaf ya Mas Endi, SARAH mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}). Coba kirim ulang ya Mas 😊`
-            : `Mohon maaf Bapak/Ibu, SARAH mengalami kendala koneksi sebentar (${err?.message || 'coba lagi'}). Silakan coba kirim ulang ya 😊`,
+          text: formatFriendlySarahChatError(err, isExclusiveEndi ? 'endi' : 'guru'),
           isError: true,
-          ...(pendingAttachments.length === 0 ? { retryPrompt: promptText } : {}),
+          retryPrompt: displayUserText,
+          ...(pendingAttachments.length > 0 ? { retryAttachments: pendingAttachments } : {}),
         },
       ]);
     } finally {
@@ -1341,7 +1350,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         );
       }
     } catch (err: any) {
-      showToast(err?.message || 'Gagal menyusun LKPD dengan SARAH.', 'error');
+      showToast(sanitizeSarahErrorMessage(err), 'error');
     } finally {
       setIsGenerating(false);
       setProcessingLabel('');
@@ -1375,7 +1384,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       setGambarHistory((prev) => [asset, ...prev].slice(0, 8));
       showToast('Ilustrasi LKPD berhasil diperbarui!', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Gagal membuat ulang gambar LKPD.', 'error');
+      showToast(sanitizeSarahErrorMessage(err), 'error');
     } finally {
       setIsRegenLkpdImage(false);
     }
@@ -1467,7 +1476,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         showToast('Modul Ajar & RPP Berdiferensiasi berhasil disusun oleh SARAH!', 'success');
       }
     } catch (err: any) {
-      showToast(err?.message || 'Gagal menghubungi asisten SARAH.', 'error');
+      showToast(sanitizeSarahErrorMessage(err), 'error');
     } finally {
       setIsGenerating(false);
       setProcessingLabel('');
@@ -1501,7 +1510,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       setGambarHistory((prev) => [asset, ...prev].slice(0, 8));
       showToast('Ilustrasi Modul Ajar berhasil diperbarui!', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Gagal membuat ulang gambar Modul Ajar.', 'error');
+      showToast(sanitizeSarahErrorMessage(err), 'error');
     } finally {
       setIsRegenModulImage(false);
     }
@@ -1538,7 +1547,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       setGambarHistory((prev) => [asset, ...prev].slice(0, 8));
       showToast('Gambar ilustrasi menarik berhasil dibuat oleh SARAH!', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Gagal membuat gambar bersama SARAH.', 'error');
+      showToast(sanitizeSarahErrorMessage(err), 'error');
     } finally {
       setIsGeneratingImage(false);
     }
@@ -1623,7 +1632,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         'success'
       );
     } catch (err: any) {
-      showToast(err?.message || 'Gagal menghasilkan soal CBT.', 'error');
+      showToast(sanitizeSarahErrorMessage(err), 'error');
     } finally {
       setIsGenerating(false);
       setProcessingLabel('');
@@ -1772,7 +1781,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       setRisetResult(enrichSarahFriendlyEmojis(res.text));
       showToast('Riset & ide aktivitas pembelajaran berhasil disusun SARAH!', 'success');
     } catch (err: any) {
-      showToast(err?.message || 'Gagal menghubungi asisten SARAH.', 'error');
+      showToast(sanitizeSarahErrorMessage(err), 'error');
     } finally {
       setIsGenerating(false);
       setProcessingLabel('');
@@ -2397,12 +2406,18 @@ export const SarahAssistantTab: React.FC<Props> = ({
                       ) : msg.isError ? (
                         <>
                           <p className="text-xs sm:text-sm leading-relaxed">{msg.text}</p>
-                          {msg.retryPrompt && (
+                          {(msg.retryPrompt || (msg.retryAttachments && msg.retryAttachments.length > 0)) && (
                             <div className="flex justify-end pt-1.5 border-t border-amber-200/70">
                               <button
                                 type="button"
                                 disabled={isChatSending}
-                                onClick={() => handleSendTeacherChat(undefined, msg.retryPrompt)}
+                                onClick={() =>
+                                  handleSendTeacherChat(
+                                    undefined,
+                                    msg.retryPrompt || '',
+                                    msg.retryAttachments
+                                  )
+                                }
                                 className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition disabled:opacity-50"
                               >
                                 <RotateCcw className="w-3 h-3" />

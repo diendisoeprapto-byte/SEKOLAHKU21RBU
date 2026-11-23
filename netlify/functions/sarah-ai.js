@@ -1052,6 +1052,7 @@ ${ragBlock ? `REFERENSI KURIKULUM:\n${ragBlock}\n\n` : ''}TUGAS WAJIB OUTPUT SAR
       `${stickerTag}\n\nHebat sekali **${studentName}** sudah menyelesaikan ujian **${examTitle}** dengan nilai **${score}/100**! Terus semangat belajar ya, Nak 🌟`,
     fromCache: Boolean(response.fromCache),
     cacheKeyHash: response.cacheKeyHash || resultCacheHash,
+    model: response.model || SARAH_GEMINI_MODEL,
   };
 }
 
@@ -1148,6 +1149,7 @@ WAJIB MENYAJIKAN OUTPUT TERSTRUKTUR DENGAN 4 BAGIAN BERIKUT:
     text: replyText || 'Mohon maaf, analisis perkembangan ujian belum dapat dibuat saat ini.',
     fromCache: Boolean(response.fromCache),
     cacheKeyHash: response.cacheKeyHash || resultCacheHash,
+    model: response.model || SARAH_GEMINI_MODEL,
   };
 }
 
@@ -1232,6 +1234,7 @@ export async function processSarahRequest(body = {}, options = {}) {
             'Maaf ya, SARAH belum bisa membuka pembahasan atau analisis soal ini karena kamu belum menyelesaikan ujiannya di CBT/TKA. Silakan kerjakan dan kirim jawabanmu terlebih dahulu!'
           );
           err.statusCode = 403;
+          err.isAppError = true;
           throw err;
         }
       }
@@ -1282,6 +1285,7 @@ export async function processSarahRequest(body = {}, options = {}) {
         mode: 'student_chat',
         text: (response.text || '').trim() || 'Maaf ya Nak, SARAH belum dapat memproses pertanyaanmu saat ini.',
         fromCache: Boolean(response.fromCache),
+        model: response.model || SARAH_GEMINI_MODEL,
       };
     }
 
@@ -1349,6 +1353,7 @@ export async function processSarahRequest(body = {}, options = {}) {
         mode: 'general_chat',
         text: replyText || 'Mohon maaf, SARAH belum menghasilkan balasan. Silakan coba kembali.',
         fromCache: Boolean(response.fromCache),
+        model: response.model || SARAH_GEMINI_MODEL,
       };
     }
 
@@ -1382,8 +1387,10 @@ export async function processSarahRequest(body = {}, options = {}) {
       mode,
       text: replyText || 'Mohon maaf, SARAH belum menghasilkan respons. Silakan coba lagi.',
       fromCache: Boolean(response.fromCache),
+      model: response.model || SARAH_GEMINI_MODEL,
     };
   } catch (error) {
+    console.error('[sarah-ai processSarahRequest error]:', error?.message || error);
     throw formatGeminiError(error);
   }
 }

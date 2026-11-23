@@ -21,6 +21,7 @@ import {
   cancelSarahAnalysisQueueGroup,
   enqueueSarahAnalysisRequest,
   exportSarahToWordDoc,
+  sanitizeSarahErrorMessage,
 } from '../utils/sarahFirestore';
 import { extractSarahResponseMetadata } from '../utils/sarahVisuals';
 import {
@@ -87,6 +88,7 @@ export const SarahExamAnalysisPanel: React.FC<Props> = ({
   const [resultFromCache, setResultFromCache] = useState(false);
   const [resultCacheHash, setResultCacheHash] = useState('');
   const [analysisResult, setAnalysisResult] = useState('');
+  const [analysisModel, setAnalysisModel] = useState('gemini-3.8-flash');
   const [analysisError, setAnalysisError] = useState('');
   const [avatarError, setAvatarError] = useState(false);
   const analysisAbortRef = useRef<AbortController | null>(null);
@@ -312,6 +314,7 @@ export const SarahExamAnalysisPanel: React.FC<Props> = ({
             .trim();
 
       setAnalysisResult(cleanedReply);
+      setAnalysisModel(res.model || 'gemini-3.8-flash');
       setResultFromCache(Boolean(res.fromCache));
       setResultCacheHash(res.resultCacheHash || '');
       setAnalysisPhase(res.fromCache ? 'cached_hit' : 'done');
@@ -327,7 +330,7 @@ export const SarahExamAnalysisPanel: React.FC<Props> = ({
         setAnalysisStatusText('Permintaan analisis SARAH dibatalkan.');
         return;
       }
-      const msg = err?.message || 'Gagal menghubungi layanan SARAH AI.';
+      const msg = sanitizeSarahErrorMessage(err);
       setAnalysisPhase('error');
       setAnalysisStatusText(msg);
       setAnalysisError(msg);
@@ -518,7 +521,7 @@ export const SarahExamAnalysisPanel: React.FC<Props> = ({
                     : analysisPhase === 'cached_hit'
                     ? '⚡ Dimuat instan dari Result Cache (hash id_ujian, nisn)'
                     : analysisPhase === 'done'
-                    ? '✓ Analisis selesai (gemini-2.5-flash)'
+                    ? `✓ Analisis selesai (${analysisModel || 'gemini-3.8-flash'})`
                     : analysisPhase === 'cancelled'
                     ? 'Dibatalkan oleh pengguna'
                     : 'Siap dijalankan melalui antrean async'}
