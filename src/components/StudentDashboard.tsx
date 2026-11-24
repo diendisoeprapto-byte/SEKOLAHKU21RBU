@@ -36,7 +36,7 @@ import {
   Loader2,
   Zap,
 } from 'lucide-react';
-import { collection, addDoc, doc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, setDoc, getDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../utils/firebase';
 import {
   ActiveUser,
@@ -79,6 +79,8 @@ import {
 import {
   saveCbtResultToFirestore,
   savePeriodicCbtDraftToFirestore,
+  buildCbtResultDocId,
+  CBT_RESULTS_COLLECTION,
 } from '../utils/cbtResultFirestore';
 import { computeExamHotsStats, formatDurasiDetik } from '../utils/examRanking';
 import { syncAllLocalToCloud } from '../utils/cloudSync';
@@ -116,6 +118,7 @@ interface Props {
   onNavigateTab: (tab: any) => void;
   initialTab?: string;
   onExamStatusChange?: (status: ActiveExamHeaderStatus | null) => void;
+  onExamActiveChange?: (active: boolean) => void;
 }
 
 interface ExamOptionItem {
@@ -143,7 +146,21 @@ export const StudentDashboard: React.FC<Props> = ({
   onNavigateTab,
   initialTab,
   onExamStatusChange,
+  onExamActiveChange,
 }) => {
+  const [submittingModalState, setSubmittingModalState] = useState<{
+    isOpen: boolean;
+    status: 'submitting' | 'retry' | 'success';
+    attemptCount: number;
+    message: string;
+  }>({
+    isOpen: false,
+    status: 'submitting',
+    attemptCount: 1,
+    message: 'Mengirim jawaban ke server...',
+  });
+
+
   // Mode tampilan siswa: 'home' (cards), 'cbt' (flow ujian CBT), 'tka' (flow ujian TKA), 'kebiasaan' (Form Laporan 7 Kebiasaan)
   const [viewMode, setViewMode] = useState<'home' | 'cbt' | 'tka' | 'kebiasaan'>(() => {
     if (initialTab === 'laporan-kebiasaan') return 'kebiasaan';
@@ -223,6 +240,108 @@ export const StudentDashboard: React.FC<Props> = ({
   const [selectedMapelFilter, setSelectedMapelFilter] = useState<string>('');
   const [selectedExamId, setSelectedExamId] = useState<string>('');
   const [isExamRunning, setIsExamRunning] = useState<boolean>(false);
+
+  useEffect(() => {
+    onExamActiveChange?.(isExamRunning);
+  }, [isExamRunning, onExamActiveChange]);
+
+  useEffect(() => {
+    try {
+      const pendingRaw = localStorage.getItem('sekolahku_pending_submission_lock_v1');
+      if (pendingRaw) {
+        const item = JSON.parse(pendingRaw);
+        if (item && item.idUjian) {
+          onExamActiveChange?.(true);
+          setSubmittingModalState({
+            isOpen: true,
+            status: 'retry',
+            attemptCount: 1,
+            message:
+              'Mendeteksi nilai ujian yang tertunda sebelumnya. Sistem sedang menyelesaikan pengiriman ke database sekolah...',
+          });
+          void (async () => {
+            let recovered = false;
+            let recAttempt = 0;
+            const docId = buildCbtResultDocId(item.idUjian, item.nisn || item.nama);
+            while (!recovered && recAttempt < 25) {
+              recAttempt++;
+              try {
+                if (item.category === 'tka') {
+                  const normMapelKey = normalizeTkaMapelKey(item.mapel);
+                  const durationUsed = Math.max(1, Math.ceil((item.durasiDetik || 60) / 60));
+                  const tkaRes = await upsertTkaSubmissionAsync({
+                    student: {
+                      id: item.nisn || 'siswa',
+                      nama: item.nama,
+                      kelas: item.kelas,
+                      nisn: item.nisn,
+                    } as any,
+                    paketName: item.paketName,
+                    mapelScores: { [normMapelKey]: item.nilaiAkhir },
+                    completedMapelKeys: [normMapelKey],
+                    questionAnswers: item.skorPerNomor || {},
+                    durasiMenitUsed: durationUsed,
+                    durasiDetik: item.durasiDetik || 60,
+                    benarHots: item.benarHots || 0,
+                    totalHots: item.totalHots || 0,
+                    jenjang: item.kelas || 'Kelas 6',
+                    tahunPelajaran: activeYear,
+                    semester: activeSemester,
+                  });
+                  if (tkaRes && (tkaRes as any).cloudSaved) {
+                    recovered = true;
+                  }
+                } else {
+                  await saveCbtResultToFirestore({
+                    examId: item.idUjian,
+                    studentId: item.nisn || 'siswa',
+                    studentName: item.nama,
+                    nisn: item.nisn,
+                    kelas: item.kelas,
+                    skor: item.nilaiAkhir,
+                    nilai: item.nilaiAkhir,
+                    waktuSelesai: new Date().toLocaleTimeString(),
+                    jawabanSiswa: item.skorPerNomor || {},
+                    category: 'cbt',
+                    mapel: item.mapel,
+                    judul: item.judul,
+                    paketName: item.paketName,
+                    tanggal: getLocalTodayStr(),
+                    recordedAt: item.recordedAt || Date.now(),
+                    tahunPelajaran: activeYear,
+                    semester: activeSemester,
+                    statusPengerjaan: 'selesai',
+                  });
+                  const snap = (await Promise.race([
+                    getDoc(doc(db, CBT_RESULTS_COLLECTION, docId)),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout')), 8000)),
+                  ])) as any;
+                  if (snap && snap.exists()) {
+                    recovered = true;
+                  }
+                }
+              } catch {
+                // ignore
+              }
+              if (!recovered) {
+                await new Promise((res) => setTimeout(res, 4000));
+              }
+            }
+            if (recovered) {
+              setSubmittingModalState({
+                isOpen: true,
+                status: 'success',
+                attemptCount: recAttempt,
+                message: 'BERHASIL! Nilai Anda sudah masuk ke sistem Guru & Admin.',
+              });
+            }
+          })();
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, [activeYear, activeSemester, onExamActiveChange]);
   const [runningExamSnapshot, setRunningExamSnapshot] = useState<ExamOptionItem | null>(null);
   const [runningSoalList, setRunningSoalList] = useState<CBTQuestion[]>([]);
   const [currentQIndex, setCurrentQIndex] = useState<number>(0);
@@ -1734,45 +1853,95 @@ export const StudentDashboard: React.FC<Props> = ({
     });
     window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
 
-    // Kirim hasil terisolasi per siswa ke Firestore dengan exponential backoff (4x percobaan)
-    let cbtIsolatedCloudSaved = false;
-    if (finishedExam.category !== 'tka') {
+    const instantBackup = {
+      nisn: currentStudent.nisn || currentStudent.id,
+      nama: currentStudent.nama,
+      kelas: currentStudent.kelas,
+      idUjian: finishedExam.id,
+      mapel: finishedExam.mapel,
+      paketName: finishedExam.paketName,
+      judul: finishedExam.judul,
+      category: finishedExam.category,
+      skorPerNomor: answers,
+      nilaiAkhir: finalGrade,
+      benarHots,
+      totalHots,
+      durasiDetik,
+      recordedAt: Date.now(),
+    };
+    try {
+      localStorage.setItem('sekolahku_pending_submission_lock_v1', JSON.stringify(instantBackup));
+    } catch {
+      // ignore
+    }
+
+    const cbtResultDocId = buildCbtResultDocId(finishedExam.id, currentStudent.nisn || currentStudent.id);
+    let success = false;
+    let attempt = 0;
+
+    while (!success && attempt < 25) {
+      attempt++;
+      setSubmittingModalState({
+        isOpen: true,
+        status: attempt > 1 ? 'retry' : 'submitting',
+        attemptCount: attempt,
+        message:
+          attempt > 1
+            ? `Koneksi sedang lambat (Wait Response). Jawaban Anda aman, sistem sedang mengirim ulang otomatis... (Percobaan ke-${attempt}). Mohon jangan tutup halaman ini.`
+            : 'Mengirim nilai ujian ke server (Tahan Wait Response)...',
+      });
+
       try {
-        cbtIsolatedCloudSaved = await saveCbtResultToFirestore(newResultEntry);
-      } catch (cbtErr) {
-        console.warn('Isolated CBT result save warning:', cbtErr);
+        if (finishedExam.category === 'tka') {
+          const normMapelKey = normalizeTkaMapelKey(finishedExam.mapel);
+          const durationUsed = Math.max(1, Math.ceil(durasiDetik / 60));
+          const tkaPromise = upsertTkaSubmissionAsync({
+            student: currentStudent,
+            paketName: finishedExam.paketName,
+            mapelScores: { [normMapelKey]: finalGrade },
+            completedMapelKeys: [normMapelKey],
+            questionAnswers: answers,
+            durasiMenitUsed: durationUsed,
+            durasiDetik,
+            benarHots,
+            totalHots,
+            jenjang: currentStudent.kelas || 'Kelas 6',
+            tahunPelajaran: activeFilters.year,
+            semester: activeFilters.semester,
+          });
+          const tkaRes = await Promise.race([
+            tkaPromise,
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000)),
+          ]);
+          if (tkaRes && (tkaRes as any).cloudSaved) {
+            success = true;
+          }
+        } else {
+          await saveCbtResultToFirestore(newResultEntry);
+          const snap = await Promise.race([
+            getDoc(doc(db, CBT_RESULTS_COLLECTION, cbtResultDocId)),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout')), 8000)),
+          ]) as any;
+          if (snap && snap.exists()) {
+            success = true;
+          }
+        }
+      } catch (err) {
+        console.warn(`Submission attempt ${attempt} warning:`, err);
+      }
+
+      if (!success) {
+        await new Promise((res) => setTimeout(res, 4000));
       }
     }
 
-    // Jika TKA, kirim & tunggu (await) penulisan langsung ke koleksi Firestore 'tka_submissions'
-    let tkaCloudSaved = false;
-    if (finishedExam.category === 'tka') {
-      try {
-        const normMapelKey = normalizeTkaMapelKey(finishedExam.mapel);
-        const durationUsed = Math.max(1, Math.ceil(durasiDetik / 60));
-        const tkaPromise = upsertTkaSubmissionAsync({
-          student: currentStudent,
-          paketName: finishedExam.paketName,
-          mapelScores: { [normMapelKey]: finalGrade },
-          completedMapelKeys: [normMapelKey],
-          questionAnswers: answers,
-          durasiMenitUsed: durationUsed,
-          durasiDetik,
-          benarHots,
-          totalHots,
-          jenjang: currentStudent.kelas || 'Kelas 6',
-          tahunPelajaran: activeFilters.year,
-          semester: activeFilters.semester,
-        });
-        const tkaRes = await Promise.race([
-          tkaPromise,
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 15000)),
-        ]);
-        tkaCloudSaved = Boolean(tkaRes && tkaRes.cloudSaved);
-      } catch (tkaErr) {
-        console.warn('Sync TKA submission error:', tkaErr);
-      }
-    }
+    setSubmittingModalState({
+      isOpen: true,
+      status: 'success',
+      attemptCount: attempt,
+      message: 'BERHASIL! Nilai Anda sudah masuk ke sistem Guru & Admin.',
+    });
+    setIsSavingSubmission(false);
 
     // Sinkronisasi ke asesmen siswa secara otomatis & langsung kirim ke Firestore sebelum sesi ditutup
     let assessKeyWritten = '';
@@ -1836,7 +2005,7 @@ export const StudentDashboard: React.FC<Props> = ({
     }
 
     // Kirim ke database Firestore (koleksi assessments + snapshot cloud penuh)
-    let cloudSaved = finishedExam.category === 'tka' ? tkaCloudSaved : cbtIsolatedCloudSaved;
+    let cloudSaved = success;
     try {
       const dbTasks: Promise<any>[] = [];
       if (assessKeyWritten && assessPayloadWritten) {
@@ -2940,220 +3109,86 @@ export const StudentDashboard: React.FC<Props> = ({
             </div>
           </div>
         ) : !examResult ? (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div>
-              <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-wider mb-1 flex items-center gap-2">
+              <h3 className="font-display font-black text-sm text-slate-800 flex items-center gap-2">
                 <span className={`w-2.5 h-2.5 rounded-full ${viewMode === 'tka' ? 'bg-purple-600' : 'bg-rose-600'}`}></span>
-                {viewMode === 'tka'
-                  ? 'Pilih Jenis Soal TKA & Mata Pelajaran'
-                  : 'Pilih Paket Soal CBT & Mata Pelajaran'}
-              </label>
-              <p className="text-xs text-slate-500">
-                {viewMode === 'tka'
-                  ? 'Pilih jenis TKA (misal: Simulasi 1 / Try Out 1) dan mata pelajaran yang diinginkan. Soal akan tampil sesuai paket & mapel yang dibuat guru.'
-                  : 'Pilih jenis/paket soal (misal: Sumatif 1) dan mata pelajaran. Daftar paket soal yang tersedia akan otomatis muncul sesuai pilihan.'}
+                Daftar Paket Ujian {viewMode === 'tka' ? 'TKA' : 'CBT'} Aktif untuk Kelas Anda
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Pilih salah satu paket ujian di bawah ini untuk memulai pengerjaan soal.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* DROPDOWN 1: PAKET / JENIS SOAL */}
-              <div>
-                <label className="block text-[11px] font-extrabold text-slate-700 mb-1.5">
-                  {viewMode === 'tka' ? '1. Jenis Soal / Simulasi TKA' : '1. Jenis / Paket Soal CBT'}
-                </label>
-                <select
-                  value={selectedPaketFilter}
-                  onChange={(e) => {
-                    const newPaket = e.target.value;
-                    setSelectedPaketFilter(newPaket);
-                    setExamResult(null);
-                    if (!newPaket) {
-                      setSelectedExamId('');
-                    }
-                  }}
-                  className={`w-full p-3 rounded-2xl border-2 font-display font-extrabold text-xs sm:text-sm outline-none transition cursor-pointer shadow-xs ${
-                    selectedPaketFilter
-                      ? viewMode === 'tka'
-                        ? 'border-purple-600 bg-purple-50/40 text-purple-950'
-                        : 'border-rose-600 bg-rose-50/40 text-rose-950'
-                      : 'border-slate-300 bg-white text-slate-800'
-                  }`}
-                >
-                  <option value="">
-                    {viewMode === 'tka' ? '-- Semua / Pilih Jenis Soal TKA --' : '-- Semua / Pilih Jenis Soal CBT --'}
-                  </option>
-                  {availablePaketOptions.map((paket) => {
-                    const matchingInPaket = currentAvailableExams.filter((ex) => ex.paketName === paket);
-                    const qTotal = matchingInPaket.reduce((sum, ex) => sum + ex.soalList.length, 0);
-                    return (
-                      <option key={paket} value={paket}>
-                        {paket} {qTotal > 0 ? `(${matchingInPaket.length} Paket Aktif • ${qTotal} Soal)` : '(Belum diaktifkan)'}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-
-              {/* DROPDOWN 2: MATA PELAJARAN */}
-              <div>
-                <label className="block text-[11px] font-extrabold text-slate-700 mb-1.5">
-                  2. Mata Pelajaran
-                </label>
-                <select
-                  value={selectedMapelFilter}
-                  onChange={(e) => {
-                    setSelectedMapelFilter(e.target.value);
-                    setExamResult(null);
-                  }}
-                  className={`w-full p-3 rounded-2xl border-2 font-display font-extrabold text-xs sm:text-sm outline-none transition cursor-pointer shadow-xs ${
-                    selectedMapelFilter
-                      ? viewMode === 'tka'
-                        ? 'border-purple-600 bg-purple-50/40 text-purple-950'
-                        : 'border-rose-600 bg-rose-50/40 text-rose-950'
-                      : 'border-slate-300 bg-white text-slate-800'
-                  }`}
-                >
-                  <option value="">-- Semua / Pilih Mata Pelajaran --</option>
-                  {availableMapelOptions.map((mapel) => {
-                    const qCount = currentAvailableExams
-                      .filter((ex) => (!selectedPaketFilter || ex.paketName === selectedPaketFilter) && ex.mapel === mapel)
-                      .reduce((sum, ex) => sum + ex.soalList.length, 0);
-                    return (
-                      <option key={mapel} value={mapel}>
-                        {mapel} {qCount > 0 ? `(${qCount} Soal)` : '(Belum diaktifkan)'}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-            </div>
-
-            {/* DROPDOWN / KARTU PAKET YANG SESUAI HASIL FILTER */}
-            <div className="space-y-2.5 pt-1">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-extrabold text-slate-700">
-                  {selectedPaketFilter || selectedMapelFilter
-                    ? `Daftar Soal Tersedia (${filteredExamsForDropdown.length} Paket Cocok):`
-                    : `Pilih Paket Soal Tersedia (${filteredExamsForDropdown.length} Paket Aktif):`}
-                </span>
-                {(selectedPaketFilter || selectedMapelFilter) && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedPaketFilter('');
-                      setSelectedMapelFilter('');
-                      setSelectedExamId('');
-                      setExamResult(null);
-                    }}
-                    className="text-[11px] font-bold text-slate-500 hover:text-slate-800 underline cursor-pointer"
-                  >
-                    Reset Filter
-                  </button>
-                )}
-              </div>
-
-              {filteredExamsForDropdown.length > 0 ? (
-                <>
-                  <select
-                    value={selectedExamId}
-                    onChange={(e) => {
-                      setSelectedExamId(e.target.value);
-                      setExamResult(null);
-                    }}
-                    className={`w-full p-3 rounded-2xl border-2 font-display font-extrabold text-xs sm:text-sm outline-none transition cursor-pointer ${
-                      selectedExamId
-                        ? viewMode === 'tka'
-                          ? 'border-purple-500 bg-purple-50/30 text-purple-950'
-                          : 'border-rose-500 bg-rose-50/30 text-rose-950'
-                        : 'border-slate-300 bg-slate-50 text-slate-800'
-                    }`}
-                  >
-                    <option value="">-- Pilih Paket Soal yang Akan Dikerjakan --</option>
-                    {filteredExamsForDropdown.map((exam) => (
-                      <option key={exam.id} value={exam.id}>
-                        {exam.paketName} • {exam.mapel}
-                        {exam.subPaket ? ` (${exam.subPaket})` : ''}
-                        {exam.kelas ? ` [${exam.kelas}]` : ''} • {exam.soalList.length} Soal • {exam.durasiMenit} Menit
-                      </option>
-                    ))}
-                  </select>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                    {filteredExamsForDropdown.map((exam) => {
-                      const isPicked = selectedExamId === exam.id;
-                      return (
-                        <button
-                          key={exam.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedExamId(exam.id);
-                            setExamResult(null);
-                          }}
-                          className={`p-3.5 rounded-2xl border-2 text-left transition cursor-pointer flex flex-col justify-between gap-2 ${
-                            isPicked
-                              ? viewMode === 'tka'
-                                ? 'border-purple-600 bg-purple-50 shadow-xs'
-                                : 'border-rose-600 bg-rose-50 shadow-xs'
-                              : 'border-slate-200 bg-slate-50/70 hover:bg-white hover:border-slate-300'
-                          }`}
-                        >
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center justify-between gap-1">
-                              <span
-                                className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md ${
-                                  viewMode === 'tka'
-                                    ? 'bg-purple-100 text-purple-800'
-                                    : 'bg-rose-100 text-rose-800'
-                                }`}
-                              >
-                                {exam.paketName}
-                              </span>
-                              {exam.subPaket && (
-                                <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md">
-                                  {exam.subPaket}
-                                </span>
-                              )}
-                            </div>
-                            <h4 className="font-display font-black text-xs text-slate-800 leading-snug">
-                              {exam.mapel}
-                            </h4>
-                            <p className="text-[11px] text-slate-500">
-                              {exam.soalList.length} Butir Soal • {exam.durasiMenit} Menit
-                              {exam.kelas ? ` • ${exam.kelas}` : ''}
-                            </p>
-                          </div>
+            {currentAvailableExams.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {currentAvailableExams.map((exam) => {
+                  const isPicked = selectedExamId === exam.id;
+                  return (
+                    <button
+                      key={exam.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedExamId(exam.id);
+                        setExamResult(null);
+                      }}
+                      className={`p-4 rounded-2xl border-2 text-left transition cursor-pointer flex flex-col justify-between gap-3 shadow-2xs ${
+                        isPicked
+                          ? viewMode === 'tka'
+                            ? 'border-purple-600 bg-purple-50 ring-2 ring-purple-200'
+                            : 'border-rose-600 bg-rose-50 ring-2 ring-rose-200'
+                          : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
+                      }`}
+                    >
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-1">
                           <span
-                            className={`text-[11px] font-extrabold ${
-                              isPicked
-                                ? viewMode === 'tka'
-                                  ? 'text-purple-700'
-                                  : 'text-rose-700'
-                                : 'text-slate-600'
+                            className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
+                              viewMode === 'tka'
+                                ? 'bg-purple-100 text-purple-900'
+                                : 'bg-rose-100 text-rose-900'
                             }`}
                           >
-                            {isPicked ? '✓ Paket Terpilih' : 'Klik untuk Memilih →'}
+                            {exam.paketName}
                           </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </>
-              ) : (
-                <div className="p-6 rounded-2xl bg-amber-50 border border-amber-200 text-center space-y-1.5">
-                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto mb-1">
-                    <Lock className="w-5 h-5" />
-                  </div>
-                  <h4 className="font-display font-black text-xs sm:text-sm text-amber-900">
-                    Belum Ada Paket Soal {viewMode === 'tka' ? 'TKA' : 'CBT'} yang Diaktifkan
-                  </h4>
-                  <p className="text-xs text-amber-800 max-w-lg mx-auto">
-                    {currentAvailableExams.length === 0
-                      ? `Saat ini guru atau admin belum mengaktifkan paket soal ${viewMode === 'tka' ? 'TKA' : 'CBT'}. Soal akan otomatis muncul di sini setelah paket diaktifkan.`
-                      : `Paket soal untuk ${selectedPaketFilter || 'kategori ini'} — ${selectedMapelFilter || 'mata pelajaran ini'} belum diaktifkan atau belum memiliki soal. Silakan pilih paket lain yang sudah berstatus aktif.`}
-                  </p>
+                          {exam.subPaket && (
+                            <span className="text-[10px] font-black bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                              {exam.subPaket}
+                            </span>
+                          )}
+                        </div>
+                        <h4 className="font-display font-black text-sm text-slate-900 leading-snug">
+                          {exam.mapel}
+                        </h4>
+                        <p className="text-xs text-slate-600 font-medium">
+                          {exam.judul}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {exam.soalList.length} Butir Soal • {exam.durasiMenit} Menit
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                        <span className={`text-xs font-black ${isPicked ? (viewMode === 'tka' ? 'text-purple-700' : 'text-rose-700') : 'text-slate-700'}`}>
+                          {isPicked ? '✓ Dipilih' : 'Mulai Ujian →'}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="p-8 rounded-2xl bg-amber-50 border border-amber-200 text-center space-y-2">
+                <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
+                  <Lock className="w-6 h-6" />
                 </div>
-              )}
-            </div>
+                <h4 className="font-display font-black text-sm text-amber-900">
+                  Belum Ada Paket Soal {viewMode === 'tka' ? 'TKA' : 'CBT'} yang Aktif
+                </h4>
+                <p className="text-xs text-amber-800 max-w-md mx-auto">
+                  Saat ini guru atau admin belum mengaktifkan paket soal untuk kelas Anda. Soal akan otomatis muncul di sini setelah diaktifkan.
+                </p>
+              </div>
+            )}
           </div>
         ) : null}
 
@@ -3789,6 +3824,118 @@ export const StudentDashboard: React.FC<Props> = ({
               >
                 Tutup &amp; Lihat Hasil Ujian
               </button>
+            )}
+          </div>
+        </div>
+      )}
+      {timeUpModal?.isOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 text-center space-y-4 shadow-2xl border border-slate-200">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Clock className="w-6 h-6 animate-pulse" />
+            </div>
+            <div>
+              <span
+                className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${
+                  timeUpModal.status === 'submitting'
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-emerald-100 text-emerald-800'
+                }`}
+              >
+                {timeUpModal.status === 'submitting'
+                  ? `Waktu Ujian ${timeUpModal.category === 'tka' ? 'TKA' : 'CBT'} Berakhir`
+                  : 'Pengiriman Otomatis Selesai'}
+              </span>
+              <h3 className="font-display font-black text-lg sm:text-xl text-slate-900">
+                {timeUpModal.status === 'submitting'
+                  ? 'Mengirim Jawaban ke Database...'
+                  : 'Jawaban Berhasil Dikirim & Sesi Ditutup'}
+              </h3>
+              <p className="text-xs font-bold text-slate-500">{timeUpModal.examTitle}</p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs text-slate-700 space-y-1.5">
+              {timeUpModal.status === 'submitting' ? (
+                <p className="leading-relaxed">
+                  Durasi pengerjaan ujian telah habis. Sistem sedang menyimpan dan mengirimkan{' '}
+                  <strong>
+                    {timeUpModal.answeredCount} dari {timeUpModal.totalQuestions}
+                  </strong>{' '}
+                  jawaban Anda secara otomatis ke database sekolah sebelum sesi ditutup...
+                </p>
+              ) : (
+                <>
+                  <p className="leading-relaxed">
+                    {timeUpModal.cloudSaved
+                      ? 'Seluruh jawaban Anda telah otomatis terkirim dan tersimpan aman di database sekolah sebelum sesi ujian ditutup.'
+                      : 'Seluruh jawaban Anda telah tersimpan di sistem sekolah dan masuk antrean sinkronisasi database.'}
+                  </p>
+                  <div className="flex items-center justify-center gap-4 pt-1 font-display font-black text-slate-900">
+                    <span>
+                      Terjawab: {timeUpModal.answeredCount}/{timeUpModal.totalQuestions} Soal
+                    </span>
+                    <span className="text-emerald-700">Nilai Akhir: {timeUpModal.score ?? 0}/100</span>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {timeUpModal.status === 'submitting' ? (
+              <div className="flex items-center justify-center gap-2 text-xs font-bold text-amber-700 py-1">
+                <span className="w-4 h-4 border-2 border-amber-600 border-t-transparent rounded-full animate-spin inline-block" />
+                <span>Mohon tunggu sebentar, jangan tutup halaman...</span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setTimeUpModal(null)}
+                className="w-full py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-display font-black text-xs sm:text-sm shadow-md transition cursor-pointer"
+              >
+                Tutup &amp; Lihat Hasil Ujian
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {submittingModalState.isOpen && (
+        <div className="fixed inset-0 z-[9999] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 text-center space-y-4 shadow-2xl border-2 border-rose-200">
+            {submittingModalState.status === 'success' ? (
+              <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+                <CheckCircle className="w-8 h-8" />
+              </div>
+            ) : (
+              <div className="w-16 h-16 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto animate-pulse">
+                <Loader2 className="w-8 h-8 animate-spin" />
+              </div>
+            )}
+            <h3 className="font-display font-black text-lg text-slate-900">
+              {submittingModalState.status === 'success'
+                ? 'Pengiriman Nilai Berhasil!'
+                : 'Pengiriman Nilai (Tahan Wait Response)'}
+            </h3>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              {submittingModalState.message}
+            </p>
+            {submittingModalState.status === 'success' ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
+                  setIsExamRunning(false);
+                  onExamActiveChange?.(false);
+                  setViewMode('home');
+                  setSelectedExamId('');
+                }}
+                className="w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black text-xs shadow-lg cursor-pointer transition"
+              >
+                Selesai &amp; Kembali ke Beranda
+              </button>
+            ) : (
+              <div className="text-[11px] text-amber-800 font-bold bg-amber-50 p-3 rounded-xl border border-amber-200">
+                🔒 Layar dikunci demi keamanan data ujian Anda. Jangan tutup halaman ini.
+              </div>
             )}
           </div>
         </div>

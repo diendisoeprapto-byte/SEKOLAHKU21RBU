@@ -21,6 +21,7 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
   const [adminFotoUrl, setAdminFotoUrl] = useState<string>(profile.adminFotoUrl || '');
   const [logoKemendikbudUrl, setLogoKemendikbudUrl] = useState<string>(profile.logoKemendikbudUrl);
   const [logoSekolahUrl, setLogoSekolahUrl] = useState<string>(profile.logoSekolahUrl);
+  const [loginBackgroundUrl, setLoginBackgroundUrl] = useState<string>(profile.loginBackgroundUrl || '');
   const [isProcessing, setIsProcessing] = useState(false);
 
   useEffect(() => {
@@ -28,6 +29,7 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
       setAdminFotoUrl(profile.adminFotoUrl || '');
       setLogoKemendikbudUrl(profile.logoKemendikbudUrl);
       setLogoSekolahUrl(profile.logoSekolahUrl);
+      setLoginBackgroundUrl(profile.loginBackgroundUrl || '');
     }
   }, [isOpen, profile]);
 
@@ -35,23 +37,25 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
 
   const handleImagePick = async (
     e: React.ChangeEvent<HTMLInputElement>,
-    target: 'adminFoto' | 'kemendikbud' | 'sekolah'
+    target: 'adminFoto' | 'kemendikbud' | 'sekolah' | 'loginBg'
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setIsProcessing(true);
     try {
       const compressed = await compressQuestionImage(file, {
-        maxWidth: target === 'adminFoto' ? 400 : 480,
-        maxHeight: target === 'adminFoto' ? 400 : 480,
-        quality: 0.82,
+        maxWidth: target === 'adminFoto' ? 400 : target === 'loginBg' ? 1200 : 480,
+        maxHeight: target === 'adminFoto' ? 400 : target === 'loginBg' ? 800 : 480,
+        quality: target === 'loginBg' ? 0.85 : 0.82,
       });
       if (target === 'adminFoto') {
         setAdminFotoUrl(compressed);
       } else if (target === 'kemendikbud') {
         setLogoKemendikbudUrl(compressed);
-      } else {
+      } else if (target === 'sekolah') {
         setLogoSekolahUrl(compressed);
+      } else {
+        setLoginBackgroundUrl(compressed);
       }
     } catch {
       showToast('Gagal memproses file gambar. Pastikan format gambar valid.', 'error');
@@ -68,15 +72,17 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
       logoKemendikbudUrl,
       logoSekolahUrl,
       adminFotoUrl: adminFotoUrl.trim() || undefined,
+      loginBackgroundUrl: loginBackgroundUrl.trim() || undefined,
     });
     showToast(
-      'Logo & Foto Profil Administrator berhasil disimpan dan disinkronkan realtime!',
+      'Logo, Foto Profil Admin & Foto Latar Login berhasil disimpan dan disinkronkan realtime!',
       'success'
     );
     onClose();
   };
 
   const activePreviewAdminFoto = adminFotoUrl || logoSekolahUrl;
+  const activePreviewLoginBg = loginBackgroundUrl || '/assets/image_13.png';
 
   return (
     <div className="fixed inset-0 z-[950] bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
@@ -89,10 +95,10 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
             </div>
             <div>
               <h3 className="font-display font-black text-base sm:text-lg text-slate-800">
-                Ubah Logo &amp; Foto Profil Admin
+                Ubah Logo, Foto Admin &amp; Foto Latar Login
               </h3>
               <p className="text-[11px] text-slate-500">
-                Perbarui foto profil akun Administrator serta 2 logo resmi sekolah
+                Perbarui foto profil akun Administrator, 2 logo resmi sekolah, serta foto latar belakang halaman login
               </p>
             </div>
           </div>
@@ -143,6 +149,48 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
                     title="Gunakan Logo Sekolah sebagai foto profil default"
                   >
                     <RotateCcw className="w-3.5 h-3.5" /> Pakai Logo Sekolah
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Foto Latar Belakang Login (Pendopo / Anak Belajar) */}
+          <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-50/80 via-white to-sky-50/70 border border-indigo-200 flex flex-col sm:flex-row items-center gap-4">
+            <img
+              src={activePreviewLoginBg}
+              alt="Foto Latar Login"
+              className="w-28 h-20 rounded-2xl object-cover bg-white border-2 border-indigo-500 shadow-xs shrink-0"
+            />
+            <div className="flex-1 min-w-0 text-center sm:text-left space-y-1.5">
+              <span className="inline-block text-[10px] font-black uppercase bg-indigo-600 text-white px-2.5 py-0.5 rounded-full">
+                Menu Ganti Foto Latar Login
+              </span>
+              <h4 className="font-display font-black text-sm text-slate-800">
+                Foto Latar Belakang Halaman Login (Pendopo / Anak Belajar)
+              </h4>
+              <p className="text-[11px] text-slate-500">
+                Gambar utama di sisi kiri layar login (misal foto anak-anak belajar di pendopo).
+              </p>
+              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 pt-1">
+                <label className="inline-flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-display font-extrabold px-3.5 py-2 rounded-xl text-xs cursor-pointer shadow-xs transition">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>{isProcessing ? 'Memproses...' : 'Ganti Foto Latar Login'}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={isProcessing}
+                    onChange={(e) => handleImagePick(e, 'loginBg')}
+                    className="hidden"
+                  />
+                </label>
+                {loginBackgroundUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setLoginBackgroundUrl('')}
+                    className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold px-3 py-2 rounded-xl text-xs cursor-pointer transition"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Reset Default
                   </button>
                 )}
               </div>
@@ -210,7 +258,7 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
             <ShieldCheck className="w-4 h-4 shrink-0 text-sky-600 mt-0.5" />
             <span>
               Gambar otomatis dioptimalkan agar ringan dan langsung tersinkronisasi ke kartu absensi,
-              e-Rapor, dan Cloud Firestore.
+              halaman login, dan Cloud Firestore.
             </span>
           </div>
 

@@ -238,21 +238,28 @@ function resolveUserMode(userInfo = {}, role = '') {
 const ENDI_REALISTIC_STICKER_LIST = `
 - [REAL_STIKER:real_endi_01] -> menyapa santai / hangat
 - [REAL_STIKER:real_endi_02] -> memberi semangat kerja
+- [REAL_STIKER:real_endi_03] -> sapaan sore hari penuh perhatian
 - [REAL_STIKER:real_endi_04] -> apresiasi kerja selesai baik
+- [REAL_STIKER:real_endi_05] -> sapaan siang hari cerah
+- [REAL_STIKER:real_endi_06] -> mengingatkan istirahat siang & makan
 - [REAL_STIKER:real_endi_07] -> merancang modul ajar, RPP, ide kelas (v2)
 - [REAL_STIKER:real_endi_08] -> menyapa lembut penuh perhatian & sedikit manja (v2)
 - [REAL_STIKER:real_endi_09] -> terima kasih santun
 - [REAL_STIKER:real_endi_10] -> fokus analisis data nilai & CBT/TKA (v2)
-- [REAL_STIKER:real_endi_11] -> bangga siswa tuntas
+- [REAL_STIKER:real_endi_11] -> bangga siswa tuntas KKTP
 - [REAL_STIKER:real_endi_12] -> solusi strategi mengajar & diferensiasi
+- [REAL_STIKER:real_endi_13] -> sapaan pagi subuh berkah
 - [REAL_STIKER:real_endi_14] -> siap membantu baca file/dokumen
 - [REAL_STIKER:real_endi_17] -> membaca dokumen/gambar/PDF/Excel unggahan Mas Endi (v2)
 - [REAL_STIKER:real_endi_18] -> menenangkan dengan empati
 - [REAL_STIKER:real_endi_19] -> pengingat sholat & doa berkah (v2)
+- [REAL_STIKER:real_endi_20] -> apresiasi administrasi sekolah rapi
 - [REAL_STIKER:real_endi_21] -> kreatif menyusun media ajar/ilustrasi (v2)
 - [REAL_STIKER:real_endi_24] -> menelaah butir soal & miskonsepsi TP (v2)
 - [REAL_STIKER:real_endi_25] -> senyum manis hangat
-- [REAL_STIKER:real_endi_28] -> doa kelancaran tugas & keluarga (v2)`;
+- [REAL_STIKER:real_endi_28] -> doa kelancaran tugas & keluarga (v2)
+- [REAL_STIKER:real_endi_30] -> selamat malam santun & perhatian
+- Koleksi #31 s.d. #60: [REAL_STIKER:real_endi_31] s.d. [REAL_STIKER:real_endi_60] -> stiker foto ekspresif tematik (senyum, apresiasi, doa berkah, motivasi mengajar)`;
 
 const SISWA_3D_STICKER_LIST = `
 - [STIKER_3D:3d_siswa_01] -> sapaan ceria dengan buku
@@ -1177,10 +1184,13 @@ WAJIB MENYAJIKAN OUTPUT TERSTRUKTUR DENGAN 4 BAGIAN BERIKUT:
 
 export async function processSarahRequest(body = {}, options = {}) {
   const requestSignal = options?.signal;
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey =
+    process.env.GEMINI_API_KEY ||
+    process.env.API_KEY ||
+    process.env.GOOGLE_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     const err = new Error(
-      'GEMINI_API_KEY belum dikonfigurasi pada environment server. Hubungi administrator sistem.'
+      'GEMINI_API_KEY belum dikonfigurasi pada environment server. Pastikan API key telah dipilih pada panel Settings > Secrets.'
     );
     err.statusCode = 500;
     throw err;
@@ -1419,10 +1429,13 @@ export async function processSarahRequest(body = {}, options = {}) {
 export async function processSarahStreamRequest(body = {}, options = {}) {
   const requestSignal = options?.signal;
   const onChunk = options?.onChunk;
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey =
+    process.env.GEMINI_API_KEY ||
+    process.env.API_KEY ||
+    process.env.GOOGLE_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     const err = new Error(
-      'GEMINI_API_KEY belum dikonfigurasi pada environment server. Hubungi administrator sistem.'
+      'GEMINI_API_KEY belum dikonfigurasi pada environment server. Pastikan API key telah dipilih pada panel Settings > Secrets.'
     );
     err.statusCode = 500;
     throw err;

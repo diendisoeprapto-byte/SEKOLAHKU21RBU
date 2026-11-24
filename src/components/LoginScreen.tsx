@@ -41,11 +41,7 @@ type LoginRoleTab = 'siswa' | 'guru' | 'wali_murid' | 'admin';
 
 const REMEMBER_LOGIN_STORAGE_KEY = 'serbu21_remember_login_v1';
 
-const HERO_IMAGE_CANDIDATES = [
-  '/assets/image_13.png',
-  '/image_13.png',
-  schoolIllustration,
-];
+
 
 const ROLE_OPTIONS: Array<{
   id: LoginRoleTab;
@@ -67,6 +63,15 @@ export const LoginScreen: React.FC<Props> = ({
   onOpenGoogleSitesGuide,
   onLogoSecretClick,
 }) => {
+  const heroCandidates = React.useMemo(() => {
+    return [
+      profile.loginBackgroundUrl,
+      '/assets/image_13.png',
+      '/image_13.png',
+      schoolIllustration,
+    ].filter(Boolean) as string[];
+  }, [profile.loginBackgroundUrl]);
+
   const [selectedRole, setSelectedRole] = useState<LoginRoleTab>(() => {
     try {
       const raw = localStorage.getItem(REMEMBER_LOGIN_STORAGE_KEY);
@@ -151,7 +156,7 @@ export const LoginScreen: React.FC<Props> = ({
   };
 
   const handleHeroError = () => {
-    if (heroSrcIdx + 1 < HERO_IMAGE_CANDIDATES.length) {
+    if (heroSrcIdx + 1 < heroCandidates.length) {
       setHeroSrcIdx((prev) => prev + 1);
     } else {
       setHeroAllFailed(true);
@@ -300,22 +305,16 @@ export const LoginScreen: React.FC<Props> = ({
     <section className="min-h-screen w-full flex flex-col md:flex-row bg-white">
       {/* LEFT COLUMN: Visual Pendopo Hero (Hidden on mobile < md) */}
       <div
-        ref={visualPaneRef}
-        onMouseMove={handleMouseMoveVisual}
-        onMouseLeave={() => setParallaxOffset({ x: 0, y: 0 })}
         className="hidden md:block md:w-[58%] lg:w-[60%] relative overflow-hidden bg-slate-900 min-h-screen select-none"
       >
         {!heroAllFailed ? (
           <img
-            src={HERO_IMAGE_CANDIDATES[heroSrcIdx]}
+            src={heroCandidates[heroSrcIdx] || heroCandidates[0]}
             alt="Anak-anak SD belajar bersama di pendopo SDN Rawa Badak Utara 21"
             loading="lazy"
             referrerPolicy="no-referrer"
             onError={handleHeroError}
-            style={{
-              transform: `translate3d(${parallaxOffset.x}px, ${parallaxOffset.y}px, 0) scale(1.04)`,
-            }}
-            className="h-full w-full object-cover object-[42%_center] transition-transform duration-300 ease-out"
+            className="h-full w-full object-cover object-[42%_center]"
           />
         ) : (
           <div className="h-full w-full bg-gradient-to-br from-slate-900 via-rose-950 to-slate-900" />

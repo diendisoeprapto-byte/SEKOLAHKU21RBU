@@ -13,6 +13,7 @@ export interface SchoolProfile {
   logoKemendikbudUrl: string;
   logoSekolahUrl: string;
   adminFotoUrl?: string;
+  loginBackgroundUrl?: string;
 }
 
 export interface Teacher {

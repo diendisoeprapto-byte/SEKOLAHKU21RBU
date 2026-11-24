@@ -5,8 +5,9 @@ export const SARAH_GEMINI_MODEL = 'gemini-3.8-flash';
 export const SARAH_GEMINI_FALLBACK_MODELS = [
   'gemini-3.8-flash',
   'gemini-3.5-flash',
-  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash',
   'gemini-4-hydrogen',
+  'gemini-3.1-flash-lite',
 ];
 export const MAX_CONCURRENT_REQUESTS = Math.max(
   1,
@@ -20,18 +21,20 @@ export function resolveSpeedPresetModels(speedMode = 'auto') {
   const clean = String(speedMode || 'auto').trim().toLowerCase();
   if (clean === 'fast' || clean === 'lite') {
     return [
+      'gemini-3.8-flash',
       'gemini-3.5-flash',
       'gemini-3.1-flash-lite',
-      'gemini-3.8-flash',
       'gemini-4-hydrogen',
+      'gemini-2.5-flash',
     ];
   }
   if (clean === 'standard' || clean === 'mendalam') {
     return [
       'gemini-3.8-flash',
-      'gemini-4-hydrogen',
       'gemini-3.5-flash',
+      'gemini-4-hydrogen',
       'gemini-3.1-flash-lite',
+      'gemini-2.5-flash',
     ];
   }
   return [...SARAH_GEMINI_FALLBACK_MODELS];
@@ -59,10 +62,16 @@ function sleep(ms) {
 }
 
 function getGeminiClient(explicitApiKey) {
-  const apiKey = String(explicitApiKey || process.env.GEMINI_API_KEY || '').trim();
+  const apiKey = String(
+    explicitApiKey ||
+      process.env.GEMINI_API_KEY ||
+      process.env.API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      ''
+  ).trim();
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     const err = new Error(
-      'GEMINI_API_KEY belum dikonfigurasi pada environment server. Hubungi administrator sistem.'
+      'GEMINI_API_KEY belum dikonfigurasi pada environment server. Pastikan API key telah dipilih pada panel Settings > Secrets.'
     );
     err.statusCode = 500;
     throw err;

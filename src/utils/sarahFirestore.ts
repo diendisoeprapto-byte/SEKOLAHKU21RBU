@@ -1355,10 +1355,12 @@ export function sanitizeSarahErrorMessage(rawMessage?: unknown): string {
     lower.includes('api key') ||
     lower.includes('permission_denied') ||
     lower.includes('unauthenticated') ||
+    lower.includes('settings > secrets') ||
+    lower.includes('secrets') ||
     lower.includes('401') ||
     lower.includes('403')
   ) {
-    return 'Konfigurasi akses layanan SARAH AI di server sedang perlu diperiksa. Silakan coba beberapa saat lagi.';
+    return 'Konfigurasi akses layanan SARAH AI di server sedang perlu diperiksa pada panel Settings > Secrets. Silakan coba beberapa saat lagi.';
   }
 
   if (
@@ -1398,6 +1400,9 @@ export function formatFriendlySarahChatError(
   if (audience === 'endi') {
     if (isBusyOrTimeout) {
       return 'Maaf ya Mas Endi, layanan SARAH sedang sedikit padat dan butuh waktu sebentar. Mas silakan tekan tombol Coba Kirim Ulang di bawah ya 😊';
+    }
+    if (lower.includes('secrets') || lower.includes('settings > secrets')) {
+      return 'Maaf ya Mas Endi, kunci API Gemini di server belum aktif atau perlu dipilih pada menu Settings > Secrets. Mas silakan cek menu Secrets ya 😊';
     }
     if (lower.includes('model') || lower.includes('konfigurasi')) {
       return 'Maaf ya Mas Endi, sambungan ke server SARAH AI sedang disinkronkan sementara. Mas boleh klik tombol Coba Kirim Ulang beberapa saat lagi ya 😊';

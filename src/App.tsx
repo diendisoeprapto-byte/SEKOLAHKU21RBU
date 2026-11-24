@@ -189,6 +189,20 @@ export default function App() {
   const activeUserRef = React.useRef<ActiveUser | null>(null);
   const [restoreTick, setRestoreTick] = useState(0);
   const [activeExamStatus, setActiveExamStatus] = useState<ActiveExamHeaderStatus | null>(null);
+  const [isExamActive, setIsExamActive] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isExamActive) {
+        e.preventDefault();
+        e.returnValue = 'Ujian sedang berlangsung! Jika Anda meninggalkan halaman ini, progres ujian bisa terganggu.';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isExamActive]);
+
   const [isOwnershipModalOpen, setIsOwnershipModalOpen] = useState(false);
   const ownershipStatus = React.useMemo(() => verifySystemOwnershipIntegrity(), []);
   const logoClickTrackerRef = React.useRef<{ count: number; lastClickAt: number }>({
@@ -1378,23 +1392,26 @@ export default function App() {
             }
             activeExamStatus={activeExamStatus}
             onLogoSecretClick={handleSecretLogoClick}
+            isExamActive={isExamActive}
           />
 
           <div className="max-w-[1600px] w-full mx-auto flex-1 flex flex-col lg:flex-row gap-6 p-4 sm:p-6">
-            <Sidebar
-              activeTab={activeTab}
-              onSelectTab={setActiveTab}
-              activeUser={activeUser}
-              profile={profile}
-              students={students}
-              isOpen={isSidebarOpen}
-              onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
-              onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
-              onOpenAdminProfile={
-                hasAdminMenuAccess(activeUser) ? () => setIsAdminProfileModalOpen(true) : undefined
-              }
-              activeExamStatus={activeExamStatus}
-            />
+            {!isExamActive && (
+              <Sidebar
+                activeTab={activeTab}
+                onSelectTab={setActiveTab}
+                activeUser={activeUser}
+                profile={profile}
+                students={students}
+                isOpen={isSidebarOpen}
+                onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
+                onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
+                onOpenAdminProfile={
+                  hasAdminMenuAccess(activeUser) ? () => setIsAdminProfileModalOpen(true) : undefined
+                }
+                activeExamStatus={activeExamStatus}
+              />
+            )}
 
             <main className="flex-1 min-w-0 space-y-6">
               <React.Fragment key={`restore_${restoreTick}`}>
@@ -1416,6 +1433,7 @@ export default function App() {
                     onNavigateTab={setActiveTab}
                     initialTab={activeTab}
                     onExamStatusChange={setActiveExamStatus}
+                    onExamActiveChange={setIsExamActive}
                   />
                 )}
 
@@ -1784,7 +1802,7 @@ export default function App() {
           </div>
 
           {/* Widget Mengambang Tanya SARAH (Khusus Portal Siswa dengan Kunci Ujian CBT Otomatis) */}
-          {activeUser.role === 'siswa' && (
+          {activeUser.role === 'siswa' && !isExamActive && (
             <SarahStudentWidget
               activeUser={activeUser}
               students={students}
