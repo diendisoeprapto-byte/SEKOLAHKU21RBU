@@ -149,6 +149,7 @@ import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../ut
 import { exportTkaAnalisisToPdf } from '../../utils/analisisReportExport';
 import { QuestionContent } from '../QuestionContent';
 import { ManualTkaScoreModal, ManualTkaModalSeed } from './ManualTkaScoreModal';
+import { AnalisisButirMatrixPanel } from '../AnalisisButirMatrixPanel';
 import { FormattedMathText, FractionBuilderBar } from '../FormattedMathText';
 import { MathPreviewPanel } from '../MathPreviewPanel';
 import {
@@ -361,6 +362,7 @@ export const TKATabs: React.FC<Props> = ({
 
   // 4. Analisis TKA State (Dropdown Paket & Dropdown Mata Pelajaran)
   const [analisisMapelTka, setAnalisisMapelTka] = useState<string>('all');
+  const [analisisMatrixMapelTka, setAnalisisMatrixMapelTka] = useState<string>(TKA_MAPEL_LIST[0]);
   const [analisisPaketTka, setAnalisisPaketTka] = useState<string>('all');
   const [analisisChartTab, setAnalisisChartTab] = useState<'kesukaran' | 'ketuntasan' | 'pembeda'>('kesukaran');
   const [isExportingAnalisisPdf, setIsExportingAnalisisPdf] = useState<boolean>(false);
@@ -6574,6 +6576,70 @@ export const TKATabs: React.FC<Props> = ({
               </div>
             </div>
             </div>
+
+            {(() => {
+              const matrixMapelOptions =
+                availableAnalisisMapels.length > 0
+                  ? availableAnalisisMapels
+                  : Array.from(TKA_MAPEL_LIST);
+              const resolvedMatrixMapel =
+                analisisMapelTka !== 'all'
+                  ? activeMapelLabel
+                  : matrixMapelOptions.includes(analisisMatrixMapelTka)
+                  ? analisisMatrixMapelTka
+                  : matrixMapelOptions[0];
+              const normMatrixMapel = normalizeTkaMapelKey(resolvedMatrixMapel);
+              const matrixQuestions = questionsForSelectedPaket.filter(
+                (q) =>
+                  q.mapel === resolvedMatrixMapel ||
+                  normalizeTkaMapelKey(q.mapel) === normMatrixMapel
+              );
+              const matrixSubmissions = relevantSubmissions
+                .filter((sub) => {
+                  const hasAnswerKeys =
+                    sub.answers && matrixQuestions.some((q) => q.id in sub.answers);
+                  if (hasAnswerKeys) return true;
+                  if (!sub.completedMapels || sub.completedMapels.length === 0) {
+                    return Number(sub.scoresPerMapel?.[normMatrixMapel] || 0) > 0;
+                  }
+                  return sub.completedMapels.some(
+                    (cm) => normalizeTkaMapelKey(cm) === normMatrixMapel
+                  );
+                })
+                .map((sub) => ({
+                  studentId: sub.studentId,
+                  studentName: sub.studentName,
+                  nisn: sub.nisn,
+                  kelas: sub.kelas,
+                  answers: sub.answers || {},
+                  recordedNilai: Number.isFinite(Number(sub.scoresPerMapel?.[normMatrixMapel]))
+                    ? Number(sub.scoresPerMapel?.[normMatrixMapel])
+                    : Number(sub.skorTotal) || 0,
+                  durasiDetik: sub.durasiDetik,
+                  benarHots: sub.benarHots,
+                }));
+
+              return (
+                <AnalisisButirMatrixPanel
+                  examType="TKA"
+                  questions={matrixQuestions}
+                  submissions={matrixSubmissions}
+                  eligibleStudents={tkaStudents}
+                  mapelLabel={resolvedMatrixMapel}
+                  paketLabel={analisisPaketTka === 'all' ? 'Semua Paket TKA' : analisisPaketTka}
+                  kelasLabel="Semua Kelas 6"
+                  tahunPelajaran={activeYear}
+                  semester={activeSemester}
+                  profile={profile}
+                  teachers={teachers}
+                  kktp={75}
+                  mapelOptions={analisisMapelTka === 'all' ? matrixMapelOptions : undefined}
+                  selectedMatrixMapel={resolvedMatrixMapel}
+                  onChangeMatrixMapel={setAnalisisMatrixMapelTka}
+                  showToast={showToast}
+                />
+              );
+            })()}
 
             {(() => {
               const tkaAnalysisStudents: SarahAnalysisStudentRow[] = relevantSubmissions.map((sub) => {

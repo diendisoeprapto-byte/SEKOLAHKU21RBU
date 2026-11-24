@@ -56,6 +56,7 @@ import {
   SarahAnalysisHardestQuestion,
   SarahAnalysisStudentRow,
 } from '../SarahExamAnalysisPanel';
+import { AnalisisButirMatrixPanel } from '../AnalisisButirMatrixPanel';
 
 export const PAKET_SOAL_LIST = [
   'Sumatif 1 (AS 1)',
@@ -1979,6 +1980,31 @@ export const AnalisisSoalTab: React.FC<Props> = ({
           </div>
         </div>
       </div>
+
+      <AnalisisButirMatrixPanel
+        examType="CBT"
+        questions={matchingExam?.soalList || []}
+        submissions={matchingExamResults.map((r) => ({
+          studentId: r.studentId,
+          studentName: r.studentName,
+          nisn: r.nisn,
+          kelas: r.kelas,
+          answers: r.jawabanSiswa || {},
+          recordedNilai: Number.isFinite(Number(r.nilai)) ? Number(r.nilai) : undefined,
+          durasiDetik: r.durasiDetik,
+          benarHots: r.benarHots,
+        }))}
+        eligibleStudents={targetStudents}
+        mapelLabel={selectedMapel}
+        paketLabel={selectedPaket}
+        kelasLabel={selectedClass === 'all' ? 'Semua Kelas' : selectedClass}
+        tahunPelajaran={activeYear}
+        semester={activeSemester}
+        profile={profile}
+        teachers={teachers}
+        kktp={75}
+        showToast={showToast}
+      />
 
       <SarahExamAnalysisPanel
         activeUser={effectiveActiveUser}

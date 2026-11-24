@@ -30,7 +30,37 @@ interface Props {
   onInsertStickerInChat?: (stickerId: string) => void;
 }
 
-const START_NUMBER_OPTIONS = [31, 37, 43, 49, 55] as const;
+const START_NUMBER_OPTIONS = [1, 7, 13, 19, 25, 31, 37, 43, 49, 55] as const;
+
+type GalleryRangeFilter = 'all' | '1-30' | '31-60';
+
+function snapToValidStartNumber(num: number): number {
+  for (let i = START_NUMBER_OPTIONS.length - 1; i >= 0; i--) {
+    if (num >= START_NUMBER_OPTIONS[i]) {
+      return START_NUMBER_OPTIONS[i];
+    }
+  }
+  return 1;
+}
+
+function detectStartNumFromFileName(fileName: string, fallbackStart: number): number {
+  const clean = fileName || '';
+  const rangeMatch = clean.match(/#?(\d{1,2})\s*(?:-|–|s\.?d\.?|sampai|to)\s*#?(\d{1,2})/i);
+  if (rangeMatch) {
+    const first = Number(rangeMatch[1]);
+    if (Number.isFinite(first) && first >= 1 && first <= 60) {
+      return snapToValidStartNumber(first);
+    }
+  }
+  const singleMatch = clean.match(/(?:stiker|sticker|lembar|sheet|#)\s*#?(\d{1,2})/i);
+  if (singleMatch) {
+    const num = Number(singleMatch[1]);
+    if (Number.isFinite(num) && num >= 1 && num <= 60) {
+      return snapToValidStartNumber(num);
+    }
+  }
+  return snapToValidStartNumber(fallbackStart);
+}
 
 interface QueuedSheetItem {
   id: string;
@@ -58,7 +88,7 @@ const GalleryStickerCard: React.FC<{
       }`}
     >
       <div className="w-full flex items-center justify-between text-[10px] font-black">
-        <span className="text-slate-600 font-mono">
+        <span className="text-slate-600 font-mono tabular-nums">
           #{String(indexNum).padStart(2, '0')}
         </span>
         {isInSystem ? (
@@ -114,10 +144,11 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
   showToast,
   onInsertStickerInChat,
 }) => {
-  const [defaultStartNum, setDefaultStartNum] = useState<number>(31);
+  const [defaultStartNum, setDefaultStartNum] = useState<number>(1);
   const [queuedSheets, setQueuedSheets] = useState<QueuedSheetItem[]>([]);
   const [slicedPreview, setSlicedPreview] = useState<CustomRealisticStickerEntry[]>([]);
   const [savedStickersMap, setSavedStickersMap] = useState<Record<string, CustomRealisticStickerEntry>>({});
+  const [galleryFilter, setGalleryFilter] = useState<GalleryRangeFilter>('all');
   const [isSlicing, setIsSlicing] = useState(false);
   const [isSavingIdb, setIsSavingIdb] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -154,7 +185,8 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
     }
 
     const nextItems: QueuedSheetItem[] = validFiles.map((file, idx) => {
-      const candidateStart = Math.min(55, defaultStartNum + (queuedSheets.length + idx) * 6);
+      const sequentialFallback = Math.min(55, defaultStartNum + (queuedSheets.length + idx) * 6);
+      const candidateStart = detectStartNumFromFileName(file.name, sequentialFallback);
       return {
         id: `sheet_${Date.now()}_${idx}`,
         file,
@@ -192,7 +224,6 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
         allResults.push(...sliced);
       }
       allResults.sort((a, b) => a.number - b.number);
-      // Deduplikasi bila ada startNumber yang menimpa nomor sama (ambil terbaru)
       const dedupedMap = new Map<string, CustomRealisticStickerEntry>();
       allResults.forEach((entry) => dedupedMap.set(entry.id, entry));
       const finalList = Array.from(dedupedMap.values()).sort((a, b) => a.number - b.number);
@@ -239,7 +270,7 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
     try {
       const count = await downloadSlicedStickersAsPng(source);
       showToast(
-        `Mengunduh ${count} file PNG satuan (sarah-real-XX.png). Salin ke /public/assets/stickers/realistic/.`,
+        `Mengunduh ${count} file PNG satuan. Salin ke /public/assets/stickers/realistic/.`,
         'success'
       );
     } catch {
@@ -252,10 +283,34 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
   const handleClearCustomCache = async () => {
     await clearAllCustomEndiStickers();
     syncSavedFromStorage();
-    showToast('Cache browser stiker tambahan (#31–#60) berhasil dibersihkan.', 'success');
+    showToast('Cache browser stiker realistik (#01–#60) berhasil dibersihkan.', 'success');
   };
 
-  const customCount = useMemo(() => Object.keys(savedStickersMap).length, [savedStickersMap]);
+  const { customCount, count1to30, count31to60 } = useMemo(() => {
+    const entries = Object.values(savedStickersMap);
+    let c1 = 0;
+    let c2 = 0;
+    entries.forEach((entry) => {
+      if (entry.number >= 1 && entry.number <= 30) c1 += 1;
+      else if (entry.number >= 31 && entry.number <= 60) c2 += 1;
+    });
+    return {
+      customCount: entries.length,
+      count1to30: c1,
+      count31to60: c2,
+    };
+  }, [savedStickersMap]);
+
+  const filteredGalleryStickers = useMemo(() => {
+    return SARAH_REALISTIC_STICKERS_ENDI.map((stk, i) => ({
+      sticker: stk,
+      indexNum: i + 1,
+    })).filter(({ indexNum }) => {
+      if (galleryFilter === '1-30') return indexNum >= 1 && indexNum <= 30;
+      if (galleryFilter === '31-60') return indexNum >= 31 && indexNum <= 60;
+      return true;
+    });
+  }, [galleryFilter]);
 
   return (
     <div className="space-y-6">
@@ -268,20 +323,23 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
               Khusus Endi Soeprapto • Auto-Slicer 2×3
             </div>
             <h2 className="font-display font-black text-lg text-slate-900">
-              Upload &amp; Auto-Slicer Lembar Stiker Realistik SARAH (#31–#60)
+              Upload &amp; Auto-Slicer Lembar Stiker Realistik SARAH (#01–#60)
             </h2>
             <p className="text-xs text-slate-600 max-w-2xl leading-relaxed">
-              Unggah gambar lembar stiker grid <strong>2 kolom × 3 baris</strong> tanpa potong manual. Sistem memotong 6 sel otomatis, membuang label teks di bagian bawah (~18%), menghapus latar checkerboard di luar border putih (flood-fill 4 sudut), dan menghasilkan file transparan <strong>512×512 PNG</strong>.
+              Unggah gambar lembar stiker grid <strong>2 kolom × 3 baris</strong> untuk nomor <strong>#01–#30</strong> maupun <strong>#31–#60</strong> tanpa potong manual. Sistem memotong 6 sel otomatis, membuang label teks di bagian bawah (~18%), menghapus latar checkerboard di luar border putih (flood-fill 4 sudut), dan menghasilkan file transparan <strong>512×512 PNG</strong>.
             </p>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
             <div className="px-4 py-2.5 rounded-2xl bg-white border border-rose-200 text-center">
               <span className="block text-[10px] font-black uppercase text-slate-500">
-                Stiker #31–#60 di Cache
+                Stiker #01–#60 di Cache
               </span>
-              <span className="font-display font-black text-lg text-rose-700">
-                {customCount} / 30
+              <span className="font-display font-black text-lg text-rose-700 tabular-nums">
+                {customCount} / 60
+              </span>
+              <span className="block text-[10px] font-semibold text-slate-500 tabular-nums">
+                #01–#30: {count1to30}/30 · #31–#60: {count31to60}/30
               </span>
             </div>
           </div>
@@ -296,7 +354,7 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
             <select
               value={defaultStartNum}
               onChange={(e) => setDefaultStartNum(Number(e.target.value))}
-              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 bg-slate-50 font-bold text-xs text-slate-800 outline-none focus:border-rose-600"
+              className="w-full px-3 py-2.5 rounded-xl border border-slate-300 bg-slate-50 font-bold text-xs text-slate-800 outline-none focus:border-rose-600 cursor-pointer"
             >
               {START_NUMBER_OPTIONS.map((num) => (
                 <option key={num} value={num}>
@@ -366,7 +424,7 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
                     <select
                       value={sheet.startNumber}
                       onChange={(e) => handleUpdateSheetStart(sheet.id, Number(e.target.value))}
-                      className="w-full px-2 py-1 rounded-lg border border-slate-300 text-[11px] font-bold text-slate-700 bg-slate-50"
+                      className="w-full px-2 py-1 rounded-lg border border-slate-300 text-[11px] font-bold text-slate-700 bg-slate-50 cursor-pointer"
                     >
                       {START_NUMBER_OPTIONS.map((num) => (
                         <option key={num} value={num}>
@@ -443,7 +501,7 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
                   alt={item.fileName}
                   className="w-24 h-24 object-contain drop-shadow-sm"
                 />
-                <span className="text-[10px] font-mono font-black text-slate-800 bg-white/90 px-2 py-0.5 rounded border border-slate-200">
+                <span className="text-[10px] font-mono font-black text-slate-800 bg-white/90 px-2 py-0.5 rounded border border-slate-200 max-w-full truncate" title={item.fileName}>
                   {item.fileName}
                 </span>
                 <span className="text-[9px] font-bold text-emerald-700">
@@ -463,10 +521,32 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
               Galeri Lengkap 60 Stiker Realistik SARAH (Mas Endi)
             </h3>
             <p className="text-xs text-slate-500">
-              Koleksi #01–#30 (bawaan) &amp; #31–#60 (`sarah-real-31.png` s.d. `sarah-real-60.png`). Klik &ldquo;Pakai di Chat&rdquo; untuk mengirim langsung.
+              Koleksi lengkap #01–#30 dan #31–#60. Klik &ldquo;Pakai di Chat&rdquo; untuk mengirim langsung.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex bg-slate-100 p-1 rounded-xl border border-slate-200 text-[11px] font-bold">
+              {(
+                [
+                  { id: 'all', label: 'Semua (60)' },
+                  { id: '1-30', label: 'Koleksi #01–#30' },
+                  { id: '31-60', label: 'Koleksi #31–#60' },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setGalleryFilter(tab.id)}
+                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                    galleryFilter === tab.id
+                      ? 'bg-white text-rose-700 shadow-2xs font-black'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
             {customCount > 0 && (
               <>
                 <button
@@ -484,7 +564,7 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
                   className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Reset Cache #31–#60</span>
+                  <span>Reset Cache Browser</span>
                 </button>
               </>
             )}
@@ -492,12 +572,12 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
-          {SARAH_REALISTIC_STICKERS_ENDI.map((stk, i) => (
+          {filteredGalleryStickers.map(({ sticker, indexNum }) => (
             <GalleryStickerCard
-              key={stk.id}
-              sticker={stk}
-              indexNum={i + 1}
-              cachedEntry={savedStickersMap[stk.id]}
+              key={sticker.id}
+              sticker={sticker}
+              indexNum={indexNum}
+              cachedEntry={savedStickersMap[sticker.id]}
               onUseSticker={onInsertStickerInChat}
             />
           ))}

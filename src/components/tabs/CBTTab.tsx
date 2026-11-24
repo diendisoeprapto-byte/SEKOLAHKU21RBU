@@ -151,6 +151,7 @@ import {
   CbtReportRecordInput,
 } from '../../utils/cbtReportExport';
 import { doesRecordMatchTerm } from '../../utils/semesterUtils';
+import { ManualCbtModalSeed, ManualCbtScoreModal } from './ManualCbtScoreModal';
 
 interface Props {
   activeUser: ActiveUser;
@@ -250,6 +251,7 @@ export const CBTTab: React.FC<Props> = ({
   const [reportPage, setReportPage] = useState<number>(1);
   const [selectedCbtReportRow, setSelectedCbtReportRow] = useState<any | null>(null);
   const [confirmDeleteCbtRowId, setConfirmDeleteCbtRowId] = useState<string | null>(null);
+  const [manualCbtModalSeed, setManualCbtModalSeed] = useState<ManualCbtModalSeed | null>(null);
 
   useEffect(() => {
     const syncResults = () => {
@@ -3844,6 +3846,30 @@ export const CBTTab: React.FC<Props> = ({
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <button
                     type="button"
+                    onClick={() =>
+                      setManualCbtModalSeed({
+                        paket:
+                          reportPaketFilter !== 'all'
+                            ? reportPaketFilter
+                            : selectedPaket || paketList[0] || 'Sumatif 1 (AS 1)',
+                        mapel:
+                          reportMapelFilter !== 'all'
+                            ? reportMapelFilter
+                            : selectedMapel,
+                        kelas:
+                          reportClassFilter !== 'all'
+                            ? reportClassFilter
+                            : activeClass,
+                      })
+                    }
+                    className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-display font-black px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                    title="Input nilai CBT manual untuk seluruh siswa (termasuk siswa yang belum ujian)"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                    <span>Input Nilai Manual</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       setCbtResultsList(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)));
                       showToast('Data hasil CBT diperbarui.', 'success');
@@ -3997,13 +4023,37 @@ export const CBTTab: React.FC<Props> = ({
                       Rekapitulasi nilai dan peringkat CBT akan tampil otomatis setelah siswa menyelesaikan ujian CBT atau guru menjalankan Simulasi Ujian CBT.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setSubTab('ujian')}
-                    className="no-print px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-display font-black cursor-pointer inline-flex items-center gap-1.5 transition"
-                  >
-                    <Play className="w-3.5 h-3.5" /> Buka Simulasi / Ujian CBT
-                  </button>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setManualCbtModalSeed({
+                          paket:
+                            reportPaketFilter !== 'all'
+                              ? reportPaketFilter
+                              : selectedPaket || paketList[0] || 'Sumatif 1 (AS 1)',
+                          mapel:
+                            reportMapelFilter !== 'all'
+                              ? reportMapelFilter
+                              : selectedMapel,
+                          kelas:
+                            reportClassFilter !== 'all'
+                              ? reportClassFilter
+                              : activeClass,
+                        })
+                      }
+                      className="no-print px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-display font-black cursor-pointer inline-flex items-center gap-1.5 transition"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" /> Input Nilai CBT Manual
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSubTab('ujian')}
+                      className="no-print px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-display font-black cursor-pointer inline-flex items-center gap-1.5 transition"
+                    >
+                      <Play className="w-3.5 h-3.5" /> Buka Simulasi / Ujian CBT
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -4211,6 +4261,21 @@ export const CBTTab: React.FC<Props> = ({
                                     title={`Unduh Rapor CBT ${row.nama} (.PDF)`}
                                   >
                                     <Download className="w-3 h-3" /> Unduh PDF
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setManualCbtModalSeed({
+                                        paket: row.paket,
+                                        mapel: row.mapel,
+                                        kelas: row.kelas,
+                                        studentId: row.raw.studentId,
+                                      })
+                                    }
+                                    className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                                    title={`Edit nilai CBT ${row.nama}`}
+                                  >
+                                    <Edit3 className="w-3 h-3" /> Edit Nilai
                                   </button>
                                   <button
                                     type="button"
@@ -4910,6 +4975,27 @@ export const CBTTab: React.FC<Props> = ({
             )}
           </div>
         </div>
+      )}
+
+      {manualCbtModalSeed && (
+        <ManualCbtScoreModal
+          seed={manualCbtModalSeed}
+          students={students}
+          exams={exams}
+          cbtResults={cbtResultsList}
+          paketList={paketList}
+          activeYear={activeYear}
+          activeSemester={activeSemester}
+          onClose={() => setManualCbtModalSeed(null)}
+          onSaved={(updatedResults, msg, closeAfter) => {
+            setCbtResultsList(updatedResults);
+            showToast(msg, 'success');
+            if (closeAfter) {
+              setManualCbtModalSeed(null);
+            }
+          }}
+          onValidationError={(msg) => showToast(msg, 'error')}
+        />
       )}
     </section>
   );

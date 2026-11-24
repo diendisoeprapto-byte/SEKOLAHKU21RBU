@@ -1,7 +1,9 @@
+import { SARAH_REALISTIC_STICKERS_ENDI } from './sarahStickers';
+
 export interface CustomRealisticStickerEntry {
-  id: string; // e.g. 'real_endi_31'
-  number: number; // 31..60
-  fileName: string; // e.g. 'sarah-real-31.png'
+  id: string; // e.g. 'real_endi_01' .. 'real_endi_60'
+  number: number; // 1..60
+  fileName: string; // e.g. 'real_endi_01_senyum_sapa.png' or 'sarah-real-31.png'
   dataUrl: string; // PNG data URL (512x512 transparent)
   updatedAt: number;
 }
@@ -366,7 +368,7 @@ export async function sliceStickerSheet2x3(
     for (let c = 0; c < cols; c++) {
       const stickerNum = startNumber + indexOffset;
       indexOffset += 1;
-      if (stickerNum > 60) continue;
+      if (stickerNum < 1 || stickerNum > 60) continue;
 
       const sx = c * cellW;
       const sy = r * cellH;
@@ -405,10 +407,15 @@ export async function sliceStickerSheet2x3(
       );
 
       const paddedNum = String(stickerNum).padStart(2, '0');
+      const stickerId = `real_endi_${paddedNum}`;
+      const matchedMeta = SARAH_REALISTIC_STICKERS_ENDI.find((s) => s.id === stickerId);
+      const resolvedFileName =
+        matchedMeta?.path.split('/').pop() || `sarah-real-${paddedNum}.png`;
+
       results.push({
-        id: `real_endi_${paddedNum}`,
+        id: stickerId,
         number: stickerNum,
-        fileName: `sarah-real-${paddedNum}.png`,
+        fileName: resolvedFileName,
         dataUrl: outCanvas.toDataURL('image/png'),
         updatedAt: Date.now(),
       });

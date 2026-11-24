@@ -173,6 +173,7 @@ const buildManualSubmissionRecord = (params: {
 interface ManualBatchStudentRowProps {
   student: Student;
   rowIndex: number;
+  hasExistingSubmission: boolean;
   rowScores: Partial<Record<TKAMapelScoreKey, string>> | undefined;
   onCellChange: (studentId: string, mapelKey: TKAMapelScoreKey, rawValue: string) => void;
   onCellKeyDown: (e: React.KeyboardEvent<HTMLInputElement>, rowIndex: number, colIndex: number) => void;
@@ -181,6 +182,7 @@ interface ManualBatchStudentRowProps {
 const ManualBatchStudentRow = memo(function ManualBatchStudentRow({
   student,
   rowIndex,
+  hasExistingSubmission,
   rowScores,
   onCellChange,
   onCellKeyDown,
@@ -204,8 +206,19 @@ const ManualBatchStudentRow = memo(function ManualBatchStudentRow({
         {rowIndex + 1}
       </td>
       <td className="p-2">
-        <div className="font-bold text-slate-900 leading-tight">{student.nama}</div>
-        <div className="text-[10px] text-slate-500">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-bold text-slate-900 leading-tight">{student.nama}</span>
+          {hasExistingSubmission ? (
+            <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-black uppercase">
+              Sudah Ujian
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[9px] font-black uppercase">
+              Belum Ujian
+            </span>
+          )}
+        </div>
+        <div className="text-[10px] text-slate-500 tabular-nums">
           {student.kelas} · {student.nisn || '-'}
         </div>
       </td>
@@ -357,6 +370,7 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
 
   // Batch state initialized lazily when entering the massal tab
   const [batchClassFilter, setBatchClassFilter] = useState<string>(seed.classFilter || 'all');
+  const [examStatusFilter, setExamStatusFilter] = useState<'all' | 'belum' | 'sudah'>('all');
   const [batchInputs, setBatchInputs] = useState<
     Record<string, Partial<Record<TKAMapelScoreKey, string>>>
   >({});
@@ -401,22 +415,36 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
     const q = studentSearch.trim().toLowerCase();
     return sortedTkaStudents.filter((s) => {
       if (studentClassFilter !== 'all' && s.kelas !== studentClassFilter) return false;
+      if (examStatusFilter !== 'all') {
+        const hasSub = Boolean(findExistingFast(s.id, paket, s.nisn));
+        if (examStatusFilter === 'belum' && hasSub) return false;
+        if (examStatusFilter === 'sudah' && !hasSub) return false;
+      }
       if (q && !s.nama.toLowerCase().includes(q) && !(s.nisn || '').toLowerCase().includes(q)) {
         return false;
       }
       return true;
     });
-  }, [sortedTkaStudents, studentClassFilter, studentSearch]);
+  }, [sortedTkaStudents, studentClassFilter, examStatusFilter, studentSearch, findExistingFast, paket]);
 
   const batchStudents = useMemo(
     () =>
-      sortedTkaStudents.filter(
-        (s) => batchClassFilter === 'all' || s.kelas === batchClassFilter
-      ),
-    [sortedTkaStudents, batchClassFilter]
+      sortedTkaStudents.filter((s) => {
+        if (batchClassFilter !== 'all' && s.kelas !== batchClassFilter) return false;
+        if (examStatusFilter !== 'all') {
+          const hasSub = Boolean(findExistingFast(s.id, paket, s.nisn));
+          if (examStatusFilter === 'belum' && hasSub) return false;
+          if (examStatusFilter === 'sudah' && !hasSub) return false;
+        }
+        return true;
+      }),
+    [sortedTkaStudents, batchClassFilter, examStatusFilter, findExistingFast, paket]
   );
 
   const selectedStudent = studentByIdMap.get(studentId) || null;
+  const selectedStudentExistingSub = selectedStudent
+    ? findExistingFast(selectedStudent.id, paket, selectedStudent.nisn)
+    : undefined;
 
   const { filledCount, previewAvg, previewPredikat, previewStatus } = useMemo(() => {
     const vals: number[] = [];
@@ -777,9 +805,20 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
                   </div>
                 </div>
                 <div className="sm:col-span-6">
-                  <label className="block text-[11px] font-black text-slate-600 mb-1">
-                    Pilih Peserta Didik ({selectableStudents.length} Siswa):
-                  </label>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <label className="block text-[11px] font-black text-slate-600">
+                      Pilih Peserta Didik ({selectableStudents.length} Siswa):
+                    </label>
+                    <select
+                      value={examStatusFilter}
+                      onChange={(e) => setExamStatusFilter(e.target.value as 'all' | 'belum' | 'sudah')}
+                      className="px-2 py-0.5 rounded-lg border border-slate-300 bg-white text-[10px] font-bold text-slate-700 outline-none cursor-pointer"
+                    >
+                      <option value="all">Semua Status</option>
+                      <option value="belum">Belum Ujian</option>
+                      <option value="sudah">Sudah Ujian</option>
+                    </select>
+                  </div>
                   <select
                     value={studentId}
                     onChange={(e) => {
@@ -792,11 +831,14 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
                     {selectableStudents.length === 0 ? (
                       <option value="">-- Tidak ada siswa yang sesuai --</option>
                     ) : (
-                      selectableStudents.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.nama} — {s.kelas} ({s.nisn || 'Tanpa NISN'})
-                        </option>
-                      ))
+                      selectableStudents.map((s) => {
+                        const existing = findExistingFast(s.id, paket, s.nisn);
+                        return (
+                          <option key={s.id} value={s.id}>
+                            {s.nama} — {s.kelas} · {existing ? `Sudah Ujian (${existing.skorTotal})` : 'Belum Ujian'}
+                          </option>
+                        );
+                      })
                     )}
                   </select>
                 </div>
@@ -814,9 +856,20 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
                         (e.currentTarget as HTMLImageElement).src = DEFAULT_STUDENT_AVATAR_URL;
                       }}
                     />
-                    <div className="min-w-0">
-                      <div className="font-display font-black text-xs text-slate-900 truncate">
-                        {selectedStudent.nama}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-display font-black text-xs text-slate-900 truncate">
+                          {selectedStudent.nama}
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${
+                            selectedStudentExistingSub
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {selectedStudentExistingSub ? 'Sudah Ujian' : 'Belum Ujian'}
+                        </span>
                       </div>
                       <div className="text-[11px] text-slate-600 font-medium">
                         {selectedStudent.kelas} · NISN:{' '}
@@ -950,7 +1003,7 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
             /* Batch / Per Class Input Tab */
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <label className="text-xs font-black text-slate-700">Pilih Kelas:</label>
                   <select
                     value={batchClassFilter}
@@ -966,6 +1019,15 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
                       </option>
                     ))}
                   </select>
+                  <select
+                    value={examStatusFilter}
+                    onChange={(e) => setExamStatusFilter(e.target.value as 'all' | 'belum' | 'sudah')}
+                    className="px-2.5 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-bold outline-none focus:border-emerald-600 cursor-pointer"
+                  >
+                    <option value="all">Semua Status Ujian</option>
+                    <option value="belum">Belum Ujian</option>
+                    <option value="sudah">Sudah Ujian</option>
+                  </select>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600 font-bold">
                   <span>Tanggal:</span>
@@ -978,7 +1040,7 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
                     }}
                     className="w-36 px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-medium"
                   />
-                  <span className="ml-1 text-emerald-700 font-black">
+                  <span className="ml-1 text-emerald-700 font-black tabular-nums">
                     {filledBatchCount}/{batchStudents.length} siswa terisi
                   </span>
                 </div>
@@ -986,7 +1048,7 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
 
               <div className="text-[11px] text-slate-500 flex items-center justify-between px-1">
                 <span>
-                  Tip cepat: gunakan tombol <strong>Tab</strong> ke kanan atau <strong>Enter / Panah Bawah</strong> untuk langsung pindah ke siswa berikutnya.
+                  Menampilkan seluruh peserta didik Kelas 6 (termasuk siswa berstatus <strong>Belum Ujian</strong>). Gunakan <strong>Tab</strong> atau <strong>Enter / Panah Bawah</strong> untuk pindah sel cepat.
                 </span>
               </div>
 
@@ -998,7 +1060,7 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
                   <thead className="bg-slate-100 text-slate-700 sticky top-0 z-10 border-b border-slate-200">
                     <tr>
                       <th className="p-2.5 font-black w-8 text-center">No</th>
-                      <th className="p-2.5 font-black min-w-[180px]">Nama Siswa &amp; Kelas</th>
+                      <th className="p-2.5 font-black min-w-[200px]">Nama Siswa &amp; Status Ujian</th>
                       {MANUAL_TKA_MAPEL_LIST.map(({ key, shortLabel }) => (
                         <th key={key} className="p-2 font-black text-center min-w-[78px]">
                           {shortLabel}
@@ -1013,6 +1075,7 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
                         key={s.id}
                         student={s}
                         rowIndex={idx}
+                        hasExistingSubmission={Boolean(findExistingFast(s.id, paket, s.nisn))}
                         rowScores={batchInputs[s.id]}
                         onCellChange={handleBatchCellChange}
                         onCellKeyDown={handleBatchCellKeyDown}

@@ -645,3 +645,277 @@ export const exportTkaAnalisisToPdf = async (
   doc.save(fileName);
   return true;
 };
+
+export interface DynamicMatrixPdfOptions {
+  profile?: SchoolProfile;
+  matrix: import('./analisisMatrixBuilder').DynamicItemMatrixData;
+  kepsekNama: string;
+  kepsekNipLabel: string;
+  waliNama: string;
+  waliNipLabel: string;
+}
+
+export const exportDynamicMatrixToPdf = async (
+  options: DynamicMatrixPdfOptions
+): Promise<boolean> => {
+  const { matrix } = options;
+  const [leftLogo, rightLogo] = await Promise.all([
+    loadImageDataUrlForPdf(options.profile?.logoKemendikbudUrl),
+    loadImageDataUrlForPdf(options.profile?.logoSekolahUrl),
+  ]);
+
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 12;
+
+  const accentRgb: [number, number, number] =
+    matrix.examType === 'TKA' ? [180, 83, 9] : [4, 120, 87];
+
+  let y = drawKopHeader(
+    doc,
+    options.profile,
+    leftLogo,
+    rightLogo,
+    `MATRIKS ANALISIS BUTIR SOAL ${matrix.examType} PER MATA PELAJARAN`,
+    `${matrix.mapelLabel} • ${matrix.paketLabel} • ${matrix.kelasLabel} • ${matrix.totalQuestions} Butir Soal • TP ${matrix.tahunPelajaran} (${matrix.semester})`,
+    accentRgb
+  );
+
+  const fmtVal = (v: number | null | undefined): string => {
+    if (v === null || v === undefined || !Number.isFinite(v)) return '-';
+    return Number.isInteger(v) ? String(v) : v.toFixed(1).replace(/\.0$/, '');
+  };
+
+  // Chunk wide question matrices cleanly into bands of max 22 columns per page
+  const CHUNK_SIZE = 22;
+  const totalCols = matrix.columns.length;
+  const chunks: Array<{ startIdx: number; endIdx: number }> = [];
+  if (totalCols === 0) {
+    chunks.push({ startIdx: 0, endIdx: 0 });
+  } else {
+    for (let s = 0; s < totalCols; s += CHUNK_SIZE) {
+      chunks.push({ startIdx: s, endIdx: Math.min(totalCols, s + CHUNK_SIZE) });
+    }
+  }
+
+  chunks.forEach((chunk, chunkIdx) => {
+    if (chunkIdx > 0) {
+      doc.addPage();
+      y = 14;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text(
+        `Lanjutan Matriks Butir Soal No. ${chunk.startIdx + 1} s.d. ${chunk.endIdx} — ${matrix.mapelLabel} (${matrix.paketLabel})`,
+        margin,
+        y
+      );
+      y += 4;
+    }
+
+    const sliceCols = matrix.columns.slice(chunk.startIdx, chunk.endIdx);
+    const isLastChunk = chunkIdx === chunks.length - 1;
+
+    // Build run-length grouped JENIS PENILAIAN header for this slice
+    const sliceGroups: Array<{ label: string; colSpan: number }> = [];
+    sliceCols.forEach((col) => {
+      const last = sliceGroups[sliceGroups.length - 1];
+      if (last && last.label === col.tipeLabel) {
+        last.colSpan += 1;
+      } else {
+        sliceGroups.push({ label: col.tipeLabel, colSpan: 1 });
+      }
+    });
+
+    const headRow1: any[] = [
+      { content: 'NO', rowSpan: 3, styles: { halign: 'center', valign: 'middle' } },
+      { content: 'NAMA SISWA', rowSpan: 1, styles: { halign: 'left', valign: 'middle' } },
+      { content: 'L/P', rowSpan: 3, styles: { halign: 'center', valign: 'middle' } },
+      ...sliceGroups.map((g) => ({
+        content: g.label,
+        colSpan: g.colSpan,
+        styles: { halign: 'center', valign: 'middle' },
+      })),
+    ];
+
+    if (isLastChunk) {
+      headRow1.push(
+        { content: 'JUMLAH', rowSpan: 2, styles: { halign: 'center', valign: 'middle' } },
+        { content: 'NILAI', rowSpan: 2, styles: { halign: 'center', valign: 'middle' } },
+        { content: 'RANK', rowSpan: 3, styles: { halign: 'center', valign: 'middle' } }
+      );
+    }
+
+    const headRow2: any[] = [
+      { content: 'NO. SOAL', styles: { halign: 'right', fontStyle: 'bold' } },
+      ...sliceCols.map((c) => ({
+        content: String(c.no),
+        styles: { halign: 'center', fontStyle: 'bold' },
+      })),
+    ];
+
+    const headRow3: any[] = [
+      { content: 'BOBOT', styles: { halign: 'right', fontStyle: 'bold' } },
+      ...sliceCols.map((c) => ({
+        content: String(c.bobot),
+        styles: { halign: 'center' },
+      })),
+    ];
+    if (isLastChunk) {
+      headRow3.push(
+        { content: fmtVal(matrix.totalBobotMaksimal), styles: { halign: 'center' } },
+        { content: '100', styles: { halign: 'center' } }
+      );
+    }
+
+    const bodyRows: any[][] = matrix.rows.map((row, rIdx) => {
+      const base = [
+        String(rIdx + 1),
+        row.nama,
+        row.jenisKelamin,
+        ...sliceCols.map((col) => fmtVal(row.itemScores[col.no - 1])),
+      ];
+      if (isLastChunk) {
+        base.push(fmtVal(row.jumlahSkor), fmtVal(row.nilaiAkhir), row.peringkat ? String(row.peringkat) : '-');
+      }
+      return base;
+    });
+
+    // Summary footer rows
+    const makeSummaryRow = (
+      label: string,
+      vals: Array<number | null>,
+      totalVal: string,
+      nilaiVal: string
+    ) => {
+      const r: any[] = [
+        '',
+        label,
+        '',
+        ...sliceCols.map((col) => fmtVal(vals[col.no - 1])),
+      ];
+      if (isLastChunk) {
+        r.push(totalVal, nilaiVal, '');
+      }
+      return r;
+    };
+
+    bodyRows.push(
+      makeSummaryRow(
+        'RATA-RATA',
+        matrix.summary.itemAverages,
+        fmtVal(matrix.summary.avgJumlah),
+        fmtVal(matrix.summary.avgNilai)
+      ),
+      makeSummaryRow(
+        'NILAI TERTINGGI',
+        matrix.summary.itemMaxes,
+        fmtVal(matrix.summary.maxJumlah),
+        fmtVal(matrix.summary.maxNilai)
+      ),
+      makeSummaryRow(
+        'NILAI TERENDAH',
+        matrix.summary.itemMins,
+        fmtVal(matrix.summary.minJumlah),
+        fmtVal(matrix.summary.minNilai)
+      ),
+      makeSummaryRow(
+        `KKM (${matrix.summary.kktp})`,
+        matrix.columns.map(() => null),
+        `${matrix.summary.tuntasCount}/${matrix.summary.pesertaWithScoreCount}`,
+        `${matrix.summary.tuntasPct}%`
+      )
+    );
+
+    const summaryStartRowIdx = matrix.rows.length;
+
+    autoTable(doc, {
+      startY: y,
+      margin: { left: margin, right: margin },
+      theme: 'grid',
+      headStyles: {
+        fillColor: accentRgb,
+        textColor: 255,
+        fontSize: 6.8,
+        fontStyle: 'bold',
+        cellPadding: 1.3,
+      },
+      styles: {
+        fontSize: 6.7,
+        cellPadding: 1.2,
+        textColor: [15, 23, 42],
+        halign: 'center',
+        valign: 'middle',
+      },
+      head: [headRow1, headRow2, headRow3],
+      body: bodyRows,
+      columnStyles: {
+        0: { cellWidth: 7 },
+        1: { halign: 'left', cellWidth: 42, fontStyle: 'bold' },
+        2: { cellWidth: 7 },
+      },
+      didParseCell: (data: any) => {
+        if (data.section === 'body' && data.row.index >= summaryStartRowIdx) {
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.fillColor = [241, 245, 249];
+        }
+      },
+    });
+
+    y = ((doc as any).lastAutoTable?.finalY || y + 30) + 6;
+  });
+
+  // Distribution table + Signature
+  if (y + 52 > pageHeight - 10) {
+    doc.addPage();
+    y = 16;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Distribusi Rentang Nilai Siswa', margin, y);
+  y += 2.5;
+
+  autoTable(doc, {
+    startY: y,
+    margin: { left: margin, right: pageWidth - margin - 120 },
+    theme: 'grid',
+    headStyles: { fillColor: [30, 41, 59], textColor: 255, fontSize: 7.5, fontStyle: 'bold' },
+    styles: { fontSize: 7.2, cellPadding: 1.5, halign: 'center' },
+    head: [['Rentang Nilai', 'Jumlah Siswa', 'Persentase']],
+    body: matrix.distribution.map((b) => [b.label, String(b.count), `${b.percentage}%`]),
+  });
+
+  const distEndY = (doc as any).lastAutoTable?.finalY || y + 40;
+  const sigTopY = Math.max(y + 4, distEndY - 38);
+  const sigLeftX = pageWidth - margin - 100;
+  const sigRightX = pageWidth - margin - 32;
+  const tanggal = `Jakarta, ${formatTodayIndonesianDate()}`;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Mengetahui,', sigLeftX, sigTopY, { align: 'center' });
+  doc.text(`Kepala ${options.profile?.name || 'SDN Rawa Badak Utara 21'}`, sigLeftX, sigTopY + 4, {
+    align: 'center',
+  });
+
+  doc.text(tanggal, sigRightX, sigTopY, { align: 'center' });
+  doc.text(`Guru / Wali ${matrix.kelasLabel}`, sigRightX, sigTopY + 4, { align: 'center' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.text(options.kepsekNama, sigLeftX, sigTopY + 24, { align: 'center' });
+  doc.text(options.waliNama || 'Guru Mata Pelajaran', sigRightX, sigTopY + 24, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.2);
+  doc.setTextColor(71, 85, 105);
+  doc.text(options.kepsekNipLabel, sigLeftX, sigTopY + 28, { align: 'center' });
+  doc.text(options.waliNipLabel, sigRightX, sigTopY + 28, { align: 'center' });
+
+  const fileName = `Matriks_Analisis_${matrix.examType}_${sanitizeFilename(matrix.mapelLabel)}_${sanitizeFilename(matrix.paketLabel)}.pdf`;
+  doc.save(fileName);
+  return true;
+};
