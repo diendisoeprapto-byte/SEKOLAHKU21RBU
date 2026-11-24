@@ -69,8 +69,12 @@ service cloud.firestore {
       allow write: if true;
     }
 
-    // Bank Soal CBT & TKA
+    // Bank Soal CBT & TKA & Hasil CBT Terisolasi per Siswa
     match /cbt_exams/{examId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    match /cbt_results/{resultId} {
       allow read: if true;
       allow write: if true;
     }

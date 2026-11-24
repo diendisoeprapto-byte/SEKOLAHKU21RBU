@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   User,
   Lock,
@@ -8,10 +8,20 @@ import {
   Eye,
   EyeOff,
   AlertCircle,
+  History,
+  X,
+  CheckCircle2,
+  Sparkles,
 } from 'lucide-react';
 import { SchoolProfile, Teacher, Student, ActiveUser } from '../types';
 import { getStoredAdminPassword } from '../utils/storage';
 import { SYSTEM_CREDIT_TEXT } from '../utils/ownershipWatermark';
+import {
+  APP_VERSION,
+  RELEASE_DATE_SHORT,
+  CHANGELOG_LIST,
+  checkAndBumpAppVersionCache,
+} from '../utils/appVersion';
 import schoolIllustration from '../assets/images/school_education_illustration_1795173778080.jpg';
 
 interface Props {
@@ -38,6 +48,14 @@ export const LoginScreen: React.FC<Props> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [illustrationError, setIllustrationError] = useState(false);
+  const [showChangelogModal, setShowChangelogModal] = useState(false);
+
+  useEffect(() => {
+    const res = checkAndBumpAppVersionCache();
+    if (res.upgraded) {
+      showToast(`Aplikasi berhasil diperbarui ke versi ${res.currentVersion}`, 'success');
+    }
+  }, [showToast]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -283,6 +301,23 @@ export const LoginScreen: React.FC<Props> = ({
               </button>
             </div>
           </div>
+
+          {/* Minimalist Clickable App Version Badge */}
+          <div className="mt-3 flex justify-center sm:justify-start">
+            <button
+              type="button"
+              onClick={() => setShowChangelogModal(true)}
+              className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-50 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-[11px] font-semibold text-slate-600 hover:text-rose-700 transition cursor-pointer"
+              title="Klik untuk melihat riwayat pembaruan aplikasi SERBU 21"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" aria-hidden="true" />
+              <span>
+                SERBU 21 • <strong className="font-mono">{APP_VERSION}</strong> (Update:{' '}
+                {RELEASE_DATE_SHORT})
+              </span>
+              <History className="w-3 h-3 text-slate-400" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -290,6 +325,105 @@ export const LoginScreen: React.FC<Props> = ({
       <footer className="text-center text-[11px] font-semibold text-slate-500 px-3 tracking-wide">
         {SYSTEM_CREDIT_TEXT}
       </footer>
+
+      {/* Changelog / Riwayat Pembaruan Modal */}
+      {showChangelogModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/55 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setShowChangelogModal(false)}
+        >
+          <div
+            className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-2xl w-full max-h-[86vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 bg-gradient-to-r from-rose-600 to-rose-700 text-white flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center shrink-0">
+                  <Sparkles className="w-4 h-4 text-amber-200" />
+                </div>
+                <div>
+                  <h3 className="font-display font-black text-base leading-tight">
+                    Catatan Pembaruan Sistem SERBU 21
+                  </h3>
+                  <p className="text-[11px] text-rose-100">
+                    Versi Aktif {APP_VERSION} · Pembaruan Terakhir {RELEASE_DATE_SHORT}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowChangelogModal(false)}
+                className="p-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white cursor-pointer transition"
+                aria-label="Tutup catatan pembaruan"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 sm:p-6 overflow-y-auto space-y-4">
+              {CHANGELOG_LIST.map((item, idx) => (
+                <div
+                  key={item.version}
+                  className={`p-4 rounded-2xl border ${
+                    idx === 0
+                      ? 'bg-emerald-50/50 border-emerald-200'
+                      : 'bg-slate-50/70 border-slate-200'
+                  } space-y-2.5`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-2.5 py-0.5 rounded-lg font-mono font-black text-xs ${
+                          idx === 0
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-200 text-slate-800'
+                        }`}
+                      >
+                        {item.version}
+                      </span>
+                      {idx === 0 && (
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700">
+                          Terbaru
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[11px] font-semibold text-slate-500">{item.date}</span>
+                  </div>
+                  <h4 className="font-display font-bold text-sm text-slate-900">{item.title}</h4>
+                  <ul className="space-y-1.5">
+                    {item.highlights.map((hl, hIdx) => (
+                      <li
+                        key={hIdx}
+                        className="flex items-start gap-2 text-xs text-slate-700 leading-relaxed"
+                      >
+                        <CheckCircle2
+                          className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
+                            idx === 0 ? 'text-emerald-600' : 'text-slate-400'
+                          }`}
+                        />
+                        <span>{hl}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+
+            <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50 flex items-center justify-between gap-3 shrink-0">
+              <span className="text-[11px] text-slate-500">
+                Draft ujian &amp; antrean sinkronisasi siswa tetap aman selama pembaruan versi.
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowChangelogModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-rose-600 text-white font-display font-bold text-xs cursor-pointer transition whitespace-nowrap"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };

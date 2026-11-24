@@ -159,6 +159,11 @@ import {
   saveCbtExamsBatchToFirestore,
 } from './utils/cbtFirestore';
 import {
+  subscribeToCbtResultsCollection,
+  applyMergedCbtResultsToLocal,
+  flushPendingCbtResultsToFirestore,
+} from './utils/cbtResultFirestore';
+import {
   subscribeToTeachersCollection,
   saveTeachersToFirestoreBatch,
   replaceTeachersInFirestore,
@@ -856,14 +861,30 @@ export default function App() {
       }
     );
 
+    // Realtime listener langsung untuk koleksi 'cbt_results' (hasil ujian CBT terisolasi per siswa)
+    const unsubCbtResults = subscribeToCbtResultsCollection(
+      async (cloudCbtResults) => {
+        await idbHydrationPromise;
+        if (!isMounted) return;
+        markLargeCollectionHydratedFromCloud('sekolahku_cbt_results');
+        applyMergedCbtResultsToLocal(cloudCbtResults);
+        flushPendingCbtResultsToFirestore().catch(() => {});
+      },
+      (err) => {
+        console.warn('CBT results listener warning:', err);
+      }
+    );
+
     idbHydrationPromise.then(() => {
       if (!isMounted) return;
       flushPendingTkaSubmissionsToFirestore().catch(() => {});
+      flushPendingCbtResultsToFirestore().catch(() => {});
       reconcileAndSyncLocalTkaSubmissions(getStoredStudents()).catch(() => {});
     });
 
     const handleOnlineSync = () => {
       flushPendingTkaSubmissionsToFirestore().catch(() => {});
+      flushPendingCbtResultsToFirestore().catch(() => {});
       reconcileAndSyncLocalTkaSubmissions().catch(() => {});
     };
     window.addEventListener('online', handleOnlineSync);
@@ -879,6 +900,7 @@ export default function App() {
       unsubTkaQuestions();
       unsubTkaSubmissions();
       unsubCbtExams();
+      unsubCbtResults();
     };
   }, []);
 
@@ -910,6 +932,7 @@ export default function App() {
     activeUserRef.current = activeUser;
     if (!activeUser) return;
     flushPendingTkaSubmissionsToFirestore().catch(() => {});
+    flushPendingCbtResultsToFirestore().catch(() => {});
     if (students.length > 0) {
       reconcileAndSyncLocalTkaSubmissions(students).catch(() => {});
     }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   SARAH_STICKER_ASSETS,
   SarahStickerCode,
@@ -10,6 +10,11 @@ import {
   findRealisticEndiSticker,
   findStudent3DSticker,
 } from '../utils/sarahStickers';
+import {
+  SARAH_STICKERS_UPDATED_EVENT,
+  getCachedCustomEndiStickerDataUrl,
+  hydrateCustomEndiStickers,
+} from '../utils/sarahStickerStorage';
 
 interface Props {
   content: string;
@@ -53,17 +58,39 @@ const SarahModeStickerView: React.FC<{
   variant: 'realistic' | 'student3d';
 }> = ({ item, variant }) => {
   const [imgError, setImgError] = useState(false);
+  const [customDataUrl, setCustomDataUrl] = useState<string | null>(() =>
+    variant === 'realistic' ? getCachedCustomEndiStickerDataUrl(item.id) : null
+  );
+
+  useEffect(() => {
+    if (variant !== 'realistic') return;
+    let active = true;
+    const syncCustom = () => {
+      if (!active) return;
+      const hit = getCachedCustomEndiStickerDataUrl(item.id);
+      setCustomDataUrl(hit);
+      if (hit) setImgError(false);
+    };
+    void hydrateCustomEndiStickers().then(syncCustom);
+    window.addEventListener(SARAH_STICKERS_UPDATED_EVENT, syncCustom);
+    return () => {
+      active = false;
+      window.removeEventListener(SARAH_STICKERS_UPDATED_EVENT, syncCustom);
+    };
+  }, [item.id, variant]);
+
+  const resolvedSrc = (variant === 'realistic' && customDataUrl) || item.path;
 
   if (!imgError) {
     return (
       <div className="my-2 inline-flex flex-col items-center">
         <div className="p-1 rounded-[1.25rem] bg-white shadow-[0_10px_24px_-6px_rgba(15,23,42,0.22)] border-2 border-white inline-block sarah-sticker-anim">
           <img
-            src={item.path}
+            src={resolvedSrc}
             alt={item.label}
             title={item.label}
             onError={() => setImgError(true)}
-            className="w-[124px] h-[124px] object-cover rounded-2xl select-none bg-rose-50"
+            className="w-[124px] h-[124px] object-contain rounded-2xl select-none bg-rose-50/40"
           />
         </div>
       </div>

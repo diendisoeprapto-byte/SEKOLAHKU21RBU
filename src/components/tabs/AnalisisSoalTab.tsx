@@ -46,6 +46,10 @@ import { syncAllLocalToCloud } from '../../utils/cloudSync';
 import { formatNipLabel, resolveKepalaSekolah, resolveWaliKelas } from '../../utils/teacherSync';
 import { doesRecordMatchTerm, isSemesterOneLabel } from '../../utils/semesterUtils';
 import { findLiveStudentForRecord } from '../../utils/tkaFirestore';
+import {
+  clearCbtResultsInFirestore,
+  deleteSingleCbtResultFromFirestore,
+} from '../../utils/cbtResultFirestore';
 import { exportCbtAnalisisToPdf } from '../../utils/analisisReportExport';
 import {
   SarahExamAnalysisPanel,
@@ -281,11 +285,17 @@ export const AnalisisSoalTab: React.FC<Props> = ({
 
   const executeClearCbtData = (scope: 'paket' | 'all') => {
     if (scope === 'paket') {
+      const targetIds = matchingExamResults.map((r) => ({
+        examId: r.examId,
+        studentId: r.studentId,
+        nisn: r.nisn,
+      }));
       clearCBTResultsFromStorage({
         scope: 'paket',
         targetPaket: selectedPaket,
         targetMapel: selectedMapel,
       });
+      void Promise.allSettled(targetIds.map((item) => deleteSingleCbtResultFromFirestore(item)));
       syncAllLocalToCloud('admin').catch(() => {});
       setCbtResults(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)));
       setIsClearModalOpen(false);
@@ -297,6 +307,7 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     }
 
     clearCBTResultsFromStorage({ scope: 'all' });
+    void clearCbtResultsInFirestore();
     syncAllLocalToCloud('admin').catch(() => {});
     setCbtResults([]);
     setIsClearModalOpen(false);
@@ -316,6 +327,11 @@ export const AnalisisSoalTab: React.FC<Props> = ({
       studentName: studentName || res.studentName,
       mapel: res.mapel || selectedMapel,
       paketName: res.paketName || selectedPaket,
+    });
+    void deleteSingleCbtResultFromFirestore({
+      examId: res.examId,
+      studentId: res.studentId,
+      nisn: res.nisn,
     });
     setCbtResults(remaining.filter((r) => !isTkaResultEntry(r)));
     setConfirmDeleteStudentRowKey(null);

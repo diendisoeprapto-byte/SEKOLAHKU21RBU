@@ -1,0 +1,103 @@
+export interface ChangelogVersionItem {
+  version: string;
+  date: string;
+  title: string;
+  highlights: string[];
+}
+
+export const APP_VERSION = 'v2.3.0';
+export const RELEASE_DATE = '24 November 2026';
+export const RELEASE_DATE_SHORT = '24 Nov 2026';
+export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
+
+export const CHANGELOG_LIST: ChangelogVersionItem[] = [
+  {
+    version: 'v2.3.0',
+    date: '24 November 2026',
+    title: 'Optimalisasi SARAH Streaming, Anti-Gagal CBT/TKA 100+ Siswa & Pemeringkatan HOTS',
+    highlights: [
+      'Pemilihan Mode Kecepatan SARAH AI (Mode Cepat Lite / Otomatis / Standar), respons streaming progresif, lazy context injection, serta auto-fallback model cerdas.',
+      'Upload & Auto-Slicer Lembar Stiker Realistik 2x3 (ID 31–60) khusus Endi Soeprapto lengkap dengan pembersihan latar otomatis berbasis HTML5 Canvas & IndexedDB.',
+      'Peningkatan kapasitas 100+ siswa per jenjang CBT & TKA dengan isolasi dokumen Firestore per siswa, auto-save draft berkala, retry backoff, dan antrean offline anti-gagal.',
+      'Sistem pemeringkatan berjenjang (Tie-Breaker): Nilai Akhir -> Jumlah Benar Soal Sulit (HOTS) -> Durasi Waktu Pengerjaan Tercepat.',
+      'Mode Minimalis (5–6 kolom ringkas) & Paginasi Katalog Perpustakaan Digital.',
+    ],
+  },
+  {
+    version: 'v2.2.0',
+    date: '14 November 2026',
+    title: 'Analisis Soal SARAH AI, Tren Recharts & Matriks Betul/Salah',
+    highlights: [
+      'Integrasi SARAH AI untuk mengulas soal yang masih salah serta analisis capaian kelas/individu pada CBT & TKA berstatus selesai.',
+      'Visualisasi tren nilai TKA per mata pelajaran menggunakan Recharts dan rekap total lintas simulasi.',
+      'Matriks pemetaan nomor soal betul dan salah per siswa serta sistem antrean AbortController & Result Caching.',
+    ],
+  },
+  {
+    version: 'v2.1.0',
+    date: '02 November 2026',
+    title: 'Katalog Perpustakaan Minimalis, Preview Media Ajar & Absensi Wajah',
+    highlights: [
+      'Preview sampul buku digital, embed Media Ajar PPT, dan tombol baca langsung dengan pencatatan jumlah pembaca.',
+      'Optimalisasi ukuran komponen upload foto pada pemindai wajah agar lebih ringkas dan nyaman.',
+    ],
+  },
+  {
+    version: 'v2.0.0',
+    date: '18 Oktober 2026',
+    title: 'Peluncuran Asisten Virtual SARAH & Penguncian Ujian Ketat',
+    highlights: [
+      'Peluncuran asisten virtual SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis) dengan Hybrid Visual System dan ruang privat terisolasi.',
+      'Aturan penguncian akses ketat (Strict Access Control) CBT & TKA pada dokumen hasil_ujian berstatus selesai.',
+    ],
+  },
+];
+
+// Prefix cache UI/AI sementara yang aman dibersihkan saat pergantian versi aplikasi.
+// DILARANG keras menghapus pending submissions, exam drafts, data siswa/guru, atau hasil ujian lokal.
+const SAFE_STALE_CACHE_PREFIXES = [
+  'serbu21_sarah_ai_cache_',
+  'sekolahku_ui_cache_',
+];
+
+export function checkAndBumpAppVersionCache(): {
+  upgraded: boolean;
+  previousVersion: string | null;
+  currentVersion: string;
+} {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return { upgraded: false, previousVersion: null, currentVersion: APP_VERSION };
+  }
+
+  try {
+    const previousVersion = window.localStorage.getItem(APP_VERSION_STORAGE_KEY);
+    if (previousVersion === APP_VERSION) {
+      return { upgraded: false, previousVersion, currentVersion: APP_VERSION };
+    }
+
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (!k) continue;
+      if (SAFE_STALE_CACHE_PREFIXES.some((prefix) => k.startsWith(prefix))) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach((k) => {
+      try {
+        window.localStorage.removeItem(k);
+      } catch {
+        // Ignore individual key errors
+      }
+    });
+
+    window.localStorage.setItem(APP_VERSION_STORAGE_KEY, APP_VERSION);
+    return {
+      upgraded: true,
+      previousVersion,
+      currentVersion: APP_VERSION,
+    };
+  } catch {
+    return { upgraded: false, previousVersion: null, currentVersion: APP_VERSION };
+  }
+}

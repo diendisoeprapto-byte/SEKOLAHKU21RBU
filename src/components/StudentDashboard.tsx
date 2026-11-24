@@ -70,7 +70,17 @@ import {
   getActiveFilters,
   CLASSES_LIST,
 } from '../utils/storage';
-import { upsertTkaSubmissionAsync, reconcileAndSyncLocalTkaSubmissions, findLiveStudentForRecord } from '../utils/tkaFirestore';
+import {
+  upsertTkaSubmissionAsync,
+  reconcileAndSyncLocalTkaSubmissions,
+  findLiveStudentForRecord,
+  savePeriodicTkaDraftToFirestore,
+} from '../utils/tkaFirestore';
+import {
+  saveCbtResultToFirestore,
+  savePeriodicCbtDraftToFirestore,
+} from '../utils/cbtResultFirestore';
+import { computeExamHotsStats, formatDurasiDetik } from '../utils/examRanking';
 import { syncAllLocalToCloud } from '../utils/cloudSync';
 import {
   StudentExamDraft,
@@ -218,8 +228,16 @@ export const StudentDashboard: React.FC<Props> = ({
   const [currentQIndex, setCurrentQIndex] = useState<number>(0);
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const [timeLeft, setTimeLeft] = useState<number>(0);
-  const [examResult, setExamResult] = useState<{ score: number; maxScore: number } | null>(null);
+  const [examResult, setExamResult] = useState<{
+    score: number;
+    maxScore: number;
+    durasiDetik?: number;
+    benarHots?: number;
+    totalHots?: number;
+  } | null>(null);
   const [firestoreSaveStatus, setFirestoreSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [isSavingSubmission, setIsSavingSubmission] = useState<boolean>(false);
+  const [offlineQueueNotice, setOfflineQueueNotice] = useState<boolean>(false);
   const [resumedNotice, setResumedNotice] = useState<string | null>(null);
   const [draftRevisionTick, setDraftRevisionTick] = useState<number>(0);
   const [timeUpModal, setTimeUpModal] = useState<{
@@ -235,6 +253,9 @@ export const StudentDashboard: React.FC<Props> = ({
 
   const autoResumedModeRef = useRef<string>('');
   const isSubmittingExamRef = useRef<boolean>(false);
+  const examStartTimestampRef = useRef<number>(Date.now());
+  const lastCloudCheckpointAtRef = useRef<number>(0);
+  const lastCloudCheckpointCountRef = useRef<number>(0);
   const handleFinishExamRef = useRef<(isAutoSubmit?: boolean) => void>(() => {});
   const latestExamStateRef = useRef<{
     studentId: string;
@@ -1246,7 +1267,17 @@ export const StudentDashboard: React.FC<Props> = ({
     const safeTimeLeft = draft.timeLeft > 0 ? draft.timeLeft : examObj.durasiMenit * 60;
     const answeredCount = countAnsweredQuestions(safeAnswers);
 
+    const initialStartTs =
+      typeof draft.examStartTimestamp === 'number' && draft.examStartTimestamp > 0
+        ? draft.examStartTimestamp
+        : Date.now() - Math.max(0, ((draft.totalSeconds || examObj.durasiMenit * 60) - safeTimeLeft) * 1000);
+    examStartTimestampRef.current = initialStartTs;
+    lastCloudCheckpointAtRef.current = Date.now();
+    lastCloudCheckpointCountRef.current = answeredCount;
+
     isSubmittingExamRef.current = false;
+    setIsSavingSubmission(false);
+    setOfflineQueueNotice(false);
     setTimeUpModal(null);
     setViewMode(examObj.category);
     setSelectedPaketFilter(draft.selectedPaketFilter || examObj.paketName);
@@ -1266,6 +1297,7 @@ export const StudentDashboard: React.FC<Props> = ({
         currentQIndex: safeIndex,
         timeLeft: safeTimeLeft,
         isActiveSession: true,
+        examStartTimestamp: initialStartTs,
         runningQuestionOrder: buildQuestionOrderSnapshot(restoredList),
       },
       { immediateSync: false }
@@ -1296,11 +1328,63 @@ export const StudentDashboard: React.FC<Props> = ({
         totalSeconds: activeExamObj.durasiMenit * 60,
         runningQuestionOrder: buildQuestionOrderSnapshot(soalToSave),
         isActiveSession: true,
+        examStartTimestamp: examStartTimestampRef.current,
         updatedAt: new Date().toISOString(),
       },
       { immediateSync: false }
     );
   }, [isExamRunning, activeExamObj?.id, currentStudent?.id, currentQIndex, answers, runningSoalList]);
+
+  // Checkpoint Firestore berkala setiap 5 soal terjawab atau setiap 45 detik (anti-hilang 100+ siswa)
+  useEffect(() => {
+    if (!isExamRunning || !activeExamObj || !currentStudent?.id || isSavingSubmission) return;
+
+    const triggerCheckpoint = () => {
+      const snap = latestExamStateRef.current;
+      if (!snap.isExamRunning || !snap.exam || !snap.studentId || isSubmittingExamRef.current) return;
+      lastCloudCheckpointAtRef.current = Date.now();
+      lastCloudCheckpointCountRef.current = countAnsweredQuestions(snap.answers);
+      if (snap.exam.category === 'tka') {
+        void savePeriodicTkaDraftToFirestore({
+          student: {
+            id: currentStudent.id,
+            nama: currentStudent.nama,
+            nisn: currentStudent.nisn,
+            kelas: currentStudent.kelas,
+            fotoUrl: currentStudent.fotoUrl,
+          },
+          paketName: snap.exam.paketName,
+          questionAnswers: snap.answers,
+        });
+      } else {
+        void savePeriodicCbtDraftToFirestore({
+          examId: snap.exam.id,
+          studentId: currentStudent.id,
+          nisn: currentStudent.nisn,
+          studentName: currentStudent.nama,
+          kelas: currentStudent.kelas,
+          mapel: snap.exam.mapel,
+          judul: snap.exam.judul,
+          paketName: snap.exam.paketName,
+          jawabanSiswa: snap.answers,
+          timeLeft: snap.timeLeft,
+          examStartTimestamp: examStartTimestampRef.current,
+        });
+      }
+    };
+
+    const answeredNow = countAnsweredQuestions(answers);
+    if (
+      answeredNow > 0 &&
+      answeredNow - lastCloudCheckpointCountRef.current >= 5 &&
+      Date.now() - lastCloudCheckpointAtRef.current >= 3000
+    ) {
+      triggerCheckpoint();
+    }
+
+    const interval = setInterval(triggerCheckpoint, 45000);
+    return () => clearInterval(interval);
+  }, [isExamRunning, activeExamObj?.id, currentStudent?.id, answers, isSavingSubmission]);
 
   // Auto-save sisa waktu ke localStorage tiap detik
   useEffect(() => {
@@ -1322,6 +1406,7 @@ export const StudentDashboard: React.FC<Props> = ({
         totalSeconds: activeExamObj.durasiMenit * 60,
         runningQuestionOrder: buildQuestionOrderSnapshot(soalToSave),
         isActiveSession: true,
+        examStartTimestamp: examStartTimestampRef.current,
         updatedAt: new Date().toISOString(),
       },
       { immediateSync: false }
@@ -1457,7 +1542,13 @@ export const StudentDashboard: React.FC<Props> = ({
     }
 
     const initialSeconds = currentExam.durasiMenit * 60;
+    const startTs = Date.now();
+    examStartTimestampRef.current = startTs;
+    lastCloudCheckpointAtRef.current = startTs;
+    lastCloudCheckpointCountRef.current = 0;
     isSubmittingExamRef.current = false;
+    setIsSavingSubmission(false);
+    setOfflineQueueNotice(false);
     setTimeUpModal(null);
     setRunningExamSnapshot(currentExam);
     setRunningSoalList(preparedList);
@@ -1485,6 +1576,7 @@ export const StudentDashboard: React.FC<Props> = ({
           totalSeconds: initialSeconds,
           runningQuestionOrder: buildQuestionOrderSnapshot(preparedList),
           isActiveSession: true,
+          examStartTimestamp: startTs,
           updatedAt: new Date().toISOString(),
         },
         { immediateSync: false }
@@ -1525,6 +1617,8 @@ export const StudentDashboard: React.FC<Props> = ({
     const finishedExam = activeExamObj;
     if (!finishedExam || isSubmittingExamRef.current) return;
     isSubmittingExamRef.current = true;
+    setIsSavingSubmission(true);
+    setOfflineQueueNotice(false);
 
     const evaluatedQuestions = activeExamSoalList.length > 0 ? activeExamSoalList : finishedExam.soalList;
     const answeredCount = countAnsweredQuestions(answers);
@@ -1553,6 +1647,17 @@ export const StudentDashboard: React.FC<Props> = ({
       }
     });
 
+    const { benarHots, totalHots } = computeExamHotsStats(
+      canonicalList,
+      answers,
+      (q, ans) => gradeQuestionAnswer(q, ans).isCorrect
+    );
+    const durasiDetik = Math.max(
+      1,
+      Math.round((Date.now() - (examStartTimestampRef.current || Date.now())) / 1000)
+    );
+    const nowIso = new Date().toISOString();
+
     const rawGrade = max > 0 ? Math.round((earned / max) * 100) : 100;
     const finalGrade = Number.isFinite(rawGrade) ? rawGrade : 0;
 
@@ -1573,15 +1678,15 @@ export const StudentDashboard: React.FC<Props> = ({
       );
     }
 
-    // Rekam ke CBT Results di storage (beserta metadata ujian untuk Statistik Performa)
+    // Rekam ke CBT Results di storage (beserta metadata ujian & HOTS + durasiDetik)
     const activeFilters = getActiveFilters();
-    const storedRes = getStoredCBTResults();
-    storedRes.push({
+    const newResultEntry = {
       examId: finishedExam.id,
       studentId: currentStudent.id,
       studentName: currentStudent.nama,
       nisn: currentStudent.nisn,
       kelas: currentStudent.kelas,
+      jenjang: currentStudent.kelas || activeClass || 'Umum',
       skor: Number.isFinite(earned) ? earned : 0,
       nilai: finalGrade,
       waktuSelesai: new Date().toLocaleTimeString(),
@@ -1594,10 +1699,17 @@ export const StudentDashboard: React.FC<Props> = ({
       recordedAt: Date.now(),
       tahunPelajaran: activeFilters.year,
       semester: activeFilters.semester,
-    });
+      benarHots,
+      totalHots,
+      durasiDetik,
+      statusPengerjaan: 'selesai' as const,
+      updatedAt: nowIso,
+    };
+    const storedRes = getStoredCBTResults();
+    storedRes.push(newResultEntry);
     saveStoredCBTResults(storedRes);
 
-    // Rekam status "selesai" ke koleksi Firestore `hasil_ujian/${nisn}_${id_ujian}` secara non-blocking
+    // Rekam status "selesai" ke koleksi Firestore `hasil_ujian/${nisn}_${id_ujian}`
     // agar Strict Access Control SARAH langsung terbuka setelah siswa selesai mengirim ujian.
     setFirestoreSaveStatus('saving');
     void saveHasilUjianToFirestore({
@@ -1622,13 +1734,22 @@ export const StudentDashboard: React.FC<Props> = ({
     });
     window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
 
+    // Kirim hasil terisolasi per siswa ke Firestore dengan exponential backoff (4x percobaan)
+    let cbtIsolatedCloudSaved = false;
+    if (finishedExam.category !== 'tka') {
+      try {
+        cbtIsolatedCloudSaved = await saveCbtResultToFirestore(newResultEntry);
+      } catch (cbtErr) {
+        console.warn('Isolated CBT result save warning:', cbtErr);
+      }
+    }
+
     // Jika TKA, kirim & tunggu (await) penulisan langsung ke koleksi Firestore 'tka_submissions'
-    // agar Admin langsung melihat hasilnya secara real-time lintas perangkat.
     let tkaCloudSaved = false;
     if (finishedExam.category === 'tka') {
       try {
         const normMapelKey = normalizeTkaMapelKey(finishedExam.mapel);
-        const durationUsed = Math.max(1, finishedExam.durasiMenit - Math.floor(timeLeft / 60));
+        const durationUsed = Math.max(1, Math.ceil(durasiDetik / 60));
         const tkaPromise = upsertTkaSubmissionAsync({
           student: currentStudent,
           paketName: finishedExam.paketName,
@@ -1636,12 +1757,16 @@ export const StudentDashboard: React.FC<Props> = ({
           completedMapelKeys: [normMapelKey],
           questionAnswers: answers,
           durasiMenitUsed: durationUsed,
+          durasiDetik,
+          benarHots,
+          totalHots,
+          jenjang: currentStudent.kelas || 'Kelas 6',
           tahunPelajaran: activeFilters.year,
           semester: activeFilters.semester,
         });
         const tkaRes = await Promise.race([
           tkaPromise,
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 12000)),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 15000)),
         ]);
         tkaCloudSaved = Boolean(tkaRes && tkaRes.cloudSaved);
       } catch (tkaErr) {
@@ -1711,12 +1836,9 @@ export const StudentDashboard: React.FC<Props> = ({
     }
 
     // Kirim ke database Firestore (koleksi assessments + snapshot cloud penuh)
-    let cloudSaved = finishedExam.category === 'tka' ? tkaCloudSaved : false;
+    let cloudSaved = finishedExam.category === 'tka' ? tkaCloudSaved : cbtIsolatedCloudSaved;
     try {
       const dbTasks: Promise<any>[] = [];
-      if (finishedExam.category !== 'tka') {
-        dbTasks.push(syncAllLocalToCloud(currentStudent.nama || 'siswa'));
-      }
       if (assessKeyWritten && assessPayloadWritten) {
         dbTasks.push(
           setDoc(
@@ -1733,18 +1855,14 @@ export const StudentDashboard: React.FC<Props> = ({
         );
       }
       if (dbTasks.length > 0) {
-        const results = await Promise.race([
+        await Promise.race([
           Promise.allSettled(dbTasks),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
         ]);
-        if (finishedExam.category !== 'tka') {
-          cloudSaved =
-            Array.isArray(results) && results.some((r) => r.status === 'fulfilled' && r.value !== false);
-        }
       }
+      // Jalankan backup global ringan di latar belakang agar tidak memperlambat UI siswa
+      syncAllLocalToCloud(currentStudent.nama || 'siswa').catch(() => {});
       if (finishedExam.category === 'tka') {
-        // Jalankan backup global & rekonsiliasi ringan di latar belakang agar tidak memperlambat UI siswa
-        syncAllLocalToCloud(currentStudent.nama || 'siswa').catch(() => {});
         reconcileAndSyncLocalTkaSubmissions(students).catch(() => {});
       }
     } catch (dbErr) {
@@ -1757,11 +1875,26 @@ export const StudentDashboard: React.FC<Props> = ({
       setDraftRevisionTick((t) => t + 1);
     }
 
+    setOfflineQueueNotice(!cloudSaved);
     setRunningExamSnapshot(finishedExam);
-    setExamResult({ score: finalGrade, maxScore: 100 });
+    setExamResult({
+      score: finalGrade,
+      maxScore: 100,
+      durasiDetik,
+      benarHots,
+      totalHots,
+    });
     setIsExamRunning(false);
     setResumedNotice(null);
+    setIsSavingSubmission(false);
     isSubmittingExamRef.current = false;
+
+    if (!cloudSaved && !isAutoSubmit) {
+      showToast(
+        'Koneksi internet terganggu! Jawaban tersimpan aman di perangkat & akan otomatis terkirim saat online.',
+        'error'
+      );
+    }
 
     if (isAutoSubmit) {
       setTimeUpModal((prev) =>
@@ -3162,6 +3295,12 @@ export const StudentDashboard: React.FC<Props> = ({
         {/* TAHAP C: ANTARMUKA SAAT UJIAN BERLANGSUNG */}
         {isExamRunning && activeExamObj && (
           <div className="space-y-4 pt-2">
+            {isSavingSubmission && (
+              <div className="p-4 rounded-2xl bg-amber-50 border-2 border-amber-300 text-amber-950 text-xs font-black flex items-center justify-center gap-2.5 shadow-sm">
+                <Loader2 className="w-4 h-4 animate-spin text-amber-600 shrink-0" />
+                <span>Sedang menyimpan jawaban... Jangan tutup halaman</span>
+              </div>
+            )}
             {/* Notice saat berhasil dipulihkan setelah logout / masuk kembali */}
             {resumedNotice && (
               <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center justify-between gap-3">
@@ -3419,11 +3558,21 @@ export const StudentDashboard: React.FC<Props> = ({
                       ) : (
                         <button
                           type="button"
+                          disabled={isSavingSubmission}
                           onClick={() => handleFinishExam(false)}
-                          className="px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black text-xs flex items-center gap-1.5 transition cursor-pointer shadow-md shadow-emerald-600/20"
+                          className="px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-display font-black text-xs flex items-center gap-1.5 transition cursor-pointer shadow-md shadow-emerald-600/20"
                         >
-                          <Send className="w-4 h-4" />
-                          <span>Selesai &amp; Kumpulkan Jawaban</span>
+                          {isSavingSubmission ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <span>Sedang menyimpan jawaban...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Send className="w-4 h-4" />
+                              <span>Selesai &amp; Kumpulkan Jawaban</span>
+                            </>
+                          )}
                         </button>
                       )}
                     </div>
@@ -3450,6 +3599,18 @@ export const StudentDashboard: React.FC<Props> = ({
               <p className="text-xs text-slate-500 mt-1">
                 {activeExamObj.judul} • Peserta: {currentStudent.nama}
               </p>
+              <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+                {typeof examResult.durasiDetik === 'number' && (
+                  <span className="text-[11px] font-bold bg-slate-100 text-slate-700 px-2.5 py-0.5 rounded-lg">
+                    Durasi: {formatDurasiDetik(examResult.durasiDetik)}
+                  </span>
+                )}
+                {typeof examResult.totalHots === 'number' && examResult.totalHots > 0 && (
+                  <span className="text-[11px] font-bold bg-purple-100 text-purple-800 px-2.5 py-0.5 rounded-lg">
+                    Benar Soal Sulit (HOTS): {examResult.benarHots ?? 0}/{examResult.totalHots}
+                  </span>
+                )}
+              </div>
             </div>
 
             <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
@@ -3460,14 +3621,14 @@ export const StudentDashboard: React.FC<Props> = ({
             <div className="max-w-xl mx-auto grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-left pt-1">
               <div
                 className={`px-3.5 py-2.5 rounded-2xl border flex items-center gap-2.5 ${
-                  firestoreSaveStatus === 'saving'
+                  firestoreSaveStatus === 'saving' || offlineQueueNotice
                     ? 'bg-amber-50 border-amber-200'
                     : 'bg-emerald-50/80 border-emerald-200'
                 }`}
               >
                 <div
                   className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 text-white ${
-                    firestoreSaveStatus === 'saving' ? 'bg-amber-500' : 'bg-emerald-600'
+                    firestoreSaveStatus === 'saving' || offlineQueueNotice ? 'bg-amber-500' : 'bg-emerald-600'
                   }`}
                 >
                   {firestoreSaveStatus === 'saving' ? (
@@ -3478,11 +3639,13 @@ export const StudentDashboard: React.FC<Props> = ({
                 </div>
                 <div className="min-w-0">
                   <p className="text-[10px] font-black uppercase tracking-wide text-slate-800">
-                    1. Simpan Firestore (Instan)
+                    1. Simpan Firestore ({offlineQueueNotice ? 'Antrean Offline' : 'Instan'})
                   </p>
-                  <p className="text-[11px] font-semibold text-emerald-800 truncate">
+                  <p className={`text-[11px] font-semibold truncate ${offlineQueueNotice ? 'text-amber-800' : 'text-emerald-800'}`}>
                     {firestoreSaveStatus === 'saving'
                       ? 'Mengirim jawaban ke Firestore...'
+                      : offlineQueueNotice
+                      ? 'Tersimpan aman lokal, otomatis terkirim saat online'
                       : '✓ Jawaban & status selesai tersimpan'}
                   </p>
                 </div>

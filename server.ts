@@ -3,11 +3,10 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { processSarahRequest } from './netlify/functions/sarah-ai.js';
 import {
-  getSarahGeminiMetrics,
-  probeSarahGeminiModels,
-} from './netlify/functions/sarah-gemini-service.js';
+  processSarahRequest,
+  processSarahStreamRequest,
+} from './netlify/functions/sarah-ai.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,21 +18,7 @@ async function startServer() {
 
   app.use(express.json({ limit: '8mb' }));
 
-  app.get('/api/health', async (req, res) => {
-    if (req.query.probe === '1') {
-      try {
-        const probe = await probeSarahGeminiModels();
-        res.json({
-          status: 'ok',
-          service: 'serbu21-sarah-ai',
-          metrics: getSarahGeminiMetrics(),
-          probe,
-        });
-      } catch (err: any) {
-        res.status(500).json({ status: 'error', message: String(err?.message || err) });
-      }
-      return;
-    }
+  app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', service: 'serbu21-sarah-ai' });
   });
 
@@ -72,8 +57,85 @@ async function startServer() {
     }
   };
 
+  const handleSarahStreamRoute = async (req: express.Request, res: express.Response) => {
+    const abortController = new AbortController();
+    const onClientAbort = () => {
+      if (!res.writableEnded) {
+        abortController.abort();
+      }
+    };
+    res.on('close', onClientAbort);
+
+    let headersSent = false;
+    const ensureStreamHeaders = () => {
+      if (headersSent || res.writableEnded) return;
+      headersSent = true;
+      res.status(200);
+      res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      if (typeof (res as any).flushHeaders === 'function') {
+        (res as any).flushHeaders();
+      }
+    };
+
+    try {
+      const result = (await processSarahStreamRequest(req.body || {}, {
+        signal: abortController.signal,
+        onChunk: (delta: string) => {
+          if (!delta || res.writableEnded || abortController.signal.aborted) return;
+          ensureStreamHeaders();
+          res.write(`${JSON.stringify({ type: 'chunk', text: delta })}\n`);
+        },
+      })) as Record<string, any>;
+
+      if (!res.writableEnded) {
+        ensureStreamHeaders();
+        res.write(
+          `${JSON.stringify({
+            type: 'done',
+            mode: result?.mode || 'general_chat',
+            text: result?.text || result?.ringkasan || '',
+            model: result?.model || '',
+            fromCache: Boolean(result?.fromCache),
+          })}\n`
+        );
+        res.end();
+      }
+    } catch (error: any) {
+      if (abortController.signal.aborted || error?.name === 'AbortError') {
+        if (!res.writableEnded) {
+          if (headersSent) {
+            res.write(`${JSON.stringify({ type: 'error', error: 'Permintaan analisis SARAH dibatalkan.' })}\n`);
+            res.end();
+          } else {
+            res.status(499).json({ error: 'Permintaan analisis SARAH dibatalkan.' });
+          }
+        }
+        return;
+      }
+
+      const statusCode = Number(error?.statusCode) || 500;
+      const errMsg = error?.message || 'Terjadi kesalahan pada server SARAH AI.';
+      console.error('[sarah-ai-stream Express route error]:', errMsg);
+      if (!res.writableEnded) {
+        if (headersSent) {
+          res.write(`${JSON.stringify({ type: 'error', error: errMsg, statusCode })}\n`);
+          res.end();
+        } else {
+          res.status(statusCode).json({ error: errMsg });
+        }
+      }
+    } finally {
+      res.off('close', onClientAbort);
+    }
+  };
+
   app.post('/.netlify/functions/sarah-ai', handleSarahRoute);
   app.post('/api/sarah-ai', handleSarahRoute);
+  app.post('/api/sarah-ai-stream', handleSarahStreamRoute);
+  app.post('/.netlify/functions/sarah-ai-stream', handleSarahStreamRoute);
 
   if (!isProd) {
     const vite = await createViteServer({

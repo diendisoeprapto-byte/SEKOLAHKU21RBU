@@ -38,6 +38,7 @@ import {
   Award,
   Users,
   Settings,
+  Loader2,
 } from 'lucide-react';
 import type { TabId } from '../Sidebar';
 import * as XLSX from 'xlsx';
@@ -93,6 +94,19 @@ import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../utils/firebase';
 import { pushAllDataToCloud, syncAllLocalToCloud } from '../../utils/cloudSync';
 import { saveCbtExamToFirestore, saveCbtExamsBatchToFirestore } from '../../utils/cbtFirestore';
+import {
+  saveCbtResultToFirestore,
+  savePeriodicCbtDraftToFirestore,
+  deleteSingleCbtResultFromFirestore,
+} from '../../utils/cbtResultFirestore';
+import {
+  computeExamHotsStats,
+  computeTieBreakerBadges,
+  formatDurasiDetik,
+  normalizeDifficultyForForm,
+  parseDurasiToSeconds,
+  sortExamRankingsWithTieBreaker,
+} from '../../utils/examRanking';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx } from '../../utils/docxImporter';
 import { compressQuestionImage } from '../../utils/imageUtils';
@@ -118,7 +132,7 @@ import {
   formatMenjodohkanKeySummary,
   stripQuestionTags,
 } from '../../utils/questionFormat';
-import { isQuestionAnswerFilled } from '../../utils/examDraft';
+import { countAnsweredQuestions, isQuestionAnswerFilled } from '../../utils/examDraft';
 import {
   SarahExamAnalysisPanel,
   SarahAnalysisHardestQuestion,
@@ -188,7 +202,11 @@ export const CBTTab: React.FC<Props> = ({
     score: number | null;
     cloudSaved: boolean;
   } | null>(null);
+  const [isSavingSubmission, setIsSavingSubmission] = useState(false);
   const isSubmittingExamRef = useRef<boolean>(false);
+  const examStartTimestampRef = useRef<number>(Date.now());
+  const lastCloudCheckpointAtRef = useRef<number>(0);
+  const lastCloudCheckpointCountRef = useRef<number>(0);
   const handleSubmitExamRef = useRef<(isTimeOut?: boolean) => void>(() => {});
 
   useEffect(() => {
@@ -228,6 +246,8 @@ export const CBTTab: React.FC<Props> = ({
   const [reportClassFilter, setReportClassFilter] = useState<string>('all');
   const [reportStatusFilter, setReportStatusFilter] = useState<'all' | 'Tuntas' | 'Remedial'>('all');
   const [reportSearch, setReportSearch] = useState<string>('');
+  const [reportRowsPerPage, setReportRowsPerPage] = useState<30 | 60 | 120 | 'all'>(30);
+  const [reportPage, setReportPage] = useState<number>(1);
   const [selectedCbtReportRow, setSelectedCbtReportRow] = useState<any | null>(null);
   const [confirmDeleteCbtRowId, setConfirmDeleteCbtRowId] = useState<string | null>(null);
 
@@ -353,7 +373,7 @@ export const CBTTab: React.FC<Props> = ({
   const [selectedMapel, setSelectedMapel] = useState<string>('Pendidikan Agama Islam');
   const [targetKelas, setTargetKelas] = useState<string>(activeClass || 'Kelas 6A');
   const [selectedTipeSoal, setSelectedTipeSoal] = useState<'pg' | 'pg_kompleks' | 'benar_salah' | 'menjodohkan' | 'isian' | 'uraian'>('pg');
-  const [levelKesukaran, setLevelKesukaran] = useState<'Mudah' | 'Sedang' | 'Sukar'>('Sedang');
+  const [levelKesukaran, setLevelKesukaran] = useState<'Mudah' | 'Sedang' | 'Sulit' | 'Sukar'>('Sedang');
   const [levelKognitif, setLevelKognitif] = useState<'L1 (C1-C2)' | 'L2 (C3)' | 'L3 (C4-C6)'>('L2 (C3)');
 
   // Setting Acak Soal & Acak Jawaban (tersimpan otomatis)
@@ -782,6 +802,43 @@ export const CBTTab: React.FC<Props> = ({
     }
   }, [isExamRunning, timeLeft]);
 
+  // Checkpoint Firestore berkala tiap 45 detik atau 5 soal terjawab saat ujian berlangsung
+  useEffect(() => {
+    if (!isExamRunning || !activeExam || isSavingSubmission) return;
+    const studentKey = activeUser.studentData?.id || activeUser.username || 'std_demo';
+
+    const pushCheckpoint = () => {
+      if (!isExamRunning || isSubmittingExamRef.current) return;
+      lastCloudCheckpointAtRef.current = Date.now();
+      lastCloudCheckpointCountRef.current = countAnsweredQuestions(studentAnswers);
+      void savePeriodicCbtDraftToFirestore({
+        examId: activeExam.id,
+        studentId: studentKey,
+        nisn: activeUser.studentData?.nisn,
+        studentName: activeUser.name,
+        kelas: activeUser.studentData?.kelas || activeClass,
+        mapel: selectedMapel,
+        judul: activeExam.judul,
+        paketName: selectedPaket,
+        jawabanSiswa: studentAnswers,
+        timeLeft,
+        examStartTimestamp: examStartTimestampRef.current,
+      });
+    };
+
+    const answeredNow = countAnsweredQuestions(studentAnswers);
+    if (
+      answeredNow > 0 &&
+      answeredNow - lastCloudCheckpointCountRef.current >= 5 &&
+      Date.now() - lastCloudCheckpointAtRef.current >= 3000
+    ) {
+      pushCheckpoint();
+    }
+
+    const timer = setInterval(pushCheckpoint, 45000);
+    return () => clearInterval(timer);
+  }, [isExamRunning, activeExam?.id, studentAnswers, isSavingSubmission]);
+
   // Sisipkan pecahan susun ke posisi kursor di textarea soal CBT
   const handleInsertCbtFraction = (numerator: string, denominator: string, whole?: string) => {
     const el = pertanyaanTextareaRef.current;
@@ -995,6 +1052,7 @@ export const CBTTab: React.FC<Props> = ({
       subPaket: selectedSubPaket,
       mapel: selectedMapel,
       kelas: targetKelas,
+      tingkatKesulitan: levelKesukaran === 'Sukar' ? 'Sulit' : levelKesukaran,
     };
 
     const isEditing = Boolean(editingQuestionId);
@@ -1079,6 +1137,7 @@ export const CBTTab: React.FC<Props> = ({
     setPosisiGambar(q.posisiGambar || 'bawah_judul');
     setOpsiGambar(q.opsiGambar || {});
     setPembahasan(q.pembahasan || '');
+    setLevelKesukaran(normalizeDifficultyForForm(q));
 
     if (q.tipe === 'pg') {
       const oA = q.opsi?.[0] || '';
@@ -1227,7 +1286,12 @@ export const CBTTab: React.FC<Props> = ({
 
   // CBT Exam Runner with Acak Soal and Acak Jawaban
   const startExam = () => {
+    const startTs = Date.now();
+    examStartTimestampRef.current = startTs;
+    lastCloudCheckpointAtRef.current = startTs;
+    lastCloudCheckpointCountRef.current = 0;
     isSubmittingExamRef.current = false;
+    setIsSavingSubmission(false);
     setTimeUpModal(null);
     setIsExamRunning(true);
     setExamResult(null);
@@ -1277,6 +1341,7 @@ export const CBTTab: React.FC<Props> = ({
   const handleSubmitExam = async (isTimeOut: boolean = false) => {
     if (!activeExam || isSubmittingExamRef.current) return;
     isSubmittingExamRef.current = true;
+    setIsSavingSubmission(true);
 
     const evaluatedQuestions =
       runningExamQuestions.length > 0 ? runningExamQuestions : activeExam.soalList;
@@ -1293,6 +1358,17 @@ export const CBTTab: React.FC<Props> = ({
       const evalRes = evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot, q.opsi, q);
       totalScore += evalRes.earnedScore;
     });
+
+    const { benarHots, totalHots } = computeExamHotsStats(
+      evaluatedQuestions,
+      studentAnswers,
+      (q, ans) => evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot, q.opsi, q).isCorrect
+    );
+    const durasiDetik = Math.max(
+      1,
+      Math.round((Date.now() - (examStartTimestampRef.current || Date.now())) / 1000)
+    );
+    const nowIso = new Date().toISOString();
 
     const finalGrade = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 100;
 
@@ -1312,11 +1388,13 @@ export const CBTTab: React.FC<Props> = ({
       );
     }
 
-    const results = getStoredCBTResults();
-    results.push({
+    const newCbtEntry: CBTExamResult = {
       examId: activeExam.id,
       studentId: activeUser.studentData?.id || 'std_demo',
       studentName: activeUser.name,
+      nisn: activeUser.studentData?.nisn,
+      kelas: activeUser.studentData?.kelas || activeClass,
+      jenjang: activeUser.studentData?.kelas || activeClass || 'Umum',
       skor: totalScore,
       nilai: finalGrade,
       waktuSelesai: new Date().toLocaleTimeString(),
@@ -1329,7 +1407,15 @@ export const CBTTab: React.FC<Props> = ({
       recordedAt: Date.now(),
       tahunPelajaran: activeYear,
       semester: activeSemester,
-    });
+      benarHots,
+      totalHots,
+      durasiDetik,
+      statusPengerjaan: 'selesai',
+      updatedAt: nowIso,
+    };
+
+    const results = getStoredCBTResults();
+    results.push(newCbtEntry);
     saveStoredCBTResults(results);
 
     // Synchronize to Penilaian, Remedial, Leger, and Analisis Soal
@@ -1426,10 +1512,11 @@ export const CBTTab: React.FC<Props> = ({
       console.warn('Sync to assessment error:', err);
     }
 
-    // Kirim langsung ke database Firestore sebelum sesi ujian ditutup
+    // Kirim langsung ke dokumen terisolasi `cbt_results` (4x exponential backoff + antrean offline)
     let cloudSaved = false;
     try {
-      const dbTasks: Promise<any>[] = [syncAllLocalToCloud(activeUser.name || 'siswa')];
+      const isolatedOk = await saveCbtResultToFirestore(newCbtEntry);
+      const dbTasks: Promise<any>[] = [];
       if (assessKeyWritten && assessPayloadWritten) {
         dbTasks.push(
           setDoc(
@@ -1445,17 +1532,21 @@ export const CBTTab: React.FC<Props> = ({
           )
         );
       }
-      const resSync = await Promise.race([
-        Promise.allSettled(dbTasks),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
-      ]);
-      cloudSaved = Array.isArray(resSync) && resSync.some((r) => r.status === 'fulfilled' && r.value !== false);
+      if (dbTasks.length > 0) {
+        await Promise.race([
+          Promise.allSettled(dbTasks),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+        ]);
+      }
+      syncAllLocalToCloud(activeUser.name || 'siswa').catch(() => {});
+      cloudSaved = isolatedOk;
     } catch (dbErr) {
       console.warn('Immediate CBT database flush warning:', dbErr);
     }
 
     setExamResult({ score: finalGrade, total: 100 });
     setIsExamRunning(false);
+    setIsSavingSubmission(false);
     isSubmittingExamRef.current = false;
 
     if (document.fullscreenElement) {
@@ -1824,13 +1915,13 @@ export const CBTTab: React.FC<Props> = ({
                   <label className="block text-[11px] font-extrabold text-slate-700 mb-1">Level Soal & Kognitif</label>
                   <div className="grid grid-cols-2 gap-1.5">
                     <select
-                      value={levelKesukaran}
+                      value={levelKesukaran === 'Sukar' ? 'Sulit' : levelKesukaran}
                       onChange={(e) => setLevelKesukaran(e.target.value as any)}
                       className="w-full px-2 py-2 rounded-2xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none"
                     >
                       <option value="Mudah">Mudah</option>
                       <option value="Sedang">Sedang</option>
-                      <option value="Sukar">Sukar</option>
+                      <option value="Sulit">Sulit (HOTS)</option>
                     </select>
                     <select
                       value={levelKognitif}
@@ -3395,13 +3486,27 @@ export const CBTTab: React.FC<Props> = ({
                   ) : (
                     <button
                       type="button"
+                      disabled={isSavingSubmission}
                       onClick={() => handleSubmitExam(false)}
-                      className="px-6 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-md cursor-pointer"
+                      className="px-6 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-xs font-black shadow-md cursor-pointer inline-flex items-center gap-1.5"
                     >
-                      Selesai &amp; Kirim Ujian
+                      {isSavingSubmission ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Sedang menyimpan jawaban... Jangan tutup halaman</span>
+                        </>
+                      ) : (
+                        <span>Selesai &amp; Kirim Ujian</span>
+                      )}
                     </button>
                   )}
                 </div>
+                {isSavingSubmission && (
+                  <div className="p-3 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-xs font-black flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-600" />
+                    <span>Sedang menyimpan jawaban... Jangan tutup halaman</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -3432,6 +3537,22 @@ export const CBTTab: React.FC<Props> = ({
               const nilai = Number.isFinite(Number(res.nilai)) ? Number(res.nilai) : 0;
               const predikat = nilai >= 90 ? 'A' : nilai >= 75 ? 'B' : nilai >= 60 ? 'C' : 'D';
               const status: 'Tuntas' | 'Remedial' = nilai >= 75 ? 'Tuntas' : 'Remedial';
+
+              // Hitung benar soal Sulit (HOTS) & durasi pengerjaan dalam detik
+              let benarHots = typeof res.benarHots === 'number' ? res.benarHots : 0;
+              let totalHots = typeof res.totalHots === 'number' ? res.totalHots : 0;
+              if (totalHots === 0 && linkedExam?.soalList && res.jawabanSiswa) {
+                const hotsCalc = computeExamHotsStats(
+                  linkedExam.soalList,
+                  res.jawabanSiswa,
+                  (q, ans) => evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot || 10, q.opsi, q).isCorrect
+                );
+                benarHots = hotsCalc.benarHots;
+                totalHots = hotsCalc.totalHots;
+              }
+              const durasiDetik = parseDurasiToSeconds(res.durasiDetik, undefined);
+              const durasiFormatted = formatDurasiDetik(durasiDetik, undefined);
+
               return {
                 id: `${res.examId}_${res.studentId}_${res.recordedAt || idx}`,
                 raw: res,
@@ -3446,27 +3567,35 @@ export const CBTTab: React.FC<Props> = ({
                 skor: res.skor ?? nilai,
                 predikat,
                 status,
+                benarHots,
+                totalHots,
+                durasiDetik,
+                durasiFormatted,
                 waktuSelesai: res.waktuSelesai || '-',
                 tanggal: res.tanggal || '-',
                 recordedAt: res.recordedAt || 0,
               };
-            })
-            .sort((a, b) => {
-              if (b.nilai !== a.nilai) return b.nilai - a.nilai;
-              return (b.recordedAt || 0) - (a.recordedAt || 0);
             });
 
+          const cbtSortAccessors = {
+            getScore: (r: (typeof enrichedRows)[number]) => r.nilai,
+            getBenarHots: (r: (typeof enrichedRows)[number]) => r.benarHots,
+            getDurasiDetik: (r: (typeof enrichedRows)[number]) => r.durasiDetik,
+            getName: (r: (typeof enrichedRows)[number]) => r.nama,
+          };
+          const sortedEnrichedRows = sortExamRankingsWithTieBreaker(enrichedRows, cbtSortAccessors);
+
           const availableReportPakets = Array.from(
-            new Set(enrichedRows.map((r) => r.paket).filter(Boolean))
+            new Set(sortedEnrichedRows.map((r) => r.paket).filter(Boolean))
           );
           const availableReportMapels = Array.from(
-            new Set(enrichedRows.map((r) => r.mapel).filter(Boolean))
+            new Set(sortedEnrichedRows.map((r) => r.mapel).filter(Boolean))
           );
           const availableReportClasses = Array.from(
-            new Set(enrichedRows.map((r) => r.kelas).filter(Boolean))
+            new Set(sortedEnrichedRows.map((r) => r.kelas).filter(Boolean))
           ).sort();
 
-          const filteredCbtRows = enrichedRows.filter((row) => {
+          const filteredCbtRows = sortedEnrichedRows.filter((row) => {
             if (reportPaketFilter !== 'all' && row.paket !== reportPaketFilter) return false;
             if (reportMapelFilter !== 'all' && row.mapel !== reportMapelFilter) return false;
             if (reportClassFilter !== 'all' && row.kelas !== reportClassFilter) return false;
@@ -3482,6 +3611,23 @@ export const CBTTab: React.FC<Props> = ({
             }
             return true;
           });
+
+          const tieBreakerReasons = computeTieBreakerBadges(filteredCbtRows, cbtSortAccessors);
+          const cbtTotalFiltered = filteredCbtRows.length;
+          const cbtTotalPages =
+            reportRowsPerPage === 'all'
+              ? 1
+              : Math.max(1, Math.ceil(cbtTotalFiltered / reportRowsPerPage));
+          const safeReportPage = Math.min(Math.max(1, reportPage), cbtTotalPages);
+          const visibleCbtRows =
+            reportRowsPerPage === 'all'
+              ? filteredCbtRows
+              : filteredCbtRows.slice(
+                  (safeReportPage - 1) * reportRowsPerPage,
+                  safeReportPage * reportRowsPerPage
+                );
+          const visibleCbtOffset =
+            reportRowsPerPage === 'all' ? 0 : (safeReportPage - 1) * reportRowsPerPage;
 
           const totalSubmissions = filteredCbtRows.length;
           const avgCbtScore =
@@ -3612,6 +3758,11 @@ export const CBTTab: React.FC<Props> = ({
             if (selectedCbtReportRow?.id === row.id) {
               setSelectedCbtReportRow(null);
             }
+            void deleteSingleCbtResultFromFirestore({
+              examId: row.raw.examId,
+              studentId: row.raw.studentId,
+              nisn: row.raw.nisn || row.nisn,
+            });
             syncAllLocalToCloud(activeUser.name || 'admin').catch(() => {});
             showToast(
               `Data nilai CBT milik "${row.nama}" (${row.mapel}) berhasil dihapus!`,
@@ -3906,71 +4057,111 @@ export const CBTTab: React.FC<Props> = ({
                         <span className="text-[11px] font-bold text-slate-500">Top 5 Scores</span>
                       </div>
                       <div className="divide-y divide-slate-100">
-                        {topCbtStudents.map((item, idx) => (
-                          <div key={`top-cbt-${item.id}`} className="py-2.5 flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <span
-                                className={`w-6 h-6 rounded-lg font-mono text-xs font-black flex items-center justify-center shrink-0 tabular-nums ${
-                                  idx === 0
-                                    ? 'bg-amber-300 text-slate-900'
-                                    : idx === 1
-                                    ? 'bg-slate-200 text-slate-900'
-                                    : idx === 2
-                                    ? 'bg-orange-200 text-slate-900'
-                                    : 'bg-slate-100 text-slate-700'
-                                }`}
-                              >
-                                {idx + 1}
-                              </span>
-                              <div className="min-w-0">
-                                <div className="text-xs font-bold text-slate-900 truncate">{item.nama}</div>
-                                <div className="text-[10px] text-slate-500 truncate">
-                                  {item.kelas} · {item.mapel}
+                        {topCbtStudents.map((item, idx) => {
+                          const reasonBadge = tieBreakerReasons[idx];
+                          return (
+                            <div key={`top-cbt-${item.id}`} className="py-2.5 flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <span
+                                  className={`w-6 h-6 rounded-lg font-mono text-xs font-black flex items-center justify-center shrink-0 tabular-nums ${
+                                    idx === 0
+                                      ? 'bg-amber-300 text-slate-900'
+                                      : idx === 1
+                                      ? 'bg-slate-200 text-slate-900'
+                                      : idx === 2
+                                      ? 'bg-orange-200 text-slate-900'
+                                      : 'bg-slate-100 text-slate-700'
+                                  }`}
+                                >
+                                  {idx + 1}
+                                </span>
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="text-xs font-bold text-slate-900 truncate">{item.nama}</span>
+                                    {reasonBadge && (
+                                      <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 text-[9px] font-black uppercase">
+                                        {reasonBadge}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500 truncate">
+                                    {item.kelas} · HOTS: {item.benarHots}/{item.totalHots || '-'} · {item.durasiFormatted}
+                                  </div>
                                 </div>
                               </div>
+                              <div className="text-right shrink-0">
+                                <div className="font-mono font-black text-sm text-emerald-700 tabular-nums">{item.nilai}</div>
+                                <div className="text-[10px] font-bold text-slate-500">Predikat {item.predikat}</div>
+                              </div>
                             </div>
-                            <div className="text-right shrink-0">
-                              <div className="font-mono font-black text-sm text-emerald-700 tabular-nums">{item.nilai}</div>
-                              <div className="text-[10px] font-bold text-slate-500">Predikat {item.predikat}</div>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
 
                   {/* Tabel Rekapitulasi Nilai CBT */}
                   <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-                    <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-slate-50/70">
+                    <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50/70">
                       <h3 className="font-display font-black text-sm text-slate-900 flex items-center gap-2">
                         <FileText className="w-4 h-4 text-emerald-600" />
-                        <span>Daftar Rekapitulasi Nilai Ujian CBT ({filteredCbtRows.length} Data)</span>
+                        <span>Daftar Rekapitulasi &amp; Pemeringkatan Nilai CBT ({filteredCbtRows.length} Data)</span>
                       </h3>
-                      <span className="text-xs text-slate-500 font-semibold tabular-nums">KKTP: 75</span>
+                      <div className="no-print flex items-center gap-3">
+                        <div className="flex items-center gap-1.5 text-xs">
+                          <span className="text-slate-500 font-bold">Baris/hal:</span>
+                          <select
+                            value={reportRowsPerPage}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setReportPage(1);
+                              setReportRowsPerPage(v === 'all' ? 'all' : (Number(v) as 30 | 60 | 120));
+                            }}
+                            className="px-2.5 py-1 rounded-xl border border-slate-300 bg-white text-xs font-extrabold text-slate-700 outline-none cursor-pointer"
+                          >
+                            <option value="30">30</option>
+                            <option value="60">60</option>
+                            <option value="120">120</option>
+                            <option value="all">Semua ({filteredCbtRows.length})</option>
+                          </select>
+                        </div>
+                        <span className="text-xs text-slate-500 font-semibold tabular-nums">KKTP: 75</span>
+                      </div>
                     </div>
                     <div className="overflow-x-auto print-expand-scroll">
                       <table className="w-full text-left border-collapse text-xs">
                         <thead>
                           <tr className="bg-emerald-50 text-emerald-950 font-black uppercase text-[11px] border-b-2 border-emerald-200">
-                            <th className="p-3 text-center w-12">No</th>
+                            <th className="p-3 text-center w-12">Rank</th>
                             <th className="p-3">Identitas Siswa</th>
                             <th className="p-3 text-center">Kelas</th>
                             <th className="p-3">Mata Pelajaran &amp; Paket</th>
                             <th className="p-3 text-center">Nilai</th>
+                            <th className="p-3 text-center">Benar HOTS</th>
+                            <th className="p-3 text-center">Durasi</th>
                             <th className="p-3 text-center">Predikat</th>
                             <th className="p-3 text-center">Status</th>
-                            <th className="p-3 text-center">Waktu</th>
                             <th className="no-print p-3 text-right">Aksi</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-200">
-                          {filteredCbtRows.map((row, idx) => (
+                          {visibleCbtRows.map((row, idx) => {
+                            const globalRank = visibleCbtOffset + idx + 1;
+                            const reasonBadge = tieBreakerReasons[visibleCbtOffset + idx];
+                            return (
                             <tr key={row.id} className="hover:bg-emerald-50/30 even:bg-slate-50/40 transition">
                               <td className="p-3 text-center font-mono font-bold text-slate-600 tabular-nums">
-                                {idx + 1}
+                                #{globalRank}
                               </td>
                               <td className="p-3">
-                                <div className="font-bold text-slate-900">{row.nama}</div>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="font-bold text-slate-900">{row.nama}</span>
+                                  {reasonBadge && (
+                                    <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200 text-[9px] font-black uppercase">
+                                      {reasonBadge}
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="text-[10px] font-mono text-slate-500 tabular-nums">NISN: {row.nisn}</div>
                               </td>
                               <td className="p-3 text-center font-bold text-slate-700 whitespace-nowrap">
@@ -3982,6 +4173,14 @@ export const CBTTab: React.FC<Props> = ({
                               </td>
                               <td className="p-3 text-center font-mono font-black text-sm text-emerald-800 tabular-nums">
                                 {row.nilai}
+                              </td>
+                              <td className="p-3 text-center whitespace-nowrap">
+                                <span className="inline-block px-2 py-0.5 rounded-md bg-purple-50 text-purple-800 border border-purple-200 font-mono font-bold text-[11px] tabular-nums">
+                                  HOTS: {row.benarHots}/{row.totalHots || '-'}
+                                </span>
+                              </td>
+                              <td className="p-3 text-center text-[11px] text-slate-700 font-mono font-bold tabular-nums whitespace-nowrap">
+                                {row.durasiFormatted}
                               </td>
                               <td className="p-3 text-center">
                                 <span
@@ -4002,9 +4201,6 @@ export const CBTTab: React.FC<Props> = ({
                                 <span className={row.status === 'Tuntas' ? 'text-emerald-700' : 'text-rose-700'}>
                                   {row.status}
                                 </span>
-                              </td>
-                              <td className="p-3 text-center text-[11px] text-slate-600 font-mono tabular-nums whitespace-nowrap">
-                                {row.tanggal} · {row.waktuSelesai}
                               </td>
                               <td className="no-print p-3 text-right">
                                 <div className="inline-flex items-center justify-end gap-1.5">
@@ -4054,10 +4250,36 @@ export const CBTTab: React.FC<Props> = ({
                                 </div>
                               </td>
                             </tr>
-                          ))}
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
+                    {reportRowsPerPage !== 'all' && cbtTotalPages > 1 && (
+                      <div className="no-print px-5 py-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs bg-slate-50/50">
+                        <span className="text-slate-500 font-bold">
+                          Halaman <strong>{safeReportPage}</strong> dari <strong>{cbtTotalPages}</strong> ({cbtTotalFiltered} data)
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={safeReportPage <= 1}
+                            onClick={() => setReportPage((p) => Math.max(1, p - 1))}
+                            className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 font-bold text-slate-700 cursor-pointer"
+                          >
+                            Sebelumnya
+                          </button>
+                          <button
+                            type="button"
+                            disabled={safeReportPage >= cbtTotalPages}
+                            onClick={() => setReportPage((p) => Math.min(cbtTotalPages, p + 1))}
+                            className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 font-bold text-slate-700 cursor-pointer"
+                          >
+                            Berikutnya
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </>
               )}

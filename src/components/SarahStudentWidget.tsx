@@ -43,16 +43,18 @@ import {
   SarahTextGeneratedResponse,
   appendSarahChatMessage,
   buildSarahChatUserId,
-  callSarahAiEndpoint,
+  callSarahAiStreamEndpoint,
   cancelSarahAnalysisQueueGroup,
   createSarahChatSession,
   deleteSarahChatSession,
   enqueueSarahAnalysisRequest,
   formatFriendlySarahChatError,
   formatSarahDateTime,
+  getSarahSpeedPreference,
   loadSarahSessionMessages,
   loadUserSarahChatSessions,
   logSarahStudentQuestion,
+  retrieveLazySarahRagContext,
   retrieveSarahRagContext,
   subscribeToMediaAjarForSarah,
   subscribeToSarahConfig,
@@ -525,12 +527,12 @@ export const SarahStudentWidget: React.FC<Props> = ({
 
     const prevHistory = messages
       .filter((m) => !m.isError)
-      .slice(-8)
+      .slice(-6)
       .map((m) => ({ role: m.role, text: m.text }));
     setMessages((prev) => [...prev, userMsg]);
     if (!overridePrompt) setInputText('');
     setIsThinking(true);
-    setStatusLabel('SARAH sedang membaca data ujian & materi belajar...');
+    setStatusLabel('SARAH sedang menyiapkan jawaban...');
 
     let currentSessionId = activeSessionId;
     try {
@@ -560,8 +562,11 @@ export const SarahStudentWidget: React.FC<Props> = ({
       // Proceed even if auto-save encounters a temporary network glitch
     }
 
+    const streamReplyId = `m_${Date.now()}`;
+    let streamMessageCreated = false;
+
     try {
-      const ragContext = retrieveSarahRagContext({
+      const ragContext = await retrieveLazySarahRagContext({
         schoolName: profile.name,
         kelas: studentKelas,
         mapel: selectedMapel === 'Umum' ? '' : selectedMapel,
@@ -583,10 +588,11 @@ export const SarahStudentWidget: React.FC<Props> = ({
         pertanyaan: question,
       }).catch(() => {});
 
-      const res = await callSarahAiEndpoint<SarahTextGeneratedResponse>(
+      const res = await callSarahAiStreamEndpoint(
         {
           mode: 'student_chat',
           role: 'siswa',
+          speedMode: getSarahSpeedPreference(),
           user: {
             name: currentStudent?.nama || activeUser.name,
             kelas: studentKelas,
@@ -595,6 +601,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
           params: {
             message: question,
             mapel: selectedMapel,
+            speedMode: getSarahSpeedPreference(),
           },
           examReviewContext: {
             requestedExamId: activeExamIdToSend || undefined,
@@ -605,8 +612,26 @@ export const SarahStudentWidget: React.FC<Props> = ({
           ragContext,
         },
         {
-          timeoutMs: 24000,
+          timeoutMs: 40000,
           onStatusChange: (statusText) => setStatusLabel(statusText),
+          onChunk: (partialText) => {
+            if (!partialText) return;
+            const parsedPartial = extractSarahResponseMetadata(partialText);
+            if (parsedPartial.avatarType) {
+              setActiveAvatarType(parsedPartial.avatarType);
+              setAvatarLoadError(false);
+            }
+            setMessages((prev) => {
+              const exists = prev.some((m) => m.id === streamReplyId);
+              if (exists) {
+                return prev.map((m) =>
+                  m.id === streamReplyId ? { ...m, text: partialText } : m
+                );
+              }
+              streamMessageCreated = true;
+              return [...prev, { id: streamReplyId, role: 'model', text: partialText }];
+            });
+          },
         }
       );
 
@@ -616,14 +641,20 @@ export const SarahStudentWidget: React.FC<Props> = ({
         setAvatarLoadError(false);
       }
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `m_${Date.now()}`,
-          role: 'model',
-          text: res.text,
-        },
-      ]);
+      setMessages((prev) => {
+        const exists = prev.some((m) => m.id === streamReplyId);
+        if (exists) {
+          return prev.map((m) => (m.id === streamReplyId ? { ...m, text: res.text } : m));
+        }
+        return [
+          ...prev,
+          {
+            id: streamReplyId,
+            role: 'model',
+            text: res.text,
+          },
+        ];
+      });
 
       if (currentSessionId) {
         appendSarahChatMessage({
@@ -642,16 +673,21 @@ export const SarahStudentWidget: React.FC<Props> = ({
         });
       }
     } catch (err: any) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `err_${Date.now()}`,
-          role: 'model',
-          text: formatFriendlySarahChatError(err, 'siswa'),
-          isError: true,
-          retryPrompt: question,
-        },
-      ]);
+      setMessages((prev) => {
+        const cleaned = streamMessageCreated
+          ? prev.filter((m) => m.id !== streamReplyId)
+          : prev;
+        return [
+          ...cleaned,
+          {
+            id: `err_${Date.now()}`,
+            role: 'model',
+            text: formatFriendlySarahChatError(err, 'siswa'),
+            isError: true,
+            retryPrompt: question,
+          },
+        ];
+      });
     } finally {
       setIsThinking(false);
       setStatusLabel('');
@@ -810,7 +846,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
         idUjian: exam.examId,
         nisn: studentNisnKey,
         cacheScope: 'student_wrong_review',
-        timeoutMs: 24000,
+        timeoutMs: 38000,
         externalController: controller,
         validateCached: (cached) =>
           typeof cached.cachedScore !== 'number' || cached.cachedScore === exam.score,

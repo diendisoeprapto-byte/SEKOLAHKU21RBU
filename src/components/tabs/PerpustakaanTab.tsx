@@ -34,6 +34,10 @@ import {
   Copy,
   Check,
   Image as ImageIcon,
+  LayoutGrid,
+  Grid3X3,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import {
   collection,
@@ -212,10 +216,42 @@ export const PerpustakaanTab: React.FC<Props> = ({
   const [literacyLogs, setLiteracyLogs] = useState<LogLiterasiItem[]>([]);
   const [loans, setLoans] = useState<PeminjamanPerpustakaanItem[]>([]);
 
-  // Catalog filters
+  // Catalog filters & view/pagination preferences
   const [searchQuery, setSearchQuery] = useState('');
   const [filterKelas, setFilterKelas] = useState<string>('Semua');
   const [filterKategori, setFilterKategori] = useState<string>('Semua');
+  const [catalogViewMode, setCatalogViewMode] = useState<'minimalis' | 'kartu'>(() => {
+    try {
+      const saved = localStorage.getItem('serbu21_perpus_view_mode');
+      return saved === 'kartu' ? 'kartu' : 'minimalis';
+    } catch {
+      return 'minimalis';
+    }
+  });
+  const [itemsPerPage, setItemsPerPage] = useState<10 | 20 | 30 | 50>(() => {
+    try {
+      const saved = Number(localStorage.getItem('serbu21_perpus_per_page'));
+      if (saved === 10 || saved === 20 || saved === 30 || saved === 50) return saved;
+    } catch {}
+    return 20;
+  });
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('serbu21_perpus_view_mode', catalogViewMode);
+    } catch {}
+  }, [catalogViewMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('serbu21_perpus_per_page', String(itemsPerPage));
+    } catch {}
+  }, [itemsPerPage]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterKelas, filterKategori, itemsPerPage]);
 
   // Dedicated Pencarian Koleksi sub-tab states
   const [searchTabQuery, setSearchTabQuery] = useState('');
@@ -1394,32 +1430,42 @@ export const PerpustakaanTab: React.FC<Props> = ({
     setPreviewBook(book);
   };
 
-  const renderMinimalBookCard = (book: PerpustakaanBook) => {
+  const renderMinimalBookCard = (
+    book: PerpustakaanBook,
+    mode: 'minimalis' | 'kartu' = catalogViewMode
+  ) => {
     const activeBookLoans = activeLoansByBookId.get(book.id) || [];
     const isCheckedOut = activeBookLoans.length > 0;
     const latestLoan = activeBookLoans[0];
+    const isMinimal = mode === 'minimalis';
 
     return (
       <article
         key={book.id}
-        className="group bg-white rounded-2xl border border-slate-200/80 hover:border-slate-300 shadow-2xs hover:shadow-md transition-all overflow-hidden flex flex-col justify-between"
+        className="group bg-white rounded-2xl border border-slate-200/85 hover:border-rose-300 shadow-2xs hover:shadow-md transition-all overflow-hidden flex flex-col justify-between"
       >
         <div>
           {/* Book Cover Preview Stage (Portrait 3:4 framed on clean neutral stage) */}
           <div
             onClick={() => openBookPreviewModal(book)}
-            className="relative bg-slate-50/90 border-b border-slate-100 pt-5 pb-4 px-8 flex items-center justify-center cursor-pointer"
+            className={`relative bg-slate-50/90 border-b border-slate-100 flex items-center justify-center cursor-pointer ${
+              isMinimal ? 'p-2.5' : 'pt-5 pb-4 px-8'
+            }`}
             title="Klik untuk preview buku"
           >
-            <div className="relative w-full max-w-[144px] aspect-[3/4] rounded-lg overflow-hidden shadow-md border border-slate-200/80 bg-white">
+            <div
+              className={`relative w-full aspect-[3/4] rounded-lg overflow-hidden shadow-sm border border-slate-200/80 bg-white ${
+                isMinimal ? 'max-w-[116px]' : 'max-w-[144px] shadow-md'
+              }`}
+            >
               <BookCoverImage
                 src={book.cover_url}
                 fileUrl={book.file_url}
                 title={book.judul}
                 kategori={book.kategori}
               />
-              <div className="absolute inset-0 bg-slate-950/0 group-hover:bg-slate-950/25 transition-colors flex items-end justify-center p-2">
-                <span className="opacity-0 group-hover:opacity-100 transition-opacity px-2.5 py-1 rounded-lg bg-white/95 text-slate-900 text-[10px] font-bold shadow-xs inline-flex items-center gap-1">
+              <div className="absolute inset-0 bg-slate-950/0 group-hover:bg-slate-950/25 transition-colors flex items-end justify-center p-1.5">
+                <span className="opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded-lg bg-white/95 text-slate-900 text-[10px] font-bold shadow-xs inline-flex items-center gap-1">
                   <Eye className="w-3 h-3 text-rose-600" />
                   <span>Preview</span>
                 </span>
@@ -1428,32 +1474,38 @@ export const PerpustakaanTab: React.FC<Props> = ({
 
             {isStaff && (
               <div
-                className="absolute top-2.5 right-2.5 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                className={`absolute flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity ${
+                  isMinimal ? 'top-1.5 right-1.5' : 'top-2.5 right-2.5'
+                }`}
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
                   type="button"
                   onClick={() => openEditBookModal(book)}
                   title="Edit Buku"
-                  className="w-7 h-7 rounded-lg bg-white/95 hover:bg-sky-600 text-slate-600 hover:text-white flex items-center justify-center shadow-xs cursor-pointer transition"
+                  className="w-6 h-6 rounded-lg bg-white/95 hover:bg-sky-600 text-slate-600 hover:text-white flex items-center justify-center shadow-xs cursor-pointer transition"
                 >
-                  <Pencil className="w-3.5 h-3.5" />
+                  <Pencil className="w-3 h-3" />
                 </button>
                 <button
                   type="button"
                   onClick={() => setBookToDelete(book)}
                   title="Hapus Buku"
-                  className="w-7 h-7 rounded-lg bg-white/95 hover:bg-rose-600 text-slate-600 hover:text-white flex items-center justify-center shadow-xs cursor-pointer transition"
+                  className="w-6 h-6 rounded-lg bg-white/95 hover:bg-rose-600 text-slate-600 hover:text-white flex items-center justify-center shadow-xs cursor-pointer transition"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <Trash2 className="w-3 h-3" />
                 </button>
               </div>
             )}
           </div>
 
           {/* Minimalist Typography Body (Zero-Pill) */}
-          <div className="p-4 space-y-1.5">
-            <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 truncate">
+          <div className={isMinimal ? 'p-2.5 space-y-1' : 'p-4 space-y-1.5'}>
+            <div
+              className={`flex items-center gap-1 font-medium text-slate-500 truncate ${
+                isMinimal ? 'text-[10px]' : 'text-[11px] gap-1.5'
+              }`}
+            >
               <span className="font-semibold text-rose-700 truncate">{book.kategori}</span>
               <span aria-hidden="true">·</span>
               <span className="shrink-0">
@@ -1463,24 +1515,35 @@ export const PerpustakaanTab: React.FC<Props> = ({
 
             <h3
               onClick={() => openBookPreviewModal(book)}
-              className="font-display font-bold text-sm text-slate-900 leading-snug line-clamp-2 cursor-pointer group-hover:text-rose-700 transition-colors"
+              title={book.judul}
+              className={`font-display font-bold text-slate-900 leading-snug line-clamp-2 cursor-pointer group-hover:text-rose-700 transition-colors ${
+                isMinimal ? 'text-xs min-h-[2rem]' : 'text-sm'
+              }`}
             >
               {book.judul}
             </h3>
 
-            <div className="text-[11px] text-slate-500 flex items-center gap-1.5 truncate">
+            <div
+              className={`text-slate-500 flex items-center gap-1 truncate ${
+                isMinimal ? 'text-[10px]' : 'text-[11px] gap-1.5'
+              }`}
+            >
               <span className="truncate">{book.penulis}</span>
               <span aria-hidden="true">·</span>
-              <span className="font-mono tabular-nums shrink-0">{book.dibaca_count}x dibaca</span>
+              <span className="font-mono tabular-nums shrink-0">{book.dibaca_count}x</span>
             </div>
 
-            <div className="pt-1 flex items-center justify-between gap-2 text-[11px]">
+            <div
+              className={`pt-0.5 flex items-center justify-between gap-1.5 ${
+                isMinimal ? 'text-[10px]' : 'pt-1 text-[11px]'
+              }`}
+            >
               {isCheckedOut ? (
                 <span className="inline-flex items-center gap-1 font-semibold text-amber-700 truncate">
                   <Clock className="w-3 h-3 shrink-0" />
                   <span className="truncate">
                     Dipinjam ({activeBookLoans.length})
-                    {latestLoan?.nama_siswa ? ` · ${latestLoan.nama_siswa}` : ''}
+                    {!isMinimal && latestLoan?.nama_siswa ? ` · ${latestLoan.nama_siswa}` : ''}
                   </span>
                 </span>
               ) : (
@@ -1490,7 +1553,7 @@ export const PerpustakaanTab: React.FC<Props> = ({
                 </span>
               )}
 
-              {isStaff && isCheckedOut && latestLoan && (
+              {!isMinimal && isStaff && isCheckedOut && latestLoan && (
                 <button
                   type="button"
                   onClick={() => handleMarkReturned(latestLoan)}
@@ -1504,29 +1567,39 @@ export const PerpustakaanTab: React.FC<Props> = ({
         </div>
 
         {/* Minimal Single-Row Footer Actions */}
-        <div className="px-4 py-3 border-t border-slate-100 flex items-center gap-1.5">
+        <div
+          className={`border-t border-slate-100 flex items-center gap-1.5 ${
+            isMinimal ? 'px-2.5 py-2' : 'px-4 py-3'
+          }`}
+        >
           <button
             type="button"
             onClick={() => handleOpenBookReader(book)}
-            className="flex-1 py-2 px-3 rounded-xl bg-slate-900 hover:bg-rose-600 text-white font-display font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition whitespace-nowrap"
+            className={`flex-1 rounded-xl bg-slate-900 hover:bg-rose-600 text-white font-display font-bold flex items-center justify-center gap-1 cursor-pointer transition whitespace-nowrap ${
+              isMinimal ? 'py-1.5 px-2 text-[11px]' : 'py-2 px-3 text-xs gap-1.5'
+            }`}
           >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>Baca Buku</span>
+            <BookOpen className="w-3 h-3 shrink-0" />
+            <span>{isMinimal ? 'Baca' : 'Baca Buku'}</span>
           </button>
           <button
             type="button"
             onClick={() => openBookPreviewModal(book)}
-            className="py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-display font-bold text-xs flex items-center justify-center gap-1 cursor-pointer transition whitespace-nowrap"
+            className={`rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-display font-bold flex items-center justify-center cursor-pointer transition whitespace-nowrap ${
+              isMinimal ? 'w-7 h-7 p-0' : 'py-2 px-3 text-xs gap-1'
+            }`}
             title="Lihat preview sampul & isi buku"
           >
             <Eye className="w-3.5 h-3.5 text-rose-600" />
-            <span>Preview</span>
+            {!isMinimal && <span>Preview</span>}
           </button>
           {isStaff && (
             <button
               type="button"
               onClick={() => openCheckoutScannerForBook(book)}
-              className="w-8 h-8 rounded-xl border border-sky-200 bg-sky-50 hover:bg-sky-600 text-sky-700 hover:text-white flex items-center justify-center cursor-pointer transition shrink-0"
+              className={`rounded-xl border border-sky-200 bg-sky-50 hover:bg-sky-600 text-sky-700 hover:text-white flex items-center justify-center cursor-pointer transition shrink-0 ${
+                isMinimal ? 'w-7 h-7' : 'w-8 h-8'
+              }`}
               title="Pinjamkan (Scan Barcode)"
             >
               <QrCode className="w-3.5 h-3.5" />
@@ -1743,7 +1816,7 @@ export const PerpustakaanTab: React.FC<Props> = ({
               ))}
             </div>
 
-            {/* Search & Filters */}
+            {/* Search, Filters & View/Pagination Controls */}
             <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200 shadow-xs space-y-3">
               <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
                 <div className="md:col-span-6 relative">
@@ -1786,6 +1859,52 @@ export const PerpustakaanTab: React.FC<Props> = ({
                   </select>
                 </div>
               </div>
+
+              <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5">
+                <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-100 border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setCatalogViewMode('minimalis')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-display font-bold flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap ${
+                      catalogViewMode === 'minimalis'
+                        ? 'bg-white text-rose-700 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Grid3X3 className="w-3.5 h-3.5" />
+                    <span>Mode Minimalis</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCatalogViewMode('kartu')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-display font-bold flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap ${
+                      catalogViewMode === 'kartu'
+                        ? 'bg-white text-rose-700 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    <span>Mode Kartu</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2 text-xs">
+                  <label htmlFor="perpus-items-per-page" className="font-bold text-slate-600">
+                    Tampilkan:
+                  </label>
+                  <select
+                    id="perpus-items-per-page"
+                    value={itemsPerPage}
+                    onChange={(e) => setItemsPerPage(Number(e.target.value) as 10 | 20 | 30 | 50)}
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                  >
+                    <option value={10}>10 Buku</option>
+                    <option value={20}>20 Buku</option>
+                    <option value={30}>30 Buku</option>
+                    <option value={50}>50 Buku</option>
+                  </select>
+                </div>
+              </div>
             </div>
 
             {/* Seeder Empty State or Book Grid */}
@@ -1824,11 +1943,98 @@ export const PerpustakaanTab: React.FC<Props> = ({
               <div className="bg-white rounded-3xl p-8 border border-slate-200 text-center text-sm text-slate-500">
                 Tidak ada buku yang cocok dengan kata kunci atau filter kelas/kategori tersebut.
               </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                {filteredBooks.map((book) => renderMinimalBookCard(book))}
-              </div>
-            )}
+            ) : (() => {
+              const totalBooks = filteredBooks.length;
+              const totalPages = Math.max(1, Math.ceil(totalBooks / itemsPerPage));
+              const safePage = Math.min(Math.max(1, currentPage), totalPages);
+              const startIndex = (safePage - 1) * itemsPerPage;
+              const endIndex = Math.min(startIndex + itemsPerPage, totalBooks);
+              const paginatedBooks = filteredBooks.slice(startIndex, endIndex);
+
+              const pageNumbers: Array<number | 'ellipsis'> = [];
+              if (totalPages <= 7) {
+                for (let p = 1; p <= totalPages; p++) pageNumbers.push(p);
+              } else {
+                pageNumbers.push(1);
+                if (safePage > 3) pageNumbers.push('ellipsis');
+                const winStart = Math.max(2, safePage - 1);
+                const winEnd = Math.min(totalPages - 1, safePage + 1);
+                for (let p = winStart; p <= winEnd; p++) pageNumbers.push(p);
+                if (safePage < totalPages - 2) pageNumbers.push('ellipsis');
+                pageNumbers.push(totalPages);
+              }
+
+              return (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-600">
+                    <span className="font-semibold tabular-nums">
+                      Menampilkan <strong>{startIndex + 1}–{endIndex}</strong> dari{' '}
+                      <strong>{totalBooks}</strong> buku
+                    </span>
+                    <span className="text-[11px] text-slate-500 tabular-nums">
+                      Halaman {safePage} / {totalPages}
+                    </span>
+                  </div>
+
+                  <div
+                    className={
+                      catalogViewMode === 'minimalis'
+                        ? 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-3'
+                        : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5'
+                    }
+                  >
+                    {paginatedBooks.map((book) => renderMinimalBookCard(book, catalogViewMode))}
+                  </div>
+
+                  {totalPages > 1 && (
+                    <div className="bg-white rounded-2xl border border-slate-200 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                        disabled={safePage <= 1}
+                        className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-rose-50 hover:border-rose-200 disabled:opacity-40 text-xs font-bold text-slate-700 flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <span>Sebelumnya</span>
+                      </button>
+
+                      <div className="flex flex-wrap items-center gap-1">
+                        {pageNumbers.map((item, idx) =>
+                          item === 'ellipsis' ? (
+                            <span key={`el_${idx}`} className="px-2 text-xs text-slate-400">
+                              ...
+                            </span>
+                          ) : (
+                            <button
+                              key={item}
+                              type="button"
+                              onClick={() => setCurrentPage(item)}
+                              className={`min-w-[32px] h-8 px-2 rounded-xl font-mono text-xs font-bold cursor-pointer transition tabular-nums ${
+                                item === safePage
+                                  ? 'bg-rose-600 text-white shadow-xs'
+                                  : 'bg-slate-50 hover:bg-rose-50 text-slate-700 border border-slate-200'
+                              }`}
+                            >
+                              {item}
+                            </button>
+                          )
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                        disabled={safePage >= totalPages}
+                        className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-rose-50 hover:border-rose-200 disabled:opacity-40 text-xs font-bold text-slate-700 flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                      >
+                        <span>Berikutnya</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
 

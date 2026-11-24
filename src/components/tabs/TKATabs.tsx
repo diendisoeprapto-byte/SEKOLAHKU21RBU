@@ -132,7 +132,16 @@ import {
   findLiveStudentForRecord,
   alignTkaSubmissionsWithStudents,
   syncTkaSubmissionsWithLiveStudents,
+  savePeriodicTkaDraftToFirestore,
 } from '../../utils/tkaFirestore';
+import {
+  computeExamHotsStats,
+  computeTieBreakerBadges,
+  formatDurasiDetik,
+  normalizeDifficultyForForm,
+  parseDurasiToSeconds,
+  sortExamRankingsWithTieBreaker,
+} from '../../utils/examRanking';
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx, convertToTkaQuestions } from '../../utils/docxImporter';
 import { compressQuestionImage } from '../../utils/imageUtils';
@@ -398,9 +407,14 @@ export const TKATabs: React.FC<Props> = ({
   const [isExamCompleted, setIsExamCompleted] = useState(false);
   const [lastExamResult, setLastExamResult] = useState<any | null>(null);
   const [tkaFirestoreSaveStatus, setTkaFirestoreSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [isSavingTkaSubmission, setIsSavingTkaSubmission] = useState<boolean>(false);
+  const [tkaOfflineNotice, setTkaOfflineNotice] = useState<string | null>(null);
   const [selectedTestStudentId, setSelectedTestStudentId] = useState<string>(tkaStudents[0]?.id || '');
   const handleFinishTkaExamRef = useRef<() => void>(() => {});
   const handleSubmitSimRef = useRef<() => void>(() => {});
+  const tkaStartTimestampRef = useRef<number>(Date.now());
+  const lastTkaCheckpointSavedAtRef = useRef<number>(0);
+  const lastTkaCheckpointAnsweredCountRef = useRef<number>(0);
 
   // Pengaturan Waktu Pengerjaan & Aktivasi Paket Soal TKA
   const [tkaDurations, setTkaDurations] = useState<Record<string, number>>(() => getStoredTKADurations());
@@ -548,6 +562,7 @@ export const TKATabs: React.FC<Props> = ({
     raguChecks: Record<string, boolean>;
     examTimerSeconds: number;
     activeExamDurationSeconds: number;
+    examStartTimestamp: number;
     tkaRunningQuestions: TKAQuestion[];
     isExamCompleted: boolean;
   }>({
@@ -559,6 +574,7 @@ export const TKATabs: React.FC<Props> = ({
     raguChecks: {},
     examTimerSeconds: 3600,
     activeExamDurationSeconds: 3600,
+    examStartTimestamp: Date.now(),
     tkaRunningQuestions: [],
     isExamCompleted: false,
   });
@@ -577,6 +593,7 @@ export const TKATabs: React.FC<Props> = ({
     raguChecks,
     examTimerSeconds,
     activeExamDurationSeconds,
+    examStartTimestamp: tkaStartTimestampRef.current,
     tkaRunningQuestions,
     isExamCompleted,
   };
@@ -592,10 +609,15 @@ export const TKATabs: React.FC<Props> = ({
     const restoredList = restoreQuestionsFromSnapshot(baseQuestions, draft.runningQuestionOrder);
     const safeIdx = Math.min(Math.max(0, draft.currentQuestionIdx || 0), Math.max(0, restoredList.length - 1));
     const safeTimer = draft.examTimerSeconds > 0 ? draft.examTimerSeconds : draft.activeExamDurationSeconds || 3600;
+    const restoredStartTs = draft.examStartTimestamp || Date.now();
+    tkaStartTimestampRef.current = restoredStartTs;
+    lastTkaCheckpointSavedAtRef.current = Date.now();
+    lastTkaCheckpointAnsweredCountRef.current = countAnsweredQuestions(draft.studentAnswers || {});
 
     setActiveExamPaket(draft.paketName);
     setActiveExamMapel(draft.mapelName || null);
     setConfirmFinishTkaExam(false);
+    setTkaOfflineNotice(null);
     setStudentAnswers(draft.studentAnswers || {});
     setRaguChecks(draft.raguChecks || {});
     setCurrentQuestionIdx(safeIdx);
@@ -610,6 +632,7 @@ export const TKATabs: React.FC<Props> = ({
         ...draft,
         currentQuestionIdx: safeIdx,
         examTimerSeconds: safeTimer,
+        examStartTimestamp: restoredStartTs,
         isActiveSession: true,
         runningQuestionOrder: buildQuestionOrderSnapshot(restoredList),
       },
@@ -636,6 +659,7 @@ export const TKATabs: React.FC<Props> = ({
         raguChecks,
         examTimerSeconds: latestTkaRoomRef.current.examTimerSeconds,
         activeExamDurationSeconds,
+        examStartTimestamp: tkaStartTimestampRef.current,
         runningQuestionOrder: buildQuestionOrderSnapshot(tkaRunningQuestions),
         isActiveSession: true,
         updatedAt: new Date().toISOString(),
@@ -652,6 +676,70 @@ export const TKATabs: React.FC<Props> = ({
     studentAnswers,
     raguChecks,
     tkaRunningQuestions,
+  ]);
+
+  // Checkpoint auto-save berkala ke Firestore tiap 45 detik atau setiap 5 soal terjawab
+  useEffect(() => {
+    if (
+      subType !== 'tes-tka-siswa' ||
+      !activeExamPaket ||
+      isExamCompleted ||
+      !activeTkaRoomStudent?.id
+    ) {
+      return;
+    }
+
+    const answeredCount = countAnsweredQuestions(studentAnswers);
+    if (
+      answeredCount > 0 &&
+      answeredCount - lastTkaCheckpointAnsweredCountRef.current >= 5
+    ) {
+      lastTkaCheckpointSavedAtRef.current = Date.now();
+      lastTkaCheckpointAnsweredCountRef.current = answeredCount;
+      void savePeriodicTkaDraftToFirestore({
+        student: {
+          id: activeTkaRoomStudent.id,
+          nama: activeTkaRoomStudent.nama,
+          nisn: activeTkaRoomStudent.nisn,
+          kelas: activeTkaRoomStudent.kelas,
+          fotoUrl: activeTkaRoomStudent.fotoUrl,
+        },
+        paketName: activeExamPaket,
+        questionAnswers: studentAnswers,
+      });
+    }
+
+    const intervalId = window.setInterval(() => {
+      const snap = latestTkaRoomRef.current;
+      if (!snap.activeExamPaket || snap.isExamCompleted || !snap.studentId) return;
+      if (Date.now() - lastTkaCheckpointSavedAtRef.current >= 45000) {
+        lastTkaCheckpointSavedAtRef.current = Date.now();
+        lastTkaCheckpointAnsweredCountRef.current = countAnsweredQuestions(snap.studentAnswers);
+        void savePeriodicTkaDraftToFirestore({
+          student: {
+            id: activeTkaRoomStudent.id,
+            nama: activeTkaRoomStudent.nama,
+            nisn: activeTkaRoomStudent.nisn,
+            kelas: activeTkaRoomStudent.kelas,
+            fotoUrl: activeTkaRoomStudent.fotoUrl,
+          },
+          paketName: snap.activeExamPaket,
+          questionAnswers: snap.studentAnswers,
+        });
+      }
+    }, 15000);
+
+    return () => window.clearInterval(intervalId);
+  }, [
+    subType,
+    activeExamPaket,
+    isExamCompleted,
+    activeTkaRoomStudent?.id,
+    activeTkaRoomStudent?.nama,
+    activeTkaRoomStudent?.nisn,
+    activeTkaRoomStudent?.kelas,
+    activeTkaRoomStudent?.fotoUrl,
+    studentAnswers,
   ]);
 
   // Auto-save timer TKA tiap detik (localStorage cepat, cloud sync periodik)
@@ -675,6 +763,7 @@ export const TKATabs: React.FC<Props> = ({
         raguChecks,
         examTimerSeconds,
         activeExamDurationSeconds,
+        examStartTimestamp: tkaStartTimestampRef.current,
         runningQuestionOrder: buildQuestionOrderSnapshot(tkaRunningQuestions),
         isActiveSession: true,
         updatedAt: new Date().toISOString(),
@@ -698,6 +787,7 @@ export const TKATabs: React.FC<Props> = ({
           raguChecks: snap.raguChecks,
           examTimerSeconds: snap.examTimerSeconds,
           activeExamDurationSeconds: snap.activeExamDurationSeconds,
+          examStartTimestamp: snap.examStartTimestamp,
           runningQuestionOrder: buildQuestionOrderSnapshot(snap.tkaRunningQuestions),
           isActiveSession: true,
           updatedAt: new Date().toISOString(),
@@ -737,7 +827,7 @@ export const TKATabs: React.FC<Props> = ({
   const [formTargetKelas, setFormTargetKelas] = useState('Kelas 6B');
   const [formTpIndex, setFormTpIndex] = useState(0);
   const [formTipe, setFormTipe] = useState<'pg' | 'pg_kompleks' | 'menjodohkan' | 'isian' | 'uraian' | 'benar_salah'>('pg');
-  const [formKesukaran, setFormKesukaran] = useState<'Mudah' | 'Sedang' | 'Sukar'>('Sedang');
+  const [formKesukaran, setFormKesukaran] = useState<'Mudah' | 'Sedang' | 'Sulit' | 'Sukar'>('Sedang');
   const [formKognitif, setFormKognitif] = useState('L2 (C3)');
 
   // Filter CP TKA according to formMapel
@@ -1299,6 +1389,24 @@ export const TKATabs: React.FC<Props> = ({
           studentPhotoMap.get(resolvedStudentId) ||
           studentPhotoMap.get(resolvedNisn) ||
           DEFAULT_STUDENT_AVATAR_URL;
+        const basePaket = sub.paketDasar || extractBaseTkaPaket(sub.paket);
+        let benarHots = typeof sub.benarHots === 'number' ? sub.benarHots : 0;
+        let totalHots = typeof sub.totalHots === 'number' ? sub.totalHots : 0;
+        if (typeof sub.totalHots !== 'number' && sub.answers) {
+          const paketQs = tkaQuestions.filter((q) => {
+            if (q.jenisTka !== basePaket) return false;
+            if (completed.length > 0) {
+              return completed.includes(normalizeTkaMapelKey(q.mapel)) || q.id in (sub.answers || {});
+            }
+            return q.id in (sub.answers || {});
+          });
+          const hotsStats = computeExamHotsStats(paketQs, sub.answers, (q, ans) =>
+            evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot || 10, q.opsi, q).isCorrect
+          );
+          benarHots = hotsStats.benarHots;
+          totalHots = hotsStats.totalHots;
+        }
+        const durasiDetik = parseDurasiToSeconds(sub.durasiDetik, sub.durasiPengerjaan);
         return {
           ...sub,
           id: sub.id,
@@ -1308,7 +1416,7 @@ export const TKATabs: React.FC<Props> = ({
           nisn: resolvedNisn,
           kelas: resolvedKelas,
           fotoUrl: resolvedFoto,
-          paket: sub.paketDasar || extractBaseTkaPaket(sub.paket),
+          paket: basePaket,
           completedMapels: completed,
           skorIndo: hasMapel('Bahasa Indonesia') ? (sub.scoresPerMapel?.['Bahasa Indonesia'] ?? 0) : null,
           skorMtk: hasMapel('Matematika') ? (sub.scoresPerMapel?.['Matematika'] ?? 0) : null,
@@ -1322,10 +1430,14 @@ export const TKATabs: React.FC<Props> = ({
           status: sub.status,
           tanggalUjian: sub.tanggalUjian || '04 November 2026',
           durasiPengerjaan: sub.durasiPengerjaan || '45 Menit',
+          durasiDetik,
+          durasiFormatted: formatDurasiDetik(durasiDetik, sub.durasiPengerjaan),
+          benarHots,
+          totalHots,
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
-  }, [activeViewType, tkaSubmissions, students, studentByIdLookup, excludedAbkIds, excludedAbkNisns, studentPhotoMap]);
+  }, [activeViewType, tkaSubmissions, students, tkaQuestions, studentByIdLookup, excludedAbkIds, excludedAbkNisns, studentPhotoMap]);
 
   const handleSeedSimulatedSubmissions = async () => {
     if (isSeedingTka) return;
@@ -1545,6 +1657,7 @@ export const TKATabs: React.FC<Props> = ({
     setFormPosisiGambar('bawah_judul');
     setFormOpsiGambar({});
     setFormBobot(10);
+    setFormKesukaran('Sedang');
     setPgOptionA('');
     setPgOptionB('');
     setPgOptionC('');
@@ -1572,6 +1685,7 @@ export const TKATabs: React.FC<Props> = ({
     setFormPaket(q.jenisTka);
     setFormMapel(q.mapel);
     setFormTipe(q.tipe);
+    setFormKesukaran(normalizeDifficultyForForm(q));
     setFormJudulTeks(q.judulTeks || '');
     setFormPertanyaan(q.pertanyaan);
     setFormBobot(q.bobot || 10);
@@ -1729,6 +1843,8 @@ export const TKATabs: React.FC<Props> = ({
     const cleanJudulTeks = formJudulTeks.trim() || undefined;
 
     const existingSavedDuration = getTKADurationMinutes(tkaDurations, formPaket, formMapel);
+    const normalizedDifficulty: 'Mudah' | 'Sedang' | 'Sulit' =
+      formKesukaran === 'Sukar' ? 'Sulit' : formKesukaran;
 
     if (editingTkaQuestionId) {
       const updated = tkaQuestions.map((q) => {
@@ -1740,6 +1856,7 @@ export const TKATabs: React.FC<Props> = ({
             cpId: activeCp?.id || q.cpId || 'cp_tka_01',
             tpId: activeTp?.id || q.tpId || 'tp_01',
             tipe: formTipe,
+            tingkatKesulitan: normalizedDifficulty,
             judulTeks: cleanJudulTeks,
             pertanyaan: formattedPertanyaan,
             opsi: parsedOpsi,
@@ -1751,7 +1868,7 @@ export const TKATabs: React.FC<Props> = ({
             gambarUrl: formGambarUrl || undefined,
             gambarUrl2: formGambarUrl2 || undefined,
             posisiGambar: formPosisiGambar,
-            pembahasan: `Level: ${formKesukaran} (${formKognitif}). Target: ${formTargetKelas}. CP: ${activeCp?.judulCp || '-'}. TP: ${activeTp?.judulTp || '-'}`,
+            pembahasan: `Level: ${normalizedDifficulty} (${formKognitif}). Target: ${formTargetKelas}. CP: ${activeCp?.judulCp || '-'}. TP: ${activeTp?.judulTp || '-'}`,
           };
         }
         return q;
@@ -1787,6 +1904,7 @@ export const TKATabs: React.FC<Props> = ({
         cpId: activeCp?.id || 'cp_tka_01',
         tpId: activeTp?.id || 'tp_01',
         tipe: formTipe,
+        tingkatKesulitan: normalizedDifficulty,
         judulTeks: cleanJudulTeks,
         pertanyaan: formattedPertanyaan,
         opsi: parsedOpsi,
@@ -1798,7 +1916,7 @@ export const TKATabs: React.FC<Props> = ({
         gambarUrl: formGambarUrl || undefined,
         gambarUrl2: formGambarUrl2 || undefined,
         posisiGambar: formPosisiGambar,
-        pembahasan: `Level: ${formKesukaran} (${formKognitif}). Target: ${formTargetKelas}. CP: ${activeCp?.judulCp || '-'}. TP: ${activeTp?.judulTp || '-'}`,
+        pembahasan: `Level: ${normalizedDifficulty} (${formKognitif}). Target: ${formTargetKelas}. CP: ${activeCp?.judulCp || '-'}. TP: ${activeTp?.judulTp || '-'}`,
       };
 
       const updated = [...tkaQuestions, newQuestion];
@@ -3538,13 +3656,13 @@ export const TKATabs: React.FC<Props> = ({
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Level Soal & Kognitif</label>
                 <div className="flex gap-1.5">
                   <select
-                    value={formKesukaran}
+                    value={formKesukaran === 'Sukar' ? 'Sulit' : formKesukaran}
                     onChange={(e) => setFormKesukaran(e.target.value as any)}
                     className="w-1/2 px-2 py-2 rounded-xl border border-slate-300 bg-white text-xs font-medium text-slate-800 outline-none focus:border-rose-400"
                   >
                     <option value="Mudah">Mudah</option>
                     <option value="Sedang">Sedang</option>
-                    <option value="Sukar">Sukar</option>
+                    <option value="Sulit">Sulit (HOTS)</option>
                   </select>
                   <select
                     value={formKognitif}
@@ -6549,17 +6667,30 @@ export const TKATabs: React.FC<Props> = ({
           ])
         ).sort((a, b) => a.localeCompare(b, 'id', { numeric: true }));
 
-        // Ranking Calculation according to selected scope (Semua Angkatan 6, atau per rombel dinamis)
-        const rankedPool = recordsForPaket
-          .filter((r) => (rankingScope === 'semua' ? true : r.kelas === rankingScope))
-          .sort((a, b) => {
-            if (b.skorTotal !== a.skorTotal) return b.skorTotal - a.skorTotal;
-            return (a.nama || '').localeCompare(b.nama || '', 'id');
-          });
+        // Ranking Calculation (Nilai Akhir -> Benar HOTS -> Durasi Tercepat)
+        const rankedPool = sortExamRankingsWithTieBreaker(
+          recordsForPaket.filter((r) => (rankingScope === 'semua' ? true : r.kelas === rankingScope)),
+          {
+            getScore: (r) => r.skorTotal,
+            getBenarHots: (r) => r.benarHots || 0,
+            getDurasiDetik: (r) => r.durasiDetik,
+            getName: (r) => r.nama || '',
+          }
+        );
 
+        const tieBreakerReasons = computeTieBreakerBadges(rankedPool, {
+          getScore: (r) => r.skorTotal,
+          getBenarHots: (r) => r.benarHots || 0,
+          getDurasiDetik: (r) => r.durasiDetik,
+          getName: (r) => r.nama || '',
+        });
+
+        const tieBreakerById = new Map<string, string>();
         const rankById = new Map<string, number>();
         rankedPool.forEach((r, idx) => {
           rankById.set(r.id, idx + 1);
+          const reason = tieBreakerReasons[idx];
+          if (reason) tieBreakerById.set(r.id, reason);
         });
 
         // Filter for table view
@@ -7091,6 +7222,16 @@ export const TKATabs: React.FC<Props> = ({
                   const statusAll: 'Tuntas' | 'Remedial' =
                     jumlahDiikuti > 0 && rataRataSemua >= 75 ? 'Tuntas' : 'Remedial';
 
+                  const totalBenarHots = stSubs.reduce(
+                    (acc, s) => acc + (Number(s.benarHots) || 0),
+                    0
+                  );
+                  const durasiList = stSubs
+                    .map((s) => parseDurasiToSeconds(s.durasiDetik, s.durasiPengerjaan))
+                    .filter((d): d is number => typeof d === 'number' && d > 0);
+                  const totalDurasiDetik =
+                    durasiList.length > 0 ? durasiList.reduce((a, b) => a + b, 0) : undefined;
+
                   return {
                     id: st.id,
                     nama: st.nama,
@@ -7102,6 +7243,8 @@ export const TKATabs: React.FC<Props> = ({
                     jumlahDiikuti,
                     totalSkorSemua,
                     rataRataSemua,
+                    totalBenarHots,
+                    totalDurasiDetik,
                     predikat: predikatAll,
                     status: statusAll,
                   };
@@ -7113,6 +7256,10 @@ export const TKATabs: React.FC<Props> = ({
                 .sort((a, b) => {
                   if (b.rataRataSemua !== a.rataRataSemua) return b.rataRataSemua - a.rataRataSemua;
                   if (b.totalSkorSemua !== a.totalSkorSemua) return b.totalSkorSemua - a.totalSkorSemua;
+                  if (b.totalBenarHots !== a.totalBenarHots) return b.totalBenarHots - a.totalBenarHots;
+                  const durA = a.totalDurasiDetik ?? Number.POSITIVE_INFINITY;
+                  const durB = b.totalDurasiDetik ?? Number.POSITIVE_INFINITY;
+                  if (durA !== durB) return durA - durB;
                   return a.nama.localeCompare(b.nama, 'id');
                 });
 
@@ -7818,13 +7965,27 @@ export const TKATabs: React.FC<Props> = ({
                           {s.nama}
                         </h4>
                       </div>
-                      <div className="pt-1 border-t border-slate-100">
+                      <div className="pt-1 border-t border-slate-100 space-y-1">
                         <div className="text-lg print:text-sm font-mono font-black text-purple-700 tabular-nums">
                           {s.skorTotal}
                         </div>
                         <div className="text-[10px] font-bold text-emerald-700">
                           Predikat {s.predikat} · {s.status}
                         </div>
+                        <div className="text-[10px] font-mono text-slate-500">
+                          HOTS: {s.benarHots || 0}/{s.totalHots || 0} · {s.durasiFormatted || '-'}
+                        </div>
+                        {tieBreakerById.get(s.id) && (
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-full text-[9px] font-black ${
+                              tieBreakerById.get(s.id) === 'Unggul HOTS'
+                                ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                : 'bg-sky-100 text-sky-800 border border-sky-200'
+                            }`}
+                          >
+                            {tieBreakerById.get(s.id)}
+                          </span>
+                        )}
                       </div>
                       <button
                         type="button"
@@ -7881,6 +8042,7 @@ export const TKATabs: React.FC<Props> = ({
                         </th>
                       ))}
                       <th className="p-3 text-center bg-purple-100/60">Skor Akhir</th>
+                      <th className="p-3 text-center">HOTS &amp; Durasi</th>
                       <th className="p-3 text-center">Predikat</th>
                       <th className="p-3 text-center">Status</th>
                       <th className="no-print p-3 text-right">Aksi</th>
@@ -7889,24 +8051,38 @@ export const TKATabs: React.FC<Props> = ({
                   <tbody className="divide-y divide-slate-200">
                     {visibleRecords.map((r, idx) => {
                       const trueRank = rankById.get(r.id) ?? idx + 1;
+                      const tieBadge = tieBreakerById.get(r.id);
                       return (
                       <tr key={r.id} className="hover:bg-purple-50/30 even:bg-slate-50/40 transition">
                         <td className="p-3 text-center font-mono font-black tabular-nums text-slate-700">
-                          {trueRank <= 3 ? (
-                            <span
-                              className={`inline-block px-2 py-0.5 rounded-md text-xs font-black ${
-                                trueRank === 1
-                                  ? 'bg-amber-300 text-slate-900'
-                                  : trueRank === 2
-                                  ? 'bg-slate-300 text-slate-900'
-                                  : 'bg-orange-200 text-slate-900'
-                              }`}
-                            >
-                              #{trueRank}
-                            </span>
-                          ) : (
-                            <span>#{trueRank}</span>
-                          )}
+                          <div className="flex flex-col items-center gap-1">
+                            {trueRank <= 3 ? (
+                              <span
+                                className={`inline-block px-2 py-0.5 rounded-md text-xs font-black ${
+                                  trueRank === 1
+                                    ? 'bg-amber-300 text-slate-900'
+                                    : trueRank === 2
+                                    ? 'bg-slate-300 text-slate-900'
+                                    : 'bg-orange-200 text-slate-900'
+                                }`}
+                              >
+                                #{trueRank}
+                              </span>
+                            ) : (
+                              <span>#{trueRank}</span>
+                            )}
+                            {tieBadge && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded-full text-[9px] font-black whitespace-nowrap ${
+                                  tieBadge === 'Unggul HOTS'
+                                    ? 'bg-purple-100 text-purple-800'
+                                    : 'bg-sky-100 text-sky-800'
+                                }`}
+                              >
+                                {tieBadge}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="p-3">
                           <div className="flex items-center gap-2.5">
@@ -7943,6 +8119,14 @@ export const TKATabs: React.FC<Props> = ({
                         ))}
                         <td className="p-3 text-center font-mono font-black tabular-nums text-sm text-purple-800 bg-purple-50/50">
                           {r.skorTotal}
+                        </td>
+                        <td className="p-3 text-center whitespace-nowrap">
+                          <div className="text-[11px] font-bold text-purple-800 font-mono">
+                            HOTS: {r.benarHots || 0}/{r.totalHots || 0}
+                          </div>
+                          <div className="text-[10px] text-slate-500 font-mono">
+                            {r.durasiFormatted || '-'}
+                          </div>
                         </td>
                         <td className="p-3 text-center">
                           <span
@@ -8025,7 +8209,7 @@ export const TKATabs: React.FC<Props> = ({
                     })}
                     {visibleRecords.length === 0 && (
                       <tr>
-                        <td colSpan={7 + activeTestedMapels.length} className="p-8 text-center text-slate-400 italic">
+                        <td colSpan={8 + activeTestedMapels.length} className="p-8 text-center text-slate-400 italic">
                           Tidak ada data pengerjaan siswa yang sesuai dengan filter.
                         </td>
                       </tr>
@@ -8611,9 +8795,15 @@ export const TKATabs: React.FC<Props> = ({
           }
 
           const durasiMenit = getTKADurationMinutes(tkaDurations, paketName, targetMapel);
+          const startNowTs = Date.now();
+          tkaStartTimestampRef.current = startNowTs;
+          lastTkaCheckpointSavedAtRef.current = startNowTs;
+          lastTkaCheckpointAnsweredCountRef.current = 0;
+
           setActiveExamPaket(paketName);
           setActiveExamMapel(targetMapel);
           setConfirmFinishTkaExam(false);
+          setTkaOfflineNotice(null);
           setStudentAnswers({});
           setRaguChecks({});
           setCurrentQuestionIdx(0);
@@ -8652,6 +8842,7 @@ export const TKATabs: React.FC<Props> = ({
                 raguChecks: {},
                 examTimerSeconds: durasiMenit * 60,
                 activeExamDurationSeconds: durasiMenit * 60,
+                examStartTimestamp: startNowTs,
                 runningQuestionOrder: buildQuestionOrderSnapshot(list),
                 isActiveSession: true,
                 updatedAt: new Date().toISOString(),
@@ -8706,133 +8897,161 @@ export const TKATabs: React.FC<Props> = ({
 
         // Submit & Grade Exam
         const handleFinishExam = async () => {
-          let totalScoreEarned = 0;
-          let totalMaxScore = 0;
+          if (isSavingTkaSubmission) return;
+          setIsSavingTkaSubmission(true);
+          try {
+            let totalScoreEarned = 0;
+            let totalMaxScore = 0;
 
-          const subjectScores: Record<string, { earned: number; max: number }> = {
-            'Bahasa Indonesia': { earned: 0, max: 0 },
-            'Matematika': { earned: 0, max: 0 },
-            'IPAS': { earned: 0, max: 0 },
-            'Bahasa Inggris': { earned: 0, max: 0 },
-            'Koding dan Kecerdasan Artifisial (KKA)': { earned: 0, max: 0 },
-          };
+            const subjectScores: Record<string, { earned: number; max: number }> = {
+              'Bahasa Indonesia': { earned: 0, max: 0 },
+              'Matematika': { earned: 0, max: 0 },
+              'IPAS': { earned: 0, max: 0 },
+              'Bahasa Inggris': { earned: 0, max: 0 },
+              'Koding dan Kecerdasan Artifisial (KKA)': { earned: 0, max: 0 },
+            };
 
-          displayExamQuestions.forEach((q) => {
-            const studentAns = studentAnswers[q.id];
-            const weight = q.bobot || 10;
-            const res = evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, weight, q.opsi, q);
-            totalScoreEarned += res.earnedScore;
-            totalMaxScore += weight;
+            displayExamQuestions.forEach((q) => {
+              const studentAns = studentAnswers[q.id];
+              const weight = q.bobot || 10;
+              const res = evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, weight, q.opsi, q);
+              totalScoreEarned += res.earnedScore;
+              totalMaxScore += weight;
 
-            const normalizedMapelKey = normalizeTkaMapelKey(q.mapel);
-            subjectScores[normalizedMapelKey].earned += res.earnedScore;
-            subjectScores[normalizedMapelKey].max += weight;
-          });
+              const normalizedMapelKey = normalizeTkaMapelKey(q.mapel);
+              subjectScores[normalizedMapelKey].earned += res.earnedScore;
+              subjectScores[normalizedMapelKey].max += weight;
+            });
 
-          const completedMapelKeys: TKAMapelScoreKey[] = [];
-          const mapelScores: Partial<Record<TKAMapelScoreKey, number>> = {};
+            const completedMapelKeys: TKAMapelScoreKey[] = [];
+            const mapelScores: Partial<Record<TKAMapelScoreKey, number>> = {};
 
-          (Object.keys(subjectScores) as TKAMapelScoreKey[]).forEach((mKey) => {
-            if (subjectScores[mKey].max > 0) {
-              completedMapelKeys.push(mKey);
-              const val = Math.round((subjectScores[mKey].earned / subjectScores[mKey].max) * 100);
-              mapelScores[mKey] = Number.isFinite(val) ? val : 0;
-            }
-          });
-
-          if (completedMapelKeys.length === 0 && activeExamMapel) {
-            const fallbackKey = normalizeTkaMapelKey(activeExamMapel);
-            completedMapelKeys.push(fallbackKey);
-            const fallbackVal = totalMaxScore > 0 ? Math.round((totalScoreEarned / totalMaxScore) * 100) : 0;
-            mapelScores[fallbackKey] = Number.isFinite(fallbackVal) ? fallbackVal : 0;
-          }
-
-          const durationUsedMinutes = Math.max(
-            1,
-            Math.ceil((activeExamDurationSeconds - examTimerSeconds) / 60)
-          );
-
-          const paketBase = activeExamPaket || 'Simulasi 1';
-          const { mergedSub, updatedList, cloudSaved } = await upsertTkaSubmissionAsync({
-            student: currentStudent,
-            paketName: paketBase,
-            mapelScores,
-            completedMapelKeys,
-            questionAnswers: studentAnswers,
-            durasiMenitUsed: durationUsedMinutes,
-            tahunPelajaran: activeYear,
-            semester: activeSemester,
-          });
-          setTkaSubmissions(updatedList);
-
-          // Simpan status "selesai" per mata pelajaran ke koleksi Firestore `hasil_ujian` secara non-blocking
-          // untuk menegakkan Strict Access Control SARAH setelah siswa mengirim jawaban.
-          setTkaFirestoreSaveStatus('saving');
-          const firestoreSavePromises: Promise<any>[] = [];
-          completedMapelKeys.forEach((mKey) => {
-            const canonicalMapelQs = getMatchingTkaQuestions(paketBase, mKey);
-            const mapelQs =
-              canonicalMapelQs.length > 0
-                ? canonicalMapelQs
-                : displayExamQuestions.filter((q) => normalizeTkaMapelKey(q.mapel) === mKey);
-            const noBetul: number[] = [];
-            const noSalah: number[] = [];
-            mapelQs.forEach((q, qIdx) => {
-              const evalRes = evaluateQuestionScore(
-                q.tipe,
-                studentAnswers[q.id],
-                q.kunciJawaban,
-                q.bobot || 10,
-                q.opsi,
-                q
-              );
-              if (evalRes.isCorrect) {
-                noBetul.push(qIdx + 1);
-              } else {
-                noSalah.push(qIdx + 1);
+            (Object.keys(subjectScores) as TKAMapelScoreKey[]).forEach((mKey) => {
+              if (subjectScores[mKey].max > 0) {
+                completedMapelKeys.push(mKey);
+                const val = Math.round((subjectScores[mKey].earned / subjectScores[mKey].max) * 100);
+                mapelScores[mKey] = Number.isFinite(val) ? val : 0;
               }
             });
-            const idUjian = `tka_live_${slugifyTkaId(paketBase)}_${slugifyTkaId(mKey)}`;
-            firestoreSavePromises.push(
-              saveHasilUjianToFirestore({
-                nisn: currentStudent.nisn || currentStudent.id,
-                id_ujian: idUjian,
-                studentId: currentStudent.id,
-                nama_siswa: currentStudent.nama,
-                kelas: currentStudent.kelas,
-                category: 'tka',
-                mapel: mKey,
-                paketName: paketBase,
-                judul: `${paketBase} - ${mKey}`,
-                status: 'selesai',
-                skor: Number(mapelScores[mKey] ?? mergedSub.skorTotal) || 0,
-                total_soal: mapelQs.length,
-                no_soal_betul: noBetul,
-                no_soal_salah: noSalah,
-                jawaban_siswa: studentAnswers,
-                waktu_selesai: new Date().toLocaleTimeString('id-ID'),
-              })
-            );
-          });
-          void Promise.allSettled(firestoreSavePromises).then(() => {
-            setTkaFirestoreSaveStatus('saved');
-          });
-          window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
 
-          setConfirmFinishTkaExam(false);
-          setLastExamResult(mergedSub);
-          setIsExamCompleted(true);
-          setTkaResumedNotice(null);
-          if (currentStudent?.id && activeExamPaket) {
-            clearTkaRoomDraft(currentStudent.id, activeExamPaket, activeExamMapel);
-            setTkaDraftRevision((v) => v + 1);
+            if (completedMapelKeys.length === 0 && activeExamMapel) {
+              const fallbackKey = normalizeTkaMapelKey(activeExamMapel);
+              completedMapelKeys.push(fallbackKey);
+              const fallbackVal = totalMaxScore > 0 ? Math.round((totalScoreEarned / totalMaxScore) * 100) : 0;
+              mapelScores[fallbackKey] = Number.isFinite(fallbackVal) ? fallbackVal : 0;
+            }
+
+            const elapsedSeconds = Math.max(
+              1,
+              Math.round((Date.now() - (tkaStartTimestampRef.current || Date.now())) / 1000)
+            );
+            const timerConsumedSeconds = Math.max(0, activeExamDurationSeconds - examTimerSeconds);
+            const durasiDetik =
+              timerConsumedSeconds > 0
+                ? Math.max(1, Math.max(timerConsumedSeconds, elapsedSeconds))
+                : elapsedSeconds;
+            const durationUsedMinutes = Math.max(1, Math.ceil(durasiDetik / 60));
+
+            const { benarHots, totalHots } = computeExamHotsStats(
+              displayExamQuestions,
+              studentAnswers,
+              (q, ans) =>
+                evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot || 10, q.opsi, q).isCorrect
+            );
+
+            const paketBase = activeExamPaket || 'Simulasi 1';
+            const { mergedSub, updatedList, cloudSaved } = await upsertTkaSubmissionAsync({
+              student: currentStudent,
+              paketName: paketBase,
+              mapelScores,
+              completedMapelKeys,
+              questionAnswers: studentAnswers,
+              durasiMenitUsed: durationUsedMinutes,
+              durasiDetik,
+              benarHots,
+              totalHots,
+              jenjang: currentStudent.kelas || 'Kelas 6',
+              tahunPelajaran: activeYear,
+              semester: activeSemester,
+            });
+            setTkaSubmissions(updatedList);
+            setTkaOfflineNotice(
+              cloudSaved
+                ? null
+                : 'Koneksi tidak stabil saat mengirim. Jawaban disimpan aman di perangkat & masuk antrean sinkronisasi otomatis ke Firestore.'
+            );
+
+            // Simpan status "selesai" per mata pelajaran ke koleksi Firestore `hasil_ujian` secara non-blocking
+            // untuk menegakkan Strict Access Control SARAH setelah siswa mengirim jawaban.
+            setTkaFirestoreSaveStatus('saving');
+            const firestoreSavePromises: Promise<any>[] = [];
+            completedMapelKeys.forEach((mKey) => {
+              const canonicalMapelQs = getMatchingTkaQuestions(paketBase, mKey);
+              const mapelQs =
+                canonicalMapelQs.length > 0
+                  ? canonicalMapelQs
+                  : displayExamQuestions.filter((q) => normalizeTkaMapelKey(q.mapel) === mKey);
+              const noBetul: number[] = [];
+              const noSalah: number[] = [];
+              mapelQs.forEach((q, qIdx) => {
+                const evalRes = evaluateQuestionScore(
+                  q.tipe,
+                  studentAnswers[q.id],
+                  q.kunciJawaban,
+                  q.bobot || 10,
+                  q.opsi,
+                  q
+                );
+                if (evalRes.isCorrect) {
+                  noBetul.push(qIdx + 1);
+                } else {
+                  noSalah.push(qIdx + 1);
+                }
+              });
+              const idUjian = `tka_live_${slugifyTkaId(paketBase)}_${slugifyTkaId(mKey)}`;
+              firestoreSavePromises.push(
+                saveHasilUjianToFirestore({
+                  nisn: currentStudent.nisn || currentStudent.id,
+                  id_ujian: idUjian,
+                  studentId: currentStudent.id,
+                  nama_siswa: currentStudent.nama,
+                  kelas: currentStudent.kelas,
+                  category: 'tka',
+                  mapel: mKey,
+                  paketName: paketBase,
+                  judul: `${paketBase} - ${mKey}`,
+                  status: 'selesai',
+                  skor: Number(mapelScores[mKey] ?? mergedSub.skorTotal) || 0,
+                  total_soal: mapelQs.length,
+                  no_soal_betul: noBetul,
+                  no_soal_salah: noSalah,
+                  jawaban_siswa: studentAnswers,
+                  waktu_selesai: new Date().toLocaleTimeString('id-ID'),
+                })
+              );
+            });
+            void Promise.allSettled(firestoreSavePromises).then(() => {
+              setTkaFirestoreSaveStatus('saved');
+            });
+            window.dispatchEvent(new Event('sekolahku-exam-results-updated'));
+
+            setConfirmFinishTkaExam(false);
+            setLastExamResult(mergedSub);
+            setIsExamCompleted(true);
+            setTkaResumedNotice(null);
+            if (currentStudent?.id && activeExamPaket) {
+              clearTkaRoomDraft(currentStudent.id, activeExamPaket, activeExamMapel);
+              setTkaDraftRevision((v) => v + 1);
+            }
+            showToast(
+              cloudSaved
+                ? `Selamat! Ujian TKA selesai dengan skor: ${mergedSub.skorTotal} (Predikat ${mergedSub.predikat}) — tersinkron ke Admin & Rekap TKA.`
+                : `Ujian TKA selesai (Skor: ${mergedSub.skorTotal}). Nilai tersimpan & masuk antrean sinkronisasi ke Admin.`,
+              'success'
+            );
+          } finally {
+            setIsSavingTkaSubmission(false);
           }
-          showToast(
-            cloudSaved
-              ? `Selamat! Ujian TKA selesai dengan skor: ${mergedSub.skorTotal} (Predikat ${mergedSub.predikat}) — tersinkron ke Admin & Rekap TKA.`
-              : `Ujian TKA selesai (Skor: ${mergedSub.skorTotal}). Nilai tersimpan & masuk antrean sinkronisasi ke Admin.`,
-            'success'
-          );
         };
         handleFinishTkaExamRef.current = handleFinishExam;
 
@@ -8844,6 +9063,13 @@ export const TKATabs: React.FC<Props> = ({
 
           return (
             <div className="space-y-4">
+              {isSavingTkaSubmission && (
+                <div className="p-3.5 rounded-2xl bg-amber-50 border-2 border-amber-300 text-amber-950 text-xs font-extrabold flex items-center gap-2.5 animate-pulse shadow-xs">
+                  <Loader2 className="w-4 h-4 animate-spin text-amber-700 shrink-0" />
+                  <span>Sedang menyimpan jawaban... Jangan tutup halaman</span>
+                </div>
+              )}
+
               {/* CBT Top Bar */}
               <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-200 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
@@ -8881,6 +9107,7 @@ export const TKATabs: React.FC<Props> = ({
                   {/* Simpan & Jeda */}
                   <button
                     type="button"
+                    disabled={isSavingTkaSubmission}
                     onClick={() => {
                       if (currentStudent?.id && activeExamPaket) {
                         saveTkaRoomDraft(
@@ -8893,6 +9120,7 @@ export const TKATabs: React.FC<Props> = ({
                             raguChecks,
                             examTimerSeconds,
                             activeExamDurationSeconds,
+                            examStartTimestamp: tkaStartTimestampRef.current,
                             runningQuestionOrder: buildQuestionOrderSnapshot(tkaRunningQuestions),
                             isActiveSession: false,
                             updatedAt: new Date().toISOString(),
@@ -8909,7 +9137,7 @@ export const TKATabs: React.FC<Props> = ({
                         'success'
                       );
                     }}
-                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-display font-bold px-3.5 py-2 rounded-2xl text-xs flex items-center gap-1.5 cursor-pointer transition"
+                    className="bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-display font-bold px-3.5 py-2 rounded-2xl text-xs flex items-center gap-1.5 cursor-pointer transition"
                   >
                     <PauseCircle className="w-4 h-4 text-purple-600" />
                     <span>Simpan &amp; Jeda</span>
@@ -8921,15 +9149,23 @@ export const TKATabs: React.FC<Props> = ({
                       <span className="text-[11px] font-bold text-emerald-900">Yakin kumpulkan?</span>
                       <button
                         type="button"
+                        disabled={isSavingTkaSubmission}
                         onClick={handleFinishExam}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-1 rounded-xl text-[11px] cursor-pointer"
+                        className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-black px-3 py-1 rounded-xl text-[11px] cursor-pointer flex items-center gap-1"
                       >
-                        Ya, Kumpulkan
+                        {isSavingTkaSubmission ? (
+                          <>
+                            <Loader2 className="w-3 h-3 animate-spin" /> Menyimpan...
+                          </>
+                        ) : (
+                          'Ya, Kumpulkan'
+                        )}
                       </button>
                       <button
                         type="button"
+                        disabled={isSavingTkaSubmission}
                         onClick={() => setConfirmFinishTkaExam(false)}
-                        className="bg-white text-slate-600 border border-slate-200 font-bold px-2.5 py-1 rounded-xl text-[11px] cursor-pointer"
+                        className="bg-white text-slate-600 border border-slate-200 font-bold px-2.5 py-1 rounded-xl text-[11px] cursor-pointer disabled:opacity-50"
                       >
                         Batal
                       </button>
@@ -8937,10 +9173,16 @@ export const TKATabs: React.FC<Props> = ({
                   ) : (
                     <button
                       type="button"
+                      disabled={isSavingTkaSubmission}
                       onClick={() => setConfirmFinishTkaExam(true)}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-display font-black px-4 py-2 rounded-2xl text-xs flex items-center gap-1.5 shadow-sm cursor-pointer transition"
+                      className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-display font-black px-4 py-2 rounded-2xl text-xs flex items-center gap-1.5 shadow-sm cursor-pointer transition"
                     >
-                      <CheckCircle className="w-4 h-4" /> Kumpulkan Ujian
+                      {isSavingTkaSubmission ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <CheckCircle className="w-4 h-4" />
+                      )}
+                      <span>{isSavingTkaSubmission ? 'Menyimpan...' : 'Kumpulkan Ujian'}</span>
                     </button>
                   )}
                 </div>
@@ -9267,10 +9509,19 @@ export const TKATabs: React.FC<Props> = ({
 
                   <button
                     type="button"
+                    disabled={isSavingTkaSubmission}
                     onClick={handleFinishExam}
-                    className="w-full py-3 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-display font-black text-xs shadow-md transition cursor-pointer flex items-center justify-center gap-2"
+                    className="w-full py-3 rounded-2xl bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white font-display font-black text-xs shadow-md transition cursor-pointer flex items-center justify-center gap-2"
                   >
-                    <CheckCircle className="w-4 h-4" /> Selesai &amp; Kumpulkan Ujian
+                    {isSavingTkaSubmission ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" /> Menyimpan Jawaban...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="w-4 h-4" /> Selesai &amp; Kumpulkan Ujian
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
@@ -9298,11 +9549,17 @@ export const TKATabs: React.FC<Props> = ({
                 </p>
               </div>
 
+              {tkaOfflineNotice && (
+                <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 text-xs font-semibold text-left">
+                  ⚠️ {tkaOfflineNotice}
+                </div>
+              )}
+
               {/* Total Score Badge */}
               <div className="p-6 rounded-3xl bg-gradient-to-br from-purple-50 via-white to-sky-50 border-2 border-purple-200 space-y-2">
                 <span className="text-xs font-black uppercase text-purple-700">Skor Akhir Komposit TKA</span>
                 <div className="text-5xl font-display font-black text-purple-900">{lastExamResult.skorTotal}</div>
-                <div className="flex justify-center items-center gap-2 pt-1">
+                <div className="flex flex-wrap justify-center items-center gap-2 pt-1">
                   <span
                     className={`px-3 py-1 rounded-full text-xs font-black ${
                       lastExamResult.predikat === 'A'
@@ -9322,6 +9579,12 @@ export const TKATabs: React.FC<Props> = ({
                     }`}
                   >
                     {lastExamResult.status} (KKTP 75)
+                  </span>
+                  <span className="px-3 py-1 rounded-full text-xs font-black bg-purple-100 text-purple-800 border border-purple-200 font-mono">
+                    HOTS: {lastExamResult.benarHots || 0}/{lastExamResult.totalHots || 0}
+                  </span>
+                  <span className="px-3 py-1 rounded-full text-xs font-black bg-slate-100 text-slate-700 border border-slate-200 font-mono">
+                    ⏱ {formatDurasiDetik(lastExamResult.durasiDetik, lastExamResult.durasiPengerjaan)}
                   </span>
                 </div>
               </div>

@@ -30,10 +30,12 @@ import {
   getAssessmentCount,
   setAssessmentCount,
   getStoredAssessments,
+  getStoredCBTResults,
   saveStoredAssessments,
   clearCBTResultsFromStorage,
 } from '../../utils/storage';
 import { syncAllLocalToCloud } from '../../utils/cloudSync';
+import { deleteSingleCbtResultFromFirestore } from '../../utils/cbtResultFirestore';
 
 interface Props {
   subjects: Subject[];
@@ -201,6 +203,14 @@ export const PenilaianTab: React.FC<Props> = ({
   // Handle delete all grades for this subject and class
   const handleDeleteAllGrades = () => {
     const cleared: AssessmentData = {};
+    const classStudentIds = new Set(currentClassStudents.map((s) => s.id));
+    const targetMapelNorm = String(selectedSubject?.name || '').trim().toLowerCase();
+    const matchingCbtDocs = getStoredCBTResults().filter((r) => {
+      if (r.category === 'tka') return false;
+      const studentOk = classStudentIds.has(r.studentId);
+      const mapelOk = !targetMapelNorm || String(r.mapel || '').trim().toLowerCase() === targetMapelNorm;
+      return studentOk && mapelOk;
+    });
     currentClassStudents.forEach((s) => {
       cleared[s.id] = { sumatif: {}, remedial: {}, asts: 0, asas: 0 };
     });
@@ -211,6 +221,17 @@ export const PenilaianTab: React.FC<Props> = ({
       targetMapel: selectedSubject?.name,
       studentIds: currentClassStudents.map((s) => s.id),
     });
+    if (matchingCbtDocs.length > 0) {
+      void Promise.allSettled(
+        matchingCbtDocs.map((r) =>
+          deleteSingleCbtResultFromFirestore({
+            examId: r.examId,
+            studentId: r.studentId,
+            nisn: r.nisn,
+          })
+        )
+      );
+    }
     syncAllLocalToCloud('admin').catch(() => {});
     showToast(`Seluruh nilai ${selectedSubject?.name} (${activeClass}) berhasil dihapus / dikosongkan!`, 'success');
     setIsDeleteModalOpen(false);

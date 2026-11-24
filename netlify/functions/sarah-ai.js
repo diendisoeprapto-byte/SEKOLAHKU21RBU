@@ -1,6 +1,7 @@
 import { Type } from '@google/genai';
 import {
   askSarahGemini,
+  askSarahGeminiStream,
   computeResultCacheHash,
   formatGeminiError,
   SARAH_GEMINI_MODEL,
@@ -198,6 +199,27 @@ function buildRagContextBlock(ragContext = {}, role = '') {
       return `[Media-${i + 1}] Judul: ${sanitizeString(m.judul, 160)} | Kelas: ${sanitizeString(m.kelas, 20)} | Mapel: ${sanitizeString(m.mapel, 80)} | ${sanitizeString(m.bab, 40)} - ${sanitizeString(m.pertemuan, 40)} | Pengunggah: ${sanitizeString(m.guru_nama, 80)}`;
     });
     parts.push(`KATALOG BANK MEDIA AJAR PPT SEKOLAH (media_ajar):\n${mediaLines.join('\n')}`);
+  }
+
+  if (Array.isArray(ragContext.libraryBooks) && ragContext.libraryBooks.length > 0) {
+    const bookLines = ragContext.libraryBooks.slice(0, 15).map((b, i) => {
+      return `[Buku-${i + 1}] ${sanitizeString(b.judul, 160)} | Kategori: ${sanitizeString(b.kategori, 60)} | Kelas: ${sanitizeString(b.kelas, 30)}`;
+    });
+    parts.push(`KATALOG RINGKAS PERPUSTAKAAN DIGITAL (perpustakaan):\n${bookLines.join('\n')}`);
+  }
+
+  if (ragContext.attendanceSummary && typeof ragContext.attendanceSummary === 'string') {
+    const cleanAtt = sanitizeString(ragContext.attendanceSummary, 1600);
+    if (cleanAtt) {
+      parts.push(`RINGKASAN STATISTIK PRESENSI SISWA:\n${cleanAtt}`);
+    }
+  }
+
+  if (ragContext.examSummary && typeof ragContext.examSummary === 'string') {
+    const cleanExam = sanitizeString(ragContext.examSummary, 1800);
+    if (cleanExam) {
+      parts.push(`RINGKASAN DATA UJIAN & NILAI SEKOLAH:\n${cleanExam}`);
+    }
   }
 
   return parts.join('\n\n');
@@ -1189,6 +1211,8 @@ export async function processSarahRequest(body = {}, options = {}) {
     throw err;
   }
 
+  const speedMode = sanitizeString(params.speedMode || body.speedMode || 'auto', 20).toLowerCase();
+
   try {
     if (mode === 'cbt_generator') {
       return await generateCbtQuestions({ params, ragBlock, signal: requestSignal });
@@ -1252,7 +1276,7 @@ export async function processSarahRequest(body = {}, options = {}) {
 
       const examReviewBlock = buildStudentExamReviewBlock(sanitizedExamReview, message);
 
-      const history = Array.isArray(body.history) ? body.history.slice(-10) : [];
+      const history = Array.isArray(body.history) ? body.history.slice(-6) : [];
       const cleanHistory = history.filter(
         (h) => h && typeof h.text === 'string' && h.text.trim()
       );
@@ -1268,10 +1292,10 @@ export async function processSarahRequest(body = {}, options = {}) {
       ];
 
       const response = await askSarahGemini({
-        model: SARAH_GEMINI_MODEL,
+        speedMode,
         contents,
         systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo, examReviewBlock),
-        timeoutMs: 10000,
+        timeoutMs: 14000,
         retries: 0,
         fastChat: true,
         useCache: cleanHistory.length === 0 && !sanitizedExamReview.requestedExamId,
@@ -1302,7 +1326,7 @@ export async function processSarahRequest(body = {}, options = {}) {
         throw err;
       }
 
-      const history = Array.isArray(body.history) ? body.history.slice(-12) : [];
+      const history = Array.isArray(body.history) ? body.history.slice(-6) : [];
       const cleanHistory = history.filter(
         (h) => h && typeof h.text === 'string' && h.text.trim()
       );
@@ -1330,10 +1354,10 @@ export async function processSarahRequest(body = {}, options = {}) {
 
       const hasAttachments = attachmentParts.length > 0;
       const response = await askSarahGemini({
-        model: SARAH_GEMINI_MODEL,
+        speedMode,
         contents,
         systemInstruction: buildTeacherBaseSystem(ragBlock, userInfo, true, endiLocationContext),
-        timeoutMs: hasAttachments ? 24000 : 10000,
+        timeoutMs: hasAttachments ? 24000 : 14000,
         retries: 0,
         fastChat: !hasAttachments,
         useCache: allowSharedCache,
@@ -1362,7 +1386,7 @@ export async function processSarahRequest(body = {}, options = {}) {
     );
 
     const response = await askSarahGemini({
-      model: SARAH_GEMINI_MODEL,
+      speedMode,
       contents: userPrompt,
       systemInstruction,
       timeoutMs: 26000,
@@ -1388,6 +1412,191 @@ export async function processSarahRequest(body = {}, options = {}) {
     };
   } catch (error) {
     console.error('[sarah-ai processSarahRequest error]:', error?.message || error);
+    throw formatGeminiError(error);
+  }
+}
+
+export async function processSarahStreamRequest(body = {}, options = {}) {
+  const requestSignal = options?.signal;
+  const onChunk = options?.onChunk;
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    const err = new Error(
+      'GEMINI_API_KEY belum dikonfigurasi pada environment server. Hubungi administrator sistem.'
+    );
+    err.statusCode = 500;
+    throw err;
+  }
+
+  const role = sanitizeString(body.role || 'guru', 20).toLowerCase();
+  const mode = sanitizeString(body.mode || (role === 'siswa' ? 'student_chat' : 'general_chat'), 40);
+  const params = body.params && typeof body.params === 'object' ? body.params : {};
+  const userInfo = body.user && typeof body.user === 'object' ? body.user : {};
+  const userMode = resolveUserMode(userInfo, role);
+  const ragBlock = buildRagContextBlock(body.ragContext || {}, role);
+  const speedMode = sanitizeString(params.speedMode || body.speedMode || 'auto', 20).toLowerCase();
+
+  if (role === 'siswa' && mode !== 'student_chat') {
+    const err = new Error('Akses ditolak: Mode ini khusus untuk Guru dan Administrator.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const rawAttachments = Array.isArray(body.attachments)
+    ? body.attachments
+    : Array.isArray(params.attachments)
+    ? params.attachments
+    : [];
+
+  if (rawAttachments.length > 0 && mode !== 'general_chat') {
+    const err = new Error('Lampiran file atau gambar hanya didukung di Obrolan Bebas SARAH AI.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  try {
+    if (mode === 'student_chat') {
+      const message = sanitizeString(params.message || body.message || '', 2000);
+      if (!message) {
+        const err = new Error('Pertanyaan siswa tidak boleh kosong.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const sanitizedExamReview = sanitizeExamReviewContext(
+        body.examReviewContext || params.examReviewContext
+      );
+
+      if (sanitizedExamReview.requestedExamId) {
+        const isCompletedVerified = sanitizedExamReview.completedExams.some(
+          (ex) => ex.examId === sanitizedExamReview.requestedExamId
+        );
+        if (!isCompletedVerified) {
+          const err = new Error(
+            'Maaf ya, SARAH belum bisa membuka pembahasan atau analisis soal ini karena kamu belum menyelesaikan ujiannya di CBT/TKA. Silakan kerjakan dan kirim jawabanmu terlebih dahulu!'
+          );
+          err.statusCode = 403;
+          err.isAppError = true;
+          throw err;
+        }
+      }
+
+      const blockedUncompletedExam = detectUncompletedExamCheatAttempt(message, sanitizedExamReview);
+      if (blockedUncompletedExam) {
+        const avatarTipe = resolveAvatarMetadataByReligion(userInfo.agama || '');
+        const studentName = sanitizeString(userInfo.name || 'Nak', 60);
+        const lockText = `[AVATAR: { "status": "aktif", "tipe": "${avatarTipe}" }]\n[STIKER_3D:3d_siswa_13]\n\n🔒 Halo Nak **${studentName}**, maaf ya, SARAH belum bisa membuka pembahasan atau analisis soal **${blockedUncompletedExam.judul}** karena kamu belum menyelesaikan ujiannya di CBT/TKA. Silakan kerjakan dan kirim jawabanmu terlebih dahulu!`;
+        if (typeof onChunk === 'function') onChunk(lockText, lockText);
+        return { mode: 'student_chat', text: lockText, fromCache: false, model: 'policy-guard' };
+      }
+
+      const examReviewBlock = buildStudentExamReviewBlock(sanitizedExamReview, message);
+      const history = Array.isArray(body.history) ? body.history.slice(-6) : [];
+      const cleanHistory = history.filter(
+        (h) => h && typeof h.text === 'string' && h.text.trim()
+      );
+      const contents = [
+        ...cleanHistory.map((h) => ({
+          role: h.role === 'model' ? 'model' : 'user',
+          parts: [{ text: sanitizeString(h.text, 1500) }],
+        })),
+        { role: 'user', parts: [{ text: message }] },
+      ];
+
+      const response = await askSarahGeminiStream({
+        speedMode,
+        contents,
+        systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo, examReviewBlock),
+        timeoutMs: 14000,
+        fastChat: true,
+        signal: requestSignal,
+        onChunk,
+      });
+
+      return {
+        mode: 'student_chat',
+        text: (response.text || '').trim() || 'Maaf ya Nak, SARAH belum dapat memproses pertanyaanmu saat ini.',
+        fromCache: false,
+        model: response.model || SARAH_GEMINI_MODEL,
+      };
+    }
+
+    if (mode === 'general_chat') {
+      const attachmentParts = buildValidatedAttachmentParts(rawAttachments, userInfo, role);
+      const rawMessage = sanitizeString(params.message || body.message || '', 3000);
+      const message =
+        rawMessage ||
+        (attachmentParts.length > 0
+          ? 'Tolong analisis, baca, dan jelaskan isi lampiran file atau gambar yang saya unggah dengan rapi dan ramah.'
+          : '');
+
+      if (!message && attachmentParts.length === 0) {
+        const err = new Error('Pesan obrolan tidak boleh kosong.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const history = Array.isArray(body.history) ? body.history.slice(-6) : [];
+      const cleanHistory = history.filter(
+        (h) => h && typeof h.text === 'string' && h.text.trim()
+      );
+      const contents = [
+        ...cleanHistory.map((h) => ({
+          role: h.role === 'model' ? 'model' : 'user',
+          parts: [{ text: sanitizeString(h.text, 2000) }],
+        })),
+        {
+          role: 'user',
+          parts: [...attachmentParts, { text: message }],
+        },
+      ];
+
+      const endiLocationContext =
+        userMode === 'exclusive_endi'
+          ? params.locationPrayerContext || body.locationPrayerContext || null
+          : null;
+
+      const hasAttachments = attachmentParts.length > 0;
+      const response = await askSarahGeminiStream({
+        speedMode,
+        contents,
+        systemInstruction: buildTeacherBaseSystem(ragBlock, userInfo, true, endiLocationContext),
+        timeoutMs: hasAttachments ? 24000 : 14000,
+        fastChat: !hasAttachments,
+        signal: requestSignal,
+        onChunk: (delta, full) => {
+          if (typeof onChunk !== 'function') return;
+          if (userMode === 'standard_teacher') {
+            const cleanDelta = delta.replace(/\[(?:REAL_STIKER|STIKER_3D|STIKER)\s*:[^\]]*\]/gi, '');
+            const cleanFull = full.replace(/\[(?:REAL_STIKER|STIKER_3D|STIKER)\s*:[^\]]*\]/gi, '');
+            if (cleanDelta) onChunk(cleanDelta, cleanFull);
+          } else {
+            onChunk(delta, full);
+          }
+        },
+      });
+
+      let replyText = (response.text || '').trim();
+      if (userMode === 'standard_teacher') {
+        replyText = replyText.replace(/\[(?:REAL_STIKER|STIKER_3D|STIKER)\s*:[^\]]*\]/gi, '').trim();
+      }
+
+      return {
+        mode: 'general_chat',
+        text: replyText || 'Mohon maaf, SARAH belum menghasilkan balasan. Silakan coba kembali.',
+        fromCache: false,
+        model: response.model || SARAH_GEMINI_MODEL,
+      };
+    }
+
+    // Fallback ke mode non-stream untuk mode terstruktur (lkpd, modul, dll.)
+    const result = await processSarahRequest(body, options);
+    if (typeof onChunk === 'function' && result?.text) {
+      onChunk(result.text, result.text);
+    }
+    return result;
+  } catch (error) {
+    console.error('[sarah-ai processSarahStreamRequest error]:', error?.message || error);
     throw formatGeminiError(error);
   }
 }

@@ -295,6 +295,28 @@ export const SARAH_REALISTIC_STICKERS_ENDI: readonly SarahStickerItem[] = Object
     hijabStyle: 'hitam garis putih',
     emoji: '🌠',
   },
+  ...Array.from({ length: 30 }, (_, idx): SarahStickerItem => {
+    const num = 31 + idx;
+    const padded = String(num).padStart(2, '0');
+    const themes = [
+      { key: 'senyum_hangat', label: 'Senyum Hangat Spesial', hijab: 'pink pastel', emoji: '🌸' },
+      { key: 'semangat_ngajar', label: 'Semangat Mengajar Mas Endi', hijab: 'cokelat tua seragam khaki', emoji: '✨' },
+      { key: 'apresiasi_manis', label: 'Apresiasi Manis dari SARAH', hijab: 'ungu muda', emoji: '💖' },
+      { key: 'doa_berkah', label: 'Doa Kebaikan & Keberkahan', hijab: 'motif abu-abu', emoji: '🤲' },
+      { key: 'perhatian_istirahat', label: 'Jangan Lupa Jaga Kesehatan', hijab: 'hitam garis putih', emoji: '☕' },
+      { key: 'inspirasi_belajar', label: 'Ide Pembelajaran Kreatif', hijab: 'pink pastel', emoji: '💡' },
+    ];
+    const theme = themes[idx % themes.length];
+    return {
+      id: `real_endi_${padded}`,
+      key: `${theme.key}_${padded}`,
+      path: `/assets/stickers/realistic/sarah-real-${padded}.png`,
+      label: `${theme.label} #${num}`,
+      triggerContext: `koleksi stiker realistik spesial Mas Endi #${num}`,
+      hijabStyle: theme.hijab,
+      emoji: theme.emoji,
+    };
+  }),
 ]);
 
 /**

@@ -17,6 +17,11 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { ActiveUser, CBTQuestion, Subject } from '../types';
+import {
+  getStoredAttendance,
+  getStoredCBTResults,
+  getStoredTKASubmissions,
+} from './storage';
 
 export type SarahKategori =
   | 'RPP/Modul Ajar'
@@ -600,6 +605,181 @@ export function retrieveSarahRagContext(params: {
   };
 }
 
+export type SarahSpeedMode = 'auto' | 'fast' | 'standard';
+export const SARAH_SPEED_PREF_KEY = 'serbu21_sarah_speed_mode';
+
+export function getSarahSpeedPreference(): SarahSpeedMode {
+  if (typeof window === 'undefined') return 'auto';
+  try {
+    const raw = window.localStorage.getItem(SARAH_SPEED_PREF_KEY);
+    if (raw === 'fast' || raw === 'standard' || raw === 'auto') {
+      return raw;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return 'auto';
+}
+
+export function setSarahSpeedPreference(mode: SarahSpeedMode): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(SARAH_SPEED_PREF_KEY, mode);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+const LAZY_LIB_CACHE_TTL_MS = 1000 * 60 * 5;
+let lazyLibraryBooksCache: {
+  fetchedAt: number;
+  items: Array<{ judul: string; kategori: string; kelas: string }>;
+} | null = null;
+
+async function getCachedPerpustakaanTitles(): Promise<
+  Array<{ judul: string; kategori: string; kelas: string }>
+> {
+  if (
+    lazyLibraryBooksCache &&
+    Date.now() - lazyLibraryBooksCache.fetchedAt < LAZY_LIB_CACHE_TTL_MS
+  ) {
+    return lazyLibraryBooksCache.items;
+  }
+  try {
+    const snap = await getDocs(query(collection(db, 'perpustakaan'), limit(15)));
+    const items: Array<{ judul: string; kategori: string; kelas: string }> = [];
+    snap.forEach((d) => {
+      const data = d.data() as any;
+      if (data?.judul) {
+        items.push({
+          judul: String(data.judul || '').slice(0, 120),
+          kategori: String(data.kategori || 'Buku Bacaan').slice(0, 50),
+          kelas: String(data.kelas || 'Semua').slice(0, 30),
+        });
+      }
+    });
+    lazyLibraryBooksCache = { fetchedAt: Date.now(), items };
+    return items;
+  } catch {
+    return lazyLibraryBooksCache?.items || [];
+  }
+}
+
+function buildLazyAttendanceSummary(kelas?: string): string {
+  try {
+    const map = getStoredAttendance();
+    const values = Object.values(map || {});
+    if (values.length === 0) return '';
+    const dates = Array.from(new Set(values.map((v) => v.date).filter(Boolean))).sort();
+    const latestDate = dates[dates.length - 1] || '';
+    const latestRecords = latestDate ? values.filter((v) => v.date === latestDate) : values;
+    const countStatus = (list: typeof values) => {
+      let h = 0;
+      let s = 0;
+      let i = 0;
+      let a = 0;
+      list.forEach((r) => {
+        if (r.status === 'H') h++;
+        else if (r.status === 'S') s++;
+        else if (r.status === 'I') i++;
+        else if (r.status === 'A') a++;
+      });
+      return { h, s, i, a, total: list.length };
+    };
+    const latestStats = countStatus(latestRecords);
+    const totalStats = countStatus(values);
+    return `Rekap Presensi (${kelas || 'Semua Kelas'}): Tanggal terbaru ${latestDate || '-'} -> Hadir ${latestStats.h}, Sakit ${latestStats.s}, Izin ${latestStats.i}, Alfa ${latestStats.a} (dari ${latestStats.total} catatan). Total arsip tercatat: ${totalStats.total} entri (H:${totalStats.h}, S:${totalStats.s}, I:${totalStats.i}, A:${totalStats.a}).`;
+  } catch {
+    return '';
+  }
+}
+
+function buildLazyExamSummary(kelas?: string): string {
+  try {
+    const cbtRes = getStoredCBTResults();
+    const tkaSubs = getStoredTKASubmissions();
+    const parts: string[] = [];
+    if (cbtRes.length > 0) {
+      const avgCbt = Math.round(
+        cbtRes.reduce((acc, r) => acc + (Number(r.nilai ?? r.skor) || 0), 0) / cbtRes.length
+      );
+      const tuntasCbt = cbtRes.filter((r) => (Number(r.nilai ?? r.skor) || 0) >= 75).length;
+      parts.push(
+        `CBT (${kelas || 'Sekolah'}): ${cbtRes.length} hasil selesai, rata-rata ${avgCbt}, tuntas KKTP 75 sebanyak ${tuntasCbt} siswa.`
+      );
+    }
+    if (tkaSubs.length > 0) {
+      const avgTka = Math.round(
+        tkaSubs.reduce((acc, r) => acc + (Number(r.skorTotal) || 0), 0) / tkaSubs.length
+      );
+      parts.push(
+        `TKA Kelas 6: ${tkaSubs.length} submisi selesai, rata-rata skor ${avgTka}/100.`
+      );
+    }
+    return parts.join(' ');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Lazy Context Injection untuk Chat Interaktif SARAH:
+ * Hanya menyuntikkan blok database (ujian/nilai, perpustakaan/media, absensi) bila prompt relevan.
+ * Obrolan umum mengirim konteks identitas minimal agar token hemat & latensi cepat.
+ */
+export async function retrieveLazySarahRagContext(params: {
+  schoolName: string;
+  kelas?: string;
+  mapel?: string;
+  queryText?: string;
+  knowledgeDocs: SarahKnowledgeItem[];
+  mediaAjarDocs: SarahMediaAjarContextDoc[];
+  subjects?: Subject[];
+  sarahConfig?: SarahConfigDoc;
+  excludeBankSoal?: boolean;
+}) {
+  const q = String(params.queryText || '').trim();
+  const needExam = /\b(nilai|ujian|cbt|tka|peringkat|rank|hots|hasil|skor|rekap|rapor|soalnya|soal|tuntas|kktp)\b/i.test(
+    q
+  );
+  const needLibraryAndKb = /\b(buku|baca|perpustakaan|literasi|pustaka|media\s*ajar|ppt|modul|materi|rpp|lkpd|kurikulum|tp)\b/i.test(
+    q
+  );
+  const needAttendance = /\b(absen|presensi|hadir|izin|sakit|alfa|alpa|statistik|kehadiran)\b/i.test(
+    q
+  );
+
+  if (!needExam && !needLibraryAndKb && !needAttendance) {
+    return {
+      schoolName: params.schoolName || 'SDN Rawa Badak Utara 21',
+      activeClass: params.kelas || '',
+      knowledgeDocs: [],
+      mediaAjarDocs: [],
+      subjectsList: [],
+      sarahConfig: params.sarahConfig
+        ? { personaNote: params.sarahConfig.personaNote }
+        : undefined,
+    };
+  }
+
+  const fullRag = retrieveSarahRagContext(params);
+  const libraryBooks = needLibraryAndKb ? await getCachedPerpustakaanTitles() : undefined;
+  const attendanceSummary = needAttendance ? buildLazyAttendanceSummary(params.kelas) : undefined;
+  const examSummary = needExam && !params.excludeBankSoal ? buildLazyExamSummary(params.kelas) : undefined;
+
+  return {
+    schoolName: fullRag.schoolName,
+    activeClass: fullRag.activeClass,
+    knowledgeDocs: needLibraryAndKb || needExam ? fullRag.knowledgeDocs : [],
+    mediaAjarDocs: needLibraryAndKb ? fullRag.mediaAjarDocs : [],
+    subjectsList: needLibraryAndKb || needExam ? fullRag.subjectsList : [],
+    sarahConfig: fullRag.sarahConfig,
+    ...(libraryBooks && libraryBooks.length > 0 ? { libraryBooks } : {}),
+    ...(attendanceSummary ? { attendanceSummary } : {}),
+    ...(examSummary ? { examSummary } : {}),
+  };
+}
+
 export interface SarahCbtGeneratedResponse {
   mode: 'cbt_generator';
   ringkasan: string;
@@ -692,6 +872,7 @@ export interface CallSarahAiOptions {
   validateCached?: (cached: any) => boolean;
   onStatusChange?: (statusText: string) => void;
   onPhaseChange?: (phase: SarahAnalysisPhase, statusText: string) => void;
+  onChunk?: (partialText: string) => void;
 }
 
 function fnv1aHexFallback(input: string): string {
@@ -819,7 +1000,7 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
 ): Promise<T & { fromCache?: boolean }> {
   const {
     signal,
-    timeoutMs = 24000,
+    timeoutMs = 38000,
     cacheKey,
     bypassCache = false,
     validateCached,
@@ -868,7 +1049,7 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
       }
 
       try {
-        const analyzeMsg = 'SARAH sedang menganalisis secara async (gemini-3.8-flash)...';
+        const analyzeMsg = 'SARAH sedang merangkai jawaban...';
         onStatusChange?.(analyzeMsg);
         onPhaseChange?.('analyzing', analyzeMsg);
 
@@ -941,6 +1122,173 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
   } finally {
     releaseSarahQueueSlot();
   }
+}
+
+/**
+ * Mengonsumsi endpoint streaming NDJSON (`/api/sarah-ai-stream`) agar jawaban tampil kata demi kata,
+ * lalu fallback transparan ke `callSarahAiEndpoint` bila server statis/Netlify tidak menyediakan stream.
+ */
+export async function callSarahAiStreamEndpoint(
+  payload: Record<string, any>,
+  options: CallSarahAiOptions = {}
+): Promise<SarahTextGeneratedResponse & { fromCache?: boolean }> {
+  const {
+    signal,
+    timeoutMs = 40000,
+    onStatusChange,
+    onPhaseChange,
+    onChunk,
+  } = options;
+
+  await acquireSarahQueueSlot(signal, onStatusChange, onPhaseChange);
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  const forwardAbort = () => controller.abort();
+  if (signal) {
+    signal.addEventListener('abort', forwardAbort, { once: true });
+  }
+
+  let fallbackToStandard = false;
+
+  try {
+    onStatusChange?.('SARAH sedang mulai mengetik jawaban...');
+    onPhaseChange?.('analyzing', 'SARAH sedang mulai mengetik jawaban...');
+
+    const response = await fetch('/api/sarah-ai-stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    if (response.status === 404 || response.status === 405 || !response.body) {
+      fallbackToStandard = true;
+    } else if (!response.ok) {
+      let data: any = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+      throw new Error(
+        sanitizeSarahErrorMessage(
+          data?.error || `Permintaan ke layanan SARAH gagal (HTTP ${response.status}).`
+        )
+      );
+    } else {
+      const contentType = (response.headers.get('content-type') || '').toLowerCase();
+      if (contentType.includes('application/json') && !contentType.includes('ndjson')) {
+        const json = await response.json();
+        if (json?.text && onChunk) {
+          onChunk(json.text);
+        }
+        onPhaseChange?.('done', 'Selesai.');
+        return {
+          mode: json?.mode || payload.mode || 'general_chat',
+          text: json?.text || '',
+          model: json?.model,
+          fromCache: Boolean(json?.fromCache),
+        };
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let accumulated = '';
+      let resolvedModel = '';
+      let resolvedMode = payload.mode || 'general_chat';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          let evt: any;
+          try {
+            evt = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (evt?.type === 'chunk' && typeof evt.text === 'string') {
+            accumulated += evt.text;
+            onChunk?.(accumulated);
+          } else if (evt?.type === 'done') {
+            if (typeof evt.text === 'string' && evt.text.length >= accumulated.length) {
+              accumulated = evt.text;
+            }
+            resolvedModel = evt.model || resolvedModel;
+            resolvedMode = evt.mode || resolvedMode;
+          } else if (evt?.type === 'error') {
+            throw new Error(sanitizeSarahErrorMessage(evt.error || 'Gagal streaming SARAH AI.'));
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        try {
+          const evt = JSON.parse(buffer.trim());
+          if (evt?.type === 'done' && typeof evt.text === 'string') {
+            accumulated = evt.text;
+            resolvedModel = evt.model || resolvedModel;
+          } else if (evt?.type === 'error') {
+            throw new Error(sanitizeSarahErrorMessage(evt.error));
+          }
+        } catch {
+          // ignore incomplete tail
+        }
+      }
+
+      onPhaseChange?.('done', 'Selesai.');
+      return {
+        mode: resolvedMode,
+        text: accumulated,
+        model: resolvedModel || undefined,
+        fromCache: false,
+      };
+    }
+  } catch (err: any) {
+    if (timedOut) {
+      throw new Error(
+        'Koneksi ke layanan SARAH AI sedang padat sehingga waktu tunggu habis. Silakan coba kirim ulang sebentar lagi.'
+      );
+    }
+    if (err?.name === 'AbortError' || signal?.aborted) {
+      onPhaseChange?.('cancelled', 'Proses SARAH dibatalkan.');
+      throw new DOMException('Permintaan ke SARAH dibatalkan.', 'AbortError');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    if (signal) {
+      signal.removeEventListener('abort', forwardAbort);
+    }
+    releaseSarahQueueSlot();
+  }
+
+  if (fallbackToStandard) {
+    const res = await callSarahAiEndpoint<SarahTextGeneratedResponse>(payload, {
+      ...options,
+      timeoutMs,
+    });
+    if (res.text && onChunk) {
+      onChunk(res.text);
+    }
+    return res;
+  }
+
+  throw new Error('Layanan SARAH AI sedang mengalami kendala koneksi sementara.');
 }
 
 export function sanitizeSarahErrorMessage(rawMessage?: unknown): string {

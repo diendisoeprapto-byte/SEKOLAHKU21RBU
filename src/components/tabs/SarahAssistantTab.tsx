@@ -39,6 +39,8 @@ import {
   FileSpreadsheet,
   Lock,
   MapPin,
+  Scissors,
+  Zap,
 } from 'lucide-react';
 import {
   ActiveUser,
@@ -67,6 +69,7 @@ import {
   SarahKategori,
   SarahKnowledgeItem,
   SarahMediaAjarContextDoc,
+  SarahSpeedMode,
   SarahStudentLogItem,
   SarahCbtGeneratedResponse,
   SarahTextGeneratedResponse,
@@ -74,17 +77,21 @@ import {
   appendSarahChatMessage,
   buildSarahChatUserId,
   callSarahAiEndpoint,
+  callSarahAiStreamEndpoint,
   createSarahChatSession,
   deleteSarahChatSession,
   deleteSarahKnowledgeItem,
   exportSarahToWordDoc,
   formatFriendlySarahChatError,
   formatSarahDateTime,
+  getSarahSpeedPreference,
   loadSarahSessionMessages,
   loadUserSarahChatSessions,
   rasterizeSvgToPngDataUrl,
+  retrieveLazySarahRagContext,
   retrieveSarahRagContext,
   sanitizeSarahErrorMessage,
+  setSarahSpeedPreference,
   subscribeToMediaAjarForSarah,
   subscribeToSarahConfig,
   subscribeToSarahKnowledgeBase,
@@ -93,6 +100,7 @@ import {
   syncSarahConfigToFirestore,
 } from '../../utils/sarahFirestore';
 import { SarahMarkdown } from '../SarahMarkdown';
+import { SarahStickerSlicerPanel } from '../SarahStickerSlicerPanel';
 import { extractSarahResponseMetadata } from '../../utils/sarahVisuals';
 import {
   SARAH_STANDARD_AVATAR_URL,
@@ -134,7 +142,16 @@ interface Props {
   onNavigateTab: (tab: TabId) => void;
 }
 
-type SarahTeacherSubTab = 'chat' | 'lkpd' | 'modul' | 'gambar' | 'cbt' | 'riset' | 'memori' | 'logs';
+type SarahTeacherSubTab =
+  | 'chat'
+  | 'lkpd'
+  | 'modul'
+  | 'gambar'
+  | 'cbt'
+  | 'riset'
+  | 'memori'
+  | 'logs'
+  | 'stickers';
 type SarahVisualStyleId = '3d_clay' | '3d_isometrik' | '2d_ceria' | 'diagram_edukatif';
 type SarahDocVisualChoice = SarahVisualStyleId | 'none';
 
@@ -441,13 +458,27 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState('');
   const [chatMapel, setChatMapel] = useState('Umum');
+  const [speedMode, setSpeedMode] = useState<SarahSpeedMode>(() => getSarahSpeedPreference());
   const [isChatSending, setIsChatSending] = useState(false);
+  const [isStreamingActive, setIsStreamingActive] = useState(false);
   const canUploadChatFiles = useMemo(() => isEndiSoepraptoUser(activeUser), [activeUser]);
   const [chatAttachments, setChatAttachments] = useState<SarahChatAttachment[]>([]);
   const [isReadingAttachment, setIsReadingAttachment] = useState(false);
   const [isDraggingOverChat, setIsDraggingOverChat] = useState(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const chatInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleSpeedModeChange = (nextMode: SarahSpeedMode) => {
+    setSpeedMode(nextMode);
+    setSarahSpeedPreference(nextMode);
+    const label =
+      nextMode === 'fast'
+        ? 'Mode Cepat (Lite) aktif untuk latensi rendah.'
+        : nextMode === 'standard'
+        ? 'Mode Standar (Mendalam) aktif.'
+        : 'Mode Otomatis (Smart Fallback) aktif.';
+    showToast(label, 'success');
+  };
   const chatFileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -1039,7 +1070,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
     };
     const prevHistory = chatMessages
       .filter((m) => !m.isError)
-      .slice(-10)
+      .slice(-6)
       .map((m) => ({ role: m.role, text: m.text }));
 
     setChatMessages((prev) => [...prev, userMsg]);
@@ -1048,6 +1079,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       setChatAttachments([]);
     }
     setIsChatSending(true);
+    setIsStreamingActive(false);
 
     let currentSessionId = activeChatSessionId;
     if (isExclusiveEndi) {
@@ -1097,11 +1129,23 @@ export const SarahAssistantTab: React.FC<Props> = ({
       }
     }
 
+    const replyId = `tm_${Date.now()}`;
+    let streamMessageCreated = false;
+
+    const cleanStickerIfNeeded = (txt: string) =>
+      isExclusiveEndi
+        ? txt
+        : txt
+            .replace(/\[REAL_STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+            .replace(/\[STIKER_3D\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+            .replace(/\[STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
+            .trim();
+
     try {
       const ragQuery = [promptText, ...pendingAttachments.map((a) => a.name)]
         .filter(Boolean)
         .join(' ');
-      const ragContext = retrieveSarahRagContext({
+      const ragContext = await retrieveLazySarahRagContext({
         schoolName: profile.name,
         kelas: activeClass,
         mapel: chatMapel === 'Umum' ? '' : chatMapel,
@@ -1112,47 +1156,65 @@ export const SarahAssistantTab: React.FC<Props> = ({
         sarahConfig,
       });
 
-      const res = await callSarahAiEndpoint<SarahTextGeneratedResponse>({
-        mode: 'general_chat',
-        role: activeUser.role,
-        user: {
-          name: activeUser.name,
-          username: activeUser.username,
-          kelas: activeClass,
-        },
-        params: {
-          message: displayUserText,
-          mapel: chatMapel,
-          ...(isExclusiveEndi && endiLocationContext
-            ? { locationPrayerContext: endiLocationContext }
-            : {}),
-        },
-        ...(pendingAttachments.length > 0
-          ? { attachments: toAttachmentPayloads(pendingAttachments) }
-          : {}),
-        history: prevHistory,
-        ragContext,
-      });
-
-      const rawText = isExclusiveEndi
-        ? res.text
-        : res.text
-            .replace(/\[REAL_STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
-            .replace(/\[STIKER_3D\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
-            .replace(/\[STIKER\s*:\s*[a-zA-Z0-9_]+\s*\]/gi, '')
-            .trim();
-
-      const cheerfulReply = enrichSarahFriendlyEmojis(rawText, { isChat: true });
-      const replyId = `tm_${Date.now()}`;
-
-      setChatMessages((prev) => [
-        ...prev,
+      const res = await callSarahAiStreamEndpoint(
         {
-          id: replyId,
-          role: 'model',
-          text: cheerfulReply,
+          mode: 'general_chat',
+          role: activeUser.role,
+          speedMode,
+          user: {
+            name: activeUser.name,
+            username: activeUser.username,
+            kelas: activeClass,
+          },
+          params: {
+            message: displayUserText,
+            mapel: chatMapel,
+            speedMode,
+            ...(isExclusiveEndi && endiLocationContext
+              ? { locationPrayerContext: endiLocationContext }
+              : {}),
+          },
+          ...(pendingAttachments.length > 0
+            ? { attachments: toAttachmentPayloads(pendingAttachments) }
+            : {}),
+          history: prevHistory,
+          ragContext,
         },
-      ]);
+        {
+          timeoutMs: 40000,
+          onChunk: (partialRaw) => {
+            const partialClean = cleanStickerIfNeeded(partialRaw);
+            if (!partialClean) return;
+            setIsStreamingActive(true);
+            setChatMessages((prev) => {
+              const exists = prev.some((m) => m.id === replyId);
+              if (exists) {
+                return prev.map((m) => (m.id === replyId ? { ...m, text: partialClean } : m));
+              }
+              streamMessageCreated = true;
+              return [...prev, { id: replyId, role: 'model', text: partialClean }];
+            });
+          },
+        }
+      );
+
+      const rawText = cleanStickerIfNeeded(res.text || '');
+      const cheerfulReply = enrichSarahFriendlyEmojis(rawText, { isChat: true });
+
+      setChatMessages((prev) => {
+        const exists = prev.some((m) => m.id === replyId);
+        if (exists) {
+          return prev.map((m) => (m.id === replyId ? { ...m, text: cheerfulReply } : m));
+        }
+        return [
+          ...prev,
+          {
+            id: replyId,
+            role: 'model',
+            text: cheerfulReply,
+          },
+        ];
+      });
 
       if (isExclusiveEndi) {
         appendEndiPrivateChatMessage(activeUser, {
@@ -1178,19 +1240,23 @@ export const SarahAssistantTab: React.FC<Props> = ({
         });
       }
     } catch (err: any) {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `terr_${Date.now()}`,
-          role: 'model',
-          text: formatFriendlySarahChatError(err, isExclusiveEndi ? 'endi' : 'guru'),
-          isError: true,
-          retryPrompt: displayUserText,
-          ...(pendingAttachments.length > 0 ? { retryAttachments: pendingAttachments } : {}),
-        },
-      ]);
+      setChatMessages((prev) => {
+        const cleaned = streamMessageCreated ? prev.filter((m) => m.id !== replyId) : prev;
+        return [
+          ...cleaned,
+          {
+            id: `terr_${Date.now()}`,
+            role: 'model',
+            text: formatFriendlySarahChatError(err, isExclusiveEndi ? 'endi' : 'guru'),
+            isError: true,
+            retryPrompt: displayUserText,
+            ...(pendingAttachments.length > 0 ? { retryAttachments: pendingAttachments } : {}),
+          },
+        ];
+      });
     } finally {
       setIsChatSending(false);
+      setIsStreamingActive(false);
     }
   };
 
@@ -1950,6 +2016,9 @@ export const SarahAssistantTab: React.FC<Props> = ({
           { id: 'riset', label: 'Riset & Pengayaan', icon: Lightbulb },
           { id: 'memori', label: `Memori & Ajarkan (${knowledgeDocs.length})`, icon: Brain },
           { id: 'logs', label: `Pantau Tanya Siswa (${studentLogs.length})`, icon: Users },
+          ...(isExclusiveEndi
+            ? [{ id: 'stickers', label: 'Auto-Slicer Stiker (60)', icon: Scissors }]
+            : []),
         ].map((tab) => {
           const Icon = tab.icon;
           const active = subTab === tab.id;
@@ -2259,6 +2328,20 @@ export const SarahAssistantTab: React.FC<Props> = ({
                     <span>Sapaan &amp; Sholat</span>
                   </button>
                 )}
+                <div className="inline-flex items-center gap-1 px-2 py-1 rounded-xl border border-indigo-200 bg-white">
+                  <Zap className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                  <select
+                    value={speedMode}
+                    onChange={(e) => handleSpeedModeChange(e.target.value as SarahSpeedMode)}
+                    title="Pengaturan Kecepatan & Model AI SARAH"
+                    aria-label="Kecepatan AI SARAH"
+                    className="bg-transparent text-xs font-bold text-slate-700 outline-none cursor-pointer"
+                  >
+                    <option value="auto">Otomatis</option>
+                    <option value="fast">Mode Cepat (Lite)</option>
+                    <option value="standard">Standar</option>
+                  </select>
+                </div>
                 <select
                   value={chatMapel}
                   onChange={(e) => setChatMapel(e.target.value)}
@@ -2476,11 +2559,11 @@ export const SarahAssistantTab: React.FC<Props> = ({
                 ))
               )}
 
-              {isChatSending && (
+              {isChatSending && !isStreamingActive && (
                 <div className="flex justify-start">
                   <div className="bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-2 text-xs font-bold">
                     <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
-                    <span>SARAH sedang membaca basis data sekolah &amp; merangkai jawaban...</span>
+                    <span>SARAH sedang merangkai jawaban...</span>
                   </div>
                 </div>
               )}
@@ -4311,6 +4394,24 @@ export const SarahAssistantTab: React.FC<Props> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* TAB KHUSUS ENDI: UPLOAD & AUTO-SLICER LEMBAR STIKER REALISTIK (#31-60) */}
+      {/* ===================================================================== */}
+      {isExclusiveEndi && subTab === 'stickers' && (
+        <SarahStickerSlicerPanel
+          showToast={showToast}
+          onInsertStickerInChat={(stickerId) => {
+            setSubTab('chat');
+            setChatInput((prev) =>
+              prev.trim()
+                ? `${prev.trim()} [REAL_STIKER:${stickerId}]`
+                : `[REAL_STIKER:${stickerId}] `
+            );
+            showToast(`Stiker ${stickerId} siap dipakai di chat SARAH!`, 'success');
+          }}
+        />
       )}
 
       {/* Modal Info Dedikasi SARAH */}

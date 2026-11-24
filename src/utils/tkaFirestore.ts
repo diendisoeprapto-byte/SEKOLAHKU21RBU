@@ -33,6 +33,8 @@ import {
   extractBaseTkaPaket,
 } from './storage';
 import { compressDataUrlImage } from './imageUtils';
+import { formatDurasiDetik } from './examRanking';
+import { writeDocWithRetry } from './cbtResultFirestore';
 
 export const TKA_QUESTIONS_COLLECTION = 'tka_questions';
 export const TKA_SUBMISSIONS_COLLECTION = 'tka_submissions';
@@ -723,8 +725,36 @@ export function mergeTwoTkaSubmissions(
     'Matematika': pickMapelScore('Matematika'),
     'IPAS': pickMapelScore('IPAS'),
     'Bahasa Inggris': pickMapelScore('Bahasa Inggris'),
-    'Koding dan Kecerdasan Artifisial (KKA)': pickMapelScore('Koding dan Kecerdasan Artifisial (KKA)'),
+    'Koding dan Kecerdasan Artifisial (KKA)': pickValSafe(
+      pickMapelScore('Koding dan Kecerdasan Artifisial (KKA)')
+    ),
   };
+
+  function pickValSafe(v: number): number {
+    return Number.isFinite(v) ? v : 0;
+  }
+
+  const mergedHotsByMapel: Record<string, { benar: number; total: number }> = {
+    ...((older as any).hotsByMapel || {}),
+    ...((newer as any).hotsByMapel || {}),
+  };
+  const mergedDurasiByMapel: Record<string, number> = {
+    ...((older as any).durasiDetikByMapel || {}),
+    ...((newer as any).durasiDetikByMapel || {}),
+  };
+
+  const hasHotsMap = Object.keys(mergedHotsByMapel).length > 0;
+  const computedBenarHots = hasHotsMap
+    ? Object.values(mergedHotsByMapel).reduce((acc, v) => acc + (Number(v?.benar) || 0), 0)
+    : Math.max(Number(older.benarHots || 0), Number(newer.benarHots || 0));
+  const computedTotalHots = hasHotsMap
+    ? Object.values(mergedHotsByMapel).reduce((acc, v) => acc + (Number(v?.total) || 0), 0)
+    : Math.max(Number(older.totalHots || 0), Number(newer.totalHots || 0));
+
+  const hasDurasiMap = Object.keys(mergedDurasiByMapel).length > 0;
+  const computedDurasiDetik = hasDurasiMap
+    ? Object.values(mergedDurasiByMapel).reduce((acc, v) => acc + (Number(v) || 0), 0)
+    : newer.durasiDetik || older.durasiDetik;
 
   const keysForAvg = mergedCompleted.length > 0 ? mergedCompleted : ALL_TKA_MAPEL_KEYS;
   const sum = keysForAvg.reduce((acc, k) => acc + Number(mergedScores[k] || 0), 0);
@@ -749,13 +779,26 @@ export function mergeTwoTkaSubmissions(
     skorTotal: avgTotal,
     predikat,
     status,
+    ...(hasHotsMap ? { hotsByMapel: mergedHotsByMapel } : {}),
+    ...(hasDurasiMap ? { durasiDetikByMapel: mergedDurasiByMapel } : {}),
+    ...(computedTotalHots > 0 || computedBenarHots > 0
+      ? { benarHots: computedBenarHots, totalHots: computedTotalHots }
+      : {}),
+    ...(computedDurasiDetik && computedDurasiDetik > 0
+      ? {
+          durasiDetik: computedDurasiDetik,
+          durasiPengerjaan: formatDurasiDetik(computedDurasiDetik),
+        }
+      : {}),
+    jenjang: newer.jenjang || older.jenjang || 'Kelas 6',
+    statusPengerjaan: 'selesai',
     tahunPelajaran: newer.tahunPelajaran || older.tahunPelajaran,
     semester: newer.semester || older.semester,
     updatedAt:
       (newer.updatedAt || '') >= (older.updatedAt || '')
         ? newer.updatedAt || new Date().toISOString()
         : older.updatedAt || new Date().toISOString(),
-  };
+  } as TKASubmissionItem;
 }
 
 export function mergeTkaSubmissionLists(
@@ -801,22 +844,90 @@ export async function saveTkaSubmissionToFirestore(submission: TKASubmissionItem
     }
   } catch {}
   enqueuePendingTkaSubmission(cleanBase as TKASubmissionItem);
-  try {
-    await setDoc(
-      doc(db, TKA_SUBMISSIONS_COLLECTION, docId),
-      {
+  const ok = await writeDocWithRetry(async () => {
+    const cleanPayload = Object.fromEntries(
+      Object.entries({
         ...cleanBase,
+        statusPengerjaan: 'selesai',
         updatedAt: cleanBase.updatedAt || new Date().toISOString(),
         serverTime: serverTimestamp(),
-      },
-      { merge: true }
+      }).filter(([, v]) => v !== undefined)
     );
+    await setDoc(doc(db, TKA_SUBMISSIONS_COLLECTION, docId), cleanPayload, { merge: true });
+  });
+
+  if (ok) {
     removePendingTkaSubmission(docId);
     safeSetLocalStorage('sekolahku_tka_submissions_seeded', 'true');
     return true;
-  } catch (error) {
-    console.error('Gagal menyimpan hasil TKA ke Firestore:', error);
-    return false;
+  }
+  console.error('Gagal menyimpan hasil TKA ke Firestore setelah 4x percobaan.');
+  return false;
+}
+
+/**
+ * Checkpoint auto-save berkala untuk pengerjaan TKA (setiap 45 detik atau 5 soal terjawab).
+ * Hanya menulis progres jawaban ke `tka_submissions/{docId}` tanpa menimpa status 'selesai'
+ * atau nilai mapel yang sudah final.
+ */
+export async function savePeriodicTkaDraftToFirestore(params: {
+  student: {
+    id: string;
+    nama: string;
+    nisn: string;
+    kelas: string;
+    fotoUrl?: string;
+  };
+  paketName: string;
+  questionAnswers: Record<string, any>;
+}): Promise<void> {
+  if (!params.student?.id && !params.student?.nisn) return;
+  const basePaket = extractBaseTkaPaket(params.paketName);
+  const stableStudentId = params.student.id || params.student.nisn || 'siswa_anon';
+  const docId = makeSubmissionDocId(stableStudentId, basePaket);
+  try {
+    const docRef = doc(db, TKA_SUBMISSIONS_COLLECTION, docId);
+    let existingCompleted = false;
+    let existingAnswers: Record<string, any> = {};
+    try {
+      const snap = await Promise.race([
+        getDoc(docRef),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+      ]);
+      if (snap && snap.exists()) {
+        const d = snap.data() as any;
+        existingCompleted =
+          d?.statusPengerjaan === 'selesai' ||
+          (Array.isArray(d?.completedMapels) && d.completedMapels.length > 0);
+        if (d?.answers && typeof d.answers === 'object') {
+          existingAnswers = d.answers;
+        }
+      }
+    } catch {
+      // ignore read failure
+    }
+    const checkpointPayload: Record<string, any> = {
+      id: docId,
+      studentId: stableStudentId,
+      studentName: params.student.nama,
+      nisn: params.student.nisn,
+      kelas: params.student.kelas,
+      jenjang: 'Kelas 6',
+      paket: basePaket,
+      paketDasar: basePaket,
+      answers: {
+        ...existingAnswers,
+        ...(params.questionAnswers || {}),
+      },
+      updatedAt: new Date().toISOString(),
+      serverTime: serverTimestamp(),
+    };
+    if (!existingCompleted) {
+      checkpointPayload.statusPengerjaan = 'sedang_mengerjakan';
+    }
+    await setDoc(docRef, checkpointPayload, { merge: true });
+  } catch {
+    // Checkpoint bersifat best-effort agar tidak mengganggu pengerjaan siswa
   }
 }
 
@@ -1066,6 +1177,11 @@ export function subscribeToTkaSubmissionsCollection(
         const list: TKASubmissionItem[] = [];
         snapshot.forEach((docSnap) => {
           const raw = docSnap.data() as any;
+          const hasCompleted =
+            Array.isArray(raw?.completedMapels) && raw.completedMapels.length > 0;
+          if (raw?.statusPengerjaan === 'sedang_mengerjakan' && !hasCompleted) {
+            return;
+          }
           const { serverTime: _st, ...rest } = raw || {};
           list.push({
             ...(rest as TKASubmissionItem),
@@ -1100,6 +1216,10 @@ export interface UpsertTkaSubmissionParams {
   completedMapelKeys: TKAMapelScoreKey[];
   questionAnswers: Record<string, any>;
   durasiMenitUsed: number;
+  durasiDetik?: number;
+  benarHots?: number;
+  totalHots?: number;
+  jenjang?: string;
   tahunPelajaran?: string;
   semester?: string;
 }
@@ -1112,7 +1232,20 @@ function buildMergedTkaSubmissionState(
   mergedSub: TKASubmissionItem;
   updatedList: TKASubmissionItem[];
 } {
-  const { student, paketName, mapelScores, completedMapelKeys, questionAnswers, durasiMenitUsed, tahunPelajaran, semester } = params;
+  const {
+    student,
+    paketName,
+    mapelScores,
+    completedMapelKeys,
+    questionAnswers,
+    durasiMenitUsed,
+    durasiDetik,
+    benarHots,
+    totalHots,
+    jenjang,
+    tahunPelajaran,
+    semester,
+  } = params;
   const basePaket = extractBaseTkaPaket(paketName);
   const stableStudentId = student.id || student.nisn || 'siswa_anon';
 
@@ -1159,6 +1292,37 @@ function buildMergedTkaSubmissionState(
     avgTotal >= 88 ? 'A' : avgTotal >= 78 ? 'B' : avgTotal >= 68 ? 'C' : 'D';
   const status: 'Tuntas' | 'Remedial' = avgTotal >= 75 ? 'Tuntas' : 'Remedial';
 
+  const mapelSlotKey = completedMapelKeys.length === 1 ? completedMapelKeys[0] : 'ALL';
+  const nextHotsByMapel: Record<string, { benar: number; total: number }> = {
+    ...((prevSub as any)?.hotsByMapel || {}),
+  };
+  if (typeof totalHots === 'number' || typeof benarHots === 'number') {
+    nextHotsByMapel[mapelSlotKey] = {
+      benar: Number(benarHots || 0),
+      total: Number(totalHots || 0),
+    };
+  }
+  const hasHotsMap = Object.keys(nextHotsByMapel).length > 0;
+  const totalBenarHots = hasHotsMap
+    ? Object.values(nextHotsByMapel).reduce((acc, v) => acc + (Number(v?.benar) || 0), 0)
+    : Number(prevSub?.benarHots || 0);
+  const totalSoalHots = hasHotsMap
+    ? Object.values(nextHotsByMapel).reduce((acc, v) => acc + (Number(v?.total) || 0), 0)
+    : Number(prevSub?.totalHots || 0);
+
+  const nextDurasiByMapel: Record<string, number> = {
+    ...((prevSub as any)?.durasiDetikByMapel || {}),
+  };
+  const safeSeconds =
+    typeof durasiDetik === 'number' && Number.isFinite(durasiDetik) && durasiDetik > 0
+      ? Math.round(durasiDetik)
+      : Math.max(1, durasiMenitUsed) * 60;
+  nextDurasiByMapel[mapelSlotKey] = safeSeconds;
+  const totalDurasiDetik = Object.values(nextDurasiByMapel).reduce(
+    (acc, v) => acc + (Number(v) || 0),
+    0
+  );
+
   const docId = makeSubmissionDocId(stableStudentId, basePaket);
   const mergedSub: TKASubmissionItem = {
     id: docId,
@@ -1166,6 +1330,7 @@ function buildMergedTkaSubmissionState(
     studentName: student.nama,
     nisn: student.nisn,
     kelas: student.kelas,
+    jenjang: jenjang || prevSub?.jenjang || student.kelas || 'Kelas 6',
     fotoUrl: sanitizeSubmissionFotoUrl(student.fotoUrl),
     paket: basePaket,
     paketDasar: basePaket,
@@ -1183,7 +1348,14 @@ function buildMergedTkaSubmissionState(
       month: 'long',
       year: 'numeric',
     }),
-    durasiPengerjaan: `${Math.max(1, durasiMenitUsed)} Menit`,
+    durasiDetik: totalDurasiDetik > 0 ? totalDurasiDetik : safeSeconds,
+    durasiPengerjaan: formatDurasiDetik(totalDurasiDetik > 0 ? totalDurasiDetik : safeSeconds),
+    ...(hasHotsMap ? { hotsByMapel: nextHotsByMapel } : {}),
+    durasiDetikByMapel: nextDurasiByMapel,
+    ...(totalSoalHots > 0 || totalBenarHots > 0
+      ? { benarHots: totalBenarHots, totalHots: totalSoalHots }
+      : {}),
+    statusPengerjaan: 'selesai',
     ...(tahunPelajaran || prevSub?.tahunPelajaran
       ? { tahunPelajaran: tahunPelajaran || prevSub?.tahunPelajaran }
       : {}),
@@ -1191,7 +1363,7 @@ function buildMergedTkaSubmissionState(
       ? { semester: semester || prevSub?.semester }
       : {}),
     updatedAt: new Date().toISOString(),
-  };
+  } as TKASubmissionItem;
 
   const otherSubs = existingSubs.filter(
     (s) =>

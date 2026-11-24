@@ -59,6 +59,25 @@
       },
       "required": ["id", "studentId", "paket", "skorTotal"]
     },
+    "CBTResult": {
+      "title": "CBTResult",
+      "description": "Dokumen hasil pengerjaan ujian CBT terisolasi per siswa (${examId}_${nisn})",
+      "type": "object",
+      "properties": {
+        "examId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "nisn": { "type": "string" },
+        "kelas": { "type": "string" },
+        "nilai": { "type": "number" },
+        "skor": { "type": "number" },
+        "benarHots": { "type": "number" },
+        "totalHots": { "type": "number" },
+        "durasiDetik": { "type": "number" },
+        "statusPengerjaan": { "type": "string", "enum": ["sedang_mengerjakan", "selesai"] }
+      },
+      "required": ["examId", "studentId", "nilai"]
+    },
     "Attendance": {
       "title": "Attendance",
       "description": "Rekam presensi harian siswa",
@@ -278,6 +297,10 @@
     "/tka_submissions/{submissionId}": {
       "schema": "TKASubmission",
       "description": "Hasil ujian TKA siswa"
+    },
+    "/cbt_results/{resultId}": {
+      "schema": "CBTResult",
+      "description": "Hasil ujian CBT terisolasi per siswa per ujian"
     },
     "/attendance/{attendanceId}": {
       "schema": "Attendance",

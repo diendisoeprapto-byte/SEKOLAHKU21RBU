@@ -223,6 +223,7 @@ export interface CBTQuestion {
   subPaket?: string;
   mapel?: string;
   kelas?: string;
+  tingkatKesulitan?: 'Mudah' | 'Sedang' | 'Sulit' | 'Sukar';
 }
 
 export type TKAJenis =
@@ -303,6 +304,12 @@ export interface CBTExamResult {
   recordedAt?: number;
   tahunPelajaran?: string;
   semester?: string;
+  benarHots?: number;
+  totalHots?: number;
+  durasiDetik?: number;
+  jenjang?: string;
+  statusPengerjaan?: 'sedang_mengerjakan' | 'selesai';
+  updatedAt?: string;
 }
 
 export interface ExamResultsResetMeta {

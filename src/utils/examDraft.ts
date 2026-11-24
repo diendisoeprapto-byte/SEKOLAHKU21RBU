@@ -24,6 +24,7 @@ export interface StudentExamDraft {
   totalSeconds: number;
   runningQuestionOrder: QuestionOrderSnapshot[];
   isActiveSession: boolean;
+  examStartTimestamp?: number;
   updatedAt: string;
 }
 
@@ -44,6 +45,7 @@ export interface TKAExamRoomDraft {
   activeExamDurationSeconds: number;
   runningQuestionOrder: QuestionOrderSnapshot[];
   isActiveSession: boolean;
+  examStartTimestamp?: number;
   updatedAt: string;
 }
 

@@ -1359,6 +1359,11 @@ export interface TKASubmissionItem {
   status: 'Tuntas' | 'Remedial';
   tanggalUjian: string;
   durasiPengerjaan?: string;
+  durasiDetik?: number;
+  benarHots?: number;
+  totalHots?: number;
+  jenjang?: string;
+  statusPengerjaan?: 'sedang_mengerjakan' | 'selesai';
   tahunPelajaran?: string;
   semester?: string;
   updatedAt?: string;
