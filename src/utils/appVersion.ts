@@ -29,6 +29,15 @@ export interface ChangelogVersionItem {
 
 export const CHANGELOG_DATA: ChangelogVersionItem[] = [
   {
+    version: 'v4.3.3',
+    date: '26 November 2026',
+    title: 'Penyederhanaan Tampilan Badge Versi & Catatan Pembaruan',
+    highlights: [
+      'Penyederhanaan tampilan teks nomor versi pada footer menjadi "Versi 4.3.3" agar lebih ringkas, bersih, dan proporsional.',
+      'Fungsi interaktif tetap aktif sepenuhnya di mana pengguna dapat mengklik badge versi kapan saja untuk membuka modal Catatan Pembaruan (Changelog).',
+    ],
+  },
+  {
     version: 'v4.3.2',
     date: '26 November 2026',
     title: 'Standardisasi Otomatis Kode Kompetensi TKA Menjadi KOM',
@@ -111,11 +120,12 @@ export const CHANGELOG_LIST = CHANGELOG_DATA;
 
 // SUMBER KEBENARAN TUNGGAL DINAMIS BERDASARKAN ELEMEN TERATAS CHANGELOG_DATA:
 export const CURRENT_CHANGELOG_ITEM = CHANGELOG_DATA[0];
-export const APP_VERSION = CHANGELOG_DATA[0]?.version || 'v4.3.2';
+export const APP_VERSION = CHANGELOG_DATA[0]?.version || 'v4.3.3';
 export const RELEASE_DATE = CHANGELOG_DATA[0]?.date || '26 November 2026';
 export const RELEASE_DATE_SHORT = RELEASE_DATE.replace('November', 'Nov').replace('Desember', 'Des');
 export const APP_VERSION_NUMBER = APP_VERSION.replace(/^v/i, '');
-export const APP_VERSION_FOOTER_TEXT = `Versi ${APP_VERSION_NUMBER} • Klik untuk lihat pembaruan`;
+export const APP_VERSION_FOOTER_TEXT = `Versi ${APP_VERSION_NUMBER}`;
+export const APP_VERSION_TOOLTIP = 'Klik untuk melihat catatan pembaruan aplikasi SERBU 21';
 
 export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
 
