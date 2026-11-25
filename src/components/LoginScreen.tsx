@@ -632,8 +632,7 @@ export const LoginScreen: React.FC<Props> = ({
           >
             <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" aria-hidden="true" />
             <span>
-              SERBU 21 • <strong className="font-mono">{APP_VERSION}</strong> (Update:{' '}
-              {RELEASE_DATE_SHORT})
+              <strong className="font-mono">Versi {APP_VERSION.replace(/^v/i, '')}</strong> ({RELEASE_DATE_SHORT}) • Klik untuk lihat pembaruan
             </span>
             <History className="w-3 h-3 text-slate-400" />
           </button>

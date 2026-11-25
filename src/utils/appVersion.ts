@@ -5,12 +5,23 @@ export interface ChangelogVersionItem {
   highlights: string[];
 }
 
-export const APP_VERSION = 'v2.3.0';
-export const RELEASE_DATE = '24 November 2026';
-export const RELEASE_DATE_SHORT = '24 Nov 2026';
+export const APP_VERSION = 'v2.3.1';
+export const RELEASE_DATE = '25 November 2026';
+export const RELEASE_DATE_SHORT = '25 Nov 2026';
 export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
 
 export const CHANGELOG_LIST: ChangelogVersionItem[] = [
+  {
+    version: 'v2.3.1',
+    date: '25 November 2026',
+    title: 'Perbaikan Tata Letak Matriks Butir Soal, Analisis 5 Tab Ringkas & Penguncian Nilai TKA',
+    highlights: [
+      'Perbaikan tata letak header Matriks Analisis Butir Soal TKA & CBT agar judul dan deskripsi tampil leluasa di atas baris filter tanpa terjepit.',
+      'Tampilan Analisis TKA & CBT kini disusun lebih ringkas dalam 5 tab horizontal (Peringkat HOTS, Grafik Performa, Matriks Butir Soal, Distribusi Nilai, dan Tingkat Kesukaran).',
+      'Penguncian nilai resmi ujian TKA satu kali pengerjaan serta penyaringan ekspor Excel, PDF, dan Word sesuai kelas yang dipilih.',
+      'Pembaruan teks versi pada footer halaman Login agar langsung menampilkan ajakan klik untuk melihat catatan pembaruan.',
+    ],
+  },
   {
     version: 'v2.3.0',
     date: '24 November 2026',

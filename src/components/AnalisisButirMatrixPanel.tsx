@@ -178,12 +178,12 @@ export const AnalisisButirMatrixPanel: React.FC<AnalisisButirMatrixPanelProps> =
   return (
     <div className="bg-white rounded-3xl border border-slate-200 shadow-xs p-5 sm:p-6 space-y-5">
       {/* Header Controls */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-        <div className="space-y-1">
-          <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-500">
-            <span className="inline-flex items-center gap-1 text-slate-800 font-black">
-              <Grid className="w-3.5 h-3.5 text-emerald-600" />
-              Matriks Analisis Butir Soal {examType}
+      <div className="flex flex-col gap-4 border-b border-slate-100 pb-4">
+        <div className="space-y-1.5 min-w-0 w-full">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-bold text-slate-500">
+            <span className="inline-flex items-center gap-1.5 text-slate-800 font-black">
+              <Grid className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>Matriks Analisis Butir Soal {examType}</span>
             </span>
             <span aria-hidden="true">·</span>
             <span>{mapelLabel}</span>
@@ -194,84 +194,88 @@ export const AnalisisButirMatrixPanel: React.FC<AnalisisButirMatrixPanelProps> =
               {matrix.totalQuestions} Butir Soal (Dinamis 1–{matrix.totalQuestions || 0})
             </span>
           </div>
-          <h3 className="font-display font-black text-base sm:text-lg text-slate-900">
+          <h3 className="font-display font-black text-base sm:text-lg text-slate-900 leading-snug">
             Matriks Skor Per Nomor Soal, Nilai Akhir, Peringkat &amp; Distribusi Nilai
           </h3>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-slate-500 leading-relaxed max-w-4xl">
             Kolom <strong>JENIS PENILAIAN</strong>, <strong>NO. SOAL (1–{matrix.totalQuestions})</strong>, dan <strong>BOBOT</strong> menyesuaikan jumlah soal aktual tanpa angka statis.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0 no-print">
-          {mapelOptions && mapelOptions.length > 0 && onChangeMatrixMapel && (
-            <select
-              value={selectedMatrixMapel || mapelLabel}
-              onChange={(e) => onChangeMatrixMapel(e.target.value)}
-              className="px-3 py-2 rounded-xl border border-amber-300 bg-amber-50 text-xs font-black text-slate-800 outline-none cursor-pointer"
-              title="Pilih mata pelajaran untuk menampilkan matriks soalnya"
+        <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1 no-print">
+          <div className="flex flex-wrap items-center gap-2">
+            {mapelOptions && mapelOptions.length > 0 && onChangeMatrixMapel && (
+              <select
+                value={selectedMatrixMapel || mapelLabel}
+                onChange={(e) => onChangeMatrixMapel(e.target.value)}
+                className="px-3 py-2 rounded-xl border border-amber-300 bg-amber-50 text-xs font-black text-slate-800 outline-none cursor-pointer"
+                title="Pilih mata pelajaran untuk menampilkan matriks soalnya"
+              >
+                {mapelOptions.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {availableSubClasses.length > 1 && (
+              <select
+                value={classSubFilter}
+                onChange={(e) => setClassSubFilter(e.target.value)}
+                className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none cursor-pointer"
+              >
+                <option value="all">Semua Kelas ({eligibleStudents.length})</option>
+                {availableSubClasses.map((cls) => (
+                  <option key={cls} value={cls}>{cls}</option>
+                ))}
+              </select>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setSortBy((prev) => (prev === 'absen' ? 'rank' : 'absen'))}
+              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap"
             >
-              {mapelOptions.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          )}
+              <ArrowUpDown className="w-3.5 h-3.5" />
+              <span>Urutkan: {sortBy === 'absen' ? 'Nama / Kelas' : 'Peringkat'}</span>
+            </button>
 
-          {availableSubClasses.length > 1 && (
-            <select
-              value={classSubFilter}
-              onChange={(e) => setClassSubFilter(e.target.value)}
-              className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-800 outline-none cursor-pointer"
+            <button
+              type="button"
+              onClick={() => setIncludeUnsubmitted((prev) => !prev)}
+              className={`px-3 py-2 rounded-xl border text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap ${
+                includeUnsubmitted
+                  ? 'bg-sky-50 border-sky-300 text-sky-900'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+              }`}
             >
-              <option value="all">Semua Kelas ({eligibleStudents.length})</option>
-              {availableSubClasses.map((cls) => (
-                <option key={cls} value={cls}>{cls}</option>
-              ))}
-            </select>
-          )}
+              <Users className="w-3.5 h-3.5" />
+              <span>{includeUnsubmitted ? 'Sembunyikan Belum Ujian' : 'Tampilkan Belum Ujian'}</span>
+            </button>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setSortBy((prev) => (prev === 'absen' ? 'rank' : 'absen'))}
-            className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap"
-          >
-            <ArrowUpDown className="w-3.5 h-3.5" />
-            <span>Urutkan: {sortBy === 'absen' ? 'Nama / Kelas' : 'Peringkat'}</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              disabled={matrix.totalQuestions === 0}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-display font-black inline-flex items-center gap-1.5 cursor-pointer shadow-2xs transition whitespace-nowrap"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Export Excel Matriks</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setIncludeUnsubmitted((prev) => !prev)}
-            className={`px-3 py-2 rounded-xl border text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap ${
-              includeUnsubmitted
-                ? 'bg-sky-50 border-sky-300 text-sky-900'
-                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-            }`}
-          >
-            <Users className="w-3.5 h-3.5" />
-            <span>{includeUnsubmitted ? 'Sembunyikan Belum Ujian' : 'Tampilkan Belum Ujian'}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleExportExcel}
-            disabled={matrix.totalQuestions === 0}
-            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-display font-black inline-flex items-center gap-1.5 cursor-pointer shadow-2xs transition whitespace-nowrap"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>Export Excel Matriks</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => void handleExportPdf()}
-            disabled={matrix.totalQuestions === 0 || isExportingPdf}
-            className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-display font-black inline-flex items-center gap-1.5 cursor-pointer shadow-2xs transition whitespace-nowrap"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>{isExportingPdf ? 'Mencetak...' : 'Cetak PDF Matriks'}</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => void handleExportPdf()}
+              disabled={matrix.totalQuestions === 0 || isExportingPdf}
+              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-display font-black inline-flex items-center gap-1.5 cursor-pointer shadow-2xs transition whitespace-nowrap"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{isExportingPdf ? 'Mencetak...' : 'Cetak PDF Matriks'}</span>
+            </button>
+          </div>
         </div>
       </div>
 
