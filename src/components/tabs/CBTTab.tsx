@@ -4918,7 +4918,7 @@ export const CBTTab: React.FC<Props> = ({
                   if (newCpTitle.trim() && newCpDesc.trim()) {
                     const newSubj: Subject = {
                       id: `s_${activeClass.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}`,
-                      code: `CP-${Date.now().toString().slice(-4)}`,
+                      code: `KOM-${Date.now().toString().slice(-4)}`,
                       name: selectedMapel,
                       kategori: 'umum',
                       kktp: 75,

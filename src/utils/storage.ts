@@ -1187,16 +1187,25 @@ export const getStoredTKACpTp = (): TKACpTp[] => {
     const parsed: TKACpTp[] = JSON.parse(data);
     if (Array.isArray(parsed) && parsed.length > 0) {
       let mutated = false;
-      const sanitized = parsed.map((cp) => ({
-        ...cp,
-        tpList: (cp.tpList || []).map((tp) => {
-          if (tp.kodeTp && tp.kodeTp.startsWith('TP-')) {
-            mutated = true;
-            return { ...tp, kodeTp: tp.kodeTp.replace('TP-', 'SK-') };
-          }
-          return tp;
-        }),
-      }));
+      const sanitized = parsed.map((cp) => {
+        let kode = cp.kodeCp || '';
+        if (kode.toUpperCase().startsWith('CP') || kode.includes('CP')) {
+          kode = kode.replace(/^CP[-_]?/i, 'KOM-');
+          if (!kode.startsWith('KOM-')) kode = 'KOM-' + kode;
+          mutated = true;
+        }
+        return {
+          ...cp,
+          kodeCp: kode,
+          tpList: (cp.tpList || []).map((tp) => {
+            if (tp.kodeTp && tp.kodeTp.startsWith('TP-')) {
+              mutated = true;
+              return { ...tp, kodeTp: tp.kodeTp.replace('TP-', 'SK-') };
+            }
+            return tp;
+          }),
+        };
+      });
       const hasKka = sanitized.some(
         (c) => (c.mapel || '').toLowerCase().includes('koding') || (c.kodeCp || '').includes('KKA')
       );
