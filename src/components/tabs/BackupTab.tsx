@@ -42,6 +42,10 @@ import {
   syncDeletionLogFromCloud,
 } from '../../utils/cloudSync';
 import firebaseConfig from '../../../firebase-applet-config.json';
+import {
+  extractImageFilesFromClipboard,
+  extractImageFilesFromDataTransfer,
+} from '../../utils/imageDropPaste';
 
 interface Props {
   profile: SchoolProfile;
@@ -82,6 +86,7 @@ export const BackupTab: React.FC<Props> = ({
   const [isSyncing, setIsSyncing] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [isRestoringFile, setIsRestoringFile] = useState(false);
+  const [dragPhotoSlot, setDragPhotoSlot] = useState<'kemendikbud' | 'sekolah' | 'admin' | null>(null);
   const [cloudStatus, setCloudStatus] = useState<'connecting' | 'online' | 'error'>('connecting');
   const [cloudBackupMeta, setCloudBackupMeta] = useState<CloudBackupDocMeta | null>(null);
   const [cloudSyncMeta, setCloudSyncMeta] = useState<CloudSyncPayload | null>(null);
@@ -191,53 +196,65 @@ export const BackupTab: React.FC<Props> = ({
     }
   };
 
+  const processKemendikbudFile = async (file: File) => {
+    const compressed = await compressQuestionImage(file, {
+      maxWidth: 480,
+      maxHeight: 480,
+      quality: 0.85,
+    });
+    onSaveProfile({
+      ...profile,
+      logoKemendikbudUrl: compressed,
+    });
+    showToast('Logo Kemendikbud berhasil diperbarui & disinkronkan realtime!', 'success');
+  };
+
   const handleKemendikbudUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const compressed = await compressQuestionImage(file, {
-        maxWidth: 480,
-        maxHeight: 480,
-        quality: 0.85,
-      });
-      onSaveProfile({
-        ...profile,
-        logoKemendikbudUrl: compressed,
-      });
-      showToast('Logo Kemendikbud berhasil diperbarui & disinkronkan realtime!', 'success');
+      await processKemendikbudFile(file);
       e.target.value = '';
     }
+  };
+
+  const processSchoolLogoFile = async (file: File) => {
+    const compressed = await compressQuestionImage(file, {
+      maxWidth: 480,
+      maxHeight: 480,
+      quality: 0.85,
+    });
+    onSaveProfile({
+      ...profile,
+      logoSekolahUrl: compressed,
+    });
+    showToast('Logo Sekolah (Monas Edition) berhasil diperbarui & disinkronkan realtime!', 'success');
   };
 
   const handleSchoolLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const compressed = await compressQuestionImage(file, {
-        maxWidth: 480,
-        maxHeight: 480,
-        quality: 0.85,
-      });
-      onSaveProfile({
-        ...profile,
-        logoSekolahUrl: compressed,
-      });
-      showToast('Logo Sekolah (Monas Edition) berhasil diperbarui & disinkronkan realtime!', 'success');
+      await processSchoolLogoFile(file);
       e.target.value = '';
     }
+  };
+
+  const processAdminPhotoFile = async (file: File) => {
+    const compressed = await compressQuestionImage(file, {
+      maxWidth: 400,
+      maxHeight: 400,
+      quality: 0.82,
+    });
+    onSaveProfile({
+      ...profile,
+      adminFotoUrl: compressed,
+    });
+    showToast('Foto Profil Admin berhasil diperbarui & disinkronkan realtime!', 'success');
   };
 
   const handleAdminPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const compressed = await compressQuestionImage(file, {
-        maxWidth: 400,
-        maxHeight: 400,
-        quality: 0.82,
-      });
-      onSaveProfile({
-        ...profile,
-        adminFotoUrl: compressed,
-      });
-      showToast('Foto Profil Admin berhasil diperbarui & disinkronkan realtime!', 'success');
+      await processAdminPhotoFile(file);
       e.target.value = '';
     }
   };
@@ -411,13 +428,45 @@ export const BackupTab: React.FC<Props> = ({
 
         {/* 2 Logo & Foto Profil Admin Upload Section */}
         <div className="p-6 rounded-3xl bg-slate-50 border border-slate-200 space-y-4">
-          <h3 className="font-display font-black text-base text-slate-800 flex items-center gap-2">
-            <Image className="w-5 h-5 text-rose-600" /> Pengaturan Logo Resmi &amp; Foto Profil Admin
-          </h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-display font-black text-base text-slate-800 flex items-center gap-2">
+              <Image className="w-5 h-5 text-rose-600" /> Pengaturan Logo Resmi &amp; Foto Profil Admin
+            </h3>
+            <span className="text-[11px] font-semibold text-slate-500">
+              Seret &amp; lepas gambar ke kartu atau klik kartu lalu tekan <kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded text-[10px] font-mono">Ctrl+V</kbd>
+            </span>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Logo 1: Kemendikbud */}
-            <div className="p-5 rounded-2xl bg-white border border-slate-200 flex items-center gap-4">
+            <div
+              tabIndex={0}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragPhotoSlot('kemendikbud');
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragPhotoSlot(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragPhotoSlot(null);
+                const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                if (files[0]) void processKemendikbudFile(files[0]);
+              }}
+              onPaste={(e) => {
+                const files = extractImageFilesFromClipboard(e.clipboardData);
+                if (files[0]) {
+                  e.preventDefault();
+                  void processKemendikbudFile(files[0]);
+                }
+              }}
+              className={`p-5 rounded-2xl bg-white border flex items-center gap-4 outline-none transition ${
+                dragPhotoSlot === 'kemendikbud'
+                  ? 'border-sky-500 ring-2 ring-sky-300 bg-sky-50'
+                  : 'border-slate-200 focus:border-sky-400'
+              }`}
+            >
               <img
                 src={profile.logoKemendikbudUrl}
                 alt="Logo Kemendikbud"
@@ -436,7 +485,34 @@ export const BackupTab: React.FC<Props> = ({
             </div>
 
             {/* Logo 2: Sekolah Monas */}
-            <div className="p-5 rounded-2xl bg-white border border-slate-200 flex items-center gap-4">
+            <div
+              tabIndex={0}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragPhotoSlot('sekolah');
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragPhotoSlot(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragPhotoSlot(null);
+                const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                if (files[0]) void processSchoolLogoFile(files[0]);
+              }}
+              onPaste={(e) => {
+                const files = extractImageFilesFromClipboard(e.clipboardData);
+                if (files[0]) {
+                  e.preventDefault();
+                  void processSchoolLogoFile(files[0]);
+                }
+              }}
+              className={`p-5 rounded-2xl bg-white border flex items-center gap-4 outline-none transition ${
+                dragPhotoSlot === 'sekolah'
+                  ? 'border-rose-500 ring-2 ring-rose-300 bg-rose-50'
+                  : 'border-slate-200 focus:border-rose-400'
+              }`}
+            >
               <img
                 src={profile.logoSekolahUrl}
                 alt="Logo Sekolah"
@@ -455,7 +531,34 @@ export const BackupTab: React.FC<Props> = ({
             </div>
 
             {/* Foto Profil Admin */}
-            <div className="p-5 rounded-2xl bg-white border border-slate-200 flex items-center gap-4">
+            <div
+              tabIndex={0}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragPhotoSlot('admin');
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragPhotoSlot(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragPhotoSlot(null);
+                const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                if (files[0]) void processAdminPhotoFile(files[0]);
+              }}
+              onPaste={(e) => {
+                const files = extractImageFilesFromClipboard(e.clipboardData);
+                if (files[0]) {
+                  e.preventDefault();
+                  void processAdminPhotoFile(files[0]);
+                }
+              }}
+              className={`p-5 rounded-2xl bg-white border flex items-center gap-4 outline-none transition ${
+                dragPhotoSlot === 'admin'
+                  ? 'border-amber-500 ring-2 ring-amber-300 bg-amber-50'
+                  : 'border-slate-200 focus:border-amber-400'
+              }`}
+            >
               <img
                 src={profile.adminFotoUrl || profile.logoSekolahUrl}
                 alt="Foto Profil Admin"

@@ -189,6 +189,10 @@ import {
   SarahAnalysisHardestQuestion,
   SarahAnalysisStudentRow,
 } from '../SarahExamAnalysisPanel';
+import {
+  extractImageFilesFromClipboard,
+  extractImageFilesFromDataTransfer,
+} from '../../utils/imageDropPaste';
 
 function slugifyTkaId(val: string): string {
   return String(val || '')
@@ -899,6 +903,7 @@ export const TKATabs: React.FC<Props> = ({
   const [formOpsiGambar, setFormOpsiGambar] = useState<Record<string, string>>({});
   const [formBobot, setFormBobot] = useState(10);
   const [showTkaFractionBuilder, setShowTkaFractionBuilder] = useState(false);
+  const [dragTkaSlot, setDragTkaSlot] = useState<string | null>(null);
   const [formDurasiMenit, setFormDurasiMenit] = useState<number>(() =>
     getTKADurationMinutes(getStoredTKADurations(), 'Simulasi 1', 'Bahasa Indonesia')
   );
@@ -1631,15 +1636,25 @@ export const TKATabs: React.FC<Props> = ({
     showToast(`Simbol "${symbol.trim()}" disisipkan ke Opsi ${optKey}!`, 'success');
   };
 
+  const processTkaQuestionImage = async (file: File, slot: 1 | 2) => {
+    try {
+      const compressed = await compressQuestionImage(file, { maxWidth: 960, maxHeight: 720, quality: 0.78 });
+      if (slot === 1) {
+        setFormGambarUrl(compressed);
+      } else {
+        setFormGambarUrl2(compressed);
+      }
+      showToast(`Gambar ${slot} soal berhasil dimuat & dioptimalkan!`, 'success');
+    } catch {
+      showToast(`Gagal memproses gambar ${slot} soal.`, 'error');
+    }
+  };
+
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const compressed = await compressQuestionImage(file, { maxWidth: 960, maxHeight: 720, quality: 0.78 });
-      setFormGambarUrl(compressed);
-      showToast('Gambar 1 soal berhasil dimuat & dioptimalkan!', 'success');
-    } catch {
-      showToast('Gagal memproses gambar 1 soal.', 'error');
+      await processTkaQuestionImage(file, 1);
     } finally {
       e.target.value = '';
     }
@@ -1649,11 +1664,7 @@ export const TKATabs: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const compressed = await compressQuestionImage(file, { maxWidth: 960, maxHeight: 720, quality: 0.78 });
-      setFormGambarUrl2(compressed);
-      showToast('Gambar 2 soal berhasil dimuat & dioptimalkan!', 'success');
-    } catch {
-      showToast('Gagal memproses gambar 2 soal.', 'error');
+      await processTkaQuestionImage(file, 2);
     } finally {
       e.target.value = '';
     }
@@ -3922,6 +3933,14 @@ export const TKATabs: React.FC<Props> = ({
                   value={formPertanyaan}
                   onChange={(e) => setFormPertanyaan(e.target.value)}
                   onPaste={(e) => {
+                    const clipImages = extractImageFilesFromClipboard(e.clipboardData);
+                    const plainText = e.clipboardData?.getData('text/plain')?.trim() || '';
+                    if (clipImages.length > 0 && !plainText) {
+                      e.preventDefault();
+                      const targetSlot: 1 | 2 = !formGambarUrl ? 1 : 2;
+                      void processTkaQuestionImage(clipImages[0], targetSlot);
+                      return;
+                    }
                     const extracted = extractPastedQuestionText(e);
                     if (extracted !== null) {
                       e.preventDefault();
@@ -3933,7 +3952,7 @@ export const TKATabs: React.FC<Props> = ({
                       showToast('Teks rata tengah dari salinan otomatis terdeteksi sebagai Judul terpisah!', 'success');
                     }
                   }}
-                  placeholder="Tuliskan soal atau bacaan. Tekan Enter beberapa kali untuk jarak antar paragraf, ketik 2/5 atau gunakan Format Pecahan / ° Derajat agar tampil rapi..."
+                  placeholder="Tuliskan soal atau bacaan. Tekan Enter beberapa kali untuk jarak antar paragraf, ketik 2/5 atau gunakan Format Pecahan / ° Derajat, atau tempel gambar (Ctrl+V)..."
                   className="w-full p-3 rounded-2xl border border-slate-300 text-xs text-slate-800 placeholder:text-slate-400 outline-none focus:border-rose-400 leading-relaxed"
                 />
               </div>
@@ -3941,16 +3960,51 @@ export const TKATabs: React.FC<Props> = ({
               {/* Upload Gambar Column: 2 Slots (Side-by-Side) + Posisi Gambar */}
               <div className="lg:col-span-4 space-y-2">
                 <label className="text-xs font-semibold text-slate-700 block">
-                  Upload Gambar Soal (Maks. 2 Gambar Bersebelahan):
+                  Upload Gambar Soal (Maks. 2 Gambar • Seret / Ctrl+V):
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   {/* Gambar 1 */}
-                  <div className="p-2 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div
+                    tabIndex={0}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDragTkaSlot('slot1');
+                    }}
+                    onDragLeave={() => setDragTkaSlot(null)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragTkaSlot(null);
+                      const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                      if (files[0]) {
+                        void processTkaQuestionImage(files[0], 1);
+                      } else {
+                        showToast('Seret file gambar yang valid untuk Gambar 1!', 'error');
+                      }
+                    }}
+                    onPaste={(e) => {
+                      const files = extractImageFilesFromClipboard(e.clipboardData);
+                      if (files[0]) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void processTkaQuestionImage(files[0], 1);
+                      }
+                    }}
+                    className={`p-2 rounded-xl border-2 border-dashed transition outline-none focus:ring-2 focus:ring-rose-300 space-y-1.5 ${
+                      dragTkaSlot === 'slot1'
+                        ? 'border-rose-500 bg-rose-50'
+                        : 'border-slate-200 bg-white hover:border-rose-300'
+                    }`}
+                  >
                     <span className="text-[10px] font-bold text-slate-600 block">Gambar 1 (Kiri)</span>
                     <label className="inline-flex items-center gap-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] px-2.5 py-1.5 rounded-lg cursor-pointer shadow-xs transition w-full justify-center">
                       <ImageIcon className="w-3.5 h-3.5" /> Pilih File
                       <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                     </label>
+                    {!formGambarUrl && (
+                      <p className="text-[9px] text-slate-400 text-center font-semibold leading-tight">
+                        Seret / klik lalu Ctrl+V
+                      </p>
+                    )}
                     {formGambarUrl && (
                       <div className="relative mt-1">
                         <img
@@ -3971,12 +4025,47 @@ export const TKATabs: React.FC<Props> = ({
                   </div>
 
                   {/* Gambar 2 */}
-                  <div className="p-2 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                  <div
+                    tabIndex={0}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDragTkaSlot('slot2');
+                    }}
+                    onDragLeave={() => setDragTkaSlot(null)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragTkaSlot(null);
+                      const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                      if (files[0]) {
+                        void processTkaQuestionImage(files[0], 2);
+                      } else {
+                        showToast('Seret file gambar yang valid untuk Gambar 2!', 'error');
+                      }
+                    }}
+                    onPaste={(e) => {
+                      const files = extractImageFilesFromClipboard(e.clipboardData);
+                      if (files[0]) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void processTkaQuestionImage(files[0], 2);
+                      }
+                    }}
+                    className={`p-2 rounded-xl border-2 border-dashed transition outline-none focus:ring-2 focus:ring-rose-300 space-y-1.5 ${
+                      dragTkaSlot === 'slot2'
+                        ? 'border-rose-500 bg-rose-50'
+                        : 'border-slate-200 bg-white hover:border-rose-300'
+                    }`}
+                  >
                     <span className="text-[10px] font-bold text-slate-600 block">Gambar 2 (Kanan)</span>
                     <label className="inline-flex items-center gap-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] px-2.5 py-1.5 rounded-lg cursor-pointer shadow-xs transition w-full justify-center">
                       <ImageIcon className="w-3.5 h-3.5" /> Pilih File
                       <input type="file" accept="image/*" onChange={handleImageUpload2} className="hidden" />
                     </label>
+                    {!formGambarUrl2 && (
+                      <p className="text-[9px] text-slate-400 text-center font-semibold leading-tight">
+                        Seret / klik lalu Ctrl+V
+                      </p>
+                    )}
                     {formGambarUrl2 && (
                       <div className="relative mt-1">
                         <img
@@ -4098,7 +4187,38 @@ export const TKATabs: React.FC<Props> = ({
                       { key: 'C', val: pgOptionC, setVal: setPgOptionC },
                       { key: 'D', val: pgOptionD, setVal: setPgOptionD },
                     ].map(({ key, val, setVal }) => (
-                      <div key={key} className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-2">
+                      <div
+                        key={key}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          setDragTkaSlot(`pg_${key}`);
+                        }}
+                        onDragLeave={() => setDragTkaSlot(null)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setDragTkaSlot(null);
+                          const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                          if (files[0]) {
+                            void handleOptionImageUpload(key, files[0]);
+                          } else {
+                            showToast(`Seret file gambar yang valid untuk Opsi ${key}!`, 'error');
+                          }
+                        }}
+                        onPaste={(e) => {
+                          const files = extractImageFilesFromClipboard(e.clipboardData);
+                          const plainText = e.clipboardData?.getData('text/plain')?.trim() || '';
+                          if (files[0] && !plainText) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void handleOptionImageUpload(key, files[0]);
+                          }
+                        }}
+                        className={`p-2.5 rounded-xl border transition space-y-2 ${
+                          dragTkaSlot === `pg_${key}`
+                            ? 'border-rose-500 bg-rose-50 ring-2 ring-rose-200'
+                            : 'border-slate-200 bg-white'
+                        }`}
+                      >
                         <div className="flex items-center gap-2">
                           <input
                             type="radio"
@@ -4115,10 +4235,10 @@ export const TKATabs: React.FC<Props> = ({
                             type="text"
                             value={val}
                             onChange={(e) => setVal(e.target.value)}
-                            placeholder={`Teks Opsi ${key}`}
+                            placeholder={`Teks Opsi ${key} (atau seret / Ctrl+V gambar)`}
                             className="flex-1 px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-medium outline-none focus:border-rose-400"
                           />
-                          <label className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 cursor-pointer transition" title={`Upload Gambar Opsi ${key}`}>
+                          <label className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 cursor-pointer transition" title={`Upload / Seret Gambar Opsi ${key}`}>
                             <ImageIcon className="w-4 h-4 text-rose-600" />
                             <input
                               type="file"
@@ -4126,6 +4246,7 @@ export const TKATabs: React.FC<Props> = ({
                               onChange={(e) => {
                                 const f = e.target.files?.[0];
                                 if (f) handleOptionImageUpload(key, f);
+                                e.target.value = '';
                               }}
                               className="hidden"
                             />
@@ -4156,13 +4277,44 @@ export const TKATabs: React.FC<Props> = ({
 
               {formTipe === 'pg_kompleks' && (
                 <div className="space-y-3">
-                  <div className="text-xs font-bold text-slate-700">Pilihan Jawaban Kompleks (Centang Semua Kunci Benar & gambar opsi):</div>
+                  <div className="text-xs font-bold text-slate-700">Pilihan Jawaban Kompleks (Centang Semua Kunci Benar • Seret / Ctrl+V gambar opsi):</div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {['A', 'B', 'C', 'D'].map((key) => {
                       const val = key === 'A' ? pgOptionA : key === 'B' ? pgOptionB : key === 'C' ? pgOptionC : pgOptionD;
                       const setVal = key === 'A' ? setPgOptionA : key === 'B' ? setPgOptionB : key === 'C' ? setPgOptionC : setPgOptionD;
                       return (
-                        <div key={key} className="p-2.5 rounded-xl border border-slate-200 bg-white space-y-2">
+                        <div
+                          key={key}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            setDragTkaSlot(`pgk_${key}`);
+                          }}
+                          onDragLeave={() => setDragTkaSlot(null)}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setDragTkaSlot(null);
+                            const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                            if (files[0]) {
+                              void handleOptionImageUpload(key, files[0]);
+                            } else {
+                              showToast(`Seret file gambar yang valid untuk Opsi ${key}!`, 'error');
+                            }
+                          }}
+                          onPaste={(e) => {
+                            const files = extractImageFilesFromClipboard(e.clipboardData);
+                            const plainText = e.clipboardData?.getData('text/plain')?.trim() || '';
+                            if (files[0] && !plainText) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              void handleOptionImageUpload(key, files[0]);
+                            }
+                          }}
+                          className={`p-2.5 rounded-xl border transition space-y-2 ${
+                            dragTkaSlot === `pgk_${key}`
+                              ? 'border-rose-500 bg-rose-50 ring-2 ring-rose-200'
+                              : 'border-slate-200 bg-white'
+                          }`}
+                        >
                           <div className="flex items-center gap-2">
                             <input
                               type="checkbox"
@@ -4175,10 +4327,10 @@ export const TKATabs: React.FC<Props> = ({
                               type="text"
                               value={val}
                               onChange={(e) => setVal(e.target.value)}
-                              placeholder={`Teks Opsi ${key}`}
+                              placeholder={`Teks Opsi ${key} (atau seret / Ctrl+V gambar)`}
                               className="flex-1 px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-medium outline-none focus:border-rose-400"
                             />
-                            <label className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 cursor-pointer transition" title={`Upload Gambar Opsi ${key}`}>
+                            <label className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 cursor-pointer transition" title={`Upload / Seret Gambar Opsi ${key}`}>
                               <ImageIcon className="w-4 h-4 text-rose-600" />
                               <input
                                 type="file"
@@ -4186,6 +4338,7 @@ export const TKATabs: React.FC<Props> = ({
                                 onChange={(e) => {
                                   const f = e.target.files?.[0];
                                   if (f) handleOptionImageUpload(key, f);
+                                  e.target.value = '';
                                 }}
                                 className="hidden"
                               />

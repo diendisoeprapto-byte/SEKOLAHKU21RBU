@@ -5,12 +5,22 @@ export interface ChangelogVersionItem {
   highlights: string[];
 }
 
-export const APP_VERSION = 'v2.3.1';
+export const APP_VERSION = 'v2.4.0';
 export const RELEASE_DATE = '25 November 2026';
 export const RELEASE_DATE_SHORT = '25 Nov 2026';
 export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
 
 export const CHANGELOG_LIST: ChangelogVersionItem[] = [
+  {
+    version: 'v2.4.0',
+    date: '25 November 2026',
+    title: 'Upload Foto & Gambar Kini Mendukung Drag & Drop serta Copy-Paste (Ctrl+V)',
+    highlights: [
+      'Seluruh area upload foto & gambar (Foto Layar Login, Profil Admin & Logo Sekolah, Foto Guru/Tendik, Foto Siswa, dan Lembar Stiker SARAH) kini mendukung seret & lepas (Drag & Drop) maupun tempel langsung (Ctrl+V / Cmd+V).',
+      'Penyusunan Soal CBT & TKA mendukung drag-and-drop serta tempel gambar (Ctrl+V) langsung pada kolom pertanyaan, slot Gambar 1 & Gambar 2, maupun tiap opsi pilihan jawaban (A–D).',
+      'Pemindai Absensi Barcode & Wajah (Face ID) serta modal pendaftaran wajah siswa mendukung drag-and-drop dan paste foto untuk pemindaian maupun registrasi cepat.',
+    ],
+  },
   {
     version: 'v2.3.1',
     date: '25 November 2026',

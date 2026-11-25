@@ -24,6 +24,11 @@ import {
   saveCustomEndiStickersToIndexedDb,
   sliceStickerSheet2x3,
 } from '../utils/sarahStickerStorage';
+import {
+  extractImageFilesFromClipboard,
+  extractImageFilesFromDataTransfer,
+  useWindowImagePaste,
+} from '../utils/imageDropPaste';
 
 interface Props {
   showToast: (msg: string, type?: 'success' | 'error') => void;
@@ -152,6 +157,7 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
   const [isSlicing, setIsSlicing] = useState(false);
   const [isSavingIdb, setIsSavingIdb] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDraggingSheet, setIsDraggingSheet] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const syncSavedFromStorage = () => {
@@ -176,7 +182,7 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
     };
   }, [queuedSheets]);
 
-  const handleSelectFiles = (files: FileList | null) => {
+  const handleSelectFiles = (files: FileList | File[] | null) => {
     if (!files || files.length === 0) return;
     const validFiles = Array.from(files).filter((f) => f.type.startsWith('image/'));
     if (validFiles.length === 0) {
@@ -196,6 +202,11 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
     });
     setQueuedSheets((prev) => [...prev, ...nextItems]);
   };
+
+  useWindowImagePaste({
+    enabled: true,
+    onImageFiles: (files) => handleSelectFiles(files),
+  });
 
   const handleUpdateSheetStart = (sheetId: string, startNum: number) => {
     setQueuedSheets((prev) =>
@@ -364,7 +375,33 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
             </select>
           </div>
 
-          <div className="md:col-span-5">
+          <div
+            className="md:col-span-5"
+            tabIndex={0}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDraggingSheet(true);
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setIsDraggingSheet(false);
+              }
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDraggingSheet(false);
+              const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+              handleSelectFiles(files);
+            }}
+            onPaste={(e) => {
+              const files = extractImageFilesFromClipboard(e.clipboardData);
+              if (files.length > 0) {
+                e.preventDefault();
+                e.stopPropagation();
+                handleSelectFiles(files);
+              }
+            }}
+          >
             <input
               ref={fileInputRef}
               type="file"
@@ -376,10 +413,15 @@ export const SarahStickerSlicerPanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="w-full py-2.5 px-4 rounded-xl border-2 border-dashed border-rose-300 bg-rose-50/70 hover:bg-rose-100 text-rose-800 font-display font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+              className={`w-full py-2.5 px-4 rounded-xl border-2 border-dashed font-display font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer ${
+                isDraggingSheet
+                  ? 'border-rose-500 bg-rose-100 text-rose-900 ring-2 ring-rose-300'
+                  : 'border-rose-300 bg-rose-50/70 hover:bg-rose-100 text-rose-800'
+              }`}
+              title="Klik, seret & lepas gambar, atau tekan Ctrl+V"
             >
-              <ImagePlus className="w-4 h-4" />
-              <span>Pilih Lembar Stiker Grid 2×3 (Multi-File)</span>
+              <ImagePlus className="w-4 h-4 shrink-0" />
+              <span>Pilih / Seret / Ctrl+V Lembar Stiker 2×3</span>
             </button>
           </div>
 

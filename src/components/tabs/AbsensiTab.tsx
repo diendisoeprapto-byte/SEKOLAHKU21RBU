@@ -79,6 +79,11 @@ import { Student, KaldikDay } from '../../types';
 import { AttendanceRecordItem } from '../../utils/storage';
 import { formatTanggalIndo, getLocalTimeStr, parseLocalDate } from '../../utils/dateUtils';
 import { TabId } from '../Sidebar';
+import {
+  extractImageFilesFromClipboard,
+  extractImageFilesFromDataTransfer,
+  useWindowImagePaste,
+} from '../../utils/imageDropPaste';
 
 interface Props {
   students: Student[];
@@ -405,6 +410,7 @@ export const AbsensiTab: React.FC<Props> = ({
   const [enrollSearch, setEnrollSearch] = useState<string>('');
   const [isEnrollingCamera, setIsEnrollingCamera] = useState(false);
   const [enrollProgressText, setEnrollProgressText] = useState<string>('');
+  const [dragScanTarget, setDragScanTarget] = useState<'dual_or_barcode' | 'face_scan' | 'face_enroll' | null>(null);
 
   const faceVideoRef = useRef<HTMLVideoElement | null>(null);
   const faceCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1265,13 +1271,9 @@ export const AbsensiTab: React.FC<Props> = ({
     };
   }, [faceCameraActive, scanMode, faceThreshold, dualVerifyRule, autoSubmitFaceAttendance]);
 
-  // Scan Face from Uploaded Photo File
-  const handleScanFaceFromFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processFaceScanFile = async (file: File) => {
     if (faceCandidatesRef.current.length === 0) {
       showToast('Belum ada data wajah siswa yang terdaftar. Daftarkan wajah terlebih dahulu.', 'error');
-      if (faceFileInputRef.current) faceFileInputRef.current.value = '';
       return;
     }
 
@@ -1308,6 +1310,16 @@ export const AbsensiTab: React.FC<Props> = ({
       showToast('Gagal memproses foto wajah.', 'error');
     } finally {
       setIsScanningFaceFile(false);
+    }
+  };
+
+  // Scan Face from Uploaded Photo File
+  const handleScanFaceFromFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await processFaceScanFile(file);
+    } finally {
       if (faceFileInputRef.current) faceFileInputRef.current.value = '';
     }
   };
@@ -1472,14 +1484,10 @@ export const AbsensiTab: React.FC<Props> = ({
     }
   };
 
-  // Enroll student face from uploaded image file
-  const handleEnrollFaceFromFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processEnrollFaceFile = async (file: File) => {
     const target = students.find((s) => s.id === enrollStudentId);
     if (!target) {
       showToast('Pilih siswa terlebih dahulu.', 'error');
-      if (enrollFileInputRef.current) enrollFileInputRef.current.value = '';
       return;
     }
 
@@ -1514,6 +1522,23 @@ export const AbsensiTab: React.FC<Props> = ({
     } finally {
       setIsEnrollingCamera(false);
       setEnrollProgressText('');
+    }
+  };
+
+  useWindowImagePaste({
+    enabled: isFaceEnrollModalOpen,
+    onImageFiles: (files) => {
+      if (files[0]) void processEnrollFaceFile(files[0]);
+    },
+  });
+
+  // Enroll student face from uploaded image file
+  const handleEnrollFaceFromFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await processEnrollFaceFile(file);
+    } finally {
       if (enrollFileInputRef.current) enrollFileInputRef.current.value = '';
     }
   };
@@ -1527,20 +1552,31 @@ export const AbsensiTab: React.FC<Props> = ({
     showToast(`Data wajah ${target?.nama || 'siswa'} dihapus.`, 'success');
   };
 
-  // Scan from uploaded file / photo
-  const handleFileUploadScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processBarcodeScanFile = async (file: File) => {
     setIsScanningFile(true);
     try {
       const decodedText = await scanBarcodeFromImageFile('temp-barcode-reader-helper', file);
       barcodeDetectedRef.current(decodedText);
     } catch {
+      if (scanMode === 'dual' && faceCandidatesRef.current.length > 0) {
+        setIsScanningFile(false);
+        await processFaceScanFile(file);
+        return;
+      }
       playBeep('error');
       showToast('Tidak ditemukan barcode yang terbaca pada foto ini.', 'error');
     } finally {
       setIsScanningFile(false);
+    }
+  };
+
+  // Scan from uploaded file / photo
+  const handleFileUploadScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await processBarcodeScanFile(file);
+    } finally {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -2142,8 +2178,36 @@ export const AbsensiTab: React.FC<Props> = ({
             {/* Single Camera Viewport for Unified Mode ('dual') & Barcode-Only Mode ('barcode') */}
             {(scanMode === 'dual' || scanMode === 'barcode') && (
               <div
-                className={`relative rounded-3xl overflow-hidden bg-slate-950 border-4 shadow-inner flex flex-col items-center justify-center text-white min-h-[270px] ${
-                  scanMode === 'dual' ? 'border-purple-400' : 'border-emerald-400'
+                tabIndex={0}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragScanTarget('dual_or_barcode');
+                }}
+                onDragLeave={() => setDragScanTarget(null)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragScanTarget(null);
+                  const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                  if (files[0]) {
+                    void processBarcodeScanFile(files[0]);
+                  } else {
+                    showToast('Seret file gambar barcode atau wajah yang valid!', 'error');
+                  }
+                }}
+                onPaste={(e) => {
+                  const files = extractImageFilesFromClipboard(e.clipboardData);
+                  if (files[0]) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void processBarcodeScanFile(files[0]);
+                  }
+                }}
+                className={`relative rounded-3xl overflow-hidden bg-slate-950 border-4 shadow-inner flex flex-col items-center justify-center text-white min-h-[270px] outline-none focus:ring-2 focus:ring-emerald-300 transition ${
+                  dragScanTarget === 'dual_or_barcode'
+                    ? 'border-amber-400 ring-4 ring-amber-300/60'
+                    : scanMode === 'dual'
+                    ? 'border-purple-400'
+                    : 'border-emerald-400'
                 }`}
               >
                 <div
@@ -2267,6 +2331,9 @@ export const AbsensiTab: React.FC<Props> = ({
                         </>
                       )}
                     </div>
+                    <p className="text-[10px] text-slate-400 font-semibold">
+                      Atau seret (Drag &amp; Drop) / klik lalu tempel (<span className="font-mono text-white">Ctrl+V</span>) foto kartu di kotak ini
+                    </p>
                   </div>
                 )}
               </div>
@@ -2277,7 +2344,37 @@ export const AbsensiTab: React.FC<Props> = ({
               <div className="space-y-3">
                 {/* Standalone Face Camera box ONLY shown in 'Wajah Saja' mode (Unified mode shares the single camera above) */}
                 {scanMode === 'face' && (
-                  <div className="relative rounded-3xl overflow-hidden bg-slate-950 border-4 border-indigo-400 min-h-[270px] shadow-inner flex flex-col items-center justify-center text-white">
+                  <div
+                    tabIndex={0}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDragScanTarget('face_scan');
+                    }}
+                    onDragLeave={() => setDragScanTarget(null)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragScanTarget(null);
+                      const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                      if (files[0]) {
+                        void processFaceScanFile(files[0]);
+                      } else {
+                        showToast('Seret file foto wajah yang valid (PNG, JPG, WEBP)!', 'error');
+                      }
+                    }}
+                    onPaste={(e) => {
+                      const files = extractImageFilesFromClipboard(e.clipboardData);
+                      if (files[0]) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void processFaceScanFile(files[0]);
+                      }
+                    }}
+                    className={`relative rounded-3xl overflow-hidden bg-slate-950 border-4 min-h-[270px] shadow-inner flex flex-col items-center justify-center text-white outline-none focus:ring-2 focus:ring-indigo-300 transition ${
+                      dragScanTarget === 'face_scan'
+                        ? 'border-amber-400 ring-4 ring-amber-300/60'
+                        : 'border-indigo-400'
+                    }`}
+                  >
                     <video
                       ref={faceVideoRef}
                       autoPlay
@@ -2351,6 +2448,9 @@ export const AbsensiTab: React.FC<Props> = ({
                             <span>{isScanningFaceFile ? 'Mengenali...' : 'Foto Wajah'}</span>
                           </button>
                         </div>
+                        <p className="text-[10px] text-slate-400 font-semibold">
+                          Atau seret (Drag &amp; Drop) / klik lalu tempel (<span className="font-mono text-white">Ctrl+V</span>) foto wajah di sini
+                        </p>
                       </div>
                     )}
                   </div>
@@ -3405,7 +3505,35 @@ export const AbsensiTab: React.FC<Props> = ({
 
               <div className="p-5 overflow-y-auto grid grid-cols-1 md:grid-cols-12 gap-5">
                 {/* Left: Camera / Upload Capture for Selected Student */}
-                <div className="md:col-span-7 space-y-3">
+                <div
+                  tabIndex={0}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragScanTarget('face_enroll');
+                  }}
+                  onDragLeave={() => setDragScanTarget(null)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragScanTarget(null);
+                    const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                    if (files[0]) {
+                      void processEnrollFaceFile(files[0]);
+                    } else {
+                      showToast('Seret file foto wajah yang valid (PNG, JPG, WEBP)!', 'error');
+                    }
+                  }}
+                  onPaste={(e) => {
+                    const files = extractImageFilesFromClipboard(e.clipboardData);
+                    if (files[0]) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      void processEnrollFaceFile(files[0]);
+                    }
+                  }}
+                  className={`md:col-span-7 space-y-3 rounded-2xl p-2 -m-2 transition outline-none ${
+                    dragScanTarget === 'face_enroll' ? 'bg-indigo-50 ring-2 ring-indigo-500' : ''
+                  }`}
+                >
                   <div className="relative rounded-2xl overflow-hidden bg-slate-950 border-2 border-indigo-400 h-56 flex items-center justify-center">
                     <video
                       ref={enrollVideoRef}
@@ -3488,6 +3616,9 @@ export const AbsensiTab: React.FC<Props> = ({
                       </button>
                     )}
                   </div>
+                  <p className="text-[11px] text-slate-500 font-semibold">
+                    Tips: Anda juga dapat menyeret (Drag &amp; Drop) atau menekan <span className="font-mono font-bold text-slate-700">Ctrl+V</span> foto wajah siswa langsung ke panel ini.
+                  </p>
                 </div>
 
                 {/* Right: Student Selector List */}

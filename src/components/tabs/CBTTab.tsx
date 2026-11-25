@@ -110,6 +110,10 @@ import {
 import { evaluateQuestionScore } from '../../utils/answerChecker';
 import { parseQuestionsFromDocx } from '../../utils/docxImporter';
 import { compressQuestionImage } from '../../utils/imageUtils';
+import {
+  extractImageFilesFromClipboard,
+  extractImageFilesFromDataTransfer,
+} from '../../utils/imageDropPaste';
 import { QuestionContent } from '../QuestionContent';
 import { FractionBuilderBar } from '../FormattedMathText';
 import { MathRenderer } from '../MathRenderer';
@@ -484,6 +488,7 @@ export const CBTTab: React.FC<Props> = ({
   const [posisiGambar, setPosisiGambar] = useState<PosisiGambar>('bawah_judul');
   const [bobotPoin, setBobotPoin] = useState(10);
   const [showFractionBuilder, setShowFractionBuilder] = useState(false);
+  const [dragCbtSlot, setDragCbtSlot] = useState<string | null>(null);
   const pertanyaanTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Options for PG & images for options
@@ -902,16 +907,36 @@ export const CBTTab: React.FC<Props> = ({
     showToast(`Simbol "${symbol.trim()}" disisipkan ke Opsi ${optKey}!`, 'success');
   };
 
+  const processCbtQuestionImage = async (file: File, slot: 1 | 2) => {
+    try {
+      const compressed = await compressQuestionImage(file, { maxWidth: 960, maxHeight: 720, quality: 0.78 });
+      if (slot === 1) {
+        setGambarUrl(compressed);
+      } else {
+        setGambarUrl2(compressed);
+      }
+      showToast(`Gambar ${slot} soal berhasil diunggah & dioptimalkan!`, 'success');
+    } catch {
+      showToast(`Gagal memproses gambar ${slot} soal.`, 'error');
+    }
+  };
+
+  const processCbtOptionImage = async (key: 'A' | 'B' | 'C' | 'D', file: File) => {
+    try {
+      const compressed = await compressQuestionImage(file, { maxWidth: 640, maxHeight: 480, quality: 0.78 });
+      setOpsiGambar((prev) => ({ ...prev, [key]: compressed }));
+      showToast(`Gambar untuk Opsi ${key} berhasil diunggah!`, 'success');
+    } catch {
+      showToast(`Gagal memproses gambar untuk Opsi ${key}.`, 'error');
+    }
+  };
+
   // Handle image upload 1 (compressed for 50-question package safety)
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const compressed = await compressQuestionImage(file, { maxWidth: 960, maxHeight: 720, quality: 0.78 });
-      setGambarUrl(compressed);
-      showToast('Gambar 1 soal berhasil diunggah & dioptimalkan!', 'success');
-    } catch {
-      showToast('Gagal memproses gambar 1 soal.', 'error');
+      await processCbtQuestionImage(file, 1);
     } finally {
       e.target.value = '';
     }
@@ -922,11 +947,7 @@ export const CBTTab: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const compressed = await compressQuestionImage(file, { maxWidth: 960, maxHeight: 720, quality: 0.78 });
-      setGambarUrl2(compressed);
-      showToast('Gambar 2 soal berhasil diunggah & dioptimalkan!', 'success');
-    } catch {
-      showToast('Gagal memproses gambar 2 soal.', 'error');
+      await processCbtQuestionImage(file, 2);
     } finally {
       e.target.value = '';
     }
@@ -937,11 +958,7 @@ export const CBTTab: React.FC<Props> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const compressed = await compressQuestionImage(file, { maxWidth: 640, maxHeight: 480, quality: 0.78 });
-      setOpsiGambar((prev) => ({ ...prev, [key]: compressed }));
-      showToast(`Gambar untuk Opsi ${key} berhasil diunggah!`, 'success');
-    } catch {
-      showToast(`Gagal memproses gambar untuk Opsi ${key}.`, 'error');
+      await processCbtOptionImage(key, file);
     } finally {
       e.target.value = '';
     }
@@ -2093,6 +2110,14 @@ export const CBTTab: React.FC<Props> = ({
                     value={pertanyaan}
                     onChange={(e) => setPertanyaan(e.target.value)}
                     onPaste={(e) => {
+                      const clipImages = extractImageFilesFromClipboard(e.clipboardData);
+                      const plainText = e.clipboardData?.getData('text/plain')?.trim() || '';
+                      if (clipImages.length > 0 && !plainText) {
+                        e.preventDefault();
+                        const targetSlot: 1 | 2 = !gambarUrl ? 1 : 2;
+                        void processCbtQuestionImage(clipImages[0], targetSlot);
+                        return;
+                      }
                       const extracted = extractPastedQuestionText(e);
                       if (extracted !== null) {
                         e.preventDefault();
@@ -2105,7 +2130,7 @@ export const CBTTab: React.FC<Props> = ({
                       }
                     }}
                     required
-                    placeholder="Tuliskan soal atau bacaan. Tekan Enter beberapa kali untuk jarak antar paragraf, ketik 2/5 atau gunakan Format Pecahan / ° Derajat agar tampil rapi..."
+                    placeholder="Tuliskan soal atau bacaan. Tekan Enter beberapa kali untuk jarak antar paragraf, ketik 2/5 atau gunakan Format Pecahan / ° Derajat, atau tempel gambar (Ctrl+V)..."
                     className="w-full p-3 rounded-2xl border border-slate-300 bg-white text-xs text-slate-800 outline-none focus:border-rose-500 font-medium leading-relaxed"
                   />
                 </div>
@@ -2114,7 +2139,7 @@ export const CBTTab: React.FC<Props> = ({
                 <div className="lg:col-span-3 space-y-2">
                   <div className="flex items-center justify-between text-xs">
                     <label className="font-display font-black text-slate-800">
-                      Upload Gambar Soal
+                      Upload Gambar Soal <span className="font-semibold text-[10px] text-slate-500">(Seret / Ctrl+V)</span>
                     </label>
                     {(gambarUrl || gambarUrl2) && (
                       <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
@@ -2124,7 +2149,37 @@ export const CBTTab: React.FC<Props> = ({
                   </div>
                   <div className="p-2.5 rounded-2xl border border-slate-200 bg-white grid grid-cols-2 gap-2 min-h-[100px]">
                     {/* Slot 1: Gambar 1 */}
-                    <div className="flex flex-col items-center justify-center p-1 rounded-xl bg-slate-50 border border-dashed border-slate-300 relative text-center">
+                    <div
+                      tabIndex={0}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setDragCbtSlot('slot1');
+                      }}
+                      onDragLeave={() => setDragCbtSlot(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setDragCbtSlot(null);
+                        const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                        if (files[0]) {
+                          void processCbtQuestionImage(files[0], 1);
+                        } else {
+                          showToast('Seret file gambar yang valid untuk Gambar 1!', 'error');
+                        }
+                      }}
+                      onPaste={(e) => {
+                        const files = extractImageFilesFromClipboard(e.clipboardData);
+                        if (files[0]) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void processCbtQuestionImage(files[0], 1);
+                        }
+                      }}
+                      className={`flex flex-col items-center justify-center p-1.5 rounded-xl border-2 border-dashed relative text-center transition outline-none focus:ring-2 focus:ring-rose-300 ${
+                        dragCbtSlot === 'slot1'
+                          ? 'border-rose-500 bg-rose-50'
+                          : 'bg-slate-50 border-slate-300 hover:border-rose-300'
+                      }`}
+                    >
                       {gambarUrl ? (
                         <div className="relative group w-full h-full flex flex-col items-center justify-center">
                           <img src={gambarUrl} alt="Gambar 1" className="h-14 w-auto max-w-full rounded object-contain" />
@@ -2142,13 +2197,44 @@ export const CBTTab: React.FC<Props> = ({
                         <label className="flex flex-col items-center justify-center cursor-pointer p-1">
                           <ImageIcon className="w-4 h-4 text-slate-400 mb-0.5" />
                           <span className="text-[10px] font-bold text-rose-600 hover:underline">+ Gambar 1</span>
+                          <span className="text-[8px] text-slate-400 font-semibold mt-0.5">Seret / Ctrl+V</span>
                           <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                         </label>
                       )}
                     </div>
 
                     {/* Slot 2: Gambar 2 (Bersebelahan) */}
-                    <div className="flex flex-col items-center justify-center p-1 rounded-xl bg-slate-50 border border-dashed border-slate-300 relative text-center">
+                    <div
+                      tabIndex={0}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setDragCbtSlot('slot2');
+                      }}
+                      onDragLeave={() => setDragCbtSlot(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setDragCbtSlot(null);
+                        const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                        if (files[0]) {
+                          void processCbtQuestionImage(files[0], 2);
+                        } else {
+                          showToast('Seret file gambar yang valid untuk Gambar 2!', 'error');
+                        }
+                      }}
+                      onPaste={(e) => {
+                        const files = extractImageFilesFromClipboard(e.clipboardData);
+                        if (files[0]) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void processCbtQuestionImage(files[0], 2);
+                        }
+                      }}
+                      className={`flex flex-col items-center justify-center p-1.5 rounded-xl border-2 border-dashed relative text-center transition outline-none focus:ring-2 focus:ring-rose-300 ${
+                        dragCbtSlot === 'slot2'
+                          ? 'border-rose-500 bg-rose-50'
+                          : 'bg-slate-50 border-slate-300 hover:border-rose-300'
+                      }`}
+                    >
                       {gambarUrl2 ? (
                         <div className="relative group w-full h-full flex flex-col items-center justify-center">
                           <img src={gambarUrl2} alt="Gambar 2" className="h-14 w-auto max-w-full rounded object-contain" />
@@ -2166,6 +2252,7 @@ export const CBTTab: React.FC<Props> = ({
                         <label className="flex flex-col items-center justify-center cursor-pointer p-1">
                           <ImageIcon className="w-4 h-4 text-slate-400 mb-0.5" />
                           <span className="text-[10px] font-bold text-rose-600 hover:underline">+ Gambar 2</span>
+                          <span className="text-[8px] text-slate-400 font-semibold mt-0.5">Seret / Ctrl+V</span>
                           <input type="file" accept="image/*" onChange={handleImageUpload2} className="hidden" />
                         </label>
                       )}
@@ -2291,7 +2378,38 @@ export const CBTTab: React.FC<Props> = ({
                       const optImg = opsiGambar[key];
 
                       return (
-                        <div key={key} className="p-2.5 rounded-2xl border border-slate-200 bg-slate-50/40 space-y-2">
+                        <div
+                          key={key}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            setDragCbtSlot(`pg_${key}`);
+                          }}
+                          onDragLeave={() => setDragCbtSlot(null)}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setDragCbtSlot(null);
+                            const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                            if (files[0]) {
+                              void processCbtOptionImage(key, files[0]);
+                            } else {
+                              showToast(`Seret file gambar yang valid untuk Opsi ${key}!`, 'error');
+                            }
+                          }}
+                          onPaste={(e) => {
+                            const files = extractImageFilesFromClipboard(e.clipboardData);
+                            const plainText = e.clipboardData?.getData('text/plain')?.trim() || '';
+                            if (files[0] && !plainText) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              void processCbtOptionImage(key, files[0]);
+                            }
+                          }}
+                          className={`p-2.5 rounded-2xl border transition space-y-2 ${
+                            dragCbtSlot === `pg_${key}`
+                              ? 'border-rose-500 bg-rose-50 ring-2 ring-rose-200'
+                              : 'border-slate-200 bg-slate-50/40'
+                          }`}
+                        >
                           <div className="flex items-center gap-2.5">
                             <input
                               type="radio"
@@ -2308,7 +2426,7 @@ export const CBTTab: React.FC<Props> = ({
                               type="text"
                               value={val}
                               onChange={(e) => setVal(e.target.value)}
-                              placeholder={`Teks Opsi ${key}`}
+                              placeholder={`Teks Opsi ${key} (atau seret / Ctrl+V gambar)`}
                               className="flex-1 px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-medium outline-none focus:border-rose-400"
                             />
                             {/* Upload Gambar Jawaban */}
@@ -2316,7 +2434,7 @@ export const CBTTab: React.FC<Props> = ({
                               className={`p-1.5 rounded-xl border flex items-center justify-center cursor-pointer transition shrink-0 ${
                                 optImg ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-white hover:bg-slate-100 text-slate-500 border-slate-300'
                               }`}
-                              title={`Upload Gambar untuk Opsi ${key}`}
+                              title={`Upload / Seret Gambar untuk Opsi ${key}`}
                             >
                               <ImageIcon className="w-4 h-4" />
                               <input

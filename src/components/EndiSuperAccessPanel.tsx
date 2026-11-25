@@ -30,6 +30,11 @@ import {
   subscribeToLoginAppearance,
 } from '../utils/authSession';
 import { mapFirestorePermissionError, sanitizeInput } from '../utils/sanitize';
+import {
+  extractImageFilesFromClipboard,
+  extractImageFilesFromDataTransfer,
+  useWindowImagePaste,
+} from '../utils/imageDropPaste';
 
 interface Props {
   activeUser: ActiveUser;
@@ -136,6 +141,7 @@ export const EndiSuperAccessPanel: React.FC<Props> = ({
   const [pendingMeta, setPendingMeta] = useState<{ sizeKb: number; width: number; height: number } | null>(null);
   const [photoStatusMsg, setPhotoStatusMsg] = useState<string>('');
   const [isCompressingPhoto, setIsCompressingPhoto] = useState(false);
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   const [isSavingPhoto, setIsSavingPhoto] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -187,10 +193,8 @@ export const EndiSuperAccessPanel: React.FC<Props> = ({
       (localLock.lockedUntil && localLock.lockedUntil > Date.now())
   );
 
-  const handleSelectPhotoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!/^image\/(jpeg|jpg|png|webp)$/i.test(file.type)) {
+  const processPhotoFile = async (file: File) => {
+    if (!/^image\/(jpeg|jpg|png|webp)$/i.test(file.type || '') && !/\.(jpe?g|png|webp)$/i.test(file.name || '')) {
       showToast('Format file harus JPG, PNG, atau WEBP.', 'error');
       return;
     }
@@ -215,6 +219,19 @@ export const EndiSuperAccessPanel: React.FC<Props> = ({
       setIsCompressingPhoto(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  useWindowImagePaste({
+    enabled: Boolean(isAllowedEndi && panelTab === 'login_photo' && !confirmModalAction),
+    onImageFiles: (files) => {
+      if (files[0]) void processPhotoFile(files[0]);
+    },
+  });
+
+  const handleSelectPhotoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processPhotoFile(file);
   };
 
   const handleSaveLoginPhoto = async () => {
@@ -420,14 +437,45 @@ export const EndiSuperAccessPanel: React.FC<Props> = ({
               className="hidden"
             />
 
-            <div className="p-5 rounded-2xl border-2 border-dashed border-rose-200 bg-rose-50/40 text-center space-y-3">
+            <div
+              tabIndex={0}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDraggingPhoto(true);
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                  setIsDraggingPhoto(false);
+                }
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDraggingPhoto(false);
+                const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                if (files[0]) void processPhotoFile(files[0]);
+                else showToast('Harap jatuhkan file gambar (JPG, PNG, atau WEBP).', 'error');
+              }}
+              onPaste={(e) => {
+                const files = extractImageFilesFromClipboard(e.clipboardData);
+                if (files[0]) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void processPhotoFile(files[0]);
+                }
+              }}
+              className={`p-5 rounded-2xl border-2 border-dashed text-center space-y-3 outline-none transition ${
+                isDraggingPhoto
+                  ? 'border-rose-500 bg-rose-100/80 ring-2 ring-rose-300'
+                  : 'border-rose-200 bg-rose-50/40 focus:border-rose-400'
+              }`}
+            >
               <Upload className="w-8 h-8 text-rose-600 mx-auto" />
               <div>
                 <p className="font-display font-bold text-xs text-slate-800">
-                  Pilih Foto Terbaru Halaman Login (.JPG / .PNG / .WEBP)
+                  Pilih, Seret &amp; Lepas (Drag &amp; Drop), atau Tempel (Ctrl+V) Foto Login
                 </p>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  Disarankan rasio lanskap atau potret yang tajam untuk panel kiri layar Login.
+                  Mendukung format .JPG / .PNG / .WEBP (disarankan rasio lanskap tajam).
                 </p>
               </div>
               <button

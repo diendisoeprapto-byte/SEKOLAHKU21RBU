@@ -2,6 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { Camera, Image, RotateCcw, Save, ShieldCheck, Upload, X } from 'lucide-react';
 import { SchoolProfile } from '../../types';
 import { compressQuestionImage } from '../../utils/imageUtils';
+import {
+  extractImageFilesFromClipboard,
+  extractImageFilesFromDataTransfer,
+  useWindowImagePaste,
+} from '../../utils/imageDropPaste';
 
 interface Props {
   isOpen: boolean;
@@ -23,6 +28,8 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
   const [logoSekolahUrl, setLogoSekolahUrl] = useState<string>(profile.logoSekolahUrl);
   const [loginBackgroundUrl, setLoginBackgroundUrl] = useState<string>(profile.loginBackgroundUrl || '');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [dragTarget, setDragTarget] = useState<'adminFoto' | 'kemendikbud' | 'sekolah' | 'loginBg' | null>(null);
+  const [activePasteTarget, setActivePasteTarget] = useState<'adminFoto' | 'kemendikbud' | 'sekolah' | 'loginBg'>('loginBg');
 
   useEffect(() => {
     if (isOpen) {
@@ -33,14 +40,10 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
     }
   }, [isOpen, profile]);
 
-  if (!isOpen) return null;
-
-  const handleImagePick = async (
-    e: React.ChangeEvent<HTMLInputElement>,
+  const processImageFile = async (
+    file: File,
     target: 'adminFoto' | 'kemendikbud' | 'sekolah' | 'loginBg'
   ) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
     setIsProcessing(true);
     try {
       const compressed = await compressQuestionImage(file, {
@@ -57,13 +60,64 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
       } else {
         setLoginBackgroundUrl(compressed);
       }
+      showToast('Gambar berhasil dimuat & dioptimalkan!', 'success');
     } catch {
       showToast('Gagal memproses file gambar. Pastikan format gambar valid.', 'error');
     } finally {
       setIsProcessing(false);
-      e.target.value = '';
     }
   };
+
+  useWindowImagePaste({
+    enabled: isOpen,
+    onImageFiles: (files) => {
+      if (files[0]) void processImageFile(files[0], activePasteTarget);
+    },
+  });
+
+  if (!isOpen) return null;
+
+  const handleImagePick = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    target: 'adminFoto' | 'kemendikbud' | 'sekolah' | 'loginBg'
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processImageFile(file, target);
+    e.target.value = '';
+  };
+
+  const makeCardDropPasteProps = (target: 'adminFoto' | 'kemendikbud' | 'sekolah' | 'loginBg') => ({
+    tabIndex: 0,
+    onClick: () => setActivePasteTarget(target),
+    onFocus: () => setActivePasteTarget(target),
+    onDragOver: (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragTarget(target);
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+        setDragTarget((prev) => (prev === target ? null : prev));
+      }
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragTarget(null);
+      setActivePasteTarget(target);
+      const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+      if (files[0]) void processImageFile(files[0], target);
+      else showToast('Harap jatuhkan file gambar yang valid.', 'error');
+    },
+    onPaste: (e: React.ClipboardEvent) => {
+      const files = extractImageFilesFromClipboard(e.clipboardData);
+      if (files[0]) {
+        e.preventDefault();
+        e.stopPropagation();
+        setActivePasteTarget(target);
+        void processImageFile(files[0], target);
+      }
+    },
+  });
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -113,7 +167,16 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
 
         <form onSubmit={handleSave} className="space-y-4">
           {/* Foto Profil Admin */}
-          <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-rose-50/80 via-white to-amber-50/70 border border-rose-200 flex flex-col sm:flex-row items-center gap-4">
+          <div
+            {...makeCardDropPasteProps('adminFoto')}
+            className={`p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-rose-50/80 via-white to-amber-50/70 border flex flex-col sm:flex-row items-center gap-4 outline-none transition ${
+              dragTarget === 'adminFoto'
+                ? 'border-rose-500 ring-2 ring-rose-300 bg-rose-50'
+                : activePasteTarget === 'adminFoto'
+                ? 'border-rose-400 ring-1 ring-rose-200'
+                : 'border-rose-200'
+            }`}
+          >
             <img
               src={activePreviewAdminFoto}
               alt="Foto Profil Admin"
@@ -156,7 +219,16 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
           </div>
 
           {/* Foto Latar Belakang Login (Pendopo / Anak Belajar) */}
-          <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-50/80 via-white to-sky-50/70 border border-indigo-200 flex flex-col sm:flex-row items-center gap-4">
+          <div
+            {...makeCardDropPasteProps('loginBg')}
+            className={`p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-50/80 via-white to-sky-50/70 border flex flex-col sm:flex-row items-center gap-4 outline-none transition ${
+              dragTarget === 'loginBg'
+                ? 'border-indigo-500 ring-2 ring-indigo-300 bg-indigo-50'
+                : activePasteTarget === 'loginBg'
+                ? 'border-indigo-400 ring-1 ring-indigo-200'
+                : 'border-indigo-200'
+            }`}
+          >
             <img
               src={activePreviewLoginBg}
               alt="Foto Latar Login"
@@ -200,7 +272,16 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
           {/* 2 Logo Resmi */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Logo Kemendikbud */}
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-center gap-3.5">
+            <div
+              {...makeCardDropPasteProps('kemendikbud')}
+              className={`p-4 rounded-2xl bg-slate-50 border flex items-center gap-3.5 outline-none transition ${
+                dragTarget === 'kemendikbud'
+                  ? 'border-sky-500 ring-2 ring-sky-300 bg-sky-50'
+                  : activePasteTarget === 'kemendikbud'
+                  ? 'border-sky-400 ring-1 ring-sky-200'
+                  : 'border-slate-200'
+              }`}
+            >
               <img
                 src={logoKemendikbudUrl}
                 alt="Logo Kemendikbud"
@@ -227,7 +308,16 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
             </div>
 
             {/* Logo Sekolah */}
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-center gap-3.5">
+            <div
+              {...makeCardDropPasteProps('sekolah')}
+              className={`p-4 rounded-2xl bg-slate-50 border flex items-center gap-3.5 outline-none transition ${
+                dragTarget === 'sekolah'
+                  ? 'border-amber-500 ring-2 ring-amber-300 bg-amber-50'
+                  : activePasteTarget === 'sekolah'
+                  ? 'border-amber-400 ring-1 ring-amber-200'
+                  : 'border-slate-200'
+              }`}
+            >
               <img
                 src={logoSekolahUrl}
                 alt="Logo Sekolah"
@@ -257,8 +347,7 @@ export const AdminProfilePhotoModal: React.FC<Props> = ({
           <div className="p-3 bg-sky-50 rounded-2xl border border-sky-200 text-[11px] text-sky-900 flex items-start gap-2">
             <ShieldCheck className="w-4 h-4 shrink-0 text-sky-600 mt-0.5" />
             <span>
-              Gambar otomatis dioptimalkan agar ringan dan langsung tersinkronisasi ke kartu absensi,
-              halaman login, dan Cloud Firestore.
+              Mendukung <strong>Drag &amp; Drop</strong> ke kartu foto/logo maupun <strong>Copy-Paste (Ctrl+V)</strong> pada kartu yang dipilih. Gambar otomatis dioptimalkan dan disinkronkan ke Cloud Firestore.
             </span>
           </div>
 

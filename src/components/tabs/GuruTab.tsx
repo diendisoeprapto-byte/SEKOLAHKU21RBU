@@ -23,6 +23,11 @@ import {
   generateAccountUsername,
 } from '../../utils/excel';
 import { MAX_TEACHERS } from '../../utils/teacherFirestore';
+import {
+  extractImageFilesFromClipboard,
+  extractImageFilesFromDataTransfer,
+  useWindowImagePaste,
+} from '../../utils/imageDropPaste';
 
 type TeacherSortOption =
   | 'nama-asc'
@@ -72,7 +77,9 @@ export const GuruTab: React.FC<Props> = ({
   const [password, setPassword] = useState('123');
   const [fotoUrl, setFotoUrl] = useState('https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150');
   const [deletingTeacher, setDeletingTeacher] = useState<Teacher | null>(null);
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoFileInputRef = useRef<HTMLInputElement>(null);
 
   const isAtMaxCapacity = teachers.length >= MAX_TEACHERS;
 
@@ -113,9 +120,11 @@ export const GuruTab: React.FC<Props> = ({
   };
 
   // Kompres foto sebelum disimpan agar maksimal 60 guru & pegawai tetap ringan di Firestore & cache lokal
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processTeacherPhotoFile = (file: File) => {
+    if (!file.type.startsWith('image/') && !/\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(file.name)) {
+      showToast('File harus berupa gambar (PNG, JPG, WEBP, dll.)!', 'error');
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       const rawDataUrl = reader.result as string;
@@ -151,6 +160,23 @@ export const GuruTab: React.FC<Props> = ({
     };
     reader.readAsDataURL(file);
   };
+
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processTeacherPhotoFile(file);
+    }
+    if (e.target) {
+      e.target.value = '';
+    }
+  };
+
+  useWindowImagePaste({
+    enabled: true,
+    onImageFiles: (files) => {
+      if (files[0]) processTeacherPhotoFile(files[0]);
+    },
+  });
 
   const handleEdit = (t: Teacher) => {
     setEditId(t.id);
@@ -550,12 +576,62 @@ export const GuruTab: React.FC<Props> = ({
 
           <div className="sm:col-span-2">
             <label className="block text-xs font-extrabold text-slate-600 mb-1">Upload Foto Guru / Tendik</label>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={handlePhotoUpload}
-              className="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-rose-600 file:text-white cursor-pointer"
-            />
+            <div
+              tabIndex={0}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDraggingPhoto(true);
+              }}
+              onDragLeave={() => setIsDraggingPhoto(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDraggingPhoto(false);
+                const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                if (files[0]) {
+                  processTeacherPhotoFile(files[0]);
+                } else {
+                  showToast('Seret file gambar yang valid (PNG, JPG, WEBP)!', 'error');
+                }
+              }}
+              onPaste={(e) => {
+                const files = extractImageFilesFromClipboard(e.clipboardData);
+                if (files[0]) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  processTeacherPhotoFile(files[0]);
+                }
+              }}
+              className={`flex items-center gap-3 p-2 rounded-xl border-2 border-dashed transition outline-none focus:ring-2 focus:ring-rose-300 ${
+                isDraggingPhoto
+                  ? 'border-rose-500 bg-rose-50/90'
+                  : 'border-slate-300 bg-white hover:border-rose-300'
+              }`}
+            >
+              <img
+                src={fotoUrl}
+                alt="Preview Guru"
+                className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0 bg-slate-100"
+              />
+              <div className="flex-1 min-w-0">
+                <input
+                  ref={photoFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoUpload}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => photoFileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 py-1 px-2.5 rounded-lg text-[11px] font-bold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer"
+                >
+                  <Upload className="w-3 h-3" /> Pilih Foto
+                </button>
+                <p className="text-[10px] text-slate-500 font-semibold mt-0.5 truncate">
+                  Atau seret (Drag &amp; Drop) / Tempel (Ctrl+V) gambar di sini
+                </p>
+              </div>
+            </div>
           </div>
 
           <div className="sm:col-span-2 lg:col-span-6 flex flex-wrap items-center justify-between gap-2 pt-2">

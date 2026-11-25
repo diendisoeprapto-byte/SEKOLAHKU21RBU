@@ -56,6 +56,11 @@ import {
   validateStudentsAgainstKelasConfig,
   applyAutoFixStudentClassDiscrepancies,
 } from '../../utils/studentClassValidation';
+import {
+  extractImageFilesFromClipboard,
+  extractImageFilesFromDataTransfer,
+  useWindowImagePaste,
+} from '../../utils/imageDropPaste';
 
 export type StudentSortOption =
   | 'nama-asc'
@@ -177,8 +182,11 @@ export const SiswaTab: React.FC<Props> = ({
 
   // Edit modal state
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+  const [dragPhotoTarget, setDragPhotoTarget] = useState<'new' | 'edit' | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const newPhotoInputRef = useRef<HTMLInputElement>(null);
+  const editPhotoInputRef = useRef<HTMLInputElement>(null);
 
   const todayDateStr = liveTodayStr || getLocalTodayStr();
   const resolvedAttendanceMap = useMemo(
@@ -611,21 +619,42 @@ export const SiswaTab: React.FC<Props> = ({
     }
   };
 
+  const processStudentPhotoFile = (file: File, isEdit = false) => {
+    if (!file.type.startsWith('image/') && !/\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(file.name)) {
+      showToast('File harus berupa gambar (PNG, JPG, WEBP, dll.)!', 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const resultUrl = reader.result as string;
+      if (isEdit) {
+        setEditingStudent((prev) => (prev ? { ...prev, fotoUrl: resultUrl } : prev));
+      } else {
+        setNewFoto(resultUrl);
+      }
+      showToast('Foto siswa berhasil dimuat!', 'success');
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>, isEdit = false) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (isEdit && editingStudent) {
-          setEditingStudent({ ...editingStudent, fotoUrl: reader.result as string });
-        } else {
-          setNewFoto(reader.result as string);
-        }
-        showToast('Foto siswa berhasil dimuat!', 'success');
-      };
-      reader.readAsDataURL(file);
+      processStudentPhotoFile(file, isEdit);
+    }
+    if (e.target) {
+      e.target.value = '';
     }
   };
+
+  useWindowImagePaste({
+    enabled: activeSubTab === 'daftar',
+    onImageFiles: (files) => {
+      if (files[0]) {
+        processStudentPhotoFile(files[0], Boolean(editingStudent));
+      }
+    },
+  });
 
   const handleAddStudent = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1072,12 +1101,62 @@ export const SiswaTab: React.FC<Props> = ({
 
             <div>
               <label className="text-[11px] font-extrabold text-slate-600 block mb-1">Unggah Foto Siswa</label>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => handlePhotoUpload(e, false)}
-                className="w-full text-xs text-slate-600 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[11px] file:font-bold file:bg-sky-600 file:text-white cursor-pointer"
-              />
+              <div
+                tabIndex={0}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragPhotoTarget('new');
+                }}
+                onDragLeave={() => setDragPhotoTarget(null)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragPhotoTarget(null);
+                  const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                  if (files[0]) {
+                    processStudentPhotoFile(files[0], false);
+                  } else {
+                    showToast('Seret file gambar yang valid (PNG, JPG, WEBP)!', 'error');
+                  }
+                }}
+                onPaste={(e) => {
+                  const files = extractImageFilesFromClipboard(e.clipboardData);
+                  if (files[0]) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    processStudentPhotoFile(files[0], false);
+                  }
+                }}
+                className={`flex items-center gap-2.5 p-1.5 rounded-xl border-2 border-dashed transition outline-none focus:ring-2 focus:ring-sky-300 ${
+                  dragPhotoTarget === 'new'
+                    ? 'border-sky-500 bg-sky-50'
+                    : 'border-slate-300 bg-white hover:border-sky-300'
+                }`}
+              >
+                <img
+                  src={newFoto}
+                  alt="Preview Siswa"
+                  className="w-9 h-9 rounded-lg object-cover border border-slate-200 shrink-0 bg-slate-100"
+                />
+                <div className="min-w-0 flex-1">
+                  <input
+                    ref={newPhotoInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => handlePhotoUpload(e, false)}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => newPhotoInputRef.current?.click()}
+                    className="py-1 px-2 rounded-lg text-[10px] font-bold bg-sky-600 hover:bg-sky-700 text-white cursor-pointer inline-flex items-center gap-1"
+                  >
+                    <Upload className="w-3 h-3" /> Pilih Foto
+                  </button>
+                  <p className="text-[9px] text-slate-500 font-semibold truncate mt-0.5">
+                    Seret / Ctrl+V gambar
+                  </p>
+                </div>
+              </div>
             </div>
 
             <div className="flex items-end">
@@ -2084,12 +2163,62 @@ export const SiswaTab: React.FC<Props> = ({
 
                 <div className="sm:col-span-2">
                   <label className="font-bold text-slate-700 block mb-1">Ganti Foto Siswa</label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => handlePhotoUpload(e, true)}
-                    className="w-full text-xs text-slate-600 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[11px] file:font-bold file:bg-sky-600 file:text-white cursor-pointer"
-                  />
+                  <div
+                    tabIndex={0}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDragPhotoTarget('edit');
+                    }}
+                    onDragLeave={() => setDragPhotoTarget(null)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragPhotoTarget(null);
+                      const files = extractImageFilesFromDataTransfer(e.dataTransfer);
+                      if (files[0]) {
+                        processStudentPhotoFile(files[0], true);
+                      } else {
+                        showToast('Seret file gambar yang valid (PNG, JPG, WEBP)!', 'error');
+                      }
+                    }}
+                    onPaste={(e) => {
+                      const files = extractImageFilesFromClipboard(e.clipboardData);
+                      if (files[0]) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        processStudentPhotoFile(files[0], true);
+                      }
+                    }}
+                    className={`flex items-center gap-3 p-2.5 rounded-xl border-2 border-dashed transition outline-none focus:ring-2 focus:ring-sky-300 ${
+                      dragPhotoTarget === 'edit'
+                        ? 'border-sky-500 bg-sky-50'
+                        : 'border-slate-300 bg-slate-50/70 hover:border-sky-300'
+                    }`}
+                  >
+                    <img
+                      src={editingStudent.fotoUrl}
+                      alt={editingStudent.nama}
+                      className="w-12 h-12 rounded-xl object-cover border border-slate-200 shrink-0 bg-white"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <input
+                        ref={editPhotoInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handlePhotoUpload(e, true)}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => editPhotoInputRef.current?.click()}
+                        className="py-1.5 px-3 rounded-lg text-[11px] font-bold bg-sky-600 hover:bg-sky-700 text-white cursor-pointer inline-flex items-center gap-1.5"
+                      >
+                        <Upload className="w-3.5 h-3.5" /> Pilih Foto Baru
+                      </button>
+                      <p className="text-[11px] text-slate-500 font-semibold mt-1">
+                        Atau seret file gambar ke kotak ini / tekan <span className="font-mono font-bold text-slate-700">Ctrl+V</span> untuk tempel foto
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
 
