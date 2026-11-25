@@ -20,12 +20,20 @@ export interface ChangelogVersionItem {
  *      perubahan dalam bahasa Indonesia yang jelas dan mudah dipahami pengguna.
  */
 
-export const APP_VERSION = 'v4.2.0';
+export const APP_VERSION = 'v4.3.0';
 export const RELEASE_DATE = '26 November 2026';
 export const RELEASE_DATE_SHORT = '26 Nov 2026';
 export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
 
 export const CHANGELOG_LIST: ChangelogVersionItem[] = [
+  {
+    version: 'v4.3.0',
+    date: '26 November 2026',
+    title: 'Pembaruan Kode Sub Kompetensi dari TP menjadi SK',
+    highlights: [
+      'Pembaruan penamaan kode pada sub kompetensi (Tujuan Pembelajaran) yang sebelumnya menggunakan awalan "TP-" kini diubah menjadi "SK-" (Sub Kompetensi) agar selaras dengan standar modul evaluasi.',
+    ],
+  },
   {
     version: 'v4.2.0',
     date: '26 November 2026',

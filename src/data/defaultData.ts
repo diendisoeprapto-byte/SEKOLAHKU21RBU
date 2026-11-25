@@ -531,9 +531,9 @@ export const DEFAULT_TKA_CP_TP: import('../types').TKACpTp[] = [
     deskripsiCp: "Peserta didik mampu menganalisis ide pokok, pesan tersirat, makna kata kontekstual, dan menyimpulkan isi bacaan sastra maupun teks informasi ilmiah.",
     mapel: "Bahasa Indonesia",
     tpList: [
-      { id: "tp_lit_01", kodeTp: "TP-LIT-01", judulTp: "Mengidentifikasi tokoh, watak, latar, dan amanat dalam cerita pendek." },
-      { id: "tp_lit_02", kodeTp: "TP-LIT-02", judulTp: "Menentukan antonim/sinonim dan makna konotatif kata dalam teks bacaan." },
-      { id: "tp_lit_03", kodeTp: "TP-LIT-03", judulTp: "Menyimpulkan isi paragraf deduktif-induktif dan memprediksi kejadian." }
+      { id: "tp_lit_01", kodeTp: "SK-LIT-01", judulTp: "Mengidentifikasi tokoh, watak, latar, dan amanat dalam cerita pendek." },
+      { id: "tp_lit_02", kodeTp: "SK-LIT-02", judulTp: "Menentukan antonim/sinonim dan makna konotatif kata dalam teks bacaan." },
+      { id: "tp_lit_03", kodeTp: "SK-LIT-03", judulTp: "Menyimpulkan isi paragraf deduktif-induktif dan memprediksi kejadian." }
     ]
   },
   {
@@ -543,9 +543,9 @@ export const DEFAULT_TKA_CP_TP: import('../types').TKACpTp[] = [
     deskripsiCp: "Peserta didik mampu mengaplikasikan operasi hitung bilangan bulat, pecahan, perbandingan, persentase, bangun ruang, dan penyajian data statistik.",
     mapel: "Matematika",
     tpList: [
-      { id: "tp_num_01", kodeTp: "TP-NUM-01", judulTp: "Menyelesaikan masalah FPB dan KPK serta operasi hitung campuran bilangan cacah." },
-      { id: "tp_num_02", kodeTp: "TP-NUM-02", judulTp: "Menghitung luas permukaan dan volume kubus, balok, dan tabung." },
-      { id: "tp_num_03", kodeTp: "TP-NUM-03", judulTp: "Menganalisis diagram batang, diagram lingkaran, dan mencari nilai rata-rata (mean)." }
+      { id: "tp_num_01", kodeTp: "SK-NUM-01", judulTp: "Menyelesaikan masalah FPB dan KPK serta operasi hitung campuran bilangan cacah." },
+      { id: "tp_num_02", kodeTp: "SK-NUM-02", judulTp: "Menghitung luas permukaan dan volume kubus, balok, dan tabung." },
+      { id: "tp_num_03", kodeTp: "SK-NUM-03", judulTp: "Menganalisis diagram batang, diagram lingkaran, dan mencari nilai rata-rata (mean)." }
     ]
   },
   {
@@ -555,9 +555,9 @@ export const DEFAULT_TKA_CP_TP: import('../types').TKACpTp[] = [
     deskripsiCp: "Peserta didik mampu bernalar kritis mengenai sistem organ tubuh manusia, daur hidup makhluk hidup, perpindahan energi, magnet, dan tata surya.",
     mapel: "Ilmu Pengetahuan Alam dan Sosial (IPAS)",
     tpList: [
-      { id: "tp_sain_01", kodeTp: "TP-SAIN-01", judulTp: "Menganalisis adaptasi hewan dan tumbuhan terhadap lingkungan hidupnya." },
-      { id: "tp_sain_02", kodeTp: "TP-SAIN-02", judulTp: "Mengidentifikasi hubungan rantai makanan dan jaring-jaring makanan dalam ekosistem." },
-      { id: "tp_sain_03", kodeTp: "TP-SAIN-03", judulTp: "Menjelaskan gaya, gerak, energi alternatif, serta sifat-sifat cahaya." }
+      { id: "tp_sain_01", kodeTp: "SK-SAIN-01", judulTp: "Menganalisis adaptasi hewan dan tumbuhan terhadap lingkungan hidupnya." },
+      { id: "tp_sain_02", kodeTp: "SK-SAIN-02", judulTp: "Mengidentifikasi hubungan rantai makanan dan jaring-jaring makanan dalam ekosistem." },
+      { id: "tp_sain_03", kodeTp: "SK-SAIN-03", judulTp: "Menjelaskan gaya, gerak, energi alternatif, serta sifat-sifat cahaya." }
     ]
   },
   {
@@ -567,9 +567,9 @@ export const DEFAULT_TKA_CP_TP: import('../types').TKACpTp[] = [
     deskripsiCp: "Peserta didik mampu memahami kosakata, instruksi sederhana, ide pokok teks bacaan pendek, dan informasi tersurat dalam bahasa Inggris.",
     mapel: "Bahasa Inggris",
     tpList: [
-      { id: "tp_eng_01", kodeTp: "TP-ENG-01", judulTp: "Mengidentifikasi makna kata dan ungkapan sehari-hari dalam teks deskripsi pendek bahasa Inggris." },
-      { id: "tp_eng_02", kodeTp: "TP-ENG-02", judulTp: "Menjawab pertanyaan 5W1H berdasarkan bacaan narasi pendek sederhana bahasa Inggris." },
-      { id: "tp_eng_03", kodeTp: "TP-ENG-03", judulTp: "Melengkapi kalimat rumpang dengan pilihan kata kerja dan kata sifat yang tepat." }
+      { id: "tp_eng_01", kodeTp: "SK-ENG-01", judulTp: "Mengidentifikasi makna kata dan ungkapan sehari-hari dalam teks deskripsi pendek bahasa Inggris." },
+      { id: "tp_eng_02", kodeTp: "SK-ENG-02", judulTp: "Menjawab pertanyaan 5W1H berdasarkan bacaan narasi pendek sederhana bahasa Inggris." },
+      { id: "tp_eng_03", kodeTp: "SK-ENG-03", judulTp: "Melengkapi kalimat rumpang dengan pilihan kata kerja dan kata sifat yang tepat." }
     ]
   },
   {
@@ -579,9 +579,9 @@ export const DEFAULT_TKA_CP_TP: import('../types').TKACpTp[] = [
     deskripsiCp: "Peserta didik mampu menerapkan dekomposisi masalah, algoritma logika pemrograman visual (urutan, perulangan, percabangan), serta memahami cara kerja dan etika aman Kecerdasan Artifisial (AI).",
     mapel: "Koding dan Kecerdasan Artifisial (KKA)",
     tpList: [
-      { id: "tp_kka_01", kodeTp: "TP-KKA-01", judulTp: "Menyelesaikan persoalan logika menggunakan dekomposisi, pengenalan pola, dan algoritma terurut." },
-      { id: "tp_kka_02", kodeTp: "TP-KKA-02", judulTp: "Menentukan keluaran program blok visual yang menggunakan perulangan (loop) dan kondisi (if-else)." },
-      { id: "tp_kka_03", kodeTp: "TP-KKA-03", judulTp: "Membedakan sistem AI dan non-AI serta menerapkan etika verifikasi informasi dan keamanan data." }
+      { id: "tp_kka_01", kodeTp: "SK-KKA-01", judulTp: "Menyelesaikan persoalan logika menggunakan dekomposisi, pengenalan pola, dan algoritma terurut." },
+      { id: "tp_kka_02", kodeTp: "SK-KKA-02", judulTp: "Menentukan keluaran program blok visual yang menggunakan perulangan (loop) dan kondisi (if-else)." },
+      { id: "tp_kka_03", kodeTp: "SK-KKA-03", judulTp: "Membedakan sistem AI dan non-AI serta menerapkan etika verifikasi informasi dan keamanan data." }
     ]
   }
 ];
