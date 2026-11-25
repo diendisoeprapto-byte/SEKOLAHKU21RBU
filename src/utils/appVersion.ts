@@ -5,88 +5,82 @@ export interface ChangelogVersionItem {
   highlights: string[];
 }
 
-export const APP_VERSION = 'v2.6.0';
-export const RELEASE_DATE = '25 November 2026';
-export const RELEASE_DATE_SHORT = '25 Nov 2026';
+/**
+ * ============================================================================
+ * ATURAN PERMANEN MANAJEMEN VERSI OTOMATIS (SEMANTIC VERSIONING):
+ * ============================================================================
+ * 1. Sumber kebenaran tunggal versi aktif saat ini adalah CHANGELOG_LIST[0].version (v4.2.0).
+ * 2. Instruksi bagi AI/Developer untuk sesi pembaruan berikutnya:
+ *    - Naikkan angka PATCH (misal: v4.2.0 -> v4.2.1) untuk perbaikan bug atau penyesuaian kecil.
+ *    - Naikkan angka MINOR (misal: v4.2.1 -> v4.3.0) untuk penambahan fitur baru.
+ *    - Naikkan angka MAJOR (misal: v4.3.0 -> v5.0.0) untuk perubahan arsitektur besar.
+ *    - Perbarui tanggal rilis sesuai tanggal pembaruan kode dibuat.
+ *    - Setiap kali menghasilkan kode baru di masa mendatang, WAJIB menambahkan entri
+ *      baru di urutan paling atas array CHANGELOG_LIST yang merangkum poin-poin
+ *      perubahan dalam bahasa Indonesia yang jelas dan mudah dipahami pengguna.
+ */
+
+export const APP_VERSION = 'v4.2.0';
+export const RELEASE_DATE = '26 November 2026';
+export const RELEASE_DATE_SHORT = '26 Nov 2026';
 export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
 
 export const CHANGELOG_LIST: ChangelogVersionItem[] = [
   {
-    version: 'v2.6.0',
+    version: 'v4.2.0',
+    date: '26 November 2026',
+    title: 'Optimalisasi Matriks TKA & Sistem Info Versi',
+    highlights: [
+      'Perbaikan tata letak tabel Matriks Analisis Butir Soal TKA agar kolom nomor soal proporsional dan teks indikator tidak memanjang ke bawah secara berlebihan.',
+      'Penambahan tampilan nomor versi dinamis di footer halaman Login serta modal Catatan Pembaruan (Changelog).',
+    ],
+  },
+  {
+    version: 'v4.1.0',
     date: '25 November 2026',
-    title: 'Perbaikan Urutan Muat Obrolan Terbaru SARAH AI',
+    title: 'Bank Media Ajar, Kustomisasi Login & Keamanan Admin',
     highlights: [
-      'Perbaikan query pemuatan pesan obrolan privat SARAH AI dari urutan terlama menjadi urutan terbaru (descending limit 40 lalu dibalik), memastikan percakapan terakhir yang Anda simpan langsung tampil saat membuka aplikasi.',
+      'Integrasi fitur Bank Media Ajar (repositori PPT hybrid Google Drive & Firestore dengan filter jenjang kelas).',
+      'Penambahan fitur unggah dan pengaturan foto latar layar Login kustom langsung dari panel Admin.',
+      'Penambahan fitur Backup dan Reset data terpusat pada akun Admin serta proteksi keamanan anti-iklan dan malware.',
     ],
   },
   {
-    version: 'v2.5.0',
-    date: '25 November 2026',
-    title: 'Sinkronisasi Real-Time Stiker Realistik SARAH ke Cloud Firestore',
+    version: 'v4.0.0',
+    date: '19 November 2026',
+    title: 'Arsitektur Multi-Tenant SaaS & Dasbor Super Admin',
     highlights: [
-      'Potongan stiker realistik SARAH kini otomatis tersinkron secara real-time ke database Cloud Firestore saat diunggah/dipotong.',
-      'Ketika Anda membuka aplikasi di perangkat atau peramban lain, stiker realistik akan langsung terunduh dan tersedia secara otomatis tanpa perlu diunggah ulang.',
+      'Pembaruan struktur database Firebase Firestore menjadi isolasi multi-sekolah berbasis NPSN (schools/{npsn}).',
+      'Penambahan portal registrasi sekolah baru, branding dinamis per sekolah, dan dasbor pengelolaan Super Admin.',
     ],
   },
   {
-    version: 'v2.4.0',
-    date: '25 November 2026',
-    title: 'Upload Foto & Gambar Kini Mendukung Drag & Drop serta Copy-Paste (Ctrl+V)',
+    version: 'v3.0.0',
+    date: '23 November 2026',
+    title: 'Peluncuran Asisten AI SARAH & Stiker Ekspresi',
     highlights: [
-      'Seluruh area upload foto & gambar (Foto Layar Login, Profil Admin & Logo Sekolah, Foto Guru/Tendik, Foto Siswa, dan Lembar Stiker SARAH) kini mendukung seret & lepas (Drag & Drop) maupun tempel langsung (Ctrl+V / Cmd+V).',
-      'Penyusunan Soal CBT & TKA mendukung drag-and-drop serta tempel gambar (Ctrl+V) langsung pada kolom pertanyaan, slot Gambar 1 & Gambar 2, maupun tiap opsi pilihan jawaban (A–D).',
-      'Pemindai Absensi Barcode & Wajah (Face ID) serta modal pendaftaran wajah siswa mendukung drag-and-drop dan paste foto untuk pemindaian maupun registrasi cepat.',
-    ],
-  },
-  {
-    version: 'v2.3.1',
-    date: '25 November 2026',
-    title: 'Perbaikan Tata Letak Matriks Butir Soal, Analisis 5 Tab Ringkas & Penguncian Nilai TKA',
-    highlights: [
-      'Perbaikan tata letak header Matriks Analisis Butir Soal TKA & CBT agar judul dan deskripsi tampil leluasa di atas baris filter tanpa terjepit.',
-      'Tampilan Analisis TKA & CBT kini disusun lebih ringkas dalam 5 tab horizontal (Peringkat HOTS, Grafik Performa, Matriks Butir Soal, Distribusi Nilai, dan Tingkat Kesukaran).',
-      'Penguncian nilai resmi ujian TKA satu kali pengerjaan serta penyaringan ekspor Excel, PDF, dan Word sesuai kelas yang dipilih.',
-      'Pembaruan teks versi pada footer halaman Login agar langsung menampilkan ajakan klik untuk melihat catatan pembaruan.',
-    ],
-  },
-  {
-    version: 'v2.3.0',
-    date: '24 November 2026',
-    title: 'Optimalisasi SARAH Streaming, Anti-Gagal CBT/TKA 100+ Siswa & Pemeringkatan HOTS',
-    highlights: [
-      'Pemilihan Mode Kecepatan SARAH AI (Mode Cepat Lite / Otomatis / Standar), respons streaming progresif, lazy context injection, serta auto-fallback model cerdas.',
-      'Upload & Auto-Slicer Lembar Stiker Realistik 2x3 (ID 31–60) khusus Endi Soeprapto lengkap dengan pembersihan latar otomatis berbasis HTML5 Canvas & IndexedDB.',
-      'Peningkatan kapasitas 100+ siswa per jenjang CBT & TKA dengan isolasi dokumen Firestore per siswa, auto-save draft berkala, retry backoff, dan antrean offline anti-gagal.',
-      'Sistem pemeringkatan berjenjang (Tie-Breaker): Nilai Akhir -> Jumlah Benar Soal Sulit (HOTS) -> Durasi Waktu Pengerjaan Tercepat.',
-      'Mode Minimalis (5–6 kolom ringkas) & Paginasi Katalog Perpustakaan Digital.',
-    ],
-  },
-  {
-    version: 'v2.2.0',
-    date: '14 November 2026',
-    title: 'Analisis Soal SARAH AI, Tren Recharts & Matriks Betul/Salah',
-    highlights: [
-      'Integrasi SARAH AI untuk mengulas soal yang masih salah serta analisis capaian kelas/individu pada CBT & TKA berstatus selesai.',
-      'Visualisasi tren nilai TKA per mata pelajaran menggunakan Recharts dan rekap total lintas simulasi.',
-      'Matriks pemetaan nomor soal betul dan salah per siswa serta sistem antrean AbortController & Result Caching.',
-    ],
-  },
-  {
-    version: 'v2.1.0',
-    date: '02 November 2026',
-    title: 'Katalog Perpustakaan Minimalis, Preview Media Ajar & Absensi Wajah',
-    highlights: [
-      'Preview sampul buku digital, embed Media Ajar PPT, dan tombol baca langsung dengan pencatatan jumlah pembaca.',
-      'Optimalisasi ukuran komponen upload foto pada pemindai wajah agar lebih ringkas dan nyaman.',
+      'Integrasi asisten virtual SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis) berbasis mesin Gemini yang ringan, responsif, dan berwawasan luas.',
+      'Fitur Guru: Pembuatan soal CBT otomatis, Modul Ajar, dan RPP berbasis konteks kurikulum.',
+      'Fitur Siswa: Pendamping belajar dengan metode Sokratik (membimbing tanpa memberi jawaban instan), pengingat waktu salat sesuai lokasi, serta pustaka 56 stiker ekspresi guru dan siswa.',
     ],
   },
   {
     version: 'v2.0.0',
-    date: '18 Oktober 2026',
-    title: 'Peluncuran Asisten Virtual SARAH & Penguncian Ujian Ketat',
+    date: '24 November 2026',
+    title: 'Ekosistem Ujian CBT/TKA Skala Besar & Analitik Skor',
     highlights: [
-      'Peluncuran asisten virtual SARAH (Sistem Asisten Adaptif, Ramah, Amanah & Humanis) dengan Hybrid Visual System dan ruang privat terisolasi.',
-      'Aturan penguncian akses ketat (Strict Access Control) CBT & TKA pada dokumen hasil_ujian berstatus selesai.',
+      'Implementasi Mode Fokus Ujian yang menyembunyikan sidebar navigasi selama siswa mengerjakan soal.',
+      'Sistem Anti-Gagal Simpan: Auto-save lokal (localStorage), mekanisme auto-retry, dan penguncian layar tunggu (read-back verification) hingga skor terkonfirmasi tersimpan di Firestore.',
+      'Sistem Peringkat & Tie-Breaker otomatis (Nilai Akhir, jumlah benar soal Sulit/HOTS, dan durasi tercepat dalam detik), penguncian nilai percobaan TKA pertama, pemetaan Kompetensi/Sub-Kompetensi, serta grafik analitik terpisah untuk TKA dan CBT.',
+    ],
+  },
+  {
+    version: 'v1.0.0',
+    date: '11 November 2026',
+    title: 'Fondasi Awal & Transformasi Identitas SERBU 21',
+    highlights: [
+      'Perubahan nama dan identitas aplikasi dari SEKOLAHKU menjadi SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama 21).',
+      'Peluncuran modul inti: Presensi QR Code & cetak kartu barcode siswa, e-Rapor, jurnal 7 Kebiasaan Anak Indonesia Hebat, serta Perpustakaan Digital buku BSE dengan paginasi.',
     ],
   },
 ];
