@@ -1186,18 +1186,32 @@ export const getStoredTKACpTp = (): TKACpTp[] => {
   try {
     const parsed: TKACpTp[] = JSON.parse(data);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      const hasKka = parsed.some(
+      let mutated = false;
+      const sanitized = parsed.map((cp) => ({
+        ...cp,
+        tpList: (cp.tpList || []).map((tp) => {
+          if (tp.kodeTp && tp.kodeTp.startsWith('TP-')) {
+            mutated = true;
+            return { ...tp, kodeTp: tp.kodeTp.replace('TP-', 'SK-') };
+          }
+          return tp;
+        }),
+      }));
+      const hasKka = sanitized.some(
         (c) => (c.mapel || '').toLowerCase().includes('koding') || (c.kodeCp || '').includes('KKA')
       );
+      let result = sanitized;
       if (!hasKka) {
         const kkaCp = DEFAULT_TKA_CP_TP.find((c) => c.id === 'cp_tka_05');
         if (kkaCp) {
-          const merged = [...parsed, kkaCp];
-          safeSetLocalStorage(STORAGE_KEYS.TKA_CP_TP, JSON.stringify(merged));
-          return merged;
+          result = [...sanitized, kkaCp];
+          mutated = true;
         }
       }
-      return parsed;
+      if (mutated) {
+        safeSetLocalStorage(STORAGE_KEYS.TKA_CP_TP, JSON.stringify(result));
+      }
+      return result;
     }
     return DEFAULT_TKA_CP_TP;
   } catch {
