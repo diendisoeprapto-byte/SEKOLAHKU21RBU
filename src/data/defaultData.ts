@@ -526,7 +526,7 @@ export const TKA_JENIS_LIST: import('../types').TKAJenis[] = [
 export const DEFAULT_TKA_CP_TP: import('../types').TKACpTp[] = [
   {
     id: "cp_tka_01",
-    kodeCp: "CP-TKA-LIT",
+    kodeCp: "KOM-TKA-LIT",
     judulCp: "Literasi Membaca & Menulis Bahasa Indonesia Tingkat Lanjut",
     deskripsiCp: "Peserta didik mampu menganalisis ide pokok, pesan tersirat, makna kata kontekstual, dan menyimpulkan isi bacaan sastra maupun teks informasi ilmiah.",
     mapel: "Bahasa Indonesia",
@@ -538,7 +538,7 @@ export const DEFAULT_TKA_CP_TP: import('../types').TKACpTp[] = [
   },
   {
     id: "cp_tka_02",
-    kodeCp: "CP-TKA-NUM",
+    kodeCp: "KOM-TKA-NUM",
     judulCp: "Numerasi & Pemecahan Masalah Matematika Kontekstual",
     deskripsiCp: "Peserta didik mampu mengaplikasikan operasi hitung bilangan bulat, pecahan, perbandingan, persentase, bangun ruang, dan penyajian data statistik.",
     mapel: "Matematika",
@@ -550,7 +550,7 @@ export const DEFAULT_TKA_CP_TP: import('../types').TKACpTp[] = [
   },
   {
     id: "cp_tka_03",
-    kodeCp: "CP-TKA-SAIN",
+    kodeCp: "KOM-TKA-SAIN",
     judulCp: "Penalaran Ilmiah & Fenomena Alam IPAS",
     deskripsiCp: "Peserta didik mampu bernalar kritis mengenai sistem organ tubuh manusia, daur hidup makhluk hidup, perpindahan energi, magnet, dan tata surya.",
     mapel: "Ilmu Pengetahuan Alam dan Sosial (IPAS)",
@@ -562,7 +562,7 @@ export const DEFAULT_TKA_CP_TP: import('../types').TKACpTp[] = [
   },
   {
     id: "cp_tka_04",
-    kodeCp: "CP-TKA-ENG",
+    kodeCp: "KOM-TKA-ENG",
     judulCp: "Literasi Komunikasi Bahasa Inggris Dasar & Kontekstual",
     deskripsiCp: "Peserta didik mampu memahami kosakata, instruksi sederhana, ide pokok teks bacaan pendek, dan informasi tersurat dalam bahasa Inggris.",
     mapel: "Bahasa Inggris",
@@ -574,7 +574,7 @@ export const DEFAULT_TKA_CP_TP: import('../types').TKACpTp[] = [
   },
   {
     id: "cp_tka_05",
-    kodeCp: "CP-TKA-KKA",
+    kodeCp: "KOM-TKA-KKA",
     judulCp: "Berpikir Komputasional, Logika Koding & Kecerdasan Artifisial (KKA)",
     deskripsiCp: "Peserta didik mampu menerapkan dekomposisi masalah, algoritma logika pemrograman visual (urutan, perulangan, percabangan), serta memahami cara kerja dan etika aman Kecerdasan Artifisial (AI).",
     mapel: "Koding dan Kecerdasan Artifisial (KKA)",
