@@ -374,7 +374,7 @@ export async function loadEndiPrivateChatMessages(
   const localCached = readLocalEndiPrivateChats();
   try {
     const msgRef = collection(db, 'sarah_private_chats', ENDI_PRIVATE_DOC_ID, 'messages');
-    const q = query(msgRef, orderBy('timestamp', 'asc'), limit(40));
+    const q = query(msgRef, orderBy('timestamp', 'desc'), limit(40));
     const snap = await Promise.race([
       getDocs(q),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000)),
@@ -386,13 +386,13 @@ export async function loadEndiPrivateChatMessages(
       const data = d.data() as any;
       return {
         id: d.id,
-        sender: data.sender === 'user' ? 'user' : 'sarah',
+        sender: (data.sender === 'user' ? 'user' : 'sarah') as ('user' | 'sarah'),
         text: String(data.text || ''),
         timestamp: String(data.timestamp || new Date().toISOString()),
         ...(data.stickerId ? { stickerId: String(data.stickerId) } : {}),
         ...(Array.isArray(data.attachmentsMeta) ? { attachmentsMeta: data.attachmentsMeta } : {}),
       };
-    });
+    }).reverse();
     writeLocalEndiPrivateChats(cloudMsgs);
     return cloudMsgs;
   } catch {

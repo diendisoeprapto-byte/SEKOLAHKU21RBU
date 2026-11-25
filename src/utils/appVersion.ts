@@ -5,12 +5,29 @@ export interface ChangelogVersionItem {
   highlights: string[];
 }
 
-export const APP_VERSION = 'v2.4.0';
+export const APP_VERSION = 'v2.6.0';
 export const RELEASE_DATE = '25 November 2026';
 export const RELEASE_DATE_SHORT = '25 Nov 2026';
 export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
 
 export const CHANGELOG_LIST: ChangelogVersionItem[] = [
+  {
+    version: 'v2.6.0',
+    date: '25 November 2026',
+    title: 'Perbaikan Urutan Muat Obrolan Terbaru SARAH AI',
+    highlights: [
+      'Perbaikan query pemuatan pesan obrolan privat SARAH AI dari urutan terlama menjadi urutan terbaru (descending limit 40 lalu dibalik), memastikan percakapan terakhir yang Anda simpan langsung tampil saat membuka aplikasi.',
+    ],
+  },
+  {
+    version: 'v2.5.0',
+    date: '25 November 2026',
+    title: 'Sinkronisasi Real-Time Stiker Realistik SARAH ke Cloud Firestore',
+    highlights: [
+      'Potongan stiker realistik SARAH kini otomatis tersinkron secara real-time ke database Cloud Firestore saat diunggah/dipotong.',
+      'Ketika Anda membuka aplikasi di perangkat atau peramban lain, stiker realistik akan langsung terunduh dan tersedia secara otomatis tanpa perlu diunggah ulang.',
+    ],
+  },
   {
     version: 'v2.4.0',
     date: '25 November 2026',

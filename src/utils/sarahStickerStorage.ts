@@ -1,4 +1,13 @@
 import { SARAH_REALISTIC_STICKERS_ENDI } from './sarahStickers';
+import { db } from './firebase';
+import {
+  collection,
+  doc,
+  setDoc,
+  getDocs,
+  deleteDoc,
+  onSnapshot,
+} from 'firebase/firestore';
 
 export interface CustomRealisticStickerEntry {
   id: string; // e.g. 'real_endi_01' .. 'real_endi_60'
@@ -11,11 +20,13 @@ export interface CustomRealisticStickerEntry {
 const STICKER_IDB_NAME = 'serbu21_sarah_stickers_db';
 const STICKER_IDB_VERSION = 1;
 const STICKER_STORE_NAME = 'custom_realistic_stickers';
+const STICKER_FIRESTORE_COLLECTION = 'sarah_custom_stickers';
 export const SARAH_STICKERS_UPDATED_EVENT = 'serbu21-sarah-stickers-updated';
 
 const inMemoryStickerCache = new Map<string, CustomRealisticStickerEntry>();
 let idbHydrated = false;
 let hydratePromise: Promise<void> | null = null;
+let firestoreSubscribed = false;
 
 function openStickerDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -25,14 +36,82 @@ function openStickerDb(): Promise<IDBDatabase> {
     }
     const req = window.indexedDB.open(STICKER_IDB_NAME, STICKER_IDB_VERSION);
     req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STICKER_STORE_NAME)) {
-        db.createObjectStore(STICKER_STORE_NAME, { keyPath: 'id' });
+      const dbInstance = req.result;
+      if (!dbInstance.objectStoreNames.contains(STICKER_STORE_NAME)) {
+        dbInstance.createObjectStore(STICKER_STORE_NAME, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error || new Error('Gagal membuka IndexedDB stiker.'));
   });
+}
+
+async function saveToIndexedDBLocal(entries: CustomRealisticStickerEntry[]): Promise<void> {
+  if (!entries.length) return;
+  try {
+    const dbInstance = await openStickerDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = dbInstance.transaction(STICKER_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STICKER_STORE_NAME);
+      for (const entry of entries) {
+        store.put(entry);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // ignore IDB write errors
+  }
+}
+
+async function loadFromIndexedDBLocal(): Promise<CustomRealisticStickerEntry[]> {
+  try {
+    const dbInstance = await openStickerDb();
+    return await new Promise<CustomRealisticStickerEntry[]>((resolve) => {
+      const tx = dbInstance.transaction(STICKER_STORE_NAME, 'readonly');
+      const store = tx.objectStore(STICKER_STORE_NAME);
+      const getAllReq = store.getAll();
+      getAllReq.onsuccess = () => {
+        const rows = Array.isArray(getAllReq.result) ? getAllReq.result : [];
+        resolve(rows);
+      };
+      getAllReq.onerror = () => resolve([]);
+    });
+  } catch {
+    return [];
+  }
+}
+
+function setupFirestoreStickerListener() {
+  if (firestoreSubscribed || typeof window === 'undefined') return;
+  firestoreSubscribed = true;
+  try {
+    onSnapshot(
+      collection(db, STICKER_FIRESTORE_COLLECTION),
+      (snap) => {
+        let changed = false;
+        snap.forEach((d) => {
+          const data = d.data() as CustomRealisticStickerEntry;
+          if (data?.id && data?.dataUrl) {
+            const existing = inMemoryStickerCache.get(data.id);
+            if (!existing || existing.updatedAt !== data.updatedAt) {
+              inMemoryStickerCache.set(data.id, data);
+              changed = true;
+            }
+          }
+        });
+        if (changed) {
+          idbHydrated = true;
+          const allEntries = Array.from(inMemoryStickerCache.values());
+          void saveToIndexedDBLocal(allEntries);
+          window.dispatchEvent(new Event(SARAH_STICKERS_UPDATED_EVENT));
+        }
+      },
+      () => {}
+    );
+  } catch {
+    // ignore offline listener errors
+  }
 }
 
 export async function hydrateCustomEndiStickers(): Promise<CustomRealisticStickerEntry[]> {
@@ -43,26 +122,36 @@ export async function hydrateCustomEndiStickers(): Promise<CustomRealisticSticke
   if (!hydratePromise) {
     hydratePromise = (async () => {
       try {
-        const db = await openStickerDb();
-        await new Promise<void>((resolve, reject) => {
-          const tx = db.transaction(STICKER_STORE_NAME, 'readonly');
-          const store = tx.objectStore(STICKER_STORE_NAME);
-          const getAllReq = store.getAll();
-          getAllReq.onsuccess = () => {
-            const rows = Array.isArray(getAllReq.result) ? getAllReq.result : [];
-            inMemoryStickerCache.clear();
-            for (const row of rows) {
-              if (row?.id && row?.dataUrl) {
-                inMemoryStickerCache.set(row.id, row as CustomRealisticStickerEntry);
-              }
+        // 1. Load from local IndexedDB first for instant render
+        const localRows = await loadFromIndexedDBLocal();
+        inMemoryStickerCache.clear();
+        for (const row of localRows) {
+          if (row?.id && row?.dataUrl) {
+            inMemoryStickerCache.set(row.id, row);
+          }
+        }
+
+        // 2. Fetch latest from Firestore cloud for real-time cross-device sync
+        const cloudSnap = await getDocs(collection(db, STICKER_FIRESTORE_COLLECTION));
+        if (!cloudSnap.empty) {
+          const cloudRows: CustomRealisticStickerEntry[] = [];
+          cloudSnap.forEach((d) => {
+            const data = d.data() as CustomRealisticStickerEntry;
+            if (data?.id && data?.dataUrl) {
+              cloudRows.push(data);
+              inMemoryStickerCache.set(data.id, data);
             }
-            idbHydrated = true;
-            resolve();
-          };
-          getAllReq.onerror = () => reject(getAllReq.error);
-        });
+          });
+          if (cloudRows.length > 0) {
+            void saveToIndexedDBLocal(cloudRows);
+          }
+        }
+
+        idbHydrated = true;
+        setupFirestoreStickerListener();
       } catch {
         idbHydrated = true;
+        setupFirestoreStickerListener();
       } finally {
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new Event(SARAH_STICKERS_UPDATED_EVENT));
@@ -89,18 +178,25 @@ export async function saveCustomEndiStickersToIndexedDb(
   entries: CustomRealisticStickerEntry[]
 ): Promise<void> {
   if (!entries.length) return;
-  const db = await openStickerDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STICKER_STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STICKER_STORE_NAME);
-    for (const entry of entries) {
-      store.put(entry);
-      inMemoryStickerCache.set(entry.id, entry);
-    }
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error || new Error('Gagal menyimpan stiker ke IndexedDB.'));
-  });
+  const timestamped = entries.map((e) => ({ ...e, updatedAt: Date.now() }));
+  
+  // 1. Save to local IndexedDB & memory cache
+  await saveToIndexedDBLocal(timestamped);
+  for (const entry of timestamped) {
+    inMemoryStickerCache.set(entry.id, entry);
+  }
   idbHydrated = true;
+
+  // 2. Save to Firestore cloud in real-time so other devices receive them instantly
+  try {
+    const writes = timestamped.map((entry) =>
+      setDoc(doc(db, STICKER_FIRESTORE_COLLECTION, entry.id), entry, { merge: true })
+    );
+    await Promise.all(writes);
+  } catch (err) {
+    console.warn('Gagal menyinkronkan stiker realistik ke Firestore cloud:', err);
+  }
+
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event(SARAH_STICKERS_UPDATED_EVENT));
   }
@@ -111,15 +207,20 @@ export async function deleteCustomEndiStickerById(stickerId: string): Promise<vo
   if (!clean) return;
   inMemoryStickerCache.delete(clean);
   try {
-    const db = await openStickerDb();
+    const dbInstance = await openStickerDb();
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STICKER_STORE_NAME, 'readwrite');
+      const tx = dbInstance.transaction(STICKER_STORE_NAME, 'readwrite');
       tx.objectStore(STICKER_STORE_NAME).delete(clean);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
   } catch {
-    // ignore
+    // ignore IDB error
+  }
+  try {
+    await deleteDoc(doc(db, STICKER_FIRESTORE_COLLECTION, clean));
+  } catch {
+    // ignore Firestore error
   }
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event(SARAH_STICKERS_UPDATED_EVENT));
@@ -127,15 +228,22 @@ export async function deleteCustomEndiStickerById(stickerId: string): Promise<vo
 }
 
 export async function clearAllCustomEndiStickers(): Promise<void> {
+  const keysToDelete = Array.from(inMemoryStickerCache.keys());
   inMemoryStickerCache.clear();
   try {
-    const db = await openStickerDb();
+    const dbInstance = await openStickerDb();
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STICKER_STORE_NAME, 'readwrite');
+      const tx = dbInstance.transaction(STICKER_STORE_NAME, 'readwrite');
       tx.objectStore(STICKER_STORE_NAME).clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
+  } catch {
+    // ignore
+  }
+  try {
+    const deletes = keysToDelete.map((id) => deleteDoc(doc(db, STICKER_FIRESTORE_COLLECTION, id)));
+    await Promise.all(deletes);
   } catch {
     // ignore
   }
