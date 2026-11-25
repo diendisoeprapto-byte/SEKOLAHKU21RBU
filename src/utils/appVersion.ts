@@ -7,31 +7,44 @@ export interface ChangelogVersionItem {
 
 /**
  * ============================================================================
- * ATURAN PERMANEN MANAJEMEN VERSI OTOMATIS (SEMANTIC VERSIONING):
+ * ATURAN PERMANEN MANAJEMEN VERSI OTOMATIS (SEMANTIC VERSIONING) — SERBU 21
  * ============================================================================
- * 1. Sumber kebenaran tunggal versi aktif saat ini adalah CHANGELOG_LIST[0].version (v4.2.0).
- * 2. Instruksi bagi AI/Developer untuk sesi pembaruan berikutnya:
- *    - Naikkan angka PATCH (misal: v4.2.0 -> v4.2.1) untuk perbaikan bug atau penyesuaian kecil.
- *    - Naikkan angka MINOR (misal: v4.2.1 -> v4.3.0) untuk penambahan fitur baru.
- *    - Naikkan angka MAJOR (misal: v4.3.0 -> v5.0.0) untuk perubahan arsitektur besar.
+ * 1. SUMBER KEBENARAN TUNGGAL:
+ *    Array `CHANGELOG_DATA` di bawah ini adalah SUMBER KEBENARAN TUNGGAL seluruh versi
+ *    aplikasi SERBU 21. Versi aktif aplikasi (`APP_VERSION`) otomatis mengambil
+ *    nilai dari elemen teratas: `CHANGELOG_DATA[0].version`.
+ *
+ * 2. PETUNJUK BAGI AI / PENGEMBANG UNTUK SETIAP SESI PEMBARUAN BERIKUTNYA:
+ *    - Naikkan angka PATCH (misal: v4.3.1 -> v4.3.2) untuk perbaikan bug, penyesuaian kode,
+ *      atau perapihan tampilan kecil.
+ *    - Naikkan angka MINOR (misal: v4.3.2 -> v4.4.0) untuk penambahan fitur baru.
+ *    - Naikkan angka MAJOR (misal: v4.4.0 -> v5.0.0) untuk perombakan arsitektur besar.
  *    - Perbarui tanggal rilis sesuai tanggal pembaruan kode dibuat.
- *    - Setiap kali menghasilkan kode baru di masa mendatang, WAJIB menambahkan entri
- *      baru di urutan paling atas array CHANGELOG_LIST yang merangkum poin-poin
- *      perubahan dalam bahasa Indonesia yang jelas dan mudah dipahami pengguna.
+ *    - SETIAP KALI MENGHASILKAN KODE BARU DI MASA MENDATANG:
+ *      WAJIB menambahkan entri baru di urutan PALING ATAS ([0]) array `CHANGELOG_DATA`
+ *      yang merangkum poin-poin perubahan dalam bahasa Indonesia yang jelas, ringkas,
+ *      dan mudah dipahami oleh pengguna.
+ * ============================================================================
  */
 
-export const APP_VERSION = 'v4.3.1';
-export const RELEASE_DATE = '26 November 2026';
-export const RELEASE_DATE_SHORT = '26 Nov 2026';
-export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
-
-export const CHANGELOG_LIST: ChangelogVersionItem[] = [
+export const CHANGELOG_DATA: ChangelogVersionItem[] = [
+  {
+    version: 'v4.3.2',
+    date: '26 November 2026',
+    title: 'Standardisasi Otomatis Kode Kompetensi TKA Menjadi KOM',
+    highlights: [
+      'Pembaruan dan standardisasi kode Kompetensi TKA otomatis dari awalan "CP-" menjadi "KOM-" (Kompetensi) di seluruh menu Kompetensi TKA, pembuatan butir soal, dan penyimpanan data.',
+      'Sistem otomatisasi nomor versi berbasis Semantic Versioning terhubung langsung dengan sumber kebenaran tunggal CHANGELOG_DATA[0].version.',
+      'Penyempurnaan tampilan modal Catatan Pembaruan (Changelog) dengan garis vertikal timeline interaktif, tombol tutup Esc, dan akses mudah di seluruh halaman.',
+    ],
+  },
   {
     version: 'v4.3.1',
     date: '26 November 2026',
     title: 'Migrasi & Pembaruan Kode Sub Kompetensi TKA Menjadi SK',
     highlights: [
       'Pembaruan penamaan kode pada sub kompetensi TKA secara menyeluruh (termasuk migrasi otomatis data penyimpanan lokal) yang sebelumnya menggunakan awalan "TP-" kini diubah menjadi "SK-" (Sub Kompetensi).',
+      'Penyempurnaan dukungan unggah gambar dengan metode Drag & Drop dan Salin-Tempel (Copy-Paste) di semua modul aplikasi (Login background, logo sekolah, foto siswa/guru, stiker realistis SARAH, dan butir soal CBT/TKA).',
     ],
   },
   {
@@ -92,6 +105,19 @@ export const CHANGELOG_LIST: ChangelogVersionItem[] = [
     ],
   },
 ];
+
+// Alias untuk kompatibilitas kode yang sudah ada
+export const CHANGELOG_LIST = CHANGELOG_DATA;
+
+// SUMBER KEBENARAN TUNGGAL DINAMIS BERDASARKAN ELEMEN TERATAS CHANGELOG_DATA:
+export const CURRENT_CHANGELOG_ITEM = CHANGELOG_DATA[0];
+export const APP_VERSION = CHANGELOG_DATA[0]?.version || 'v4.3.2';
+export const RELEASE_DATE = CHANGELOG_DATA[0]?.date || '26 November 2026';
+export const RELEASE_DATE_SHORT = RELEASE_DATE.replace('November', 'Nov').replace('Desember', 'Des');
+export const APP_VERSION_NUMBER = APP_VERSION.replace(/^v/i, '');
+export const APP_VERSION_FOOTER_TEXT = `Versi ${APP_VERSION_NUMBER} • Klik untuk lihat pembaruan`;
+
+export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
 
 // Prefix cache UI/AI sementara yang aman dibersihkan saat pergantian versi aplikasi.
 // DILARANG keras menghapus pending submissions, exam drafts, data siswa/guru, atau hasil ujian lokal.

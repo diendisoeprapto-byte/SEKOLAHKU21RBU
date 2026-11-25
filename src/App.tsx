@@ -77,10 +77,13 @@ import { EndiSuperAccessPanel } from './components/EndiSuperAccessPanel';
 // Modals
 import { ImageZoomModal } from './components/modals/ImageZoomModal';
 import { CustomHolidayModal } from './components/modals/CustomHolidayModal';
+import { Info } from 'lucide-react';
 import { MonthlyAttendanceModal } from './components/modals/MonthlyAttendanceModal';
 import { ChangePasswordModal } from './components/modals/ChangePasswordModal';
 import { AdminProfilePhotoModal } from './components/modals/AdminProfilePhotoModal';
 import { OwnershipCertificateModal } from './components/modals/OwnershipCertificateModal';
+import { ChangelogModal } from './components/ChangelogModal';
+import { APP_VERSION_FOOTER_TEXT, checkAndBumpAppVersionCache } from './utils/appVersion';
 import {
   _CREATOR_SIGNATURE_ENDI_DILANESA,
   SYSTEM_CREDIT_TEXT,
@@ -1022,6 +1025,7 @@ export default function App() {
   const [isGoogleSitesModalOpen, setIsGoogleSitesModalOpen] = useState(false);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
   const [isAdminProfileModalOpen, setIsAdminProfileModalOpen] = useState(false);
+  const [isChangelogModalOpen, setIsChangelogModalOpen] = useState(false);
 
   // Toast System
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; type: 'success' | 'error' }>>([]);
@@ -1033,6 +1037,14 @@ export default function App() {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 3500);
   };
+
+  // Cek pembaruan versi aplikasi & bersihkan cache usang
+  useEffect(() => {
+    const res = checkAndBumpAppVersionCache();
+    if (res.upgraded && activeUser) {
+      showToast(`Aplikasi berhasil diperbarui ke versi ${res.currentVersion}`, 'success');
+    }
+  }, [activeUser]);
 
   // Sync profile update with cloud & sync Kepala Sekolah record in Data Guru
   const handleSaveProfile = (newProfile: SchoolProfile) => {
@@ -1830,12 +1842,32 @@ export default function App() {
             />
           )}
 
-          {/* Minimalist App Credit Footer */}
-          <footer className="mt-auto border-t border-slate-200/80 bg-white/85 backdrop-blur-xs py-3 px-4 text-center no-print">
-            <p className="text-[11px] font-semibold text-slate-500 tracking-wide">
-              {SYSTEM_CREDIT_TEXT}
-            </p>
+          {/* Minimalist App Credit Footer with Interactive Version Button */}
+          <footer className="mt-auto border-t border-slate-200/80 bg-white/85 backdrop-blur-xs py-3 px-4 no-print">
+            <div className="max-w-[1600px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2.5">
+              <p className="text-[11px] font-semibold text-slate-500 tracking-wide text-center sm:text-left">
+                {SYSTEM_CREDIT_TEXT}
+              </p>
+              <button
+                type="button"
+                onClick={() => setIsChangelogModalOpen(true)}
+                className="group inline-flex items-center gap-2 px-3 py-1 rounded-xl bg-slate-100 hover:bg-rose-50 border border-slate-200 hover:border-rose-300 text-xs font-semibold text-slate-600 hover:text-rose-700 transition cursor-pointer shadow-2xs active:scale-95"
+                title="Klik untuk melihat catatan pembaruan aplikasi SERBU 21"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 group-hover:ring-3 group-hover:ring-emerald-100 transition-all" aria-hidden="true" />
+                <Info className="w-3.5 h-3.5 text-slate-400 group-hover:text-rose-600 transition" />
+                <span className="font-mono text-slate-800 group-hover:text-rose-700">
+                  {APP_VERSION_FOOTER_TEXT}
+                </span>
+              </button>
+            </div>
           </footer>
+
+          {/* Changelog / Riwayat Pembaruan Modal Responsif */}
+          <ChangelogModal
+            isOpen={isChangelogModalOpen}
+            onClose={() => setIsChangelogModalOpen(false)}
+          />
         </div>
       )}
     </div>
