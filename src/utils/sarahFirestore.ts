@@ -1022,7 +1022,8 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
 
   await acquireSarahQueueSlot(signal, onStatusChange, onPhaseChange);
   try {
-    const maxAttempts = 2;
+    const maxAttempts = 3;
+    const retryDelaysMs = [1500, 3000];
     let lastErr: Error | null = null;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -1030,10 +1031,14 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
         throw new DOMException('Permintaan ke SARAH dibatalkan.', 'AbortError');
       }
       if (attempt > 0) {
-        const retryMsg = 'Menghubungkan ulang ke SARAH AI...';
+        const waitMs = retryDelaysMs[attempt - 1] || 1500;
+        const retryMsg = 'Menghubungkan ulang ke SARAH AI secara otomatis...';
         onStatusChange?.(retryMsg);
         onPhaseChange?.('analyzing', retryMsg);
-        await new Promise((resolve) => setTimeout(resolve, 450));
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        if (signal?.aborted) {
+          throw new DOMException('Permintaan ke SARAH dibatalkan.', 'AbortError');
+        }
       }
 
       const controller = new AbortController();
@@ -1083,11 +1088,10 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
         const errMsg = sanitizeSarahErrorMessage(
           data?.error || `Permintaan ke layanan SARAH gagal (HTTP ${response.status}).`
         );
-        // Server sudah menjalankan fallback multi-model; hanya retry di klien bila gangguan gateway 502
-        const isTransientGateway = response.status === 502;
+        const isTransientHttp = [429, 502, 503, 504].includes(response.status);
         lastErr = new Error(errMsg);
 
-        if (!isTransientGateway || attempt === maxAttempts - 1) {
+        if (!isTransientHttp || attempt === maxAttempts - 1) {
           throw lastErr;
         }
       } catch (err: any) {
@@ -1101,12 +1105,19 @@ export async function callSarahAiEndpoint<T = SarahTextGeneratedResponse>(
           throw new DOMException('Permintaan ke SARAH dibatalkan.', 'AbortError');
         } else {
           const isNetworkError = err instanceof TypeError;
+          const msgLower = String(err?.message || '').toLowerCase();
+          const isRetryable =
+            isNetworkError ||
+            msgLower.includes('padat') ||
+            msgLower.includes('antrean') ||
+            msgLower.includes('kendala koneksi') ||
+            msgLower.includes('waktu tunggu');
           lastErr = new Error(
             sanitizeSarahErrorMessage(
               err instanceof Error ? err.message : 'Gagal terhubung ke layanan SARAH.'
             )
           );
-          if (!isNetworkError || attempt === maxAttempts - 1) {
+          if (!isRetryable || attempt === maxAttempts - 1) {
             throw lastErr;
           }
         }
@@ -1141,139 +1152,185 @@ export async function callSarahAiStreamEndpoint(
   } = options;
 
   await acquireSarahQueueSlot(signal, onStatusChange, onPhaseChange);
-  const controller = new AbortController();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-
-  const forwardAbort = () => controller.abort();
-  if (signal) {
-    signal.addEventListener('abort', forwardAbort, { once: true });
-  }
-
+  const maxStreamAttempts = 3;
+  const streamRetryDelaysMs = [1500, 3000];
   let fallbackToStandard = false;
+  let lastStreamErr: Error | null = null;
 
   try {
-    onStatusChange?.('SARAH sedang mulai mengetik jawaban...');
-    onPhaseChange?.('analyzing', 'SARAH sedang mulai mengetik jawaban...');
-
-    const response = await fetch('/api/sarah-ai-stream', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-
-    if (response.status === 404 || response.status === 405 || !response.body) {
-      fallbackToStandard = true;
-    } else if (!response.ok) {
-      let data: any = null;
-      try {
-        data = await response.json();
-      } catch {
-        data = null;
+    for (let attempt = 0; attempt < maxStreamAttempts; attempt++) {
+      if (signal?.aborted) {
+        throw new DOMException('Permintaan ke SARAH dibatalkan.', 'AbortError');
       }
-      throw new Error(
-        sanitizeSarahErrorMessage(
-          data?.error || `Permintaan ke layanan SARAH gagal (HTTP ${response.status}).`
-        )
-      );
-    } else {
-      const contentType = (response.headers.get('content-type') || '').toLowerCase();
-      if (contentType.includes('application/json') && !contentType.includes('ndjson')) {
-        const json = await response.json();
-        if (json?.text && onChunk) {
-          onChunk(json.text);
+      if (attempt > 0) {
+        const waitMs = streamRetryDelaysMs[attempt - 1] || 1500;
+        onStatusChange?.('Menyambungkan ulang ke SARAH AI secara otomatis...');
+        onPhaseChange?.('analyzing', 'Menyambungkan ulang ke SARAH AI secara otomatis...');
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        if (signal?.aborted) {
+          throw new DOMException('Permintaan ke SARAH dibatalkan.', 'AbortError');
         }
+      }
+
+      const controller = new AbortController();
+      let timedOut = false;
+      let receivedAnyStreamChunk = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+
+      const forwardAbort = () => controller.abort();
+      if (signal) {
+        signal.addEventListener('abort', forwardAbort, { once: true });
+      }
+
+      try {
+        onStatusChange?.('SARAH sedang mulai mengetik jawaban...');
+        onPhaseChange?.('analyzing', 'SARAH sedang mulai mengetik jawaban...');
+
+        const response = await fetch('/api/sarah-ai-stream', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+
+        if (response.status === 404 || response.status === 405 || !response.body) {
+          fallbackToStandard = true;
+          break;
+        }
+
+        if (!response.ok) {
+          let data: any = null;
+          try {
+            data = await response.json();
+          } catch {
+            data = null;
+          }
+          const isTransientHttp = [429, 502, 503, 504].includes(response.status);
+          lastStreamErr = new Error(
+            sanitizeSarahErrorMessage(
+              data?.error || `Permintaan ke layanan SARAH gagal (HTTP ${response.status}).`
+            )
+          );
+          if (!isTransientHttp || attempt === maxStreamAttempts - 1) {
+            throw lastStreamErr;
+          }
+          continue;
+        }
+
+        const contentType = (response.headers.get('content-type') || '').toLowerCase();
+        if (contentType.includes('application/json') && !contentType.includes('ndjson')) {
+          const json = await response.json();
+          if (json?.text && onChunk) {
+            onChunk(json.text);
+          }
+          onPhaseChange?.('done', 'Selesai.');
+          return {
+            mode: json?.mode || payload.mode || 'general_chat',
+            text: json?.text || '',
+            model: json?.model,
+            fromCache: Boolean(json?.fromCache),
+          };
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let accumulated = '';
+        let resolvedModel = '';
+        let resolvedMode = payload.mode || 'general_chat';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+            let evt: any;
+            try {
+              evt = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if (evt?.type === 'chunk' && typeof evt.text === 'string') {
+              receivedAnyStreamChunk = true;
+              accumulated += evt.text;
+              onChunk?.(accumulated);
+            } else if (evt?.type === 'done') {
+              if (typeof evt.text === 'string' && evt.text.length >= accumulated.length) {
+                accumulated = evt.text;
+              }
+              resolvedModel = evt.model || resolvedModel;
+              resolvedMode = evt.mode || resolvedMode;
+            } else if (evt?.type === 'error') {
+              throw new Error(sanitizeSarahErrorMessage(evt.error || 'Gagal streaming SARAH AI.'));
+            }
+          }
+        }
+
+        if (buffer.trim()) {
+          try {
+            const evt = JSON.parse(buffer.trim());
+            if (evt?.type === 'done' && typeof evt.text === 'string') {
+              accumulated = evt.text;
+              resolvedModel = evt.model || resolvedModel;
+            } else if (evt?.type === 'error') {
+              throw new Error(sanitizeSarahErrorMessage(evt.error));
+            }
+          } catch {
+            // ignore incomplete tail
+          }
+        }
+
         onPhaseChange?.('done', 'Selesai.');
         return {
-          mode: json?.mode || payload.mode || 'general_chat',
-          text: json?.text || '',
-          model: json?.model,
-          fromCache: Boolean(json?.fromCache),
+          mode: resolvedMode,
+          text: accumulated,
+          model: resolvedModel || undefined,
+          fromCache: false,
         };
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-      let accumulated = '';
-      let resolvedModel = '';
-      let resolvedMode = payload.mode || 'general_chat';
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const rawLine of lines) {
-          const line = rawLine.trim();
-          if (!line) continue;
-          let evt: any;
-          try {
-            evt = JSON.parse(line);
-          } catch {
-            continue;
+      } catch (err: any) {
+        if (timedOut) {
+          lastStreamErr = new Error(
+            'Koneksi ke layanan SARAH AI sedang padat sehingga waktu tunggu habis. Silakan coba kirim ulang sebentar lagi.'
+          );
+          if (receivedAnyStreamChunk || attempt === maxStreamAttempts - 1) {
+            throw lastStreamErr;
           }
-          if (evt?.type === 'chunk' && typeof evt.text === 'string') {
-            accumulated += evt.text;
-            onChunk?.(accumulated);
-          } else if (evt?.type === 'done') {
-            if (typeof evt.text === 'string' && evt.text.length >= accumulated.length) {
-              accumulated = evt.text;
-            }
-            resolvedModel = evt.model || resolvedModel;
-            resolvedMode = evt.mode || resolvedMode;
-          } else if (evt?.type === 'error') {
-            throw new Error(sanitizeSarahErrorMessage(evt.error || 'Gagal streaming SARAH AI.'));
+        } else if (err?.name === 'AbortError' || signal?.aborted) {
+          onPhaseChange?.('cancelled', 'Proses SARAH dibatalkan.');
+          throw new DOMException('Permintaan ke SARAH dibatalkan.', 'AbortError');
+        } else {
+          const msgLower = String(err?.message || '').toLowerCase();
+          const isRetryable =
+            !receivedAnyStreamChunk &&
+            (err instanceof TypeError ||
+              msgLower.includes('padat') ||
+              msgLower.includes('antrean') ||
+              msgLower.includes('kendala koneksi') ||
+              msgLower.includes('disinkronkan') ||
+              msgLower.includes('waktu tunggu'));
+          lastStreamErr = err instanceof Error ? err : new Error(sanitizeSarahErrorMessage(err));
+          if (!isRetryable || attempt === maxStreamAttempts - 1) {
+            throw lastStreamErr;
           }
         }
-      }
-
-      if (buffer.trim()) {
-        try {
-          const evt = JSON.parse(buffer.trim());
-          if (evt?.type === 'done' && typeof evt.text === 'string') {
-            accumulated = evt.text;
-            resolvedModel = evt.model || resolvedModel;
-          } else if (evt?.type === 'error') {
-            throw new Error(sanitizeSarahErrorMessage(evt.error));
-          }
-        } catch {
-          // ignore incomplete tail
+      } finally {
+        clearTimeout(timer);
+        if (signal) {
+          signal.removeEventListener('abort', forwardAbort);
         }
       }
-
-      onPhaseChange?.('done', 'Selesai.');
-      return {
-        mode: resolvedMode,
-        text: accumulated,
-        model: resolvedModel || undefined,
-        fromCache: false,
-      };
     }
-  } catch (err: any) {
-    if (timedOut) {
-      throw new Error(
-        'Koneksi ke layanan SARAH AI sedang padat sehingga waktu tunggu habis. Silakan coba kirim ulang sebentar lagi.'
-      );
-    }
-    if (err?.name === 'AbortError' || signal?.aborted) {
-      onPhaseChange?.('cancelled', 'Proses SARAH dibatalkan.');
-      throw new DOMException('Permintaan ke SARAH dibatalkan.', 'AbortError');
-    }
-    throw err;
   } finally {
-    clearTimeout(timer);
-    if (signal) {
-      signal.removeEventListener('abort', forwardAbort);
-    }
     releaseSarahQueueSlot();
   }
 
@@ -1288,7 +1345,7 @@ export async function callSarahAiStreamEndpoint(
     return res;
   }
 
-  throw new Error('Layanan SARAH AI sedang mengalami kendala koneksi sementara.');
+  throw lastStreamErr || new Error('Layanan SARAH AI sedang mengalami kendala koneksi sementara.');
 }
 
 export function sanitizeSarahErrorMessage(rawMessage?: unknown): string {

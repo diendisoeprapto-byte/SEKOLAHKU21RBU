@@ -51,6 +51,8 @@ export interface TkaAnalisisPdfOptions {
   profile?: SchoolProfile;
   paketLabel: string;
   mapelLabel: string;
+  kelasLabel?: string;
+  kktp?: number;
   tahunPelajaran: string;
   semester: string;
   totalPeserta: number;
@@ -483,6 +485,15 @@ export const exportCbtAnalisisToPdf = async (
   doc.text(options.kepsekNipLabel, leftX, sigY + 4, { align: 'center' });
   doc.text(options.waliNipLabel, rightX, sigY + 4, { align: 'center' });
 
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • ${options.profile?.name || 'SDN Rawa Badak Utara 21'}`,
+    pageWidth / 2,
+    pageHeight - 6,
+    { align: 'center' }
+  );
+
   const fileName = `Laporan_Analisis_CBT_${sanitizeFilename(options.mapel)}_${sanitizeFilename(options.paket)}_${sanitizeFilename(options.kelas)}.pdf`;
   doc.save(fileName);
   return true;
@@ -501,13 +512,16 @@ export const exportTkaAnalisisToPdf = async (
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 14;
 
+  const kelasDisplay = options.kelasLabel || 'Semua Kelas 6';
+  const kktpValue = options.kktp ?? 75;
+
   let y = drawKopHeader(
     doc,
     options.profile,
     leftLogo,
     rightLogo,
     'LAPORAN ANALISIS BUTIR SOAL & KETUNTASAN TKA',
-    `Paket: ${options.paketLabel} • Mapel: ${options.mapelLabel} • TP ${options.tahunPelajaran} (${options.semester})`,
+    `Paket: ${options.paketLabel} • Mapel: ${options.mapelLabel} • ${kelasDisplay} • KKM ${kktpValue} • TP ${options.tahunPelajaran} (${options.semester})`,
     [180, 83, 9]
   );
 
@@ -564,7 +578,7 @@ export const exportTkaAnalisisToPdf = async (
     countSukar,
     total,
     avgPct,
-    80
+    kktpValue
   );
 
   doc.setFont('helvetica', 'bold');
@@ -641,7 +655,16 @@ export const exportTkaAnalisisToPdf = async (
   doc.setTextColor(71, 85, 105);
   doc.text(options.kepsekNipLabel, rightX, sigY + 4, { align: 'center' });
 
-  const fileName = `Laporan_Analisis_TKA_${sanitizeFilename(options.paketLabel)}_${sanitizeFilename(options.mapelLabel)}.pdf`;
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • ${options.profile?.name || 'SDN Rawa Badak Utara 21'}`,
+    pageWidth / 2,
+    pageHeight - 6,
+    { align: 'center' }
+  );
+
+  const fileName = `Laporan_Analisis_TKA_${sanitizeFilename(options.paketLabel)}_${sanitizeFilename(options.mapelLabel)}_${sanitizeFilename(kelasDisplay)}.pdf`;
   doc.save(fileName);
   return true;
 };
@@ -914,6 +937,15 @@ export const exportDynamicMatrixToPdf = async (
   doc.setTextColor(71, 85, 105);
   doc.text(options.kepsekNipLabel, sigLeftX, sigTopY + 28, { align: 'center' });
   doc.text(options.waliNipLabel, sigRightX, sigTopY + 28, { align: 'center' });
+
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • ${options.profile?.name || 'SDN Rawa Badak Utara 21'}`,
+    pageWidth / 2,
+    pageHeight - 6,
+    { align: 'center' }
+  );
 
   const fileName = `Matriks_Analisis_${matrix.examType}_${sanitizeFilename(matrix.mapelLabel)}_${sanitizeFilename(matrix.paketLabel)}.pdf`;
   doc.save(fileName);

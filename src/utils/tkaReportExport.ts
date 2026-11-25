@@ -333,6 +333,9 @@ const buildIndividualReportSectionHtml = (
         </td>
       </tr>
     </table>
+    <div style="margin-top:16px;padding-top:6px;border-top:1px solid #cbd5e1;text-align:center;font-size:8pt;color:#64748b;">
+      Dokumen Resmi SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • ${escapeHtml(options.schoolName)}
+    </div>
   </div>`;
 };
 
@@ -491,6 +494,9 @@ export const exportClassTkaReportToWord = (
     </table>
 
     ${signatureHtml}
+    <div style="margin-top:16px;padding-top:6px;border-top:1px solid #cbd5e1;text-align:center;font-size:8pt;color:#64748b;">
+      Dokumen Resmi SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • ${escapeHtml(options.schoolName)}
+    </div>
   `;
 
   const docHtml = wrapWordHtml(`Rekap Report TKA - ${classLabel}`, bodyHtml, true);
@@ -717,6 +723,15 @@ const renderIndividualTkaPdfPage = (
   doc.setFontSize(8);
   doc.setTextColor(71, 85, 105);
   doc.text(wali.nipLabel, cx3, sigY + 4, { align: 'center' });
+
+  doc.setFontSize(7.2);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Dokumen Resmi SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • ${options.schoolName}`,
+    pageWidth / 2,
+    pageHeight - 6,
+    { align: 'center' }
+  );
 };
 
 export const exportIndividualTkaReportToPdf = async (
@@ -894,6 +909,15 @@ export const exportClassTkaReportToPdf = async (
     doc.setFontSize(8);
     doc.text(options.kepsekNipLabel, cx, sigY + 4, { align: 'center' });
   }
+
+  doc.setFontSize(7.2);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Dokumen Resmi SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • ${options.schoolName}`,
+    pageWidth / 2,
+    pageHeight - 6,
+    { align: 'center' }
+  );
 
   const fileName = `Rekap_Report_TKA_${sanitizeFilenamePart(classLabel)}_${sanitizeFilenamePart(options.paketLabel)}.pdf`;
   doc.save(fileName);

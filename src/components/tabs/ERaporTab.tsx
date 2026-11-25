@@ -610,6 +610,10 @@ export const ERaporTab: React.FC<Props> = ({
               </div>
             </div>
           </div>
+
+          <div className="mt-6 pt-2 border-t border-slate-200 text-center text-[9px] text-slate-500">
+            Dokumen Resmi SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • {profile.name}
+          </div>
         </div>
       </div>
     </section>

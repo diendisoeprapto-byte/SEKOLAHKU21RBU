@@ -16,9 +16,20 @@ import {
   Users,
   Briefcase,
 } from 'lucide-react';
+import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { SchoolProfile, Teacher, Student, ActiveUser } from '../types';
-import { getStoredAdminPassword } from '../utils/storage';
+import { getStoredAdminPassword, saveStoredAdminPassword } from '../utils/storage';
 import { SYSTEM_CREDIT_TEXT } from '../utils/ownershipWatermark';
+import { db } from '../utils/firebase';
+import {
+  AdminCredentialsDoc,
+  clearLocalAdminLockout,
+  getCachedLoginAppearanceUrl,
+  getLocalAdminLockout,
+  saveLocalAdminLockout,
+  subscribeToAdminCredentials,
+  subscribeToLoginAppearance,
+} from '../utils/authSession';
 import {
   APP_VERSION,
   RELEASE_DATE_SHORT,
@@ -63,14 +74,20 @@ export const LoginScreen: React.FC<Props> = ({
   onOpenGoogleSitesGuide,
   onLogoSecretClick,
 }) => {
+  const [cloudLoginBgUrl, setCloudLoginBgUrl] = useState<string>(() =>
+    getCachedLoginAppearanceUrl()
+  );
+  const [adminCreds, setAdminCreds] = useState<AdminCredentialsDoc | null>(null);
+
   const heroCandidates = React.useMemo(() => {
     return [
+      cloudLoginBgUrl,
       profile.loginBackgroundUrl,
       '/assets/image_13.png',
       '/image_13.png',
       schoolIllustration,
     ].filter(Boolean) as string[];
-  }, [profile.loginBackgroundUrl]);
+  }, [cloudLoginBgUrl, profile.loginBackgroundUrl]);
 
   const [selectedRole, setSelectedRole] = useState<LoginRoleTab>(() => {
     try {
@@ -116,13 +133,33 @@ export const LoginScreen: React.FC<Props> = ({
   const [schoolLogoSrc, setSchoolLogoSrc] = useState<string>(
     profile.logoSekolahUrl || '/assets/image_7.png'
   );
-  const [parallaxOffset, setParallaxOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [showChangelogModal, setShowChangelogModal] = useState(false);
-  const visualPaneRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setSchoolLogoSrc(profile.logoSekolahUrl || '/assets/image_7.png');
   }, [profile.logoSekolahUrl]);
+
+  useEffect(() => {
+    const unsubAppearance = subscribeToLoginAppearance((docData) => {
+      const nextUrl = docData?.imageDataUrl || '';
+      setCloudLoginBgUrl(nextUrl);
+      setHeroSrcIdx(0);
+      setHeroAllFailed(false);
+    });
+    const unsubAdmin = subscribeToAdminCredentials((credData) => {
+      setAdminCreds(credData);
+      if (credData?.password) {
+        saveStoredAdminPassword(credData.password);
+      }
+      if (credData && credData.lockedUntil === null && (credData.failedAttempts || 0) === 0) {
+        clearLocalAdminLockout();
+      }
+    });
+    return () => {
+      unsubAppearance();
+      unsubAdmin();
+    };
+  }, []);
 
   useEffect(() => {
     const res = checkAndBumpAppVersionCache();
@@ -130,15 +167,6 @@ export const LoginScreen: React.FC<Props> = ({
       showToast(`Aplikasi berhasil diperbarui ke versi ${res.currentVersion}`, 'success');
     }
   }, [showToast]);
-
-  useEffect(() => {
-    const handleScrollParallax = () => {
-      const scrollY = window.scrollY || 0;
-      setParallaxOffset((prev) => ({ ...prev, y: Math.min(28, scrollY * 0.14) }));
-    };
-    window.addEventListener('scroll', handleScrollParallax, { passive: true });
-    return () => window.removeEventListener('scroll', handleScrollParallax);
-  }, []);
 
   const persistRememberPreference = (shouldRemember: boolean, uname: string, role: LoginRoleTab) => {
     try {
@@ -163,17 +191,6 @@ export const LoginScreen: React.FC<Props> = ({
     }
   };
 
-  const handleMouseMoveVisual = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = visualPaneRef.current?.getBoundingClientRect();
-    if (!rect || rect.width === 0 || rect.height === 0) return;
-    const normX = (e.clientX - rect.left) / rect.width - 0.5;
-    const normY = (e.clientY - rect.top) / rect.height - 0.5;
-    setParallaxOffset({
-      x: Math.round(normX * -10),
-      y: Math.round(normY * -10),
-    });
-  };
-
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
@@ -189,8 +206,10 @@ export const LoginScreen: React.FC<Props> = ({
     }
 
     // 1. Verifikasi Akun Administrator
-    const storedAdminPass = getStoredAdminPassword().trim();
-    const isAdminPassCustomized = localStorage.getItem('sekolahku_admin_password') !== null;
+    const cloudAdminPass = typeof adminCreds?.password === 'string' ? adminCreds.password.trim() : '';
+    const storedAdminPass = cloudAdminPass || getStoredAdminPassword().trim();
+    const isAdminPassCustomized =
+      Boolean(cloudAdminPass) || localStorage.getItem('sekolahku_admin_password') !== null;
     if (u === 'admin') {
       if (selectedRole !== 'admin' && selectedRole !== 'guru') {
         const msg = 'Akun Administrator menggunakan pilihan peran "Admin". Silakan pilih peran Admin.';
@@ -198,7 +217,29 @@ export const LoginScreen: React.FC<Props> = ({
         showToast(msg, 'error');
         return;
       }
+
+      const localLock = getLocalAdminLockout();
+      const activeLockedUntil = Math.max(
+        Number(adminCreds?.lockedUntil || 0),
+        Number(localLock.lockedUntil || 0)
+      );
+      if (activeLockedUntil > Date.now()) {
+        const minsLeft = Math.max(1, Math.ceil((activeLockedUntil - Date.now()) / 60000));
+        const msg = `Akun Administrator terkunci sementara karena percobaan sandi salah (${minsLeft} menit lagi) atau hubungi Endi Soeprapto untuk pemulihan.`;
+        setLoginError(msg);
+        showToast(msg, 'error');
+        return;
+      }
+
       if (p === storedAdminPass || (!isAdminPassCustomized && (p === 'admin' || p === '123'))) {
+        clearLocalAdminLockout();
+        if (adminCreds && ((adminCreds.failedAttempts || 0) > 0 || adminCreds.lockedUntil)) {
+          void setDoc(
+            doc(db, 'settings', 'admin_credentials'),
+            { failedAttempts: 0, lockedUntil: null, updatedAt: new Date().toISOString(), serverTime: serverTimestamp() },
+            { merge: true }
+          ).catch(() => {});
+        }
         persistRememberPreference(rememberMe, username, 'admin');
         onLoginSuccess({
           role: 'admin',
@@ -210,7 +251,24 @@ export const LoginScreen: React.FC<Props> = ({
         showToast('Berhasil masuk sebagai Administrator!', 'success');
         return;
       }
-      const msg = 'Password Administrator tidak sesuai dengan data aplikasi SERBU 21.';
+
+      const nextFailed = Math.max(Number(adminCreds?.failedAttempts || 0), localLock.failedAttempts) + 1;
+      const nextLockedUntil = nextFailed >= 5 ? Date.now() + 15 * 60 * 1000 : null;
+      saveLocalAdminLockout({ failedAttempts: nextFailed, lockedUntil: nextLockedUntil });
+      void setDoc(
+        doc(db, 'settings', 'admin_credentials'),
+        {
+          failedAttempts: nextFailed,
+          lockedUntil: nextLockedUntil,
+          updatedAt: new Date().toISOString(),
+          serverTime: serverTimestamp(),
+        },
+        { merge: true }
+      ).catch(() => {});
+
+      const msg = nextLockedUntil
+        ? 'Terlalu banyak percobaan salah. Akun Admin dikunci sementara 15 menit (dapat dibuka oleh Endi Soeprapto).'
+        : `Password Administrator tidak sesuai dengan data aplikasi SERBU 21 (Percobaan ${nextFailed}/5).`;
       setLoginError(msg);
       showToast(msg, 'error');
       return;
@@ -370,10 +428,10 @@ export const LoginScreen: React.FC<Props> = ({
             SELAMAT DATANG DI WEB SERBU 21
           </h1>
           <p className="text-sm lg:text-base font-bold text-amber-100 drop-shadow">
-            (Sistem Digital Terpadu SDN Rawa Badak Utara 21)
+            (Sistem Edukasi, Rapor, dan Basis Data Utama)
           </p>
           <p className="text-xs text-white/85 max-w-xl leading-relaxed">
-            Terintegrasi layanan Presensi Harian, CBT &amp; Simulasi TKA Kelas 6, Rapor Kurikulum Merdeka, Perpustakaan Digital, dan Asisten Virtual SARAH.
+            Terintegrasi layanan Presensi Harian, CBT &amp; Simulasi TKA, Rapor Kurikulum Merdeka, Perpustakaan Digital, dan Asisten Virtual SARAH.
           </p>
         </div>
       </div>
@@ -580,8 +638,9 @@ export const LoginScreen: React.FC<Props> = ({
             <History className="w-3 h-3 text-slate-400" />
           </button>
 
-          <footer className="text-[11px] font-semibold text-slate-500 tracking-wide">
-            {SYSTEM_CREDIT_TEXT}
+          <footer className="text-[11px] font-semibold text-slate-500 tracking-wide space-y-0.5">
+            <div>SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • SDN Rawa Badak Utara 21</div>
+            <div className="text-[10px] text-slate-400">{SYSTEM_CREDIT_TEXT}</div>
           </footer>
         </div>
       </div>

@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import { collection, addDoc, doc, setDoc, getDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../utils/firebase';
+import { sanitizeInput } from '../utils/sanitize';
 import {
   ActiveUser,
   ActiveExamHeaderStatus,
@@ -353,6 +354,8 @@ export const StudentDashboard: React.FC<Props> = ({
     durasiDetik?: number;
     benarHots?: number;
     totalHots?: number;
+    lockedPracticeOnly?: boolean;
+    lockedScore?: number;
   } | null>(null);
   const [firestoreSaveStatus, setFirestoreSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [isSavingSubmission, setIsSavingSubmission] = useState<boolean>(false);
@@ -669,7 +672,7 @@ export const StudentDashboard: React.FC<Props> = ({
     const mergedCatatan: Record<string, string> = {};
     TUJUH_KEBIASAAN_LIST.forEach((h) => {
       const chosen = kebiasaanSelectedIndicators[h.id] || [];
-      const manual = (kebiasaanNotes[h.id] || '').trim();
+      const manual = sanitizeInput(kebiasaanNotes[h.id] || '', 500);
       if (chosen.length > 0 && manual) {
         mergedCatatan[h.id] = `${chosen.join('; ')} — ${manual}`;
       } else if (chosen.length > 0) {
@@ -710,7 +713,7 @@ export const StudentDashboard: React.FC<Props> = ({
       },
       catatan: mergedCatatan,
       skor: completedCount,
-      catatanSiswa: kebiasaanCatatanSiswa.trim(),
+      catatanSiswa: sanitizeInput(kebiasaanCatatanSiswa, 800),
       createdAt: now.toISOString(),
     };
 
@@ -1739,14 +1742,21 @@ export const StudentDashboard: React.FC<Props> = ({
     setIsSavingSubmission(true);
     setOfflineQueueNotice(false);
 
+    const sanitizedAnswers: Record<string, string | string[]> = {};
+    Object.entries(answers).forEach(([qId, val]) => {
+      sanitizedAnswers[qId] = Array.isArray(val)
+        ? val.map((v) => sanitizeInput(v, 500))
+        : sanitizeInput(val, 2000);
+    });
+
     const evaluatedQuestions = activeExamSoalList.length > 0 ? activeExamSoalList : finishedExam.soalList;
-    const answeredCount = countAnsweredQuestions(answers);
+    const answeredCount = countAnsweredQuestions(sanitizedAnswers);
     let earned = 0;
     let max = 0;
 
     evaluatedQuestions.forEach((q) => {
       max += q.bobot || 10;
-      const ans = answers[q.id];
+      const ans = sanitizedAnswers[q.id];
       const evalRes = gradeQuestionAnswer(q, ans);
       earned += evalRes.earnedScore;
     });
@@ -1758,7 +1768,7 @@ export const StudentDashboard: React.FC<Props> = ({
     const noSoalBetul: number[] = [];
     const noSoalSalah: number[] = [];
     canonicalList.forEach((q, idx) => {
-      const evalRes = gradeQuestionAnswer(q, answers[q.id]);
+      const evalRes = gradeQuestionAnswer(q, sanitizedAnswers[q.id]);
       if (evalRes.isCorrect) {
         noSoalBetul.push(idx + 1);
       } else {
@@ -1768,7 +1778,7 @@ export const StudentDashboard: React.FC<Props> = ({
 
     const { benarHots, totalHots } = computeExamHotsStats(
       canonicalList,
-      answers,
+      sanitizedAnswers,
       (q, ans) => gradeQuestionAnswer(q, ans).isCorrect
     );
     const durasiDetik = Math.max(
@@ -1809,7 +1819,7 @@ export const StudentDashboard: React.FC<Props> = ({
       skor: Number.isFinite(earned) ? earned : 0,
       nilai: finalGrade,
       waktuSelesai: new Date().toLocaleTimeString(),
-      jawabanSiswa: answers,
+      jawabanSiswa: sanitizedAnswers,
       category: finishedExam.category,
       mapel: finishedExam.mapel,
       judul: finishedExam.judul,
@@ -1846,7 +1856,7 @@ export const StudentDashboard: React.FC<Props> = ({
       total_soal: canonicalList.length,
       no_soal_betul: noSoalBetul,
       no_soal_salah: noSoalSalah,
-      jawaban_siswa: answers,
+      jawaban_siswa: sanitizedAnswers,
       waktu_selesai: new Date().toLocaleTimeString('id-ID'),
     }).finally(() => {
       setFirestoreSaveStatus('saved');
@@ -1862,7 +1872,7 @@ export const StudentDashboard: React.FC<Props> = ({
       paketName: finishedExam.paketName,
       judul: finishedExam.judul,
       category: finishedExam.category,
-      skorPerNomor: answers,
+      skorPerNomor: sanitizedAnswers,
       nilaiAkhir: finalGrade,
       benarHots,
       totalHots,
@@ -1878,6 +1888,8 @@ export const StudentDashboard: React.FC<Props> = ({
     const cbtResultDocId = buildCbtResultDocId(finishedExam.id, currentStudent.nisn || currentStudent.id);
     let success = false;
     let attempt = 0;
+    let tkaLockedPracticeOnly = false;
+    let tkaLockedScore: number | undefined = undefined;
 
     while (!success && attempt < 25) {
       attempt++;
@@ -1900,7 +1912,7 @@ export const StudentDashboard: React.FC<Props> = ({
             paketName: finishedExam.paketName,
             mapelScores: { [normMapelKey]: finalGrade },
             completedMapelKeys: [normMapelKey],
-            questionAnswers: answers,
+            questionAnswers: sanitizedAnswers,
             durasiMenitUsed: durationUsed,
             durasiDetik,
             benarHots,
@@ -1915,6 +1927,10 @@ export const StudentDashboard: React.FC<Props> = ({
           ]);
           if (tkaRes && (tkaRes as any).cloudSaved) {
             success = true;
+            tkaLockedPracticeOnly = Boolean((tkaRes as any).lockedPracticeOnly);
+            if (typeof (tkaRes as any).lockedScore === 'number') {
+              tkaLockedScore = (tkaRes as any).lockedScore;
+            }
           }
         } else {
           await saveCbtResultToFirestore(newResultEntry);
@@ -1939,14 +1955,17 @@ export const StudentDashboard: React.FC<Props> = ({
       isOpen: true,
       status: 'success',
       attemptCount: attempt,
-      message: 'BERHASIL! Nilai Anda sudah masuk ke sistem Guru & Admin.',
+      message: tkaLockedPracticeOnly
+        ? `Latihan selesai! Skor latihan: ${finalGrade}. Nilai resmi TKA Anda (${tkaLockedScore ?? finalGrade}) tetap aman terkunci.`
+        : 'BERHASIL! Nilai Anda sudah masuk ke sistem Guru & Admin.',
     });
     setIsSavingSubmission(false);
 
     // Sinkronisasi ke asesmen siswa secara otomatis & langsung kirim ke Firestore sebelum sesi ditutup
+    // (Dilewati jika TKA berstatus latihan murni karena nilai resmi sudah terkunci 1x)
     let assessKeyWritten = '';
     let assessPayloadWritten: Record<string, any> | null = null;
-    try {
+    if (!tkaLockedPracticeOnly) try {
       const filters = getActiveFilters();
       const targetClass = currentStudent?.kelas || activeClass;
       const normMapel = finishedExam.mapel.toLowerCase();
@@ -2052,6 +2071,8 @@ export const StudentDashboard: React.FC<Props> = ({
       durasiDetik,
       benarHots,
       totalHots,
+      lockedPracticeOnly: tkaLockedPracticeOnly,
+      lockedScore: tkaLockedScore,
     });
     setIsExamRunning(false);
     setResumedNotice(null);
@@ -2077,14 +2098,18 @@ export const StudentDashboard: React.FC<Props> = ({
           : null
       );
       showToast(
-        cloudSaved
+        tkaLockedPracticeOnly
+          ? `Latihan Selesai! Skor percobaan latihan Anda: ${finalGrade}. Nilai resmi pertama (${tkaLockedScore ?? finalGrade}) tetap terkunci.`
+          : cloudSaved
           ? `Waktu ujian habis! Jawaban otomatis terkirim ke database. Nilai Anda: ${finalGrade}`
           : `Waktu ujian habis! Jawaban tersimpan & masuk antrean sinkronisasi database. Nilai Anda: ${finalGrade}`,
         'success'
       );
     } else if (finishedExam.category === 'tka') {
       showToast(
-        cloudSaved
+        tkaLockedPracticeOnly
+          ? `Latihan Selesai! Skor latihan: ${finalGrade}. Nilai resmi TKA (${tkaLockedScore ?? finalGrade}) tetap terkunci di sistem Guru.`
+          : cloudSaved
           ? `Selamat! Ujian TKA selesai & nilai (${finalGrade}) berhasil terkirim ke Admin!`
           : `Ujian TKA selesai (Nilai: ${finalGrade}). Nilai tersimpan di perangkat & masuk antrean sinkronisasi ke Admin.`,
         'success'
@@ -3625,11 +3650,21 @@ export const StudentDashboard: React.FC<Props> = ({
               <CheckCircle2 className="w-10 h-10" />
             </div>
             <div>
-              <span className="text-xs font-black uppercase text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
-                Ujian Berhasil Diselesaikan &amp; Tersinkronisasi
+              <span
+                className={`text-xs font-black uppercase px-3 py-1 rounded-full border ${
+                  examResult.lockedPracticeOnly
+                    ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
+                    : 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                }`}
+              >
+                {examResult.lockedPracticeOnly
+                  ? 'Mode Latihan Selesai • Nilai Resmi Tetap Terkunci'
+                  : 'Ujian Berhasil Diselesaikan & Tersinkronisasi'}
               </span>
               <h3 className="font-display font-black text-2xl text-slate-800 mt-2">
-                Nilai Akhir: {examResult.score} / 100
+                {examResult.lockedPracticeOnly
+                  ? `Skor Percobaan Latihan: ${examResult.score} / 100`
+                  : `Nilai Akhir: ${examResult.score} / 100`}
               </h3>
               <p className="text-xs text-slate-500 mt-1">
                 {activeExamObj.judul} • Peserta: {currentStudent.nama}
@@ -3648,9 +3683,15 @@ export const StudentDashboard: React.FC<Props> = ({
               </div>
             </div>
 
-            <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
-              Nilai Anda telah otomatis tersimpan ke data penilaian sekolah dan langsung terintegrasi dengan Rekap Nilai (Leger) serta e-Rapor resmi.
-            </p>
+            {examResult.lockedPracticeOnly ? (
+              <div className="max-w-lg mx-auto p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-xs font-bold leading-relaxed">
+                Latihan Selesai! Skor percobaan latihan Anda: <strong>{examResult.score}</strong>. Catatan: Nilai resmi TKA pertama Anda (<strong>{examResult.lockedScore ?? examResult.score}</strong>) sudah masuk &amp; terkunci di sistem Guru sehingga tidak berubah.
+              </div>
+            ) : (
+              <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                Nilai Anda telah otomatis tersimpan ke data penilaian sekolah dan langsung terintegrasi dengan Rekap Nilai (Leger) serta e-Rapor resmi.
+              </p>
+            )}
 
             {/* Indikator Status Terpisah: Simpan Jawaban Firestore (Instan) vs Analisis SARAH AI (Async Queue) */}
             <div className="max-w-xl mx-auto grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-left pt-1">

@@ -1025,8 +1025,10 @@ export const ManajemenASAJTab: React.FC<Props> = ({
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, semCfg.shortLabel);
-    XLSX.writeFile(wb, `Template_Rapor_${semCfg.shortLabel.replace(/\s+/g, '_')}.xlsx`);
-    showToast(`Template Excel ${semCfg.label} berhasil diunduh!`, 'success');
+    const kelasSuffix =
+      rombelFilter === 'ALL' ? 'Semua_Kelas_6' : rombelFilter.replace(/\s+/g, '_');
+    XLSX.writeFile(wb, `Template_Rapor_${semCfg.shortLabel.replace(/\s+/g, '_')}_${kelasSuffix}.xlsx`);
+    showToast(`Template Excel ${semCfg.label} (${rombelFilter === 'ALL' ? 'Semua Kelas 6' : rombelFilter}) berhasil diunduh!`, 'success');
   };
 
   // Import Excel untuk semester yang sedang dipilih
@@ -2298,7 +2300,9 @@ export const ManajemenASAJTab: React.FC<Props> = ({
           const ws = XLSX.utils.json_to_sheet(rowsExcel);
           const wb = XLSX.utils.book_new();
           XLSX.utils.book_append_sheet(wb, ws, 'Rekap Ijazah 10 Mapel');
-          XLSX.writeFile(wb, `Rekap_Nilai_Ijazah_Semua_Mapel_${kosp.tahunPelajaran.replace('/', '-')}.xlsx`);
+          const kelasSuffix =
+            rombelFilter === 'ALL' ? 'Semua_Kelas_6' : rombelFilter.replace(/\s+/g, '_');
+          XLSX.writeFile(wb, `Rekap_Nilai_Ijazah_Semua_Mapel_${kelasSuffix}_${kosp.tahunPelajaran.replace('/', '-')}.xlsx`);
           showToast('Rekap Nilai Ijazah & Rata-rata Rapor Per Mapel berhasil diekspor ke Excel!', 'success');
         };
 

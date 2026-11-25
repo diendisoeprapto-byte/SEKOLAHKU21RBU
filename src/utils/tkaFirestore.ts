@@ -689,6 +689,35 @@ export function clearPendingTkaSubmissions(): void {
   }
 }
 
+export function isTkaMapelLocked(
+  sub: TKASubmissionItem | undefined | null,
+  mapelKey: TKAMapelScoreKey
+): boolean {
+  if (!sub) return false;
+  const lockedEntry = sub.lockedMapels?.[mapelKey];
+  if (lockedEntry && lockedEntry.sumberNilai === 'UJIAN_TKA') {
+    return true;
+  }
+  if (sub.sumberNilai === 'UJIAN_TKA' && sub.isLocked === true) {
+    const completed = Array.isArray(sub.completedMapels)
+      ? sub.completedMapels.map((m) => normalizeTkaMapelKey(m))
+      : [];
+    if (completed.length > 0) {
+      return completed.includes(mapelKey);
+    }
+    return Number(sub.scoresPerMapel?.[mapelKey] ?? 0) > 0;
+  }
+  return false;
+}
+
+export function isAnyTkaMapelLocked(sub: TKASubmissionItem | undefined | null): boolean {
+  if (!sub) return false;
+  if (sub.lockedMapels && Object.keys(sub.lockedMapels).length > 0) {
+    return Object.values(sub.lockedMapels).some((v) => v?.sumberNilai === 'UJIAN_TKA');
+  }
+  return sub.sumberNilai === 'UJIAN_TKA' && sub.isLocked === true;
+}
+
 export function mergeTwoTkaSubmissions(
   older: TKASubmissionItem,
   newer: TKASubmissionItem
@@ -705,7 +734,29 @@ export function mergeTwoTkaSubmissions(
   const olderSet = new Set(olderCompleted);
   const newerSet = new Set(newerCompleted);
 
+  const mergedLockedMapels: NonNullable<TKASubmissionItem['lockedMapels']> = {};
+  ALL_TKA_MAPEL_KEYS.forEach((key) => {
+    const olderLocked = isTkaMapelLocked(older, key);
+    const newerLocked = isTkaMapelLocked(newer, key);
+    if (olderLocked) {
+      mergedLockedMapels[key] = older.lockedMapels?.[key] || {
+        score: Number(older.scoresPerMapel?.[key] ?? 0),
+        waktuTerkunci: older.waktuTerkunci || older.updatedAt || new Date().toISOString(),
+        sumberNilai: 'UJIAN_TKA',
+      };
+    } else if (newerLocked) {
+      mergedLockedMapels[key] = newer.lockedMapels?.[key] || {
+        score: Number(newer.scoresPerMapel?.[key] ?? 0),
+        waktuTerkunci: newer.waktuTerkunci || newer.updatedAt || new Date().toISOString(),
+        sumberNilai: 'UJIAN_TKA',
+      };
+    }
+  });
+
   const pickMapelScore = (key: TKAMapelScoreKey): number => {
+    if (mergedLockedMapels[key]) {
+      return Number.isFinite(mergedLockedMapels[key].score) ? mergedLockedMapels[key].score : 0;
+    }
     const newerAttempted = newerSet.has(key);
     const olderAttempted = olderSet.has(key);
     const nVal = Number(newer.scoresPerMapel?.[key] ?? 0);
@@ -729,6 +780,8 @@ export function mergeTwoTkaSubmissions(
       pickMapelScore('Koding dan Kecerdasan Artifisial (KKA)')
     ),
   };
+
+  const hasAnyLock = Object.keys(mergedLockedMapels).length > 0;
 
   function pickValSafe(v: number): number {
     return Number.isFinite(v) ? v : 0;
@@ -794,6 +847,16 @@ export function mergeTwoTkaSubmissions(
     statusPengerjaan: 'selesai',
     tahunPelajaran: newer.tahunPelajaran || older.tahunPelajaran,
     semester: newer.semester || older.semester,
+    sumberNilai: hasAnyLock
+      ? 'UJIAN_TKA'
+      : newer.sumberNilai || older.sumberNilai || undefined,
+    isLocked: hasAnyLock,
+    waktuTerkunci: hasAnyLock
+      ? older.waktuTerkunci ||
+        newer.waktuTerkunci ||
+        Object.values(mergedLockedMapels)[0]?.waktuTerkunci
+      : undefined,
+    ...(hasAnyLock ? { lockedMapels: mergedLockedMapels } : {}),
     updatedAt:
       (newer.updatedAt || '') >= (older.updatedAt || '')
         ? newer.updatedAt || new Date().toISOString()
@@ -1222,6 +1285,7 @@ export interface UpsertTkaSubmissionParams {
   jenjang?: string;
   tahunPelajaran?: string;
   semester?: string;
+  sumberNilai?: 'UJIAN_TKA' | 'INPUT_MANUAL';
 }
 
 function buildMergedTkaSubmissionState(
@@ -1231,6 +1295,8 @@ function buildMergedTkaSubmissionState(
 ): {
   mergedSub: TKASubmissionItem;
   updatedList: TKASubmissionItem[];
+  lockedPracticeOnly: boolean;
+  lockedScore?: number;
 } {
   const {
     student,
@@ -1245,6 +1311,7 @@ function buildMergedTkaSubmissionState(
     jenjang,
     tahunPelajaran,
     semester,
+    sumberNilai = 'UJIAN_TKA',
   } = params;
   const basePaket = extractBaseTkaPaket(paketName);
   const stableStudentId = student.id || student.nisn || 'siswa_anon';
@@ -1260,6 +1327,35 @@ function buildMergedTkaSubmissionState(
       ? mergeTwoTkaSubmissions(remoteSub, localPrev)
       : localPrev || remoteSub || undefined;
 
+  // Kondisi B: Jika semua mapel yang disubmit sudah terkunci resmi oleh UJIAN_TKA,
+  // jadikan sesi ini latihan murni dan JANGAN timpa nilai resmi pertama di sistem/Firestore.
+  const unlockedSubmittedMapels = completedMapelKeys.filter(
+    (key) => !isTkaMapelLocked(prevSub, key)
+  );
+  if (
+    sumberNilai === 'UJIAN_TKA' &&
+    prevSub &&
+    completedMapelKeys.length > 0 &&
+    unlockedSubmittedMapels.length === 0
+  ) {
+    const firstKey = completedMapelKeys[0];
+    const lockedScore =
+      completedMapelKeys.length === 1
+        ? Number(
+            prevSub.lockedMapels?.[firstKey]?.score ??
+              prevSub.scoresPerMapel?.[firstKey] ??
+              prevSub.skorTotal ??
+              0
+          )
+        : Number(prevSub.skorTotal ?? 0);
+    return {
+      mergedSub: prevSub,
+      updatedList: existingSubs,
+      lockedPracticeOnly: true,
+      lockedScore,
+    };
+  }
+
   const prevCompleted: TKAMapelScoreKey[] = Array.isArray(prevSub?.completedMapels)
     ? (prevSub!.completedMapels as TKAMapelScoreKey[])
     : prevSub?.scoresPerMapel
@@ -1268,7 +1364,31 @@ function buildMergedTkaSubmissionState(
 
   const mergedCompleted = Array.from(new Set<TKAMapelScoreKey>([...prevCompleted, ...completedMapelKeys]));
 
+  const nowIso = new Date().toISOString();
+  const nextLockedMapels: NonNullable<TKASubmissionItem['lockedMapels']> = {
+    ...(prevSub?.lockedMapels || {}),
+  };
+
+  // Pastikan lock lama pada mapel yang sudah UJIAN_TKA ikut tercatat eksplisit
+  if (prevSub?.sumberNilai === 'UJIAN_TKA' && prevSub?.isLocked) {
+    prevCompleted.forEach((k) => {
+      if (!nextLockedMapels[k]) {
+        nextLockedMapels[k] = {
+          score: Number(prevSub.scoresPerMapel?.[k] ?? 0),
+          waktuTerkunci: prevSub.waktuTerkunci || prevSub.updatedAt || nowIso,
+          sumberNilai: 'UJIAN_TKA',
+        };
+      }
+    });
+  }
+
   const pickVal = (key: TKAMapelScoreKey): number => {
+    if (isTkaMapelLocked(prevSub, key)) {
+      const lockedVal =
+        prevSub?.lockedMapels?.[key]?.score ?? prevSub?.scoresPerMapel?.[key] ?? 0;
+      const nLocked = Number(lockedVal);
+      return Number.isFinite(nLocked) ? nLocked : 0;
+    }
     const raw = mapelScores[key] ?? prevSub?.scoresPerMapel?.[key] ?? 0;
     const n = Number(raw);
     return Number.isFinite(n) ? n : 0;
@@ -1281,6 +1401,18 @@ function buildMergedTkaSubmissionState(
     'Bahasa Inggris': pickVal('Bahasa Inggris'),
     'Koding dan Kecerdasan Artifisial (KKA)': pickVal('Koding dan Kecerdasan Artifisial (KKA)'),
   };
+
+  // Kondisi A: Ujian TKA nyata mengunci nilai untuk mapel yang baru diselesaikan
+  // (termasuk menimpa nilai INPUT_MANUAL sebelumnya karena belum terkunci).
+  if (sumberNilai === 'UJIAN_TKA') {
+    unlockedSubmittedMapels.forEach((key) => {
+      nextLockedMapels[key] = {
+        score: Number(updatedScores[key] ?? 0),
+        waktuTerkunci: nowIso,
+        sumberNilai: 'UJIAN_TKA',
+      };
+    });
+  }
 
   const keysForAvg: TKAMapelScoreKey[] =
     mergedCompleted.length > 0 ? mergedCompleted : ALL_TKA_MAPEL_KEYS;
@@ -1296,7 +1428,9 @@ function buildMergedTkaSubmissionState(
   const nextHotsByMapel: Record<string, { benar: number; total: number }> = {
     ...((prevSub as any)?.hotsByMapel || {}),
   };
-  if (typeof totalHots === 'number' || typeof benarHots === 'number') {
+  const slotIsLocked =
+    completedMapelKeys.length === 1 && isTkaMapelLocked(prevSub, completedMapelKeys[0]);
+  if (!slotIsLocked && (typeof totalHots === 'number' || typeof benarHots === 'number')) {
     nextHotsByMapel[mapelSlotKey] = {
       benar: Number(benarHots || 0),
       total: Number(totalHots || 0),
@@ -1317,12 +1451,21 @@ function buildMergedTkaSubmissionState(
     typeof durasiDetik === 'number' && Number.isFinite(durasiDetik) && durasiDetik > 0
       ? Math.round(durasiDetik)
       : Math.max(1, durasiMenitUsed) * 60;
-  nextDurasiByMapel[mapelSlotKey] = safeSeconds;
+  if (!slotIsLocked) {
+    nextDurasiByMapel[mapelSlotKey] = safeSeconds;
+  }
   const totalDurasiDetik = Object.values(nextDurasiByMapel).reduce(
     (acc, v) => acc + (Number(v) || 0),
     0
   );
 
+  // Jaga jawaban mapel yang sudah terkunci agar tidak tertimpa percobaan ulang sebagian
+  const mergedAnswers: Record<string, any> =
+    unlockedSubmittedMapels.length === completedMapelKeys.length
+      ? { ...(prevSub?.answers || {}), ...questionAnswers }
+      : { ...questionAnswers, ...(prevSub?.answers || {}) };
+
+  const hasAnyLock = Object.keys(nextLockedMapels).length > 0;
   const docId = makeSubmissionDocId(stableStudentId, basePaket);
   const mergedSub: TKASubmissionItem = {
     id: docId,
@@ -1335,10 +1478,7 @@ function buildMergedTkaSubmissionState(
     paket: basePaket,
     paketDasar: basePaket,
     completedMapels: mergedCompleted,
-    answers: {
-      ...(prevSub?.answers || {}),
-      ...questionAnswers,
-    },
+    answers: mergedAnswers,
     scoresPerMapel: updatedScores,
     skorTotal: avgTotal,
     predikat,
@@ -1356,13 +1496,21 @@ function buildMergedTkaSubmissionState(
       ? { benarHots: totalBenarHots, totalHots: totalSoalHots }
       : {}),
     statusPengerjaan: 'selesai',
+    sumberNilai: hasAnyLock ? 'UJIAN_TKA' : sumberNilai,
+    isLocked: hasAnyLock,
+    ...(hasAnyLock
+      ? {
+          waktuTerkunci: prevSub?.waktuTerkunci || nowIso,
+          lockedMapels: nextLockedMapels,
+        }
+      : {}),
     ...(tahunPelajaran || prevSub?.tahunPelajaran
       ? { tahunPelajaran: tahunPelajaran || prevSub?.tahunPelajaran }
       : {}),
     ...(semester || prevSub?.semester
       ? { semester: semester || prevSub?.semester }
       : {}),
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowIso,
   } as TKASubmissionItem;
 
   const otherSubs = existingSubs.filter(
@@ -1374,7 +1522,7 @@ function buildMergedTkaSubmissionState(
       )
   );
   const updatedList = [mergedSub, ...otherSubs];
-  return { mergedSub, updatedList };
+  return { mergedSub, updatedList, lockedPracticeOnly: false };
 }
 
 /**
@@ -1385,13 +1533,27 @@ export function upsertTkaSubmission(params: UpsertTkaSubmissionParams): {
   mergedSub: TKASubmissionItem;
   updatedList: TKASubmissionItem[];
   syncPromise: Promise<boolean>;
+  lockedPracticeOnly?: boolean;
+  lockedScore?: number;
 } {
   const existingSubs = getStoredTKASubmissions();
-  const { mergedSub, updatedList } = buildMergedTkaSubmissionState(params, existingSubs);
+  const { mergedSub, updatedList, lockedPracticeOnly, lockedScore } = buildMergedTkaSubmissionState(
+    params,
+    existingSubs
+  );
+  if (lockedPracticeOnly) {
+    return {
+      mergedSub,
+      updatedList,
+      syncPromise: Promise.resolve(true),
+      lockedPracticeOnly: true,
+      lockedScore,
+    };
+  }
   enqueuePendingTkaSubmission(mergedSub);
   saveStoredTKASubmissions(updatedList);
   const syncPromise = saveTkaSubmissionToFirestore(mergedSub);
-  return { mergedSub, updatedList, syncPromise };
+  return { mergedSub, updatedList, syncPromise, lockedPracticeOnly: false };
 }
 
 /**
@@ -1402,6 +1564,8 @@ export async function upsertTkaSubmissionAsync(params: UpsertTkaSubmissionParams
   mergedSub: TKASubmissionItem;
   updatedList: TKASubmissionItem[];
   cloudSaved: boolean;
+  lockedPracticeOnly?: boolean;
+  lockedScore?: number;
 }> {
   const basePaket = extractBaseTkaPaket(params.paketName);
   const stableStudentId = params.student.id || params.student.nisn || 'siswa_anon';
@@ -1422,11 +1586,24 @@ export async function upsertTkaSubmissionAsync(params: UpsertTkaSubmissionParams
   }
 
   const existingSubs = getStoredTKASubmissions();
-  const { mergedSub, updatedList } = buildMergedTkaSubmissionState(params, existingSubs, remoteSub);
+  const { mergedSub, updatedList, lockedPracticeOnly, lockedScore } = buildMergedTkaSubmissionState(
+    params,
+    existingSubs,
+    remoteSub
+  );
+  if (lockedPracticeOnly) {
+    return {
+      mergedSub,
+      updatedList,
+      cloudSaved: true,
+      lockedPracticeOnly: true,
+      lockedScore,
+    };
+  }
   enqueuePendingTkaSubmission(mergedSub);
   saveStoredTKASubmissions(updatedList);
   const cloudSaved = await saveTkaSubmissionToFirestore(mergedSub);
-  return { mergedSub, updatedList, cloudSaved };
+  return { mergedSub, updatedList, cloudSaved, lockedPracticeOnly: false };
 }
 
 /**
@@ -1522,7 +1699,7 @@ export function reconcileTkaResultsToSubmissions(options: {
             (existing.nisn || '') !== (matchedStudent.nisn || '') ||
             existing.kelas !== matchedStudent.kelas)
       );
-      if (completed.includes(mapelKey)) {
+      if (completed.includes(mapelKey) || isTkaMapelLocked(existing, mapelKey)) {
         if (studentMetaChanged && matchedStudent) {
           const syncedItem: TKASubmissionItem = {
             ...existing,
@@ -1557,6 +1734,15 @@ export function reconcileTkaResultsToSubmissions(options: {
         updatedCompleted.reduce((acc, k) => acc + Number(nextScores[k] || 0), 0) /
           updatedCompleted.length
       );
+      const lockTimeIso = res.recordedAt ? new Date(res.recordedAt).toISOString() : new Date().toISOString();
+      const updatedLockedMapels: NonNullable<TKASubmissionItem['lockedMapels']> = {
+        ...(existing.lockedMapels || {}),
+        [mapelKey]: {
+          score: numericGrade,
+          waktuTerkunci: lockTimeIso,
+          sumberNilai: 'UJIAN_TKA',
+        },
+      };
       const updatedItem: TKASubmissionItem = {
         ...existing,
         id: docId,
@@ -1576,19 +1762,24 @@ export function reconcileTkaResultsToSubmissions(options: {
         skorTotal: avg,
         predikat: avg >= 88 ? 'A' : avg >= 78 ? 'B' : avg >= 68 ? 'C' : 'D',
         status: avg >= 75 ? 'Tuntas' : 'Remedial',
+        sumberNilai: 'UJIAN_TKA',
+        isLocked: true,
+        waktuTerkunci: existing.waktuTerkunci || lockTimeIso,
+        lockedMapels: updatedLockedMapels,
         ...(res.tahunPelajaran || existing.tahunPelajaran
           ? { tahunPelajaran: res.tahunPelajaran || existing.tahunPelajaran }
           : {}),
         ...(res.semester || existing.semester
           ? { semester: res.semester || existing.semester }
           : {}),
-        updatedAt: res.recordedAt ? new Date(res.recordedAt).toISOString() : new Date().toISOString(),
+        updatedAt: lockTimeIso,
       };
       subMap.set(docId, updatedItem);
       recoveredMap.set(docId, updatedItem);
       return;
     }
 
+    const newLockIso = res.recordedAt ? new Date(res.recordedAt).toISOString() : new Date().toISOString();
     const newItem: TKASubmissionItem = {
       id: docId,
       studentId: sid,
@@ -1611,13 +1802,23 @@ export function reconcileTkaResultsToSubmissions(options: {
       skorTotal: numericGrade,
       predikat: numericGrade >= 88 ? 'A' : numericGrade >= 78 ? 'B' : numericGrade >= 68 ? 'C' : 'D',
       status: numericGrade >= 75 ? 'Tuntas' : 'Remedial',
+      sumberNilai: 'UJIAN_TKA',
+      isLocked: true,
+      waktuTerkunci: newLockIso,
+      lockedMapels: {
+        [mapelKey]: {
+          score: numericGrade,
+          waktuTerkunci: newLockIso,
+          sumberNilai: 'UJIAN_TKA',
+        },
+      },
       tanggalUjian:
         res.tanggal ||
         new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }),
       durasiPengerjaan: '45 Menit',
       ...(res.tahunPelajaran ? { tahunPelajaran: res.tahunPelajaran } : {}),
       ...(res.semester ? { semester: res.semester } : {}),
-      updatedAt: res.recordedAt ? new Date(res.recordedAt).toISOString() : new Date().toISOString(),
+      updatedAt: newLockIso,
     };
     subMap.set(docId, newItem);
     recoveredMap.set(docId, newItem);

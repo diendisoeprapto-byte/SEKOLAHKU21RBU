@@ -73,6 +73,7 @@ import {
   Student,
 } from '../../types';
 import { db, handleFirestoreError, OperationType } from '../../utils/firebase';
+import { mapFirestorePermissionError, sanitizeInput } from '../../utils/sanitize';
 import { CLASSES_LIST } from '../../utils/storage';
 import { getLocalTodayStr, formatTanggalIndo } from '../../utils/dateUtils';
 import { renderBarcodeToCanvas } from '../../utils/barcode';
@@ -932,13 +933,13 @@ export const PerpustakaanTab: React.FC<Props> = ({
     setIsSavingBook(true);
     try {
       const payload = {
-        judul: formJudul.trim(),
-        penulis: formPenulis.trim() || 'Tim Penulis',
+        judul: sanitizeInput(formJudul, 200),
+        penulis: sanitizeInput(formPenulis, 120) || 'Tim Penulis',
         kategori: formKategori,
         kelas: formKelas,
-        sumber: formSumber.trim() || 'Perpustakaan Digital',
-        cover_url: formCoverUrl.trim(),
-        file_url: formFileUrl.trim(),
+        sumber: sanitizeInput(formSumber, 120) || 'Perpustakaan Digital',
+        cover_url: sanitizeInput(formCoverUrl, 1000),
+        file_url: sanitizeInput(formFileUrl, 1000),
       };
 
       if (editingBookId) {
@@ -954,7 +955,7 @@ export const PerpustakaanTab: React.FC<Props> = ({
       }
       setIsBookModalOpen(false);
     } catch (err: any) {
-      showToast(`Gagal menyimpan buku: ${err?.message || 'Kendala Firestore'}`, 'error');
+      showToast(mapFirestorePermissionError(err, 'Gagal menyimpan data buku ke Perpustakaan Digital.'), 'error');
     } finally {
       setIsSavingBook(false);
     }

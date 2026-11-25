@@ -1089,38 +1089,34 @@ export const DashboardKebiasaanTab: React.FC<Props> = ({
       {isMonthlyPrintModalOpen && (
         <div className="fixed inset-0 z-[960] bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
           {/* Print Style Injector untuk mengisolasi hanya modal saat window.print() dipanggil */}
-          <style
-            dangerouslySetInnerHTML={{
-              __html: `
-                @media print {
-                  body * {
-                    visibility: hidden !important;
-                  }
-                  #printable-monthly-kebiasaan, #printable-monthly-kebiasaan * {
-                    visibility: visible !important;
-                  }
-                  #printable-monthly-kebiasaan {
-                    position: absolute !important;
-                    left: 0 !important;
-                    top: 0 !important;
-                    width: 100% !important;
-                    margin: 0 !important;
-                    padding: 15px 25px !important;
-                    background: white !important;
-                    color: black !important;
-                    font-size: 11pt !important;
-                  }
-                  .no-print-in-modal {
-                    display: none !important;
-                  }
-                  .print-break-inside-avoid {
-                    page-break-inside: avoid !important;
-                    break-inside: avoid !important;
-                  }
-                }
-              `,
-            }}
-          />
+          <style>{`
+            @media print {
+              body * {
+                visibility: hidden !important;
+              }
+              #printable-monthly-kebiasaan, #printable-monthly-kebiasaan * {
+                visibility: visible !important;
+              }
+              #printable-monthly-kebiasaan {
+                position: absolute !important;
+                left: 0 !important;
+                top: 0 !important;
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 15px 25px !important;
+                background: white !important;
+                color: black !important;
+                font-size: 11pt !important;
+              }
+              .no-print-in-modal {
+                display: none !important;
+              }
+              .print-break-inside-avoid {
+                page-break-inside: avoid !important;
+                break-inside: avoid !important;
+              }
+            }
+          `}</style>
 
           <div className="bg-white max-w-5xl w-full max-h-[94vh] rounded-3xl shadow-2xl border-2 border-amber-200 flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
             {/* Top Modal Header */}

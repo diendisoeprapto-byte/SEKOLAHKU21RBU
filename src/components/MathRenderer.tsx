@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
+import { sanitizeHtmlFragment } from '../utils/sanitize';
 
 export type MathFontFamily = 'nunito' | 'plus-jakarta' | 'katex';
 export type MixedFractionMode = 'mixed' | 'improper';
@@ -346,7 +347,7 @@ export const MathRenderer: React.FC<MathRendererProps> = ({
               <span
                 key={`math-block-${idx}`}
                 className={`block my-1.5 text-center ${fontCfg.inlineFractionWeightClass}`}
-                dangerouslySetInnerHTML={{ __html: seg.html }}
+                dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(seg.html) }}
               />
             );
           }
@@ -354,7 +355,7 @@ export const MathRenderer: React.FC<MathRendererProps> = ({
             <span
               key={`math-inline-${idx}`}
               className={`inline-block align-middle mx-[0.12em] ${fontCfg.inlineFractionWeightClass}`}
-              dangerouslySetInnerHTML={{ __html: seg.html }}
+              dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(seg.html) }}
             />
           );
         }

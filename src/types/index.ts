@@ -253,10 +253,17 @@ export interface TKACpTp {
   judulCp: string;
   deskripsiCp: string;
   mapel: string;
+  kompetensi?: string;
+  subKompetensi?: string;
+  mataPelajaran?: string;
+  jenjangKelas?: string;
   tpList: {
     id: string;
     kodeTp: string;
     judulTp: string;
+    subKompetensi?: string;
+    mataPelajaran?: string;
+    jenjangKelas?: string;
   }[];
 }
 

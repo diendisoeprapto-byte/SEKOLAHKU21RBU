@@ -6,6 +6,21 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // User Session Profiles (Firebase Anonymous Auth)
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if
+        request.auth != null &&
+        request.auth.uid == userId &&
+        request.resource.data.uid == userId &&
+        request.resource.data.role in ['admin', 'guru', 'siswa'] &&
+        request.resource.data.username is string &&
+        request.resource.data.username.size() <= 100 &&
+        request.resource.data.nama is string &&
+        request.resource.data.nama.size() <= 160;
+      allow delete: if false;
+    }
+
     // Connection validation test document
     match /test/{testId} {
       allow read, write: if true;
@@ -29,10 +44,60 @@ service cloud.firestore {
       allow write: if true;
     }
 
-    // TKA Submissions
+    // TKA Submissions (dengan penguncian nilai resmi ujian TKA 1x)
     match /tka_submissions/{submissionId} {
+      function isValidTkaSubmissionBase() {
+        return
+          request.resource.data.id is string &&
+          request.resource.data.id.size() > 0 &&
+          request.resource.data.id.size() <= 220 &&
+          request.resource.data.studentId is string &&
+          request.resource.data.studentId.size() > 0 &&
+          request.resource.data.studentId.size() <= 120 &&
+          request.resource.data.paket is string &&
+          request.resource.data.paket.size() > 0 &&
+          request.resource.data.paket.size() <= 160 &&
+          (!('skorTotal' in request.resource.data) || (
+            request.resource.data.skorTotal is number &&
+            request.resource.data.skorTotal >= 0 &&
+            request.resource.data.skorTotal <= 100
+          ));
+      }
+
+      function isLockedTkaMapelPreserved(mapel) {
+        return
+          !(resource.data.lockedMapels is map) ||
+          !(mapel in resource.data.lockedMapels) ||
+          !(resource.data.lockedMapels[mapel] is map) ||
+          resource.data.lockedMapels[mapel].sumberNilai != 'UJIAN_TKA' ||
+          (
+            request.resource.data.lockedMapels is map &&
+            mapel in request.resource.data.lockedMapels &&
+            request.resource.data.lockedMapels[mapel] is map &&
+            request.resource.data.lockedMapels[mapel].sumberNilai == 'UJIAN_TKA' &&
+            request.resource.data.lockedMapels[mapel].score == resource.data.lockedMapels[mapel].score &&
+            request.resource.data.scoresPerMapel is map &&
+            request.resource.data.scoresPerMapel[mapel] == resource.data.lockedMapels[mapel].score
+          );
+      }
+
       allow read: if true;
-      allow write: if true;
+      allow create: if isValidTkaSubmissionBase();
+      allow update: if
+        isValidTkaSubmissionBase() &&
+        (
+          !(resource.data.isLocked == true && resource.data.sumberNilai == 'UJIAN_TKA') ||
+          (
+            request.resource.data.isLocked == true &&
+            request.resource.data.sumberNilai == 'UJIAN_TKA' &&
+            isLockedTkaMapelPreserved('Bahasa Indonesia') &&
+            isLockedTkaMapelPreserved('Matematika') &&
+            isLockedTkaMapelPreserved('IPAS') &&
+            isLockedTkaMapelPreserved('Bahasa Inggris') &&
+            isLockedTkaMapelPreserved('Koding dan Kecerdasan Artifisial (KKA)')
+          )
+        );
+      allow delete: if true;
     }
 
     // Attendance records

@@ -1,40 +1,45 @@
 import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 
-export const SARAH_GEMINI_MODEL = 'gemini-3.8-flash';
+export const SARAH_GEMINI_MODEL = 'gemini-2.5-flash';
 export const SARAH_GEMINI_FALLBACK_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
   'gemini-3.8-flash',
   'gemini-3.5-flash',
-  'gemini-2.5-flash',
-  'gemini-4-hydrogen',
   'gemini-3.1-flash-lite',
+  'gemini-4-hydrogen',
 ];
 export const MAX_CONCURRENT_REQUESTS = Math.max(
   1,
   Number(process.env.SARAH_MAX_CONCURRENT_REQUESTS) || 4
 );
 export const DEFAULT_TIMEOUT_MS = 18000;
-export const DEFAULT_MAX_RETRIES = 1;
+export const FAST_CHAT_TIMEOUT_MS = 8000;
+export const DEFAULT_MAX_RETRIES = 2;
+const SILENT_RETRY_DELAYS_MS = [1500, 3000];
 const FALLBACK_SWITCH_DELAY_MS = 1200;
 
 export function resolveSpeedPresetModels(speedMode = 'auto') {
   const clean = String(speedMode || 'auto').trim().toLowerCase();
   if (clean === 'fast' || clean === 'lite') {
     return [
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
       'gemini-3.8-flash',
       'gemini-3.5-flash',
       'gemini-3.1-flash-lite',
       'gemini-4-hydrogen',
-      'gemini-2.5-flash',
     ];
   }
   if (clean === 'standard' || clean === 'mendalam') {
     return [
+      'gemini-2.5-flash',
       'gemini-3.8-flash',
       'gemini-3.5-flash',
       'gemini-4-hydrogen',
+      'gemini-2.5-flash-lite',
       'gemini-3.1-flash-lite',
-      'gemini-2.5-flash',
     ];
   }
   return [...SARAH_GEMINI_FALLBACK_MODELS];
@@ -739,29 +744,25 @@ export async function askSarahGemini({
     await acquireQueueSlot(MAX_QUEUE_WAIT_MS, signal);
     try {
       let bestError = null;
-      const singleModelOnly = candidateModels.length <= 1;
-      const attemptsPerModel = singleModelOnly
-        ? Math.max(1, 1 + Math.max(0, Number(retries) || 0))
-        : 1;
+      const maxSilentRetries = Math.min(2, Math.max(0, Number(retries) || 0));
+      let silentRetriesUsed = 0;
 
       for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
         const candidateModel = candidateModels[mIdx];
         const hasNextFallback = mIdx < candidateModels.length - 1;
         const modelConfig = buildConfigForModel(finalConfig, candidateModel, fastChat, speedMode);
-        const perAttemptTimeoutMs =
-          fastChat && speedMode === 'fast'
-            ? Math.min(Number(timeoutMs) || DEFAULT_TIMEOUT_MS, 6500)
-            : fastChat
-            ? Math.min(Number(timeoutMs) || DEFAULT_TIMEOUT_MS, 7000)
-            : Number(timeoutMs) || DEFAULT_TIMEOUT_MS;
+        const perAttemptTimeoutMs = fastChat
+          ? Math.min(Number(timeoutMs) || FAST_CHAT_TIMEOUT_MS, FAST_CHAT_TIMEOUT_MS)
+          : Number(timeoutMs) || DEFAULT_TIMEOUT_MS;
+        const maxAttemptsThisModel = mIdx === 0 ? 1 + maxSilentRetries : 1;
 
-        for (let attempt = 0; attempt < attemptsPerModel; attempt++) {
+        for (let attempt = 0; attempt < maxAttemptsThisModel; attempt++) {
           if (signal?.aborted) {
             throw createAbortError();
           }
           if (attempt > 0) {
-            const jitterMs = 300 + Math.floor(Math.random() * 200);
-            await sleep(jitterMs);
+            const delayMs = SILENT_RETRY_DELAYS_MS[Math.min(attempt - 1, SILENT_RETRY_DELAYS_MS.length - 1)] || 1500;
+            await sleep(delayMs);
             if (signal?.aborted) {
               throw createAbortError();
             }
@@ -818,22 +819,34 @@ export async function askSarahGemini({
 
             if (isTransientGeminiError(err)) {
               recordModelCooldown(candidateModel, 'transient');
-              if (attempt < attemptsPerModel - 1) {
+              // Bila masih punya model fallback, pindah cepat ke gemini-2.5-flash-lite / model cadangan
+              // atau lakukan silent retry berjeda 1.5s / 3s saat di model utama atau terakhir
+              if (attempt < maxAttemptsThisModel - 1 && !hasNextFallback) {
+                silentRetriesUsed += 1;
                 console.warn(
-                  `[sarah-gemini-service] Retry ringan pada ${candidateModel} (status ${details.statusCode}):`,
+                  `[sarah-gemini-service] Silent auto-retry #${silentRetriesUsed} pada ${candidateModel} (status ${details.statusCode}):`,
                   details.cleanMessage
                 );
                 continue;
               }
               if (hasNextFallback) {
+                const switchDelay =
+                  silentRetriesUsed === 0
+                    ? FALLBACK_SWITCH_DELAY_MS
+                    : SILENT_RETRY_DELAYS_MS[Math.min(silentRetriesUsed - 1, SILENT_RETRY_DELAYS_MS.length - 1)] || FALLBACK_SWITCH_DELAY_MS;
+                silentRetriesUsed += 1;
                 console.warn(
-                  `[sarah-gemini-service] ${candidateModel} lambat/padat (status ${details.statusCode}: ${details.cleanMessage}), jeda 1.2 detik lalu beralih ke ${candidateModels[mIdx + 1]}.`
+                  `[sarah-gemini-service] ${candidateModel} lambat/padat (status ${details.statusCode}: ${details.cleanMessage}), jeda ${switchDelay}ms lalu beralih ke ${candidateModels[mIdx + 1]}.`
                 );
-                await sleep(FALLBACK_SWITCH_DELAY_MS);
+                await sleep(switchDelay);
                 if (signal?.aborted) {
                   throw createAbortError();
                 }
                 break;
+              }
+              if (attempt < maxAttemptsThisModel - 1) {
+                silentRetriesUsed += 1;
+                continue;
               }
             }
 
@@ -891,17 +904,15 @@ export async function askSarahGeminiStream({
   await acquireQueueSlot(MAX_QUEUE_WAIT_MS, signal);
   try {
     let bestError = null;
+    let streamRetriesUsed = 0;
 
     for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
       const candidateModel = candidateModels[mIdx];
       const hasNextFallback = mIdx < candidateModels.length - 1;
       const modelConfig = buildConfigForModel(finalConfig, candidateModel, fastChat, speedMode);
-      const perAttemptTimeoutMs =
-        fastChat && speedMode === 'fast'
-          ? Math.min(Number(timeoutMs) || DEFAULT_TIMEOUT_MS, 6500)
-          : fastChat
-          ? Math.min(Number(timeoutMs) || DEFAULT_TIMEOUT_MS, 7000)
-          : Number(timeoutMs) || DEFAULT_TIMEOUT_MS;
+      const perAttemptTimeoutMs = fastChat
+        ? Math.min(Number(timeoutMs) || FAST_CHAT_TIMEOUT_MS, FAST_CHAT_TIMEOUT_MS)
+        : Number(timeoutMs) || DEFAULT_TIMEOUT_MS;
 
       if (signal?.aborted) {
         throw createAbortError();
@@ -950,10 +961,15 @@ export async function askSarahGeminiStream({
 
         if (isTransientGeminiError(err) && hasNextFallback) {
           recordModelCooldown(candidateModel, 'transient');
+          const delayMs =
+            streamRetriesUsed === 0
+              ? FALLBACK_SWITCH_DELAY_MS
+              : SILENT_RETRY_DELAYS_MS[Math.min(streamRetriesUsed - 1, SILENT_RETRY_DELAYS_MS.length - 1)] || FALLBACK_SWITCH_DELAY_MS;
+          streamRetriesUsed += 1;
           console.warn(
-            `[sarah-gemini-service] Stream ${candidateModel} lambat/padat (status ${details.statusCode}: ${details.cleanMessage}), jeda 1.2 detik lalu beralih ke ${candidateModels[mIdx + 1]}.`
+            `[sarah-gemini-service] Stream ${candidateModel} lambat/padat (status ${details.statusCode}: ${details.cleanMessage}), jeda ${delayMs}ms lalu beralih ke ${candidateModels[mIdx + 1]}.`
           );
-          await sleep(FALLBACK_SWITCH_DELAY_MS);
+          await sleep(delayMs);
           if (signal?.aborted) {
             throw createAbortError();
           }

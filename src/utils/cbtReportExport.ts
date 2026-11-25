@@ -29,6 +29,7 @@ export interface CbtReportExportOptions {
   logoSekolahUrl?: string;
   tahunPelajaran: string;
   semester: string;
+  kelasLabel?: string;
   filterSummary: string;
   kepsekNama: string;
   kepsekNipLabel: string;
@@ -292,10 +293,14 @@ export const exportClassCbtReportToWord = (
         </td>
       </tr>
     </table>
+    <div style="margin-top:18px;padding-top:6px;border-top:1px solid #cbd5e1;text-align:center;font-size:8pt;color:#64748b;">
+      Dokumen Resmi SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • ${escapeHtml(options.schoolName)}
+    </div>
   `;
 
   const docHtml = wrapWordHtml('Rekap Report CBT', body, true);
-  const fileName = `Report_Hasil_CBT_${sanitizeFilenamePart(options.semester)}.doc`;
+  const kelasPart = options.kelasLabel ? `_${sanitizeFilenamePart(options.kelasLabel)}` : '';
+  const fileName = `Report_Hasil_CBT_${sanitizeFilenamePart(options.semester)}${kelasPart}.doc`;
   triggerWordDownload(docHtml, fileName);
   return true;
 };
@@ -584,6 +589,16 @@ export const exportClassCbtReportToPdf = async (
   doc.setFontSize(8);
   doc.text(options.waliNipLabel || 'NIP. -', cx2, sigY + 4, { align: 'center' });
 
-  doc.save(`Report_Hasil_CBT_${sanitizeFilenamePart(options.semester)}.pdf`);
+  doc.setFontSize(7.2);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Dokumen Resmi SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • ${options.schoolName}`,
+    pageWidth / 2,
+    pageHeight - 6,
+    { align: 'center' }
+  );
+
+  const kelasPart = options.kelasLabel ? `_${sanitizeFilenamePart(options.kelasLabel)}` : '';
+  doc.save(`Report_Hasil_CBT_${sanitizeFilenamePart(options.semester)}${kelasPart}.pdf`);
   return true;
 };

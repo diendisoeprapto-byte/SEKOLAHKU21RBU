@@ -1,0 +1,235 @@
+Perbaiki mesin pemanggilan Gemini API pada asisten SARAH di aplikasi SERBU 21 (arsitektur client-side static web yang di-deploy via GitHub dan Netlify) agar obrolan selalu lancar dan tidak memunculkan pesan "layanan SARAH sedang sedikit padat / Coba Kirim Ulang":
+
+1. RANTAI MODEL FALLBACK OTOMATIS (ANTI-429 & ANTI-503):
+   - Buat fungsi `callSarahGeminiWithFallback(prompt, history)` yang mencoba model secara berurutan:
+     a) `gemini-2.5-flash` (percobaan utama)
+     b) `gemini-2.5-flash-lite` (otomatis pindah jika model pertama terkena rate limit 429 atau sibuk 503)
+     c) `gemini-2.0-flash` (jalur cadangan terakhir)
+   - Lakukan jeda otomatis 1,2 detik sebelum berpindah ke model cadangan di balik layar tanpa memunculkan pesan error ke pengguna.
+
+2. RINGANKAN PAYLOAD OBROLAN (SLIDING WINDOW):
+   - Batasi riwayat obrolan yang dikirim dalam `contents` hanya 6 pesan terakhir (3 tanya-jawab terakhir) agar ukuran permintaan kecil, hemat kuota token per menit (TPM) tier gratis Google AI Studio, dan balasan muncul dalam 1–2 detik.
+   - Pisahkan `systemInstruction` (identitas SARAH, sapaan Mas Endi, dan ringkasan aturan SERBU 21) agar tidak ikut terduplikasi di setiap riwayat pesan.
+
+3. STREAMING TEKS & DIAGNOSTIK ERROR JELAS:
+   - Gunakan `generateContentStream` agar jawaban SARAH langsung mengalir kata demi kata begitu terhubung.
+   - Hanya tampilkan tombol "Coba Kirim Ulang" jika ketiga model cadangan sudah dicoba dan semuanya gagal, serta tampilkan kode status error kecil di console (`console.warn`) agar mudah dicek bila kuota API key harian habis.
+
+
+ ================================================================ 2. PENONAKTIFAN SIDEBAR KIRI SAAT UJIAN BERLANGSUNG (FOCUS MODE) ================================================================ - Buat state global `isExamActive` (boolean) yang otomatis bernilai `true` segera setelah siswa menekan tombol "Mulai Ujian" pada modul CBT maupun TKA. - Selama `isExamActive === true`: * **Sembunyikan dan nonaktifkan sepenuhnya Sidebar Navigasi Sebelah Kiri** pada akun siswa (termasuk tombol toggle buka/tutup sidebar dan widget/ikon asisten SARAH agar tidak mengganggu fokus maupun menjadi celah keluar ujian). * Pasang peringatan `window.onbeforeunload` browser agar jika siswa tidak sengaja menekan tombol Back, Refresh (F5), atau menutup tab browser, muncul peringatan konfirmasi dari browser. - Kembalikan `isExamActive = false` dan tampilkan kembali Sidebar Sebelah Kiri **HANYA SETELAH** proses submit selesai dan nilai terkonfirmasi masuk ke server Firebase Firestore. ================================================================ 3. PENGUNCIAN KELUAR & PENGIRIMAN NILAI TAHAN "WAIT RESPONSE" ================================================================ Pastikan 100% nilai siswa masuk ke sistem Admin dan Guru (kapasitas 100+ siswa serentak per jenjang) meskipun koneksi internet lambat, mengalami *wait response* (loading lama / timeout), atau putus sesaat: 1. Larangan Keluar Sebelum Nilai Terkonfirmasi Masuk ke Sistem Admin/Guru: - Saat siswa menekan tombol "Selesai / Submit" (atau saat waktu ujian habis otomatis), munculkan **Modal Overlay Layar Penuh yang Tidak Bisa Ditutup** (tanpa tombol `X`, tanpa klik di luar modal, dan sidebar kiri tetap terkunci). - Siswa **tidak dapat keluar** dari halaman ujian selama status pengiriman nilai belum terverifikasi masuk ke Firestore. 2. Mekanisme Pengiriman Tahan "Wait Response" & Verifikasi Baca Balik: - Sebelum mengirim ke server, simpan dan kunci jawaban serta skor akhir siswa (`nisn`, `nama`, `kelas`, `idUjian`, `mapel`, `skorPerNomor`, `nilaiAkhir`, `benarHots`, `durasiDetik`) ke `localStorage` sebagai cadangan instan. - Kirim payload ringkas (< 2 KB) ke dokumen unik `{idUjian}_{nisn}` di Firebase Firestore dengan batas waktu tunggu (*timeout* 10 detik per percobaan). - Jika terjadi *wait response* (> 10 detik tanpa balasan) atau koneksi terputus: * Jangan batalkan proses dan jangan me-reset jawaban. * Tampilkan pesan status jelas pada modal penguncian: `"Koneksi sedang lambat (Wait Response). Jawaban Anda aman, sistem sedang mengirim ulang otomatis... (Percobaan ke-X). Mohon jangan tutup halaman ini."` * Jalankan pengiriman ulang otomatis (*auto-retry loop*) setiap 4 detik hingga mendapatkan respons sukses dari Firestore. - Lakukan **Verifikasi Baca Balik (*Read-Back Verification*)** singkat ke dokumen `{idUjian}_{nisn}` di Firestore untuk memastikan nilai benar-benar sudah tercatat di sistem Admin/Guru. 3. Pembukaan Kunci Setelah Nilai Terverifikasi Masuk: - Setelah server mengonfirmasi nilai telah masuk ke sistem Admin/Guru: * Ubah status modal menjadi centang hijau: `"BERHASIL! Nilai Anda sudah masuk ke sistem Guru & Admin."` * Aktifkan tombol `"Selesai & Kembali ke Beranda"` yang mengubah `isExamActive = false`, membuka kembali **Sidebar Sebelah Kiri**, dan menghapus antrean sementara di `localStorage`. - Jika perangkat siswa tertutup paksa saat *wait response*, saat aplikasi dibuka kembali sistem otomatis mendeteksi nilai tertunda di `localStorage`, langsung mengunci layar ke modal pengiriman, dan menyelesaikannya hingga masuk ke sistem Admin/Guru. ================================================================ 4. TAMPILAN 5 TAB MENU RINGKAS & UNDUH PER KELAS (UNTUK ANALISIS CBT & TKA) ================================================================ Seragamkan tata letak halaman **Analisis Hasil CBT** maupun **Analisis Hasil TKA** pada akun Admin dan Guru agar menggunakan antarmuka berbasis **Menu Tab Horizontal (Tabbed Interface)** yang ringkas dan pas dalam satu layar tanpa perlu *scroll* panjang ke bawah: 1. Header Filter Ringkas & Ringkasan KPI (Tetap Muncul di Semua Tab): - Buat satu baris filter atas yang padat: * Pada **Analisis TKA**: Pilih Jenis TKA (`Simulasi TKA` / `Tryout TKA`), Pilih Kelas/Rombel (`Semua Kelas`, `1A`–`6B`), Pilih Mata Pelajaran, Input KKM (default `75`). * Pada **Analisis CBT**: Pilih Jenis/Paket Ujian CBT, Pilih Kelas/Rombel (`Semua Kelas`, `1A`–`6B`), Pilih Mata Pelajaran, Input KKM (default `75`). * Sertakan tombol **Export Excel** dan **Cetak PDF** di samping filter (dan di seluruh menu aplikasi lainnya seperti Presensi, e-Rapor, Legger) yang **wajib memfilter data unduhan sesuai Kelas/Rombel yang dipilih**. - Di bawah filter, tampilkan 4 kartu ringkasan mini (*KPI Cards*) sejajar 1 baris: `Peserta Selesai`, `Rata-Rata Nilai`, `Nilai Tertinggi`, dan `Ketuntasan KKM (%)`. 2. Navigasi 5 Tab Menu Analisis Horizontal (Berlaku Sama untuk Analisis CBT & Analisis TKA): - Buat bar tab navigasi dengan indikator tab aktif yang jelas (perpindahan tab berlangsung instan di sisi client tanpa memuat ulang data Firestore): * **Tab 1: Peringkat & Tie-Breaker HOTS** - Menampilkan tabel peringkat siswa (mendukung 100+ siswa per jenjang) yang diurutkan otomatis berdasarkan aturan Tie-Breaker SERBU 21: `Nilai Akhir -> Jumlah Benar Soal HOTS -> Durasi Pengerjaan Tercepat`, lengkap dengan badge `Unggul HOTS` / `Lebih Cepat`. * **Tab 2: Grafik Performa & Ketuntasan** - Menampilkan grafik Recharts (perbandingan rata-rata nilai antar mapel / antar kelas serta pie/bar chart persentase Tuntas vs Belum Tuntas KKM) berdampingan 2 kolom dalam satu layar. * **Tab 3: Matriks Analisis Butir Soal** - Menampilkan tabel matriks dinamis per nomor soal (otomatis menyesuaikan jumlah dan tipe soal aktual di paket CBT maupun TKA: `PILIHAN GANDA`, `PG KOMPLEKS`, `ISIAN`, `URAIAN`, beserta bobot tiap nomor), kolom `JUMLAH`, `NILAI`, `PERINGKAT`, serta baris statistik bawah (`RATA-RATA`, `NILAI TERTINGGI`, `NILAI TERENDAH`, `KKM`). * **Tab 4: Distribusi Nilai Perolehan** - Menampilkan tabel rekapitulasi frekuensi rentang nilai per mata pelajaran (`< 11`, `11–20`, `21–30`, `31–40`, `41–50`, `51–60`, `61–70`, `71–80`, `81–90`, `91–100`, dan `JLH`). * **Tab 5: Analisis Tingkat Kesukaran & Daya Beda** - Menampilkan tabel evaluasi kualitas tiap butir soal CBT maupun TKA (persentase siswa menjawab benar per nomor, kategori tingkat kesukaran: `Mudah`, `Sedang`, `Sulit`, serta rekomendasi tindak lanjut soal). 3. Desain Responsif & Hemat Ruang Layar: - Gunakan padding yang proporsional (`p-4`) dan tinggi area konten tab dengan `max-h-[62vh] overflow-auto` + `sticky top-0` pada header tabel sehingga header kolom tetap terlihat saat meninjau banyak siswa tanpa menggeser seluruh halaman ke bawah. Pastikan seluruh perubahan ini tetap menjaga integritas database Firebase Firestore, kompatibel dengan data soal/nilai yang sudah ada, serta terhubung dengan asisten virtual SARAH.
+
+ Perbarui teks kepanjangan aplikasi SERBU 21 pada halaman Login (serta seluruh bagian header/footer/modal aplikasi yang memuat identitas aplikasi) menjadi kepanjangan resmi berikut:
+
+SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama)
+
+Instruksi Teknis Perubahan Kode:
+1. Ganti Teks Kepanjangan di Halaman Login:
+   - Cari teks `(Sistem Digital Terpadu SDN Rawa Badak Utara 21)` atau `(Sistem Elektronik Rawa Badak Utara 21)` pada komponen halaman Login (baik pada bagian overlay banner/hero image sisi kiri maupun di bawah kartu login) dan ubah seluruhnya menjadi:
+     `(Sistem Edukasi, Rapor, dan Basis Data Utama)`
+
+2. Penyelarasan Teks Sambutan pada Layar Login:
+   - Pastikan susunan teks sambutan di bagian bawah sisi kiri layar Login tampil bersih dan jelas:
+     * Badge kecil: `PORTAL EDUKASI & EVALUASI SEKOLAH DASAR`
+     * Judul utama: `SELAMAT DATANG DI WEB SERBU 21`
+     * Sub-judul kepanjangan (dalam tanda kurung): `(Sistem Edukasi, Rapor, dan Basis Data Utama)`
+     * Deskripsi layanan: `Terintegrasi layanan Presensi Harian, CBT & Simulasi TKA, Rapor Kurikulum Merdeka, Perpustakaan Digital, dan Asisten Virtual SARAH.`
+
+3. Konsistensi Identitas di Seluruh Halaman Aplikasi:
+   - Selaraskan juga teks kepanjangan pada footer halaman Login, header utama dashboard, halaman cetak laporan/PDF, dan modal informasi aplikasi menjadi `SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • SDN Rawa Badak Utara 21`.
+
+Pastikan perubahan teks ini tidak mengubah tata letak, desain visual, gambar latar belakang pendopo, maupun fungsi autentikasi login yang sudah berjalan.
+
+
+ Perbaiki tata letak (layout) komponen banner header pada halaman "Report & Rekapitulasi Hasil Ujian TKA" (dan halaman banner serupa di modul CBT/ASAJ) pada aplikasi SERBU 21 agar deretan tombol aksi di sisi kanan tidak meluber keluar dari kotak banner ungu gelap.
+
+Instruksi Teknis Perubahan UI (Tailwind CSS):
+1. Perbaikan Struktur Flex/Grid Banner Utama:
+   - Pastikan container banner utama memiliki `overflow-hidden` dan tata letak responsif `flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 p-6 rounded-2xl`.
+   - Pada kolom kiri (Judul & Deskripsi): beri `lg:max-w-md shrink-0` agar teks judul "Report & Rekapitulasi Hasil Ujian TKA" tidak terhimpit terlalu sempit dan tetap nyaman dibaca.
+
+2. Penataan Ulang Tombol Aksi Agar Rapi di Dalam Kotak:
+   - Pada container pembungkus 8 tombol aksi (`Input Nilai Manual`, `Segarkan Cloud`, `Pulihkan Nilai TKA`, `Simulasikan (55)`, `Download Report`, `Unduh PDF`, `Cetak Rekap A4`, `Kosongkan`), hapus `whitespace-nowrap` pada parent atau tambahkan `flex flex-wrap items-center lg:justify-end gap-2.5 flex-1` sehingga tombol otomatis turun ke baris kedua secara rapi di dalam kotak banner tanpa pernah menembus batas kanan layar.
+   - Kelompokkan atau susun tombol dalam 2 baris yang seimbang (misalnya baris atas untuk tombol kelola data: `Input Nilai Manual`, `Segarkan Cloud`, `Pulihkan Nilai TKA`, `Simulasikan`; dan baris bawah untuk tombol ekspor/aksi akhir: `Download Report`, `Unduh PDF`, `Cetak Rekap A4`, `Kosongkan`).
+   - Standarkan ukuran padding dan tinggi tombol (`px-3.5 py-2 text-xs font-semibold rounded-xl inline-flex items-center gap-1.5 whitespace-nowrap`) agar seluruh tombol sejajar simetris.
+   - Pastikan tombol `Kosongkan` tetap terlihat jelas di atas latar gelap (gunakan `bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-400/30` alih-alih warna pink pucat yang menyatu dengan latar putih saat keluar kotak).
+
+Pastikan seluruh fungsi klik pada masing-masing tombol (termasuk filter unduhan sesuai kelas yang dipilih) tetap berjalan normal tanpa error.
+
+ Perbarui penamaan menu, label kolom, dan relasi data pada modul TKA aplikasi SERBU 21 (SEKOLAHKU) dengan ketentuan sebagai berikut:
+
+================================================================
+1. PERUBAHAN NAMA MENU & ISTILAH (CP -> KOMPETENSI, TP -> SUB KOMPETENSI)
+================================================================
+- Pada navigasi sidebar maupun tab menu TKA, ubah nama menu `"CP dan TP TKA"` (atau `"CP & TP TKA"`) menjadi `"Kompetensi TKA"`.
+- Di dalam halaman `"Kompetensi TKA"` tersebut (meliputi judul halaman, form input/edit, filter, maupun tabel daftar):
+  * Ubah seluruh label `"Capaian Pembelajaran (CP)"` atau `"CP"` menjadi `"Kompetensi"`.
+  * Ubah seluruh label `"Tujuan Pembelajaran (TP)"` atau `"TP"` menjadi `"Sub Kompetensi"`.
+- Pastikan setiap data **Kompetensi** dan **Sub Kompetensi** yang disimpan di Firebase Firestore terikat dengan properti `mataPelajaran` (misal: Matematika, Bahasa Indonesia, IPAS) dan `jenjangKelas`.
+- Pertahankan kompatibilitas dengan data lama di Firestore (jika dokumen lama masih memakai field `cp` dan `tp`, tetap baca dan tampilkan sebagai `Kompetensi` dan `Sub Kompetensi` tanpa menyebabkan error).
+
+================================================================
+2. KONEKSI OTOMATIS PADA MENU PEMBUATAN SOAL TKA
+================================================================
+- Pada halaman **"Pembuatan Soal TKA"** (baik form tambah/edit soal maupun generator soal AI SARAH):
+  * Ganti dropdown/field `"CP"` menjadi `"Kompetensi"`.
+  * Ganti dropdown/field `"TP"` menjadi `"Sub Kompetensi"`.
+- Terapkan **Cascading Filter (Koneksi Berjenjang 3 Tingkat)** yang terhubung langsung ke database menu `"Kompetensi TKA"`:
+  1. **Pilih Mata Pelajaran TKA** terlebih dahulu (misal: `Matematika`).
+  2. **Dropdown Kompetensi** otomatis memfilter dan menampilkan daftar **Kompetensi** yang hanya milik mata pelajaran yang dipilih dari data menu `"Kompetensi TKA"`.
+  3. **Dropdown Sub Kompetensi** otomatis memfilter dan menampilkan daftar **Sub Kompetensi** yang hanya berada di bawah **Kompetensi** (dan mata pelajaran) yang dipilih.
+- Jika pengguna mengubah pilihan **Mata Pelajaran**, otomatis reset pilihan **Kompetensi** dan **Sub Kompetensi** agar tidak terjadi ketidaksesuaian antar mapel.
+- Jika untuk suatu mata pelajaran belum ada data di menu `"Kompetensi TKA"`, tampilkan pesan singkat di dropdown: `"Belum ada data Kompetensi untuk mapel ini (tambahkan di menu Kompetensi TKA)"`.
+
+================================================================
+3. SINKRONISASI KE ANALISIS BUTIR SOAL & ASISTEN SARAH
+================================================================
+- Pastikan label pada tabel **Analisis Butir Soal TKA**, kartu pratinjau soal, serta prompt pembuatan soal TKA oleh asisten **SARAH** ikut menggunakan istilah **Kompetensi** dan **Sub Kompetensi** sesuai pilihan mata pelajaran yang aktif.
+
+ Perbarui mekanisme penyimpanan, penguncian, dan pengeditan nilai pada modul Ujian TKA dan Rekapitulasi/Input Manual TKA di aplikasi SERBU 21 dengan aturan sumber nilai dan penguncian otomatis berikut:
+
+================================================================
+1. PENANDAAN SUMBER NILAI (METADATA DATABASE FIRESTORE)
+================================================================
+Pada setiap dokumen hasil TKA siswa (`{idUjian}_{nisn}` di Firebase Firestore), wajib menyertakan field penanda sumber dan status kunci:
+- `sumberNilai`: `"UJIAN_TKA"` atau `"INPUT_MANUAL"`
+- `isLocked`: `true` (jika `sumberNilai === "UJIAN_TKA"`) atau `false` (jika `sumberNilai === "INPUT_MANUAL"`)
+- `waktuTerkunci`: timestamp saat nilai resmi pertama dari ujian masuk ke sistem.
+
+================================================================
+2. ATURAN SAAT SISWA MENGERJAKAN UJIAN TKA (1x NILAI RESMI TERKUNCI)
+================================================================
+Ketika siswa menekan tombol Selesai/Submit pada Ujian TKA (Simulasi TKA maupun Tryout TKA):
+1. Cek dokumen hasil TKA siswa untuk paket/mapel tersebut di Firestore (`{idUjian}_{nisn}`):
+   - **KONDISI A (Belum Ada Nilai Sama Sekali):**
+     * Simpan nilai ujian siswa ke rekapitulasi Firestore dengan `sumberNilai: "UJIAN_TKA"` dan `isLocked: true`.
+     * Nilai resmi terkunci dan masuk ke pemeringkatan & analisis.
+   - **KONDISI B (Sudah Ada Nilai, tetapi `sumberNilai === "INPUT_MANUAL"` / `isLocked === false`):**
+     * **TIMPA / GANTI** nilai input manual tersebut dengan nilai asli hasil ujian siswa.
+     * Perbarui dokumen menjadi `sumberNilai: "UJIAN_TKA"`, `isLocked: true`, dan simpan rincian jawaban per nomor soal siswa agar terhubung ke matriks analisis butir soal.
+     * Setelah tertimpa oleh hasil ujian, nilai langsung terkunci secara permanen.
+   - **KONDISI C (Sudah Ada Nilai dengan `sumberNilai === "UJIAN_TKA"` / `isLocked === true`):**
+     * Siswa **tetap diperbolehkan mengerjakan soal TKA kembali** sebagai latihan mandiri.
+     * Namun, saat siswa klik Selesai/Submit pada percobaan ke-2 dan seterusnya, sistem **DILARANG menimpa atau mengubah** nilai pertama yang sudah masuk ke rekapitulasi Firestore.
+     * Tampilkan notifikasi ramah pada layar selesai ujian siswa: `"Latihan Selesai! Skor percobaan latihan Anda: [Nilai]. Catatan: Nilai resmi TKA pertama Anda ([Nilai Terkunci]) sudah masuk & terkunci di sistem Guru sehingga tidak berubah."`
+     * Pastikan nilai percobaan ke-2 tidak mengubah peringkat, rata-rata kelas, maupun matriks analisis butir soal.
+
+================================================================
+3. ATURAN PADA MENU INPUT MANUAL & REKAPITULASI (GURU / ADMIN)
+================================================================
+Pada modal/halaman **"Input Nilai Manual"** dan tabel **"Report & Rekapitulasi Hasil Ujian TKA"**:
+- Jika siswa **belum mengerjakan ujian TKA** (`sumberNilai !== "UJIAN_TKA"` atau data masih kosong):
+  * Guru/Admin **dapat menginput atau mengedit nilai secara manual**.
+  * Saat disimpan, tandai dokumen dengan `sumberNilai: "INPUT_MANUAL"` dan `isLocked: false` (beri badge kecil `"Manual"` pada tabel rekap agar guru tahu nilai tersebut masih sementara dan akan otomatis tergantikan jika siswa mengikuti ujian TKA).
+- Jika siswa **sudah mengerjakan ujian TKA dan nilainya sudah masuk** (`sumberNilai === "UJIAN_TKA"` dan `isLocked === true`):
+  * **KUNCI input nilai siswa tersebut** (`disabled` / tidak bisa diedit maupun ditimpa lewat form Input Nilai Manual).
+  * Tampilkan ikon gembok 🔒 beserta keterangan/tooltip: `"Terkunci (Hasil Ujian TKA Resmi)"`.
+  * Pastikan tombol `"Kosongkan"` atau fitur reset admin memiliki konfirmasi keamanan berlapis jika memang harus mereset ujian ulang karena kendala teknis tertentu.
+
+Pastikan mekanisme ini tetap terintegrasi penuh dengan pengiriman tahan *wait response* (nilai pertama baru dikunci setelah terverifikasi masuk ke Firestore) dan sistem pemeringkatan Tie-Breaker HOTS.
+
+ Tambahkan panel kontrol khusus Super-Access pada akun user **Endi Soeprapto** di aplikasi SERBU 21 (SDN Rawa Badak Utara 21) yang mencakup dua fitur utama: **Upload & Simpan Permanen Foto Login Screen** serta **Menu Reset / Pemulihan Akun Admin (Backup Admin)**.
+
+================================================================
+1. DETEKSI HAK AKSES KHUSUS USER "ENDI SOEPRAPTO"
+================================================================
+- Buat pengecekan identitas user yang sedang login (case-insensitive pada nama `"Endi Soeprapto"` atau username/NUPTK terkait akun Endi Soeprapto).
+- Tampilkan menu/kartu khusus bernama **"Pengaturan Sistem & Cadangan Admin (Khusus Endi Soeprapto)"** pada dashboard/profil user **Endi Soeprapto** (dan sembunyikan menu ini dari akun siswa, wali murid, maupun guru biasa lainnya).
+
+================================================================
+2. MENU UPLOAD & SIMPAN PERMANEN FOTO LOGIN SCREEN
+================================================================
+Di dalam menu khusus user **Endi Soeprapto**, buat fitur ganti foto latar belakang halaman Login dengan jaminan penyimpanan permanen:
+- **Kompresi Gambar Otomatis Sebelum Simpan:**
+  * Saat memilih file gambar baru (`JPG`, `PNG`, `WEBP`), otomatis ubah ukuran proporsional (maksimal lebar `1600px`) dan kompres menjadi format `WEBP/JPEG` berkualitas tinggi (`0.82`) melalui HTML5 `<canvas>` agar ukuran file ringan (< 450 KB) dan aman disimpan langsung ke dokumen konfigurasi Firebase Firestore tanpa melebihi batas ukuran dokumen 1 MB.
+- **Penyimpanan Permanen ke Cloud (Firebase Firestore) + Cache Lokal:**
+  * Begitu tombol **"Simpan & Terapkan Foto Login"** ditekan, simpan string gambar terkompresi beserta timestamp update ke dokumen global `settings/login_appearance` (atau koleksi konfigurasi sekolah `schools/{npsn}/settings/login_appearance`) di Firebase Firestore.
+  * Simpan juga salinan cepat ke `localStorage` (`serbu21_login_bg_cache`) agar layar Login tampil instan tanpa kedipan (*flash*) saat dibuka.
+  * Tampilkan indikator status sukses: `"Foto Login berhasil disimpan permanen ke Cloud SERBU 21 dan langsung aktif di halaman Login."`
+  * Sertakan pratinjau langsung (*Live Preview*) foto yang sedang aktif saat ini serta tombol **"Kembalikan ke Foto Default Pendopo"** jika sewaktu-waktu ingin kembali ke foto bawaan.
+- **Pembacaan Otomatis di Halaman Login:**
+  * Pada komponen `LoginScreen`, wajib melakukan `onSnapshot` atau `getDoc` ke `settings/login_appearance` di Firestore setiap kali halaman Login dibuka, sehingga foto yang baru diunggah oleh **Endi Soeprapto** langsung muncul di semua perangkat (laptop, HP siswa/guru, maupun Papan Interaktif Digital) meskipun halaman di-refresh.
+
+================================================================
+3. MENU RESET & PEMULIHAN AKUN ADMIN (BACKUP ADMIN)
+================================================================
+Tambahkan tab/bagian kedua di dalam menu khusus user **Endi Soeprapto** bertajuk **"Pemulihan & Reset Akun Admin (Backup Darurat)"**:
+- **Fungsi Utama:** Sebagai pengaman cadangan (*fail-safe*) jika akun Admin utama terhapus, terkunci, lupa kata sandi, atau mengalami gangguan akses.
+- **Fitur yang Wajib Tersedia:**
+  1. **Reset Password Admin Utama:** Input password baru + konfirmasi password baru untuk mereset langsung kredensial akun dengan role `admin` di Firebase Firestore (menggunakan hashing/struktur autentikasi yang sama dengan sistem login aplikasi).
+  2. **Pulihkan / Buat Ulang Akun Admin Default:** Tombol darurat **"Pulihkan Akun Admin Sekolah"** yang otomatis membuat ulang atau mengaktifkan kembali dokumen user Admin utama (`role: "admin"`, status aktif) di Firestore jika dokumen admin tidak ditemukan atau terhapus.
+  3. **Buka Kunci Sesi / Reset Lockout Admin:** Tombol untuk membersihkan status blokir login (*failed attempts / locked status*) pada akun Admin.
+- **Konfirmasi Keamanan:**
+  * Setiap aksi reset/pemulihan Admin wajib menampilkan modal konfirmasi: `"Apakah Anda yakin ingin mereset akses akun Administrator SERBU 21?"` dan mencatat riwayat waktu pemulihan (`lastAdminRecoveryBy: "Endi Soeprapto"`).
+
+Pastikan seluruh fitur ini terintegrasi mulus dengan aturan keamanan Firestore dan tidak mengganggu data siswa, nilai TKA/CBT, maupun asisten virtual SARAH.
+
+ Tambahkan lapisan keamanan anti-malware, anti-XSS, dan pemblokir injeksi iklan (Anti-Ad Injection) pada aplikasi SERBU 21 (SDN Rawa Badak Utara 21) dengan 4 pengamanan teknis berikut:
+
+================================================================
+1. CONTENT SECURITY POLICY (CSP) & SECURITY META TAGS DI INDEX.HTML
+================================================================
+- Pada bagian `<head>` file `index.html`, tambahkan meta tag **Content-Security-Policy** ketat yang HANYA mengizinkan pemuatan skrip, gaya, dan koneksi dari sumber resmi yang digunakan SERBU 21:
+  * `default-src 'self' data: blob:;`
+  * `script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://www.gstatic.com https://apis.google.com;`
+  * `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;`
+  * `font-src 'self' data: https://fonts.gstatic.com;`
+  * `img-src 'self' data: blob: https://*.googleapis.com https://*.googleusercontent.com https://firebasestorage.googleapis.com;`
+  * `connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://firestore.googleapis.com https://generativelanguage.googleapis.com;`
+  * `frame-ancestors 'none';` (Mencegah web SERBU 21 dibajak/ditampilkan di dalam iframe situs iklan atau phishing luar).
+- Dengan aturan ini, browser otomatis memblokir segala skrip iklan, pop-up liar, atau kode malware dari domain luar yang mencoba menyusup.
+
+================================================================
+2. SANITASI INPUT ANTI-XSS (PEMBERSIH TEKS OTOMATIS)
+================================================================
+- Buat fungsi utilitas `sanitizeText(input)` yang otomatis menghapus/menetralkan tag berbahaya (`<script>`, `<iframe>`, `<object>`, `<embed>`, atribut `onload=`, `onerror=`, `javascript:`) pada seluruh form input aplikasi:
+  * Pesan percakapan Asisten Virtual SARAH.
+  * Jawaban esai/uraian siswa pada CBT & TKA.
+  * Input judul/deskripsi buku Perpustakaan Digital.
+  * Input laporan 7 Kebiasaan Anak Indonesia Hebat dan pengumuman sekolah.
+- Pastikan tidak ada penggunaan `dangerouslySetInnerHTML` tanpa pembersihan tag HTML terlebih dahulu.
+
+================================================================
+3. DETEKSI & PEMBLOKIR ELEMEN IKLAN / SKRIP ASING (DOM GUARD)
+================================================================
+- Buat komponen penjaga keamanan latar belakang (`SecurityGuard.jsx`) menggunakan `MutationObserver` ringan yang memantau penambahan elemen `<script>` atau `<iframe>` baru secara tiba-tiba ke dalam halaman:
+  * Jika terdeteksi elemen `<script>` atau `<iframe>` asing yang sumbernya (`src`) bukan berasal dari domain resmi aplikasi, Google, atau Firebase, langsung hapus elemen tersebut dari DOM secara otomatis agar iklan ekstensi browser atau skrip sisipan tidak muncul di layar siswa/guru.
+
+================================================================
+4. PROTEKSI KUNCI API & LOGIKA OTENTIKASI
+================================================================
+- Pastikan seluruh panggilan ke Gemini API (untuk Asisten SARAH) hanya mengirim teks yang sudah disanitasi dan membatasi panjang karakter input maksimal (misal maks. 1.500 karakter per pesan) agar tidak disalahgunakan untuk injeksi prompt atau spam.
+
+Pastikan seluruh fitur utama SERBU 21 (Firebase Firestore, Tailwind CSS, Recharts, dan Asisten SARAH) tetap berjalan mulus tanpa terblokir oleh aturan keamanan ini.
+
+ Perbarui lapisan autentikasi sesi, sanitasi input, dan penjaga keamanan DOM pada aplikasi SERBU 21 (SDN Rawa Badak Utara 21) agar sinkron 100% dengan Firestore Security Rules yang ketat dan bebas dari sisipan iklan maupun malware:
+
+================================================================
+1. AKTIVASI SESI FIREBASE AUTH OTOMATIS DI LATAR BELAKANG
+================================================================
+- Pada proses login aplikasi (baik login Admin, Guru, Siswa, maupun Wali Murid), pastikan setelah kredensial pengguna terverifikasi dari tabel/koleksi Firestore, aplikasi otomatis menjalankan `signInAnonymously(auth)` (dari `firebase/auth`) di latar belakang dan menyimpan/menyelaraskan dokumen profil sesi aktif di `/users/{auth.currentUser.uid}` (memuat `role`, `nama`, `kelas`, dan `nisn`/`nuptk`).
+- Hal ini wajib dilakukan agar properti `request.auth != null` dan pengecekan `role` pada Firestore Security Rules aktif sepenuhnya tanpa memblokir pengguna sah sekolah, sekaligus menolak pihak luar yang mencoba mengakses database tanpa lewat aplikasi.
+
+================================================================
+2. SANITASI INPUT ANTI-XSS & ANTI-INJEKSI IKLAN
+================================================================
+- Buat helper global `sanitizeInput(value)` yang membersihkan seluruh input teks sebelum dikirim ke Firebase Firestore maupun Gemini API (Asisten SARAH):
+  * Hapus seluruh tag HTML berbahaya (`<script>`, `<iframe>`, `<object>`, `<embed>`, `<link>`, `<meta>`) serta atribut event handler (`onload=`, `onerror=`, `onclick=`, `javascript:`).
+  * Terapkan sanitasi ini pada:
+    1. Kolom chat & generator soal Asisten Virtual SARAH (batasi panjang maksimal input 1.500 karakter).
+    2. Jawaban uraian/isian siswa pada modul CBT & TKA.
+    3. Form judul/deskripsi buku Perpustakaan Digital, pengumuman sekolah, dan laporan 7 Kebiasaan Anak Indonesia Hebat.
+- Pastikan seluruh teks yang dirender di layar menggunakan teks biasa (React JSX escaping) dan hindari penggunaan `dangerouslySetInnerHTML` tanpa pembersihan ketat.
+
+================================================================
+3. PENJAGA KEAMANAN BROWSER (CONTENT SECURITY POLICY & DOM GUARD)
+================================================================
+- Pada bagian `<head>` file `index.html`, tambahkan meta tag **Content-Security-Policy** ketat yang hanya mengizinkan domain resmi aplikasi, Google Fonts, Tailwind CDN, Firebase, dan Google Generative AI:
+  `<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://*.googleapis.com https://*.googleusercontent.com https://firebasestorage.googleapis.com; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://firestore.googleapis.com https://generativelanguage.googleapis.com;">`
+- Buat komponen penjaga keamanan latar belakang (`SecurityGuard.jsx`) menggunakan `MutationObserver` ringan yang otomatis menghapus elemen `<script>` atau `<iframe>` asing yang disuntikkan secara tiba-tiba ke dalam halaman (misalnya oleh ekstensi browser beriklan/adware di komputer/HP pengguna) jika sumbernya (`src`) bukan berasal dari domain resmi aplikasi, Google, atau Firebase.
+
+================================================================
+4. PENANGANAN ERROR HAK AKSES FIRESTORE YANG RAMAH
+================================================================
+- Jika terjadi penolakan akses dari Firestore (`permission-denied`), tangkap error tersebut dengan rapi dan tampilkan pesan yang jelas (misalnya: `"Akses ditolak: Nilai resmi TKA sudah terkunci"` atau `"Sesi keamanan habis, silakan muat ulang halaman"`), bukan layar blank/crash.
+
+Pastikan seluruh fitur utama SERBU 21 (Upload Foto Login khusus Endi Soeprapto, Penguncian Nilai TKA 1x, 5 Tab Analisis CBT & TKA, serta Asisten SARAH) tetap berjalan lancar tanpa hambatan.

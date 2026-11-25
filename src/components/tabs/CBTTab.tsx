@@ -3681,6 +3681,7 @@ export const CBTTab: React.FC<Props> = ({
             logoSekolahUrl: profile?.logoSekolahUrl,
             tahunPelajaran: activeYear,
             semester: activeSemester,
+            kelasLabel: reportClassFilter === 'all' ? 'Semua_Kelas' : reportClassFilter,
             filterSummary: `Paket: ${reportPaketFilter === 'all' ? 'Semua Paket' : reportPaketFilter} • Mapel: ${
               reportMapelFilter === 'all' ? 'Semua Mapel' : reportMapelFilter
             } • Kelas: ${reportClassFilter === 'all' ? 'Semua Kelas' : reportClassFilter}`,
@@ -3823,8 +3824,8 @@ export const CBTTab: React.FC<Props> = ({
               </div>
 
               {/* Eye-Catching Editorial Header Banner (Layar) */}
-              <div className="no-print bg-gradient-to-br from-slate-900 via-emerald-950 to-cyan-950 text-white p-6 sm:p-7 rounded-3xl shadow-md border border-emerald-900/40 flex flex-col xl:flex-row xl:items-center justify-between gap-5">
-                <div className="space-y-2 max-w-2xl">
+              <div className="no-print overflow-hidden bg-gradient-to-br from-slate-900 via-emerald-950 to-cyan-950 text-white p-6 rounded-2xl shadow-md border border-emerald-900/40 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+                <div className="space-y-2 lg:max-w-md shrink-0">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-emerald-200 font-medium">
                     <span>Rekapitulasi Evaluasi CBT</span>
                     <span aria-hidden="true">·</span>
@@ -3843,7 +3844,7 @@ export const CBTTab: React.FC<Props> = ({
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2.5 lg:justify-end flex-1">
                   <button
                     type="button"
                     onClick={() =>
@@ -3862,7 +3863,7 @@ export const CBTTab: React.FC<Props> = ({
                             : activeClass,
                       })
                     }
-                    className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-display font-black px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                    className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-display font-black px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
                     title="Input nilai CBT manual untuk seluruh siswa (termasuk siswa yang belum ujian)"
                   >
                     <Edit3 className="w-4 h-4" />
@@ -3874,7 +3875,7 @@ export const CBTTab: React.FC<Props> = ({
                       setCbtResultsList(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)));
                       showToast('Data hasil CBT diperbarui.', 'success');
                     }}
-                    className="bg-white/10 hover:bg-white/20 text-white font-display font-bold px-3.5 py-2.5 rounded-xl text-xs border border-white/15 flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
+                    className="bg-white/10 hover:bg-white/20 text-white font-display font-bold px-3.5 py-2 rounded-xl text-xs border border-white/15 flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
                   >
                     <RefreshCw className="w-4 h-4 text-sky-300" />
                     <span>Segarkan Data</span>
@@ -3882,7 +3883,7 @@ export const CBTTab: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={() => void handleDownloadCbtPdf()}
-                    className="bg-rose-500 hover:bg-rose-400 text-white font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                    className="bg-rose-500 hover:bg-rose-400 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
                     title="Unduh Report Rekapitulasi CBT (.PDF)"
                   >
                     <Download className="w-4 h-4" />
@@ -3891,7 +3892,7 @@ export const CBTTab: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={handleDownloadCbtWord}
-                    className="bg-sky-500 hover:bg-sky-400 text-white font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                    className="bg-sky-500 hover:bg-sky-400 text-white font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
                     title="Unduh Report Rekapitulasi CBT (.DOC Word) dengan Kop Logo & spasi tanda tangan 4 cm"
                   >
                     <FileText className="w-4 h-4" />
@@ -3900,7 +3901,7 @@ export const CBTTab: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={() => window.print()}
-                    className="bg-white hover:bg-slate-100 text-slate-900 font-display font-black px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                    className="bg-white hover:bg-slate-100 text-slate-900 font-display font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
                   >
                     <Printer className="w-4 h-4 text-emerald-700" />
                     <span>Cetak Rekap A4</span>

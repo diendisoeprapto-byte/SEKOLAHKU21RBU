@@ -40,7 +40,7 @@ function computeSignatureChecksum(input: string): string {
 }
 
 export const SYSTEM_CREDIT_TEXT =
-  'SERBU 21 — Dikembangkan oleh Endi Soeprapto, S.Pd., Gr. | For my beloved daughter, Assyuwaifah Dilanesa';
+  'SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • SDN Rawa Badak Utara 21 — Dikembangkan oleh Endi Soeprapto, S.Pd., Gr. | For my beloved daughter, Assyuwaifah Dilanesa';
 
 // Browser Console Watermark (IIFE) — otomatis dicetak saat halaman dimuat
 (function renderBrowserConsoleWatermark() {

@@ -64,7 +64,7 @@ export const OwnershipCertificateModal: React.FC<Props> = ({
                 Nama Aplikasi &amp; Satuan Pendidikan
               </span>
               <p className="font-display font-black text-base sm:text-lg text-rose-700 mt-0.5">
-                {_CREATOR_SIGNATURE_ENDI_DILANESA.appName} — {_CREATOR_SIGNATURE_ENDI_DILANESA.institution}
+                {_CREATOR_SIGNATURE_ENDI_DILANESA.appName} (Sistem Edukasi, Rapor, dan Basis Data Utama) • {_CREATOR_SIGNATURE_ENDI_DILANESA.institution}
               </p>
             </div>
 

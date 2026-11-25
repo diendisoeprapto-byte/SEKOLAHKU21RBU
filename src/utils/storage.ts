@@ -1367,6 +1367,17 @@ export interface TKASubmissionItem {
   tahunPelajaran?: string;
   semester?: string;
   updatedAt?: string;
+  sumberNilai?: 'UJIAN_TKA' | 'INPUT_MANUAL';
+  isLocked?: boolean;
+  waktuTerkunci?: string;
+  lockedMapels?: Record<
+    string,
+    {
+      score: number;
+      waktuTerkunci: string;
+      sumberNilai: 'UJIAN_TKA';
+    }
+  >;
 }
 
 export const sanitizeTkaSubmissionsList = (

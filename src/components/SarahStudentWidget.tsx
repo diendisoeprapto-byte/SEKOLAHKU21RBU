@@ -31,6 +31,7 @@ import {
   Subject,
 } from '../types';
 import { subscribeToCbtExamsCollection } from '../utils/cbtFirestore';
+import { sanitizeInput } from '../utils/sanitize';
 import {
   DEFAULT_SARAH_CONFIG,
   SARAH_ATTRIBUTION_TEXT,
@@ -512,7 +513,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
       return;
     }
 
-    const question = (overridePrompt ?? inputText).trim();
+    const question = sanitizeInput(overridePrompt ?? inputText, 1500);
     if (!question || isThinking) return;
 
     const freshExamBundle = buildStudentExamReviewBundle(currentStudent, cbtExams);

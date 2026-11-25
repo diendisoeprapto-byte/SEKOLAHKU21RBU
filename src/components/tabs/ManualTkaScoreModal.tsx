@@ -3,6 +3,7 @@ import {
   CheckCircle,
   ChevronRight,
   Edit3,
+  Lock,
   Save,
   Search,
   User,
@@ -19,7 +20,11 @@ import {
   normalizeTkaMapelKey,
   sanitizeSubmissionFotoUrl,
 } from '../../utils/storage';
-import { makeSubmissionDocId } from '../../utils/tkaFirestore';
+import {
+  isAnyTkaMapelLocked,
+  isTkaMapelLocked,
+  makeSubmissionDocId,
+} from '../../utils/tkaFirestore';
 
 export interface ManualTkaModalSeed {
   paket: string;
@@ -125,6 +130,14 @@ const buildManualSubmissionRecord = (params: {
   };
 
   MANUAL_TKA_MAPEL_LIST.forEach(({ key }) => {
+    if (isTkaMapelLocked(existingSub, key)) {
+      const lockedVal = Number(
+        existingSub?.lockedMapels?.[key]?.score ?? existingSub?.scoresPerMapel?.[key] ?? 0
+      );
+      completedMapels.push(key);
+      scoresPerMapel[key] = Number.isFinite(lockedVal) ? lockedVal : 0;
+      return;
+    }
     const raw = (mapelInputs[key] ?? '').toString().trim();
     if (raw !== '') {
       const parsed = Number(raw);
@@ -145,6 +158,7 @@ const buildManualSubmissionRecord = (params: {
   const status: 'Tuntas' | 'Remedial' = skorTotal >= 75 ? 'Tuntas' : 'Remedial';
   const docId = makeSubmissionDocId(student.id, basePaket, existingSub?.id);
   const nowIso = new Date().toISOString();
+  const hasLockedAny = isAnyTkaMapelLocked(existingSub);
 
   return {
     ...(existingSub || {}),
@@ -162,6 +176,10 @@ const buildManualSubmissionRecord = (params: {
     skorTotal,
     predikat,
     status,
+    sumberNilai: hasLockedAny ? 'UJIAN_TKA' : 'INPUT_MANUAL',
+    isLocked: hasLockedAny,
+    ...(hasLockedAny && existingSub?.waktuTerkunci ? { waktuTerkunci: existingSub.waktuTerkunci } : {}),
+    ...(hasLockedAny && existingSub?.lockedMapels ? { lockedMapels: existingSub.lockedMapels } : {}),
     tanggalUjian: (tanggalUjian || '').trim() || existingSub?.tanggalUjian || todayLabel,
     durasiPengerjaan: (durasi || '').trim() || existingSub?.durasiPengerjaan || '45 Menit',
     tahunPelajaran: existingSub?.tahunPelajaran || activeYear,
@@ -173,7 +191,7 @@ const buildManualSubmissionRecord = (params: {
 interface ManualBatchStudentRowProps {
   student: Student;
   rowIndex: number;
-  hasExistingSubmission: boolean;
+  existingSub?: TKASubmissionItem;
   rowScores: Partial<Record<TKAMapelScoreKey, string>> | undefined;
   onCellChange: (studentId: string, mapelKey: TKAMapelScoreKey, rawValue: string) => void;
   onCellKeyDown: (e: React.KeyboardEvent<HTMLInputElement>, rowIndex: number, colIndex: number) => void;
@@ -182,7 +200,7 @@ interface ManualBatchStudentRowProps {
 const ManualBatchStudentRow = memo(function ManualBatchStudentRow({
   student,
   rowIndex,
-  hasExistingSubmission,
+  existingSub,
   rowScores,
   onCellChange,
   onCellKeyDown,
@@ -199,6 +217,7 @@ const ManualBatchStudentRow = memo(function ManualBatchStudentRow({
     }
   }
   const rowAvg = count > 0 ? Math.round(sum / count) : null;
+  const anyLocked = isAnyTkaMapelLocked(existingSub);
 
   return (
     <tr className="hover:bg-slate-50">
@@ -208,9 +227,20 @@ const ManualBatchStudentRow = memo(function ManualBatchStudentRow({
       <td className="p-2">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="font-bold text-slate-900 leading-tight">{student.nama}</span>
-          {hasExistingSubmission ? (
-            <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-black uppercase">
-              Sudah Ujian
+          {anyLocked ? (
+            <span
+              className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-black uppercase inline-flex items-center gap-0.5"
+              title="Nilai resmi dari Ujian TKA siswa dan terkunci 1x"
+            >
+              <Lock className="w-2.5 h-2.5" />
+              Terkunci
+            </span>
+          ) : existingSub ? (
+            <span
+              className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 text-[9px] font-black uppercase"
+              title="Input manual guru — akan terganti & terkunci 1x jika siswa mengerjakan Ujian TKA"
+            >
+              Manual
             </span>
           ) : (
             <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[9px] font-black uppercase">
@@ -222,23 +252,41 @@ const ManualBatchStudentRow = memo(function ManualBatchStudentRow({
           {student.kelas} · {student.nisn || '-'}
         </div>
       </td>
-      {MANUAL_TKA_MAPEL_LIST.map(({ key }, colIndex) => (
-        <td key={key} className="p-1.5 text-center">
-          <input
-            type="text"
-            inputMode="numeric"
-            pattern="[0-9]*"
-            maxLength={3}
-            data-batch-cell={`${rowIndex}-${colIndex}`}
-            value={rowScores?.[key] ?? ''}
-            onFocus={(e) => e.currentTarget.select()}
-            onChange={(e) => onCellChange(student.id, key, e.target.value)}
-            onKeyDown={(e) => onCellKeyDown(e, rowIndex, colIndex)}
-            placeholder="—"
-            className="w-16 px-1.5 py-1 rounded-lg border border-slate-300 bg-white text-center font-bold text-slate-900 tabular-nums outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
-          />
-        </td>
-      ))}
+      {MANUAL_TKA_MAPEL_LIST.map(({ key }, colIndex) => {
+        const isCellLocked = isTkaMapelLocked(existingSub, key);
+        return (
+          <td key={key} className="p-1.5 text-center">
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={3}
+              disabled={isCellLocked}
+              data-batch-cell={`${rowIndex}-${colIndex}`}
+              value={rowScores?.[key] ?? ''}
+              onFocus={(e) => {
+                if (!isCellLocked) e.currentTarget.select();
+              }}
+              onChange={(e) => {
+                if (isCellLocked) return;
+                onCellChange(student.id, key, e.target.value);
+              }}
+              onKeyDown={(e) => onCellKeyDown(e, rowIndex, colIndex)}
+              placeholder="—"
+              title={
+                isCellLocked
+                  ? 'Terkunci (Hasil Ujian TKA Resmi)'
+                  : 'Isi nilai manual 0-100'
+              }
+              className={`w-16 px-1.5 py-1 rounded-lg border text-center font-bold tabular-nums outline-none ${
+                isCellLocked
+                  ? 'border-emerald-200 bg-emerald-50/60 text-emerald-900 cursor-not-allowed opacity-80'
+                  : 'border-slate-300 bg-white text-slate-900 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100'
+              }`}
+            />
+          </td>
+        );
+      })}
       <td className="p-2 text-center font-display font-black tabular-nums">
         {rowAvg !== null ? (
           <span className={rowAvg >= 75 ? 'text-emerald-700' : 'text-rose-600'}>
@@ -861,15 +909,20 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
                         <span className="font-display font-black text-xs text-slate-900 truncate">
                           {selectedStudent.nama}
                         </span>
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${
-                            selectedStudentExistingSub
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {selectedStudentExistingSub ? 'Sudah Ujian' : 'Belum Ujian'}
-                        </span>
+                        {isAnyTkaMapelLocked(selectedStudentExistingSub) ? (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-100 text-emerald-800 inline-flex items-center gap-0.5">
+                            <Lock className="w-2.5 h-2.5" />
+                            Terkunci (Hasil Ujian TKA Resmi)
+                          </span>
+                        ) : selectedStudentExistingSub ? (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-sky-100 text-sky-800">
+                            Manual
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-amber-100 text-amber-800">
+                            Belum Ujian
+                          </span>
+                        )}
                       </div>
                       <div className="text-[11px] text-slate-600 font-medium">
                         {selectedStudent.kelas} · NISN:{' '}
@@ -904,6 +957,15 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
                 </div>
               )}
 
+              {selectedStudentExistingSub && isAnyTkaMapelLocked(selectedStudentExistingSub) && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-3.5 py-2.5 text-[11px] text-emerald-900 flex items-start gap-2">
+                  <Lock className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Nilai Ujian TKA Resmi Terkunci:</strong> Mata pelajaran bertanda <strong>Terkunci</strong> berasal dari pengerjaan langsung siswa dan tidak dapat ditimpa manual. Anda tetap dapat mengisi mata pelajaran lain yang masih kosong atau berstatus <strong>Manual</strong>.
+                  </span>
+                </div>
+              )}
+
               {/* 5 Subject Score Inputs */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -912,55 +974,87 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
                   </label>
                   <button
                     type="button"
-                    onClick={() => setScoresInput({ ...EMPTY_MANUAL_SCORES })}
+                    onClick={() =>
+                      setScoresInput((prev) => {
+                        const next = { ...EMPTY_MANUAL_SCORES };
+                        MANUAL_TKA_MAPEL_LIST.forEach(({ key }) => {
+                          if (isTkaMapelLocked(selectedStudentExistingSub, key)) {
+                            next[key] = prev[key];
+                          }
+                        });
+                        return next;
+                      })
+                    }
                     className="text-[11px] font-bold text-slate-500 hover:text-rose-600 cursor-pointer"
                   >
-                    Kosongkan Semua Isian
+                    Kosongkan Isian Manual
                   </button>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                  {MANUAL_TKA_MAPEL_LIST.map(({ key, shortLabel }, idx) => (
-                    <div
-                      key={key}
-                      className="bg-slate-50 border border-slate-200 rounded-2xl p-3 space-y-1.5 focus-within:border-emerald-500 focus-within:bg-emerald-50/30"
-                    >
-                      <label className="block text-[11px] font-black text-slate-700 leading-tight">
-                        {shortLabel}
-                      </label>
-                      <input
-                        ref={(el) => {
-                          singleScoreInputRefs.current[idx] = el;
-                        }}
-                        type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        maxLength={3}
-                        value={scoresInput[key]}
-                        onFocus={(e) => e.currentTarget.select()}
-                        onChange={(e) => {
-                          const val = sanitizeManualScoreInput(e.target.value);
-                          setScoresInput((prev) => ({
-                            ...prev,
-                            [key]: val,
-                          }));
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            const nextEl = singleScoreInputRefs.current[idx + 1];
-                            if (nextEl) {
-                              nextEl.focus();
-                              nextEl.select();
-                            } else {
-                              handleSaveSingle(true);
+                  {MANUAL_TKA_MAPEL_LIST.map(({ key, shortLabel }, idx) => {
+                    const isMapelLocked = isTkaMapelLocked(selectedStudentExistingSub, key);
+                    return (
+                      <div
+                        key={key}
+                        className={`border rounded-2xl p-3 space-y-1.5 ${
+                          isMapelLocked
+                            ? 'bg-emerald-50/60 border-emerald-200'
+                            : 'bg-slate-50 border-slate-200 focus-within:border-emerald-500 focus-within:bg-emerald-50/30'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <label className="block text-[11px] font-black text-slate-700 leading-tight">
+                            {shortLabel}
+                          </label>
+                          {isMapelLocked && (
+                            <span className="inline-flex items-center gap-0.5 text-[9px] font-black text-emerald-700">
+                              <Lock className="w-2.5 h-2.5" /> Terkunci
+                            </span>
+                          )}
+                        </div>
+                        <input
+                          ref={(el) => {
+                            singleScoreInputRefs.current[idx] = el;
+                          }}
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          maxLength={3}
+                          disabled={isMapelLocked}
+                          value={scoresInput[key]}
+                          onFocus={(e) => {
+                            if (!isMapelLocked) e.currentTarget.select();
+                          }}
+                          onChange={(e) => {
+                            if (isMapelLocked) return;
+                            const val = sanitizeManualScoreInput(e.target.value);
+                            setScoresInput((prev) => ({
+                              ...prev,
+                              [key]: val,
+                            }));
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const nextEl = singleScoreInputRefs.current[idx + 1];
+                              if (nextEl && !nextEl.disabled) {
+                                nextEl.focus();
+                                nextEl.select();
+                              } else {
+                                handleSaveSingle(true);
+                              }
                             }
-                          }
-                        }}
-                        placeholder="—"
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-center font-display font-black text-base text-slate-900 tabular-nums outline-none focus:border-emerald-600"
-                      />
-                    </div>
-                  ))}
+                          }}
+                          placeholder="—"
+                          className={`w-full px-3 py-2 rounded-xl border text-center font-display font-black text-base tabular-nums outline-none ${
+                            isMapelLocked
+                              ? 'border-emerald-200 bg-white/80 text-emerald-900 cursor-not-allowed opacity-85'
+                              : 'border-slate-300 bg-white text-slate-900 focus:border-emerald-600'
+                          }`}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1075,7 +1169,7 @@ export const ManualTkaScoreModal: React.FC<ManualTkaScoreModalProps> = ({
                         key={s.id}
                         student={s}
                         rowIndex={idx}
-                        hasExistingSubmission={Boolean(findExistingFast(s.id, paket, s.nisn))}
+                        existingSub={findExistingFast(s.id, paket, s.nisn)}
                         rowScores={batchInputs[s.id]}
                         onCellChange={handleBatchCellChange}
                         onCellKeyDown={handleBatchCellKeyDown}

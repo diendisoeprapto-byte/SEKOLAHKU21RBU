@@ -71,6 +71,8 @@ import { DEFAULT_SCHOOL_PROFILE, DEFAULT_TEACHERS, DEFAULT_STUDENTS, DEFAULT_SUB
 import { Header } from './components/Header';
 import { Sidebar, TabId } from './components/Sidebar';
 import { LoginScreen } from './components/LoginScreen';
+import { SecurityGuard } from './components/SecurityGuard';
+import { EndiSuperAccessPanel } from './components/EndiSuperAccessPanel';
 
 // Modals
 import { ImageZoomModal } from './components/modals/ImageZoomModal';
@@ -170,6 +172,8 @@ import {
   sortTeachersAlphabetically,
 } from './utils/teacherFirestore';
 import { getLocalTodayStr } from './utils/dateUtils';
+import { ensureFirebaseSessionUser } from './utils/authSession';
+import { isEndiSoepraptoUser } from './utils/sarahAttachments';
 
 export default function App() {
   // Database States
@@ -945,6 +949,7 @@ export default function App() {
   useEffect(() => {
     activeUserRef.current = activeUser;
     if (!activeUser) return;
+    void ensureFirebaseSessionUser(activeUser);
     flushPendingTkaSubmissionsToFirestore().catch(() => {});
     flushPendingCbtResultsToFirestore().catch(() => {});
     if (students.length > 0) {
@@ -1175,6 +1180,7 @@ export default function App() {
   // Login & Logout: default always opens Beranda Sekolah ('dashboard')
   const handleLoginSuccess = (user: ActiveUser) => {
     setActiveUser(user);
+    void ensureFirebaseSessionUser(user);
     localStorage.setItem('sekolahku_active_user', JSON.stringify(user));
     localStorage.setItem('sekolahku_last_activity', String(Date.now()));
     // Bridge userRole & identitas untuk modul standalone asaj.html
@@ -1258,6 +1264,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col antialiased selection:bg-rose-500 selection:text-white">
+      <SecurityGuard />
       {/* Toast Notification Stack */}
       <div className="fixed top-4 right-4 z-[999] flex flex-col gap-2 max-w-sm w-full pointer-events-none px-4 sm:px-0">
         {toasts.map((t) => (
@@ -1796,6 +1803,16 @@ export default function App() {
                   subjects={subjects}
                   showToast={showToast}
                   onNavigateTab={setActiveTab}
+                />
+              )}
+
+              {/* Tab Super-Access Khusus Endi Soeprapto */}
+              {activeTab === 'super-access-endi' && isEndiSoepraptoUser(activeUser) && activeUser.role !== 'siswa' && (
+                <EndiSuperAccessPanel
+                  activeUser={activeUser}
+                  profile={profile}
+                  onUpdateProfile={handleSaveProfile}
+                  showToast={showToast}
                 />
               )}
             </main>

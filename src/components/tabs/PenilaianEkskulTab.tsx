@@ -289,7 +289,8 @@ export const PenilaianEkskulTab: React.FC<Props> = ({
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Penilaian Ekskul');
-    XLSX.writeFile(wb, `Penilaian_Ekskul_${activeEkskul?.nama.replace(/\s+/g, '_')}.xlsx`);
+    const kelasSuffix = classFilter === 'all' ? 'Semua_Kelas' : classFilter.replace(/\s+/g, '_');
+    XLSX.writeFile(wb, `Penilaian_Ekskul_${activeEkskul?.nama.replace(/\s+/g, '_')}_${kelasSuffix}.xlsx`);
     showToast('Berkas Excel Penilaian Ekskul berhasil diunduh!', 'success');
   };
 

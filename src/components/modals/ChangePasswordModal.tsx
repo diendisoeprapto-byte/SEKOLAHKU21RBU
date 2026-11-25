@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
 import { KeyRound, Eye, EyeOff, ShieldCheck, Check, AlertCircle, RotateCcw } from 'lucide-react';
+import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { db } from '../../utils/firebase';
+import { clearLocalAdminLockout } from '../../utils/authSession';
 import {
   getStoredAdminPassword,
   saveStoredAdminPassword,
@@ -53,6 +56,19 @@ export const ChangePasswordModal: React.FC<Props> = ({
     }
 
     saveStoredAdminPassword(newPassword);
+    clearLocalAdminLockout();
+    void setDoc(
+      doc(db, 'settings', 'admin_credentials'),
+      {
+        password: newPassword,
+        active: true,
+        failedAttempts: 0,
+        lockedUntil: null,
+        updatedAt: new Date().toISOString(),
+        serverTime: serverTimestamp(),
+      },
+      { merge: true }
+    ).catch(() => {});
     showToast('Password administrator berhasil diubah!', 'success');
     setOldPassword('');
     setNewPassword('');
@@ -65,6 +81,19 @@ export const ChangePasswordModal: React.FC<Props> = ({
   const handleResetAdminToDefault = () => {
     if (!allowResetAdmin) return;
     resetStoredAdminPassword();
+    clearLocalAdminLockout();
+    void setDoc(
+      doc(db, 'settings', 'admin_credentials'),
+      {
+        password: 'admin',
+        active: true,
+        failedAttempts: 0,
+        lockedUntil: null,
+        updatedAt: new Date().toISOString(),
+        serverTime: serverTimestamp(),
+      },
+      { merge: true }
+    ).catch(() => {});
     showToast('Password administrator berhasil di-reset ke default ("admin")!', 'success');
     setOldPassword('');
     setNewPassword('');
@@ -97,7 +126,7 @@ export const ChangePasswordModal: React.FC<Props> = ({
                 Rubah Password Administrator
               </h3>
               <p className="text-[11px] text-slate-500">
-                Perbarui kata sandi akun Administrator aplikasi SERBU 21
+                SERBU 21 (Sistem Edukasi, Rapor, dan Basis Data Utama) • SDN Rawa Badak Utara 21
               </p>
             </div>
           </div>

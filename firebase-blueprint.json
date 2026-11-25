@@ -55,7 +55,14 @@
         "skorTotal": { "type": "number" },
         "predikat": { "type": "string" },
         "status": { "type": "string" },
-        "tanggalUjian": { "type": "string" }
+        "tanggalUjian": { "type": "string" },
+        "benarHots": { "type": "number" },
+        "totalHots": { "type": "number" },
+        "durasiDetik": { "type": "number" },
+        "sumberNilai": { "type": "string", "enum": ["UJIAN_TKA", "INPUT_MANUAL"] },
+        "isLocked": { "type": "boolean" },
+        "waktuTerkunci": { "type": "string" },
+        "lockedMapels": { "type": "object" }
       },
       "required": ["id", "studentId", "paket", "skorTotal"]
     },
@@ -279,6 +286,30 @@
         "updated_at": { "type": "string", "format": "date-time" }
       },
       "required": ["owner", "isolated"]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Sesi profil peran pengguna aktif (Firebase Anonymous Auth UID)",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "guru", "siswa"] },
+        "username": { "type": "string" },
+        "nama": { "type": "string" },
+        "kelas": { "type": "string" },
+        "nisn": { "type": "string" },
+        "detail": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "role", "username", "nama"]
+    },
+    "AppSetting": {
+      "title": "AppSetting",
+      "description": "Dokumen konfigurasi sistem (tampilan login, kredensial admin, pengaturan ujian CBT)",
+      "type": "object",
+      "properties": {
+        "updatedAt": { "type": "string" }
+      }
     }
   },
   "firestore": {
@@ -361,6 +392,14 @@
     "/sarah_private_chats/{ownerId}/messages/{messageId}": {
       "schema": "SarahChatMessage",
       "description": "Sub-koleksi isi pesan privat eksklusif Endi Soeprapto"
+    },
+    "/users/{userId}": {
+      "schema": "UserAccount",
+      "description": "Dokumen sesi profil peran pengguna aktif terikat Firebase Auth UID"
+    },
+    "/settings/{settingId}": {
+      "schema": "AppSetting",
+      "description": "Konfigurasi global aplikasi SERBU 21 (tampilan login, kredensial admin, pengaturan CBT)"
     }
   }
 }

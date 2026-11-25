@@ -223,75 +223,71 @@ export const BarcodePrintModal: React.FC<Props> = ({
       id="batch-barcode-portal-root"
       className="fixed inset-0 z-[970] bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
     >
-      <style
-        dangerouslySetInnerHTML={{
-          __html: `
-            @media print {
-              @page {
-                size: ${pageCssSize};
-                margin: 5mm;
-              }
-              html, body {
-                margin: 0 !important;
-                padding: 0 !important;
-                background: #ffffff !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-              }
-              body > *:not(#batch-barcode-portal-root) {
-                display: none !important;
-              }
-              #batch-barcode-portal-root {
-                position: static !important;
-                inset: auto !important;
-                display: block !important;
-                background: #ffffff !important;
-                padding: 0 !important;
-                margin: 0 !important;
-                overflow: visible !important;
-              }
-              #batch-barcode-modal-shell {
-                position: static !important;
-                max-width: none !important;
-                max-height: none !important;
-                width: 100% !important;
-                border: none !important;
-                border-radius: 0 !important;
-                box-shadow: none !important;
-                overflow: visible !important;
-                background: #ffffff !important;
-              }
-              #batch-barcode-scroll-area {
-                overflow: visible !important;
-                padding: 0 !important;
-                background: #ffffff !important;
-              }
-              .no-print-in-modal {
-                display: none !important;
-              }
-              .print-sheet-page {
-                box-shadow: none !important;
-                margin: 0 auto !important;
-                border: none !important;
-                page-break-after: always !important;
-                break-after: page !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-              }
-              .print-sheet-page:last-child {
-                page-break-after: auto !important;
-                break-after: auto !important;
-              }
-              .barcode-card-item {
-                break-inside: avoid !important;
-                page-break-inside: avoid !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-              }
-            }
-          `,
-        }}
-      />
+      <style>{`
+        @media print {
+          @page {
+            size: ${pageCssSize};
+            margin: 5mm;
+          }
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          body > *:not(#batch-barcode-portal-root) {
+            display: none !important;
+          }
+          #batch-barcode-portal-root {
+            position: static !important;
+            inset: auto !important;
+            display: block !important;
+            background: #ffffff !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            overflow: visible !important;
+          }
+          #batch-barcode-modal-shell {
+            position: static !important;
+            max-width: none !important;
+            max-height: none !important;
+            width: 100% !important;
+            border: none !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            overflow: visible !important;
+            background: #ffffff !important;
+          }
+          #batch-barcode-scroll-area {
+            overflow: visible !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+          }
+          .no-print-in-modal {
+            display: none !important;
+          }
+          .print-sheet-page {
+            box-shadow: none !important;
+            margin: 0 auto !important;
+            border: none !important;
+            page-break-after: always !important;
+            break-after: page !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .print-sheet-page:last-child {
+            page-break-after: auto !important;
+            break-after: auto !important;
+          }
+          .barcode-card-item {
+            break-inside: avoid !important;
+            page-break-inside: avoid !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+        }
+      `}</style>
 
       <div
         id="batch-barcode-modal-shell"

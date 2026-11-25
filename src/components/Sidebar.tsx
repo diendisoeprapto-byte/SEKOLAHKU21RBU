@@ -33,6 +33,7 @@ import {
   Camera,
   Presentation,
   MessageCircleHeart,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   ActiveExamHeaderStatus,
@@ -42,6 +43,7 @@ import {
   hasAdminMenuAccess,
   isAbkExcludedFromTka,
 } from '../types';
+import { isEndiSoepraptoUser } from '../utils/sarahAttachments';
 
 export type TabId =
   | 'dashboard'
@@ -79,7 +81,8 @@ export type TabId =
   | 'manajemen-asaj'
   | 'portal-alumni'
   | 'perpustakaan'
-  | 'asisten-sarah';
+  | 'asisten-sarah'
+  | 'super-access-endi';
 
 interface Props {
   activeTab: TabId;
@@ -767,7 +770,7 @@ export const Sidebar: React.FC<Props> = ({
                       <span>Siswa TKA (Kelas 6)</span>
                     </button>
                   )}
-                  {(!searchQuery || 'cp dan tp tka capaian tujuan tka literasi numerasi sains ipas'.includes(searchQuery)) && (
+                  {(!searchQuery || 'cp dan tp tka kompetensi sub kompetensi capaian tujuan tka literasi numerasi sains ipas'.includes(searchQuery)) && (
                     <button
                       onClick={() => onSelectTab('cp-tp-tka')}
                       className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
@@ -777,7 +780,7 @@ export const Sidebar: React.FC<Props> = ({
                       }`}
                     >
                       <Compass className="w-4 h-4" />
-                      <span>CP dan TP TKA</span>
+                      <span>Kompetensi TKA</span>
                     </button>
                   )}
                   {(!searchQuery || 'bank soal tka simulasi 1 6 tryout tka 1 5 import xlsx csv pengaturan soal waktu ujian acak jawaban'.includes(searchQuery)) && (
@@ -898,6 +901,20 @@ export const Sidebar: React.FC<Props> = ({
                     >
                       <KeyRound className="w-4 h-4 text-rose-600" />
                       <span>Rubah Password Admin</span>
+                    </button>
+                  )}
+                  {isEndiSoepraptoUser(activeUser) && activeUser.role !== 'siswa' && (!searchQuery || 'pengaturan sistem cadangan admin endi soeprapto foto login screen pemulihan reset super akses'.includes(searchQuery)) && (
+                    <button
+                      type="button"
+                      onClick={() => onSelectTab('super-access-endi')}
+                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition cursor-pointer ${
+                        activeTab === 'super-access-endi'
+                          ? 'bg-gradient-to-r from-indigo-700 to-purple-700 text-white shadow-sm'
+                          : 'text-indigo-900 bg-indigo-50/90 hover:bg-indigo-100 border border-indigo-200'
+                      }`}
+                    >
+                      <ShieldAlert className={`w-4 h-4 shrink-0 ${activeTab === 'super-access-endi' ? 'text-amber-300' : 'text-indigo-600'}`} />
+                      <span className="leading-snug">Pengaturan Sistem &amp; Cadangan Admin (Khusus Endi Soeprapto)</span>
                     </button>
                   )}
                 </div>

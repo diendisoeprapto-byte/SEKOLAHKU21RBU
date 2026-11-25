@@ -99,6 +99,7 @@ import {
   svgToDataUrl,
   syncSarahConfigToFirestore,
 } from '../../utils/sarahFirestore';
+import { mapFirestorePermissionError, sanitizeInput } from '../../utils/sanitize';
 import { SarahMarkdown } from '../SarahMarkdown';
 import { SarahStickerSlicerPanel } from '../SarahStickerSlicerPanel';
 import { extractSarahResponseMetadata } from '../../utils/sarahVisuals';
@@ -1029,7 +1030,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
     overrideAttachments?: SarahChatAttachment[]
   ) => {
     if (e) e.preventDefault();
-    const promptText = (overrideText ?? chatInput).trim();
+    const promptText = sanitizeInput(overrideText ?? chatInput, 1500);
     const pendingAttachments = Array.isArray(overrideAttachments)
       ? overrideAttachments
       : !overrideText && canUploadChatFiles
@@ -1350,7 +1351,8 @@ export const SarahAssistantTab: React.FC<Props> = ({
   // Handler Generator LKPD Menarik
   const handleGenerateLkpd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!lkpdTopik.trim()) {
+    const cleanTopik = sanitizeInput(lkpdTopik, 400);
+    if (!cleanTopik) {
       showToast('Harap isi Topik / Tujuan Pembelajaran LKPD terlebih dahulu.', 'error');
       return;
     }
@@ -1361,7 +1363,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         schoolName: profile.name,
         kelas: lkpdKelas,
         mapel: lkpdMapel,
-        queryText: `${lkpdTopik} ${lkpdAktivitas} ${lkpdDiferensiasi}`,
+        queryText: `${cleanTopik} ${lkpdAktivitas} ${lkpdDiferensiasi}`,
         knowledgeDocs,
         mediaAjarDocs,
         subjects,
@@ -1375,7 +1377,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         params: {
           kelas: lkpdKelas,
           mapel: lkpdMapel,
-          topik: lkpdTopik,
+          topik: cleanTopik,
           jenisAktivitas: lkpdAktivitas,
           tingkatDiferensiasi: lkpdDiferensiasi,
         },
@@ -1483,7 +1485,8 @@ export const SarahAssistantTab: React.FC<Props> = ({
 
   const handleGenerateModul = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!modulTopik.trim()) {
+    const cleanModulTopik = sanitizeInput(modulTopik, 400);
+    if (!cleanModulTopik) {
       showToast('Harap isi Topik / Tujuan Pembelajaran (TP) terlebih dahulu.', 'error');
       return;
     }
@@ -1494,7 +1497,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         schoolName: profile.name,
         kelas: modulKelas,
         mapel: modulMapel,
-        queryText: `${modulTopik} ${modulInklusi}`,
+        queryText: `${cleanModulTopik} ${modulInklusi}`,
         knowledgeDocs,
         mediaAjarDocs,
         subjects,
@@ -1508,8 +1511,8 @@ export const SarahAssistantTab: React.FC<Props> = ({
         params: {
           kelas: modulKelas,
           mapel: modulMapel,
-          topik: modulTopik,
-          inklusiCatatan: modulInklusi,
+          topik: cleanModulTopik,
+          inklusiCatatan: sanitizeInput(modulInklusi, 400),
         },
         ragContext,
       });
@@ -1643,7 +1646,8 @@ export const SarahAssistantTab: React.FC<Props> = ({
   const handleGenerateCbt = async (e: React.FormEvent) => {
     e.preventDefault();
     const selectedRef = firestoreMaterialRefs.find((r) => r.id === cbtSelectedRefId);
-    if (cbtSourceMode === 'manual' && !cbtTopik.trim()) {
+    const cleanCbtTopik = sanitizeInput(cbtTopik, 400);
+    if (cbtSourceMode === 'manual' && !cleanCbtTopik) {
       showToast('Harap masukkan Topik / Materi untuk membuat soal CBT.', 'error');
       return;
     }
@@ -1657,8 +1661,8 @@ export const SarahAssistantTab: React.FC<Props> = ({
     try {
       const effectiveTopik =
         cbtSourceMode === 'firestore' && selectedRef
-          ? `${selectedRef.label}${cbtTopik.trim() ? ` — Fokus: ${cbtTopik.trim()}` : ''}`
-          : cbtTopik.trim();
+          ? `${selectedRef.label}${cleanCbtTopik ? ` — Fokus: ${cleanCbtTopik}` : ''}`
+          : cleanCbtTopik;
 
       const ragContext = retrieveSarahRagContext({
         schoolName: profile.name,
@@ -1877,26 +1881,29 @@ export const SarahAssistantTab: React.FC<Props> = ({
 
   const handleSubmitManualTeach = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!teachJudul.trim() || !teachKonten.trim()) {
+    const cleanJudul = sanitizeInput(teachJudul, 200);
+    const cleanKonten = sanitizeInput(teachKonten, 4000);
+    const cleanSumber = sanitizeInput(teachSumber, 200);
+    if (!cleanJudul || !cleanKonten) {
       showToast('Judul dan isi ringkasan pengetahuan wajib diisi.', 'error');
       return;
     }
     setIsSavingManualKb(true);
     try {
       await addSarahKnowledgeItem({
-        judul: teachJudul,
+        judul: cleanJudul,
         kategori: teachKategori,
         kelas: teachKelas,
         mata_pelajaran: teachMapel,
-        konten_ringkasan: teachKonten,
-        sumber: teachSumber || 'Input Manual Guru',
+        konten_ringkasan: cleanKonten,
+        sumber: cleanSumber || 'Input Manual Guru',
         disetujui_oleh: activeUser.name,
       });
       setTeachJudul('');
       setTeachKonten('');
       showToast('Pengetahuan baru berhasil diajarkan ke Memori SARAH!', 'success');
     } catch (err: any) {
-      showToast(`Gagal menyimpan pengetahuan: ${err?.message || 'error'}`, 'error');
+      showToast(mapFirestorePermissionError(err, 'Gagal menyimpan pengetahuan ke Memori SARAH.'), 'error');
     } finally {
       setIsSavingManualKb(false);
     }
@@ -4397,7 +4404,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* TAB KHUSUS ENDI: UPLOAD & AUTO-SLICER LEMBAR STIKER REALISTIK (#31-60) */}
+      {/* TAB KHUSUS ENDI: UPLOAD & AUTO-SLICER LEMBAR STIKER REALISTIK (#01-60) */}
       {/* ===================================================================== */}
       {isExclusiveEndi && subTab === 'stickers' && (
         <SarahStickerSlicerPanel

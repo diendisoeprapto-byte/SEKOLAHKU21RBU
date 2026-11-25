@@ -31,6 +31,7 @@ import {
 import { db } from '../../utils/firebase';
 import { ActiveUser, SchoolProfile, Student, hasAdminMenuAccess } from '../../types';
 import { formatTanggalIndo } from '../../utils/dateUtils';
+import { sanitizeHtmlFragment } from '../../utils/sanitize';
 
 interface Props {
   activeUser: ActiveUser;
@@ -2565,7 +2566,7 @@ export const PortalAlumniTab: React.FC<Props> = ({
       {printHtml && (
         <div
           className="hidden print:block"
-          dangerouslySetInnerHTML={{ __html: printHtml }}
+          dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(printHtml) }}
         />
       )}
     </div>
