@@ -135,10 +135,51 @@ export function extractGoogleDriveFileId(rawUrl: string): string | null {
   return null;
 }
 
+export function isGoogleSlidesUrl(rawUrl?: string): boolean {
+  const input = (rawUrl || '').trim();
+  if (!input) return false;
+  try {
+    const parsed = new URL(input);
+    const hostname = parsed.hostname.toLowerCase();
+    return hostname.endsWith('docs.google.com') && /\/presentation\/d\/[a-zA-Z0-9_-]+/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
 export function convertDriveUrlToEmbedUrl(rawUrl: string): string | null {
   const fileId = extractGoogleDriveFileId(rawUrl);
   if (!fileId) return null;
-  return `https://drive.google.com/file/d/${fileId}/preview`;
+  if (isGoogleSlidesUrl(rawUrl)) {
+    return `https://docs.google.com/presentation/d/${fileId}/embed?start=false&loop=false&delayms=3000&rm=minimal`;
+  }
+  return `https://drive.google.com/file/d/${fileId}/preview?rm=minimal`;
+}
+
+export function resolvePresentationPreviewUrl(
+  mediaItem: Pick<MediaAjarItem, 'drive_url' | 'embed_url'>
+): string | null {
+  const rawDrive = (mediaItem.drive_url || '').trim();
+  const rawEmbed = (mediaItem.embed_url || '').trim();
+  const slidesSource = isGoogleSlidesUrl(rawDrive)
+    ? rawDrive
+    : isGoogleSlidesUrl(rawEmbed)
+    ? rawEmbed
+    : null;
+
+  if (slidesSource) {
+    const slideId = extractGoogleDriveFileId(slidesSource);
+    if (slideId) {
+      return `https://docs.google.com/presentation/d/${slideId}/embed?start=false&loop=false&delayms=3000&rm=minimal`;
+    }
+  }
+
+  const fileId = extractGoogleDriveFileId(rawDrive) || extractGoogleDriveFileId(rawEmbed);
+  if (fileId) {
+    return `https://drive.google.com/file/d/${fileId}/preview?rm=minimal`;
+  }
+
+  return getSafeExternalUrl(rawEmbed) || getSafeExternalUrl(rawDrive);
 }
 
 function getSafeExternalUrl(rawUrl?: string): string | null {
@@ -375,10 +416,51 @@ export const MediaAjarTab: React.FC<Props> = ({
   const [deletingItem, setDeletingItem] = useState<MediaAjarItem | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
 
-  // State Modal Slide Viewer & Fullscreen
+  // State Modal Slide Viewer & Fullscreen Presentation Mode
   const [viewingItem, setViewingItem] = useState<MediaAjarItem | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [isDockVisible, setIsDockVisible] = useState<boolean>(true);
   const viewerContainerRef = useRef<HTMLDivElement | null>(null);
+  const dockHideTimerRef = useRef<number | null>(null);
+  const isDockHoveredRef = useRef<boolean>(false);
+
+  const clearDockHideTimer = () => {
+    if (dockHideTimerRef.current !== null) {
+      window.clearTimeout(dockHideTimerRef.current);
+      dockHideTimerRef.current = null;
+    }
+  };
+
+  const revealDock = () => {
+    clearDockHideTimer();
+    setIsDockVisible(true);
+    dockHideTimerRef.current = window.setTimeout(() => {
+      if (!isDockHoveredRef.current) {
+        setIsDockVisible(false);
+      }
+    }, 3000);
+  };
+
+  const openMediaPreview = (mediaItem: MediaAjarItem) => {
+    setViewingItem(mediaItem);
+    revealDock();
+    if (
+      typeof document !== 'undefined' &&
+      !document.fullscreenElement &&
+      document.documentElement?.requestFullscreen
+    ) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+  };
+
+  const closeMediaPreview = () => {
+    clearDockHideTimer();
+    isDockHoveredRef.current = false;
+    if (typeof document !== 'undefined' && document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+    setViewingItem(null);
+  };
 
   useEffect(() => {
     const onFsChange = () => {
@@ -387,6 +469,54 @@ export const MediaAjarTab: React.FC<Props> = ({
     document.addEventListener('fullscreenchange', onFsChange);
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
+
+  useEffect(() => {
+    if (!viewingItem) {
+      clearDockHideTimer();
+      return;
+    }
+
+    revealDock();
+
+    const handleUserActivity = () => {
+      revealDock();
+    };
+
+    const handlePresentationKeyDown = (e: KeyboardEvent) => {
+      const targetTag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
+      const isTyping = targetTag === 'input' || targetTag === 'textarea' || targetTag === 'select';
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMediaPreview();
+        return;
+      }
+      if (!isTyping && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        const targetEl = viewerContainerRef.current || document.documentElement;
+        if (!document.fullscreenElement) {
+          targetEl?.requestFullscreen?.().catch(() => {});
+        } else {
+          document.exitFullscreen().catch(() => {});
+        }
+        revealDock();
+      }
+    };
+
+    window.addEventListener('mousemove', handleUserActivity, { passive: true });
+    window.addEventListener('mousedown', handleUserActivity, { passive: true });
+    window.addEventListener('touchstart', handleUserActivity, { passive: true });
+    window.addEventListener('pointermove', handleUserActivity, { passive: true });
+    window.addEventListener('keydown', handlePresentationKeyDown);
+
+    return () => {
+      clearDockHideTimer();
+      window.removeEventListener('mousemove', handleUserActivity);
+      window.removeEventListener('mousedown', handleUserActivity);
+      window.removeEventListener('touchstart', handleUserActivity);
+      window.removeEventListener('pointermove', handleUserActivity);
+      window.removeEventListener('keydown', handlePresentationKeyDown);
+    };
+  }, [viewingItem]);
 
   // Target query Firestore sesuai role dan kelas
   const targetFirestoreKelas =
@@ -608,13 +738,15 @@ export const MediaAjarTab: React.FC<Props> = ({
   };
 
   const handleToggleFullscreen = async () => {
-    if (!viewerContainerRef.current) return;
+    const targetEl = viewerContainerRef.current || document.documentElement;
+    if (!targetEl) return;
     try {
       if (!document.fullscreenElement) {
-        await viewerContainerRef.current.requestFullscreen();
+        await targetEl.requestFullscreen();
       } else {
         await document.exitFullscreen();
       }
+      revealDock();
     } catch {
       showToast('Mode layar penuh tidak didukung oleh browser atau perangkat ini.', 'error');
     }
@@ -826,7 +958,7 @@ export const MediaAjarTab: React.FC<Props> = ({
                 <div>
                   {/* Preview Slide PPT 16:9 */}
                   <div
-                    onClick={() => setViewingItem(item)}
+                    onClick={() => openMediaPreview(item)}
                     className="relative aspect-[16/9] bg-slate-100 border-b border-slate-100 overflow-hidden cursor-pointer"
                     title="Klik untuk membuka presentasi slide"
                   >
@@ -887,7 +1019,7 @@ export const MediaAjarTab: React.FC<Props> = ({
                     </div>
 
                     <h3
-                      onClick={() => setViewingItem(item)}
+                      onClick={() => openMediaPreview(item)}
                       className="font-display font-bold text-sm sm:text-[15px] text-slate-900 leading-snug line-clamp-2 cursor-pointer group-hover:text-rose-700 transition-colors"
                     >
                       {item.judul}
@@ -906,7 +1038,7 @@ export const MediaAjarTab: React.FC<Props> = ({
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
-                      onClick={() => setViewingItem(item)}
+                      onClick={() => openMediaPreview(item)}
                       className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-rose-600 text-white font-display font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
                     >
                       <Eye className="w-3.5 h-3.5" />
@@ -1190,99 +1322,137 @@ export const MediaAjarTab: React.FC<Props> = ({
         </div>
       )}
 
-      {/* MODAL VIEWER SLIDE PRESENTASI FULLSCREEN */}
-      {viewingItem && (
-        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
+      {/* MODE PRESENTASI SLIDESHOW LAYAR PENUH (100vw x 100vh) */}
+      {viewingItem && (() => {
+        const presentationUrl = resolvePresentationPreviewUrl(viewingItem);
+        const safeDriveUrl = getSafeExternalUrl(viewingItem.drive_url);
+
+        return (
           <div
             ref={viewerContainerRef}
-            className="bg-slate-900 w-full h-full max-w-6xl max-h-[92vh] rounded-2xl sm:rounded-3xl overflow-hidden flex flex-col border border-slate-700 shadow-2xl"
+            onMouseMove={revealDock}
+            onTouchStart={revealDock}
+            className="fixed inset-0 z-[9999] w-screen h-screen bg-black overflow-hidden select-none"
           >
-            {/* Top Toolbar Viewer */}
-            <div className="px-4 py-3 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-white shrink-0">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
-                  <span className="font-bold text-rose-400">{viewingItem.mapel}</span>
-                  <span>•</span>
-                  <span>Kelas {viewingItem.kelas}</span>
-                  <span>•</span>
-                  <span>{viewingItem.bab}</span>
-                  <span>•</span>
-                  <span className="truncate">{viewingItem.pertemuan}</span>
+            {/* Zona sensitif tepi atas agar floating dock mudah muncul kembali meski kursor di atas iframe */}
+            <div
+              onMouseEnter={revealDock}
+              onTouchStart={revealDock}
+              className="absolute top-0 inset-x-0 h-5 z-20"
+            />
+
+            {/* Auto-Hide Floating Capsule Dock */}
+            <div
+              onMouseEnter={() => {
+                isDockHoveredRef.current = true;
+                revealDock();
+              }}
+              onMouseLeave={() => {
+                isDockHoveredRef.current = false;
+                revealDock();
+              }}
+              className={`absolute top-4 left-1/2 -translate-x-1/2 z-30 max-w-[94vw] transition-all duration-300 ${
+                isDockVisible
+                  ? 'opacity-100 translate-y-0 pointer-events-auto'
+                  : 'opacity-0 -translate-y-4 pointer-events-none'
+              }`}
+            >
+              <div className="bg-slate-950/80 backdrop-blur-md border border-white/15 rounded-full shadow-2xl px-3 sm:px-4 py-2 flex items-center gap-2 sm:gap-3 text-white">
+                <div className="flex items-center gap-2 min-w-0 max-w-[42vw] sm:max-w-[360px]">
+                  <span className="w-7 h-7 rounded-full bg-rose-600/90 flex items-center justify-center shrink-0">
+                    <Presentation className="w-3.5 h-3.5 text-white" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="font-display font-bold text-xs sm:text-sm text-white truncate">
+                      {viewingItem.judul}
+                    </div>
+                    <div className="hidden md:flex items-center gap-1.5 text-[10px] text-slate-300 truncate">
+                      <span className="text-rose-300 font-semibold">{viewingItem.mapel}</span>
+                      <span>•</span>
+                      <span>Kelas {viewingItem.kelas}</span>
+                      <span>•</span>
+                      <span className="truncate">{viewingItem.bab}</span>
+                    </div>
+                  </div>
                 </div>
-                <h3 className="font-display font-black text-sm sm:text-base text-white truncate">
-                  {viewingItem.judul}
-                </h3>
-              </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleToggleFullscreen}
-                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
-                >
-                  {isFullscreen ? (
-                    <>
-                      <Minimize2 className="w-4 h-4" />
-                      <span className="hidden sm:inline">Keluar Layar Penuh</span>
-                    </>
-                  ) : (
-                    <>
-                      <Maximize2 className="w-4 h-4" />
-                      <span className="hidden sm:inline">Mode Layar Penuh (Fullscreen)</span>
-                    </>
-                  )}
-                </button>
+                <div className="h-5 w-px bg-white/15 shrink-0" />
 
-                {getSafeExternalUrl(viewingItem.drive_url) && (
-                  <a
-                    href={getSafeExternalUrl(viewingItem.drive_url)!}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold flex items-center gap-1.5 transition"
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleToggleFullscreen}
+                    title="Beralih Layar Penuh (Pintasan: F)"
+                    className="px-2.5 sm:px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
                   >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Buka Drive</span>
-                  </a>
-                )}
+                    {isFullscreen ? (
+                      <>
+                        <Minimize2 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Normal</span>
+                      </>
+                    ) : (
+                      <>
+                        <Maximize2 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Fullscreen</span>
+                      </>
+                    )}
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (document.fullscreenElement) {
-                      document.exitFullscreen().catch(() => {});
-                    }
-                    setViewingItem(null);
-                  }}
-                  className="p-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white transition cursor-pointer"
-                  title="Tutup Viewer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                  {safeDriveUrl && (
+                    <a
+                      href={safeDriveUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Buka materi di tab baru Google Drive"
+                      className="px-2.5 sm:px-3 py-1.5 rounded-full bg-sky-600/90 hover:bg-sky-500 text-white text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Buka di Tab Baru</span>
+                    </a>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={closeMediaPreview}
+                    title="Keluar Presentasi (Pintasan: Esc)"
+                    className="px-2.5 sm:px-3 py-1.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Keluar</span>
+                  </button>
+                </div>
               </div>
             </div>
 
-            {/* Iframe Slide Container */}
-            <div className="flex-1 bg-slate-950 relative">
-              {getSafeExternalUrl(viewingItem.embed_url) ? (
+            {/* Canvas Slideshow 100vw x 100vh */}
+            <div className="w-full h-full bg-black">
+              {presentationUrl ? (
                 <iframe
-                  src={getSafeExternalUrl(viewingItem.embed_url)!}
+                  src={presentationUrl}
                   title={viewingItem.judul}
-                  className="w-full h-full border-0"
+                  className="w-full h-full border-0 bg-black"
                   allow="autoplay; fullscreen"
                   allowFullScreen
                 />
               ) : (
-                <div className="h-full flex flex-col items-center justify-center p-6 text-center text-slate-300 space-y-2">
+                <div className="h-full flex flex-col items-center justify-center p-6 text-center text-slate-300 space-y-3">
                   <AlertTriangle className="w-10 h-10 text-amber-400" />
                   <p className="text-sm font-bold">
                     Tautan pratinjau slide tidak valid atau tidak dapat dimuat.
                   </p>
+                  <button
+                    type="button"
+                    onClick={closeMediaPreview}
+                    className="px-4 py-2 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold cursor-pointer"
+                  >
+                    Tutup Presentasi
+                  </button>
                 </div>
               )}
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </section>
   );
 };

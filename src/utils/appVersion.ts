@@ -29,6 +29,15 @@ export interface ChangelogVersionItem {
 
 export const CHANGELOG_DATA: ChangelogVersionItem[] = [
   {
+    version: 'v4.14.2',
+    date: '26 November 2026',
+    title: 'Mode Presentasi Slideshow Penuh pada Bank Media Ajar',
+    highlights: [
+      'Mengubah tampilan pratinjau Bank Media Ajar menjadi mode presentasi slideshow layar penuh (100% canvas hitam) layaknya tampilan Slide Show PowerPoint.',
+      'Menambahkan bilah kontrol melayang yang otomatis bersembunyi (auto-hide) setelah 3 detik agar tampilan materi di kelas bersih tanpa gangguan.',
+    ],
+  },
+  {
     version: 'v4.14.1',
     date: '26 November 2026',
     title: 'Pemilihan Mata Pelajaran Spesifik saat Hapus / Buka Kunci Nilai TKA & CBT',
