@@ -15,10 +15,10 @@ export interface ChangelogVersionItem {
  *    nilai dari elemen teratas: `CHANGELOG_DATA[0].version`.
  *
  * 2. PETUNJUK BAGI AI / PENGEMBANG UNTUK SETIAP SESI PEMBARUAN BERIKUTNYA:
- *    - Naikkan angka PATCH (misal: v4.3.1 -> v4.3.2) untuk perbaikan bug, penyesuaian kode,
+ *    - Naikkan angka PATCH (misal: v4.8.0 -> v4.8.1) untuk perbaikan bug, penyesuaian kode,
  *      atau perapihan tampilan kecil.
- *    - Naikkan angka MINOR (misal: v4.3.2 -> v4.4.0) untuk penambahan fitur baru.
- *    - Naikkan angka MAJOR (misal: v4.4.0 -> v5.0.0) untuk perombakan arsitektur besar.
+ *    - Naikkan angka MINOR (misal: v4.8.0 -> v4.9.0) untuk penambahan fitur baru.
+ *    - Naikkan angka MAJOR (misal: v4.8.0 -> v5.0.0) untuk perombakan arsitektur besar.
  *    - Perbarui tanggal rilis sesuai tanggal pembaruan kode dibuat.
  *    - SETIAP KALI MENGHASILKAN KODE BARU DI MASA MENDATANG:
  *      WAJIB menambahkan entri baru di urutan PALING ATAS ([0]) array `CHANGELOG_DATA`
@@ -28,6 +28,74 @@ export interface ChangelogVersionItem {
  */
 
 export const CHANGELOG_DATA: ChangelogVersionItem[] = [
+  {
+    version: 'v4.14.1',
+    date: '26 November 2026',
+    title: 'Pemilihan Mata Pelajaran Spesifik saat Hapus / Buka Kunci Nilai TKA & CBT',
+    highlights: [
+      'Menambahkan kotak centang pilih mata pelajaran (mapel) di dialog Buka Kunci & Hapus Nilai TKA maupun CBT sehingga guru/admin dapat menghapus atau menghitung ulang hanya mapel tertentu tanpa menghapus nilai mapel lainnya.',
+      'Menambahkan pemilihan mapel pada dialog Kosongkan Data TKA/CBT serta tombol Hapus per siswa pada Rekap TKA yang memiliki lebih dari satu mapel, sekaligus membersihkan mirror Firestore per mapel secara akurat.',
+    ],
+  },
+  {
+    version: 'v4.14.0',
+    date: '26 November 2026',
+    title: 'Penambahan Link Sumber Pengetahuan untuk Asisten AI SARAH',
+    highlights: [
+      'Menambahkan menu kelola Link Sumber Pengetahuan (URL situs edukasi, artikel Kemendikbud, Google Drive/PDF) khusus Admin & Endi Soeprapto lengkap dengan ringkasan konten dan kontrol target Guru/Siswa.',
+      'Integrasi langsung daftar tautan sumber aktif dan pencarian web Gemini Search ke dalam memori AI SARAH beserta tombol tautan sumber otomatis di bawah balasan chat.',
+    ],
+  },
+  {
+    version: 'v4.13.0',
+    date: '26 November 2026',
+    title: 'Integrasi Kehadiran & TP pada Jurnal Mengajar serta Pengelolaan Modul Ajar',
+    highlights: [
+      'Penyeragaman istilah menjadi Modul Ajar secara menyeluruh serta penambahan tombol Hapus per item beserta dialog konfirmasi di Repositori Perangkat Ajar.',
+      'Integrasi otomatis ringkasan kehadiran murid harian dan pilihan Tujuan Pembelajaran (TP) dari data Kurikulum ke dalam form, tabel, dan ekspor PDF/Excel Jurnal Mengajar.',
+    ],
+  },
+  {
+    version: 'v4.11.0',
+    date: '26 November 2026',
+    title: 'Fitur Buka Kunci Nilai, Koreksi Ulang Skor Otomatis & Ujian Ulang (Admin & Endi Soeprapto)',
+    highlights: [
+      'Menambahkan kontrol eksklusif Buka Kunci Nilai (hanya dapat diakses Admin / Super Admin dan akun Endi Soeprapto) pada Rekap Hasil & Matriks Analisis Butir Soal CBT maupun TKA.',
+      'Menambahkan fitur Hitung Ulang Nilai Otomatis dengan konfirmasi PIN Pengawas untuk mengevaluasi ulang seluruh jawaban tersimpan siswa menggunakan kunci jawaban terbaru via writeBatch Firestore.',
+      'Menambahkan opsi Buka Kunci & Hapus Nilai (izinkan siswa mengerjakan ulang paket/mapel) serta Buka Kunci Edit Manual, sekaligus sinkronisasi real-time penghapusan status terkunci di perangkat siswa.',
+    ],
+  },
+  {
+    version: 'v4.10.0',
+    date: '26 November 2026',
+    title: 'Modul Administrasi Pembelajaran & Download Laporan Jurnal Mengajar Harian',
+    highlights: [
+      'Menambahkan modul Administrasi Pembelajaran (Repositori ATP, Prota, Promes, Modul Ajar/RPP, PPI & LKPD Adaptif) dengan fitur draf otomatis AI SARAH serta status verifikasi digital ber-QR Code.',
+      'Menambahkan fitur Jurnal Mengajar Harian (Agenda Kelas) lengkap dengan filter periode, unduh laporan resmi siap cetak (PDF) berkop sekolah & blok pengesahan Kepala Sekolah, serta ekspor Excel (.csv).',
+      'Menambahkan dasbor pemantauan & supervisi Kepala Sekolah untuk verifikasi satu klik serta kontrol akses bertahap (khusus Endi Soeprapto & Kepsek, dengan sakelar aktivasi ke seluruh guru).',
+    ],
+  },
+  {
+    version: 'v4.9.0',
+    date: '26 November 2026',
+    title: 'Standardisasi Otomatis Kode Kompetensi (KOM) & Sub Kompetensi (SK) TKA',
+    highlights: [
+      'Pembaruan dan standardisasi kode Kompetensi TKA otomatis dari awalan "CP-" menjadi "KOM-" (Kompetensi) di seluruh menu Kompetensi TKA, pembuatan butir soal, dan penyimpanan data.',
+      'Pembaruan penamaan kode pada sub kompetensi TKA secara menyeluruh (termasuk migrasi otomatis data penyimpanan lokal) dari "TP-" menjadi "SK-" (Sub Kompetensi).',
+      'Penyempurnaan sinkronisasi nomor versi otomatis berbasis Semantic Versioning terhubung langsung dengan perubahan data dan pembaruan sistem.',
+    ],
+  },
+  {
+    version: 'v4.8.0',
+    date: '26 November 2026',
+    title: 'Sistem Tahun Ajaran & Arsip Riwayat Mengajar Guru',
+    highlights: [
+      'Menambahkan pengelolaan Tahun Ajaran aktif serta pemetaan penugasan kelas guru per tahun ajaran tanpa menghapus rekam jejak mengajar sebelumnya.',
+      'Menambahkan fitur beralih tahun ajaran (Year Switcher) di dasbor Guru dan Admin untuk melihat arsip nilai, presensi, e-Rapor, dan soal tahun lalu secara utuh sekaligus menyesuaikan kelas ampu otomatis di tahun ajaran baru.',
+      'Optimasi performa anti-macet (debouncing auto-save, kompresi gambar otomatis via canvas, paginasi tabel rekap & matriks, serta manajemen listener memori).',
+      'Mode Kunci Ujian (Exam Lock) layar penuh otomatis, deteksi pindah tab/Alt+Tab, buka kunci pengawas via Ctrl + C + B dan PIN 2121, pembaruan soal/kunci jawaban secara live, tampilan skor instan siswa, serta tombol Reset Nilai Ujian.',
+    ],
+  },
   {
     version: 'v4.4.0',
     date: '26 November 2026',
@@ -130,7 +198,7 @@ export const CHANGELOG_LIST = CHANGELOG_DATA;
 
 // SUMBER KEBENARAN TUNGGAL DINAMIS BERDASARKAN ELEMEN TERATAS CHANGELOG_DATA:
 export const CURRENT_CHANGELOG_ITEM = CHANGELOG_DATA[0];
-export const APP_VERSION = CHANGELOG_DATA[0]?.version || 'v4.3.3';
+export const APP_VERSION = CHANGELOG_DATA[0]?.version || 'v4.8.0';
 export const RELEASE_DATE = CHANGELOG_DATA[0]?.date || '26 November 2026';
 export const RELEASE_DATE_SHORT = RELEASE_DATE.replace('November', 'Nov').replace('Desember', 'Des');
 export const APP_VERSION_NUMBER = APP_VERSION.replace(/^v/i, '');

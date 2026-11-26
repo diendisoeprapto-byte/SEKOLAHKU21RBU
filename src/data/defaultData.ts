@@ -20,6 +20,11 @@ export const DEFAULT_SCHOOL_PROFILE: SchoolProfile = {
   },
   logoKemendikbudUrl: LOGO_KEMENDIKBUD_DEFAULT,
   logoSekolahUrl: LOGO_SEKOLAH_DEFAULT,
+  activeAcademicYear: "2026/2027",
+  academicYears: ["2026/2027", "2027/2028"],
+  proctorPin: "2121",
+  examLockEnabled: true,
+  showStudentScoreImmediate: true,
 };
 
 export const DEFAULT_TEACHERS: Teacher[] = [

@@ -89,6 +89,25 @@ function writeLocalHasilUjianCache(docId: string, record: HasilUjianRecord): voi
   }
 }
 
+export function removeLocalHasilUjianCacheEntries(docIds: string[]): void {
+  if (typeof window === 'undefined' || !Array.isArray(docIds) || docIds.length === 0) return;
+  try {
+    const map = readLocalHasilUjianCache();
+    let changed = false;
+    docIds.forEach((id) => {
+      if (id && id in map) {
+        delete map[id];
+        changed = true;
+      }
+    });
+    if (changed) {
+      window.localStorage.setItem(LOCAL_HASIL_UJIAN_CACHE_KEY, JSON.stringify(map));
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
 /**
  * Menyimpan hasil ujian ke Firestore koleksi `hasil_ujian` dengan key `${nisn}_${id_ujian}`
  * secara non-blocking agar siswa tidak mengalami "wait response" saat selesai ujian.

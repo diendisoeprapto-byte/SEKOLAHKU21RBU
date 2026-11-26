@@ -26,6 +26,7 @@ import {
   AlignCenter,
   Power,
   Lock,
+  Unlock,
   Eye,
   EyeOff,
   Download,
@@ -156,6 +157,17 @@ import {
 } from '../../utils/cbtReportExport';
 import { doesRecordMatchTerm } from '../../utils/semesterUtils';
 import { ManualCbtModalSeed, ManualCbtScoreModal } from './ManualCbtScoreModal';
+import {
+  UnlockScoreModal,
+  UnlockScoreActionMode,
+  UnlockMapelOption,
+} from '../modals/UnlockScoreModal';
+import {
+  canManageLockedScores,
+  unlockAndDeleteCbtForReexam,
+  unlockAndRecalculateCbtResults,
+  unlockCbtForManualEdit,
+} from '../../utils/examScoreUnlock';
 
 interface Props {
   activeUser: ActiveUser;
@@ -256,6 +268,12 @@ export const CBTTab: React.FC<Props> = ({
   const [selectedCbtReportRow, setSelectedCbtReportRow] = useState<any | null>(null);
   const [confirmDeleteCbtRowId, setConfirmDeleteCbtRowId] = useState<string | null>(null);
   const [manualCbtModalSeed, setManualCbtModalSeed] = useState<ManualCbtModalSeed | null>(null);
+  const [cbtUnlockModalState, setCbtUnlockModalState] = useState<{
+    targets: CBTExamResult[];
+    scopeLabel: string;
+    initialSelectedMapels?: string[];
+  } | null>(null);
+  const hasScoreUnlockAuthority = canManageLockedScores(activeUser);
 
   useEffect(() => {
     const syncResults = () => {
@@ -3963,6 +3981,29 @@ export const CBTTab: React.FC<Props> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2.5 lg:justify-end flex-1">
+                  {hasScoreUnlockAuthority && (
+                    <button
+                      type="button"
+                      disabled={filteredCbtRows.length === 0}
+                      onClick={() =>
+                        setCbtUnlockModalState({
+                          targets: filteredCbtRows.map((r) => r.raw),
+                          scopeLabel: `${
+                            reportPaketFilter === 'all' ? 'Semua Paket CBT' : reportPaketFilter
+                          } · ${reportMapelFilter === 'all' ? 'Semua Mapel' : reportMapelFilter} (${
+                            reportClassFilter === 'all' ? 'Semua Kelas' : reportClassFilter
+                          })`,
+                          initialSelectedMapels:
+                            reportMapelFilter !== 'all' ? [reportMapelFilter] : undefined,
+                        })
+                      }
+                      className="bg-amber-500 hover:bg-amber-400 disabled:opacity-45 text-slate-950 font-display font-black px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                      title="Buka kunci nilai, hitung ulang sesuai kunci terbaru, atau hapus nilai untuk ujian ulang (Admin & Endi Soeprapto)"
+                    >
+                      <Unlock className="w-4 h-4" />
+                      <span>Buka Kunci Nilai (Admin/Endi)</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() =>
@@ -4325,6 +4366,16 @@ export const CBTTab: React.FC<Props> = ({
                               <td className="p-3">
                                 <div className="flex flex-wrap items-center gap-1.5">
                                   <span className="font-bold text-slate-900">{row.nama}</span>
+                                  {row.raw.isScoreLocked !== false &&
+                                    row.raw.isLocked !== false &&
+                                    row.raw.sumberNilai !== 'INPUT_MANUAL' && (
+                                      <span
+                                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-[9px] font-black"
+                                        title="Nilai ujian CBT terkunci otomatis"
+                                      >
+                                        <Lock className="w-2.5 h-2.5" /> Terkunci
+                                      </span>
+                                    )}
                                   {reasonBadge && (
                                     <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200 text-[9px] font-black uppercase">
                                       {reasonBadge}
@@ -4381,6 +4432,37 @@ export const CBTTab: React.FC<Props> = ({
                                   >
                                     <Download className="w-3 h-3" /> Unduh PDF
                                   </button>
+                                  {hasScoreUnlockAuthority && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const studentPaketRows = sortedEnrichedRows.filter(
+                                          (item) =>
+                                            (item.raw.studentId === row.raw.studentId ||
+                                              (row.nisn && item.nisn === row.nisn)) &&
+                                            item.paket === row.paket
+                                        );
+                                        const targets =
+                                          studentPaketRows.length > 0
+                                            ? studentPaketRows.map((item) => item.raw)
+                                            : [row.raw];
+                                        setCbtUnlockModalState({
+                                          targets,
+                                          scopeLabel:
+                                            targets.length > 1
+                                              ? `${row.nama} · ${row.paket} (${targets.length} Mapel)`
+                                              : `${row.nama} · ${row.mapel} (${row.paket})`,
+                                          initialSelectedMapels: [row.mapel || row.raw.mapel].filter(
+                                            Boolean
+                                          ) as string[],
+                                        });
+                                      }}
+                                      className="px-2.5 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                                      title={`Buka kunci nilai / koreksi ulang / hapus nilai milik ${row.nama}`}
+                                    >
+                                      <Unlock className="w-3 h-3" /> Buka Kunci
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     onClick={() =>
@@ -5116,6 +5198,118 @@ export const CBTTab: React.FC<Props> = ({
           onValidationError={(msg) => showToast(msg, 'error')}
         />
       )}
+
+      {cbtUnlockModalState && (() => {
+        const mapelCountMap = new Map<string, { label: string; count: number }>();
+        cbtUnlockModalState.targets.forEach((t) => {
+          const linkedEx = exams.find((ex) => ex.id === t.examId);
+          const rawMapel = String(t.mapel || linkedEx?.mapel || 'Umum').trim();
+          const keyLower = rawMapel.toLowerCase();
+          const existing = mapelCountMap.get(keyLower);
+          if (existing) {
+            existing.count += 1;
+          } else {
+            mapelCountMap.set(keyLower, { label: rawMapel, count: 1 });
+          }
+        });
+        const cbtMapelOptions: UnlockMapelOption[] = Array.from(mapelCountMap.values()).map(
+          (entry) => ({
+            key: entry.label,
+            label: entry.label,
+            count: entry.count,
+          })
+        );
+
+        return (
+          <UnlockScoreModal
+            isOpen={Boolean(cbtUnlockModalState)}
+            examType="CBT"
+            scopeLabel={cbtUnlockModalState.scopeLabel}
+            itemCount={cbtUnlockModalState.targets.length}
+            hasAnswersCount={
+              cbtUnlockModalState.targets.filter(
+                (r) => r.jawabanSiswa && Object.keys(r.jawabanSiswa).length > 0
+              ).length
+            }
+            availableMapels={cbtMapelOptions}
+            initialSelectedMapels={cbtUnlockModalState.initialSelectedMapels}
+            schoolProctorPin={profile?.proctorPin}
+            showToast={showToast}
+            onClose={() => setCbtUnlockModalState(null)}
+            onExecuteAction={async (mode: UnlockScoreActionMode, selectedMapels: string[]) => {
+              const actor = activeUser.name || activeUser.username || 'Admin';
+              const selectedLowerSet = new Set(
+                selectedMapels.map((m) => String(m || '').trim().toLowerCase())
+              );
+              const targets =
+                cbtMapelOptions.length > 0 && selectedLowerSet.size > 0
+                  ? cbtUnlockModalState.targets.filter((t) => {
+                      const linkedEx = exams.find((ex) => ex.id === t.examId);
+                      const mName = String(t.mapel || linkedEx?.mapel || 'Umum')
+                        .trim()
+                        .toLowerCase();
+                      return selectedLowerSet.has(mName);
+                    })
+                  : cbtUnlockModalState.targets;
+
+              if (targets.length === 0) {
+                showToast('Tidak ada data nilai CBT yang cocok dengan mapel terpilih.', 'error');
+                return;
+              }
+
+              const mapelNote =
+                selectedMapels.length > 0 && selectedMapels.length < cbtMapelOptions.length
+                  ? ` (${selectedMapels.join(', ')})`
+                  : '';
+
+              if (mode === 'recalculate') {
+                const res = await unlockAndRecalculateCbtResults({
+                  targets,
+                  exams,
+                  unlockedBy: actor,
+                });
+                setCbtResultsList(res.updatedAllNonTkaResults);
+                showToast(
+                  res.skippedNoAnswersCount > 0
+                    ? `${res.recalculatedCount} nilai CBT${mapelNote} berhasil dihitung ulang sesuai kunci terbaru (${res.skippedNoAnswersCount} data manual tanpa log jawaban dilewati).`
+                    : `${res.recalculatedCount} nilai CBT${mapelNote} berhasil dibuka kuncinya & dihitung ulang sesuai kunci jawaban terbaru!`,
+                  'success'
+                );
+              } else if (mode === 'delete_reexam') {
+                const remaining = await unlockAndDeleteCbtForReexam({
+                  targets,
+                  unlockedBy: actor,
+                });
+                setCbtResultsList(remaining);
+                showToast(
+                  `${targets.length} data nilai CBT${mapelNote} dihapus & kunci pengerjaan dibuka. Nilai mapel lain tetap aman.`,
+                  'success'
+                );
+              } else {
+                const updated = await unlockCbtForManualEdit({
+                  targets,
+                  unlockedBy: actor,
+                });
+                setCbtResultsList(updated);
+                showToast(
+                  `Kunci nilai CBT${mapelNote} untuk ${targets.length} data berhasil dibuka. Silakan edit nilai secara manual.`,
+                  'success'
+                );
+                if (targets.length === 1) {
+                  const one = targets[0];
+                  setManualCbtModalSeed({
+                    paket: one.paketName || one.judul || selectedPaket,
+                    mapel: one.mapel || selectedMapel,
+                    kelas: one.kelas || activeClass,
+                    studentId: one.studentId,
+                  });
+                }
+              }
+              setCbtUnlockModalState(null);
+            }}
+          />
+        );
+      })()}
     </section>
   );
 };

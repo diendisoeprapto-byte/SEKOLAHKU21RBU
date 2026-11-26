@@ -14,6 +14,12 @@ export interface SchoolProfile {
   logoSekolahUrl: string;
   adminFotoUrl?: string;
   loginBackgroundUrl?: string;
+  activeAcademicYear?: string;
+  academicYears?: string[];
+  proctorPin?: string;
+  examLockEnabled?: boolean;
+  showStudentScoreImmediate?: boolean;
+  isLearningAdminPublic?: boolean;
 }
 
 export interface Teacher {
@@ -29,6 +35,7 @@ export interface Teacher {
   username: string;
   password: string;
   fotoUrl: string;
+  teachingHistory?: Record<string, string>; // e.g. { "2026/2027": "Kelas 6A", "2027/2028": "Kelas 5A" }
 }
 
 export type ReligionType = 'Islam' | 'Kristen' | 'Katolik' | 'Buddha' | 'Hindu' | 'Konghucu';
@@ -318,6 +325,14 @@ export interface CBTExamResult {
   jenjang?: string;
   statusPengerjaan?: 'sedang_mengerjakan' | 'selesai';
   updatedAt?: string;
+  sumberNilai?: 'UJIAN_CBT' | 'INPUT_MANUAL';
+  isLocked?: boolean;
+  isScoreLocked?: boolean;
+  isCompleted?: boolean;
+  hasAttempted?: boolean;
+  unlockedAndRecalculatedBy?: string;
+  unlockedAt?: string;
+  recalculatedAt?: string;
 }
 
 export interface ExamResultsResetMeta {

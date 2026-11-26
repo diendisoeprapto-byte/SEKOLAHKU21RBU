@@ -4,6 +4,8 @@ import {
   Download,
   FileSpreadsheet,
   Grid,
+  Lock,
+  Unlock,
   Users,
 } from 'lucide-react';
 import { CBTQuestion, SchoolProfile, Student, Teacher, TKAQuestion } from '../types';
@@ -33,6 +35,10 @@ interface AnalisisButirMatrixPanelProps {
   selectedMatrixMapel?: string;
   onChangeMatrixMapel?: (mapel: string) => void;
   showToast?: (msg: string, type?: 'success' | 'error') => void;
+  canManageLocks?: boolean;
+  onOpenBulkUnlock?: () => void;
+  onOpenStudentUnlock?: (studentId: string, studentName: string) => void;
+  isStudentLockedLookup?: (studentId: string) => boolean;
 }
 
 export const AnalisisButirMatrixPanel: React.FC<AnalisisButirMatrixPanelProps> = ({
@@ -52,6 +58,10 @@ export const AnalisisButirMatrixPanel: React.FC<AnalisisButirMatrixPanelProps> =
   selectedMatrixMapel,
   onChangeMatrixMapel,
   showToast,
+  canManageLocks = false,
+  onOpenBulkUnlock,
+  onOpenStudentUnlock,
+  isStudentLockedLookup,
 }) => {
   const [sortBy, setSortBy] = useState<'absen' | 'rank'>('absen');
   const [includeUnsubmitted, setIncludeUnsubmitted] = useState<boolean>(false);
@@ -256,6 +266,19 @@ export const AnalisisButirMatrixPanel: React.FC<AnalisisButirMatrixPanelProps> =
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {canManageLocks && onOpenBulkUnlock && (
+              <button
+                type="button"
+                onClick={onOpenBulkUnlock}
+                disabled={submissions.length === 0}
+                className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-45 text-white text-xs font-display font-black inline-flex items-center gap-1.5 cursor-pointer shadow-2xs transition whitespace-nowrap"
+                title="Buka kunci nilai, koreksi ulang skor otomatis, atau hapus nilai untuk ujian ulang (Khusus Admin & Endi Soeprapto)"
+              >
+                <Unlock className="w-3.5 h-3.5" />
+                <span>Buka Kunci Nilai (Admin/Endi)</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleExportExcel}
@@ -413,6 +436,27 @@ export const AnalisisButirMatrixPanel: React.FC<AnalisisButirMatrixPanelProps> =
                             (Manual)
                           </span>
                         )}
+                        {canManageLocks && row.hasSubmitted && onOpenStudentUnlock && (() => {
+                          const rowLocked = isStudentLockedLookup ? isStudentLockedLookup(row.studentId) : true;
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => onOpenStudentUnlock(row.studentId, row.nama)}
+                              className={`no-print ml-1.5 inline-flex items-center justify-center w-5 h-5 rounded-md border align-middle cursor-pointer transition ${
+                                rowLocked
+                                  ? 'bg-amber-100 hover:bg-amber-200 text-amber-800 border-amber-300'
+                                  : 'bg-sky-50 hover:bg-sky-100 text-sky-700 border-sky-200'
+                              }`}
+                              title={
+                                rowLocked
+                                  ? `Nilai ${row.nama} terkunci — klik untuk buka kunci / koreksi ulang / hapus`
+                                  : `Kelola kunci nilai ${row.nama}`
+                              }
+                            >
+                              {rowLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+                            </button>
+                          );
+                        })()}
                       </td>
                       <td className="sticky left-[216px] z-10 bg-inherit border border-slate-200 px-2 py-1.5 text-center font-semibold text-slate-600">
                         {row.jenisKelamin}

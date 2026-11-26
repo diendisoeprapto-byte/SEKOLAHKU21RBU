@@ -21,6 +21,8 @@ import {
   Database,
   Zap,
   StopCircle,
+  Globe,
+  ExternalLink,
 } from 'lucide-react';
 import {
   ActiveExamHeaderStatus,
@@ -60,6 +62,9 @@ import {
   subscribeToMediaAjarForSarah,
   subscribeToSarahConfig,
   subscribeToSarahKnowledgeBase,
+  SarahKnowledgeLink,
+  extractMatchedKnowledgeLinksFromText,
+  loadActiveSarahKnowledgeLinksCached,
 } from '../utils/sarahFirestore';
 import { SarahMarkdown } from './SarahMarkdown';
 import {
@@ -128,6 +133,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
   const [selectedMapel, setSelectedMapel] = useState('Umum');
   const [inputText, setInputText] = useState('');
   const [isThinking, setIsThinking] = useState(false);
+  const [sessionKnowledgeLinks, setSessionKnowledgeLinks] = useState<SarahKnowledgeLink[]>([]);
   const [statusLabel, setStatusLabel] = useState('');
   const [firestoreCheckState, setFirestoreCheckState] = useState<'idle' | 'checking' | 'verified' | 'locked'>('idle');
   const [analysisPhase, setAnalysisPhase] = useState<SarahAnalysisPhase>('idle');
@@ -336,6 +342,21 @@ export const SarahStudentWidget: React.FC<Props> = ({
       window.removeEventListener('serbu21-open-tanya-sarah', handleOpenEvent);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    loadActiveSarahKnowledgeLinksCached(profile?.npsn, 'siswa')
+      .then((links) => {
+        if (!cancelled) {
+          setSessionKnowledgeLinks(links);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, profile?.npsn]);
 
   useEffect(() => {
     let cancelled = false;
@@ -577,6 +598,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
         subjects,
         sarahConfig,
         excludeBankSoal: true,
+        knowledgeLinks: sessionKnowledgeLinks,
       });
 
       logSarahStudentQuestion({
@@ -821,6 +843,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
         subjects,
         sarahConfig,
         excludeBankSoal: true,
+        knowledgeLinks: sessionKnowledgeLinks,
       });
 
       logSarahStudentQuestion({
@@ -1337,6 +1360,30 @@ export const SarahStudentWidget: React.FC<Props> = ({
                         ) : (
                           <>
                             <SarahMarkdown content={msg.text} compact userMode="siswa" />
+                            {(() => {
+                              const matchedSources = extractMatchedKnowledgeLinksFromText(
+                                msg.text,
+                                sessionKnowledgeLinks
+                              );
+                              if (matchedSources.length === 0) return null;
+                              return (
+                                <div className="flex flex-wrap gap-1.5 pt-1">
+                                  {matchedSources.map((srcLink) => (
+                                    <a
+                                      key={srcLink.id}
+                                      href={srcLink.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 font-bold text-[10px] transition shadow-2xs"
+                                    >
+                                      <Globe className="w-3 h-3 text-sky-600 shrink-0" />
+                                      <span>Baca Sumber: {srcLink.title}</span>
+                                      <ExternalLink className="w-2.5 h-2.5 text-sky-500 shrink-0" />
+                                    </a>
+                                  ))}
+                                </div>
+                              );
+                            })()}
                             <div className="flex justify-end pt-1 border-t border-slate-100">
                               <button
                                 type="button"

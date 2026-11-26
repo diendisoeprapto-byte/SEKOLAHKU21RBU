@@ -22,6 +22,7 @@ import {
   getStoredCBTResults,
   getStoredTKASubmissions,
 } from './storage';
+import { cleanRecordId, cleanSchoolNpsn } from './learningAdminFirestore';
 
 export type SarahKategori =
   | 'RPP/Modul Ajar'
@@ -61,6 +62,28 @@ export interface SarahMediaAjarContextDoc {
   bab?: string;
   pertemuan?: string;
   guru_nama?: string;
+}
+
+export type SarahKnowledgeLinkTarget = 'all' | 'guru' | 'siswa';
+
+export interface SarahKnowledgeLink {
+  id: string;
+  title: string;
+  url: string;
+  target: SarahKnowledgeLinkTarget;
+  summary?: string;
+  active: boolean;
+  createdBy: string;
+  createdAt?: string;
+  updatedAt: string;
+}
+
+export interface SarahKnowledgeLinkRagItem {
+  id: string;
+  title: string;
+  url: string;
+  target: SarahKnowledgeLinkTarget;
+  summary?: string;
 }
 
 export interface SarahConfigDoc {
@@ -516,6 +539,7 @@ export function retrieveSarahRagContext(params: {
   subjects?: Subject[];
   sarahConfig?: SarahConfigDoc;
   excludeBankSoal?: boolean;
+  knowledgeLinks?: SarahKnowledgeLink[];
 }) {
   const targetDigit = extractGradeDigit(params.kelas);
   const queryTokens = `${params.queryText || ''} ${params.mapel || ''}`
@@ -593,6 +617,8 @@ export function retrieveSarahRagContext(params: {
     tp: Array.isArray(s.tujuanPembelajaran) ? s.tujuanPembelajaran.slice(0, 3).join('; ') : '',
   }));
 
+  const rankedLinks = rankKnowledgeLinksForQuery(params.knowledgeLinks, params.queryText, params.mapel);
+
   return {
     schoolName: params.schoolName || 'SDN Rawa Badak Utara 21',
     activeClass: params.kelas || '',
@@ -602,6 +628,7 @@ export function retrieveSarahRagContext(params: {
     sarahConfig: params.sarahConfig
       ? { personaNote: params.sarahConfig.personaNote }
       : undefined,
+    ...(rankedLinks.length > 0 ? { knowledgeLinks: rankedLinks } : {}),
   };
 }
 
@@ -737,6 +764,7 @@ export async function retrieveLazySarahRagContext(params: {
   subjects?: Subject[];
   sarahConfig?: SarahConfigDoc;
   excludeBankSoal?: boolean;
+  knowledgeLinks?: SarahKnowledgeLink[];
 }) {
   const q = String(params.queryText || '').trim();
   const needExam = /\b(nilai|ujian|cbt|tka|peringkat|rank|hots|hasil|skor|rekap|rapor|soalnya|soal|tuntas|kktp)\b/i.test(
@@ -749,6 +777,8 @@ export async function retrieveLazySarahRagContext(params: {
     q
   );
 
+  const rankedLinks = rankKnowledgeLinksForQuery(params.knowledgeLinks, params.queryText, params.mapel);
+
   if (!needExam && !needLibraryAndKb && !needAttendance) {
     return {
       schoolName: params.schoolName || 'SDN Rawa Badak Utara 21',
@@ -759,6 +789,7 @@ export async function retrieveLazySarahRagContext(params: {
       sarahConfig: params.sarahConfig
         ? { personaNote: params.sarahConfig.personaNote }
         : undefined,
+      ...(rankedLinks.length > 0 ? { knowledgeLinks: rankedLinks } : {}),
     };
   }
 
@@ -774,6 +805,7 @@ export async function retrieveLazySarahRagContext(params: {
     mediaAjarDocs: needLibraryAndKb ? fullRag.mediaAjarDocs : [],
     subjectsList: needLibraryAndKb || needExam ? fullRag.subjectsList : [],
     sarahConfig: fullRag.sarahConfig,
+    ...(rankedLinks.length > 0 ? { knowledgeLinks: rankedLinks } : {}),
     ...(libraryBooks && libraryBooks.length > 0 ? { libraryBooks } : {}),
     ...(attendanceSummary ? { attendanceSummary } : {}),
     ...(examSummary ? { examSummary } : {}),
@@ -1732,4 +1764,300 @@ export function exportSarahToWordDoc(params: {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ============================================================================
+// BASIS PENGETAHUAN LINK SUMBER INFORMASI (schools/{npsn}/sarah_knowledge_links)
+// ============================================================================
+
+const sarahKnowledgeLinksSessionCache = new Map<string, SarahKnowledgeLink[]>();
+
+function sanitizeKnowledgeLinkTarget(raw?: string): SarahKnowledgeLinkTarget {
+  if (raw === 'guru' || raw === 'siswa' || raw === 'all') return raw;
+  return 'all';
+}
+
+function normalizeHttpUrl(rawUrl: string): string {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed.slice(0, 2000);
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(trimmed)) {
+    return `https://${trimmed}`.slice(0, 2000);
+  }
+  return trimmed.slice(0, 2000);
+}
+
+export function isValidPublicHttpUrl(rawUrl: string): boolean {
+  const candidate = normalizeHttpUrl(rawUrl);
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function mapDocToSarahKnowledgeLink(docId: string, d: any): SarahKnowledgeLink {
+  return {
+    id: String(d?.id || docId),
+    title: String(d?.title || 'Sumber Informasi Sekolah').slice(0, 300),
+    url: String(d?.url || '').slice(0, 2000),
+    target: sanitizeKnowledgeLinkTarget(d?.target),
+    summary: typeof d?.summary === 'string' ? d.summary.slice(0, 4000) : '',
+    active: d?.active !== false,
+    createdBy: String(d?.createdBy || 'Admin').slice(0, 160),
+    createdAt: typeof d?.createdAt === 'string' ? d.createdAt : undefined,
+    updatedAt: String(d?.updatedAt || new Date().toISOString()),
+  };
+}
+
+function sortKnowledgeLinksDesc(list: SarahKnowledgeLink[]): SarahKnowledgeLink[] {
+  return [...list].sort((a, b) =>
+    String(b.updatedAt || b.createdAt || '').localeCompare(
+      String(a.updatedAt || a.createdAt || '')
+    )
+  );
+}
+
+export function filterActiveKnowledgeLinksByRole(
+  links: SarahKnowledgeLink[],
+  role: 'guru' | 'siswa'
+): SarahKnowledgeLink[] {
+  return (links || []).filter(
+    (item) => item.active && (item.target === 'all' || item.target === role)
+  );
+}
+
+export function rankKnowledgeLinksForQuery(
+  links?: SarahKnowledgeLink[],
+  queryText?: string,
+  mapel?: string
+): SarahKnowledgeLinkRagItem[] {
+  if (!Array.isArray(links) || links.length === 0) return [];
+  const activeOnly = links.filter((l) => l.active && l.url);
+  if (activeOnly.length === 0) return [];
+
+  const tokens = `${queryText || ''} ${mapel || ''}`
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length > 2);
+
+  return [...activeOnly]
+    .map((item) => {
+      const hay = `${item.title} ${item.summary || ''} ${item.url}`.toLowerCase();
+      let score = 0;
+      tokens.forEach((tok) => {
+        if (hay.includes(tok)) score += 3;
+      });
+      return { item, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 18)
+    .map(({ item }) => ({
+      id: item.id,
+      title: item.title.slice(0, 250),
+      url: item.url.slice(0, 1500),
+      target: item.target,
+      ...(item.summary ? { summary: item.summary.slice(0, 1200) } : {}),
+    }));
+}
+
+export function invalidateSarahKnowledgeLinksCache(npsn?: string): void {
+  if (!npsn) {
+    sarahKnowledgeLinksSessionCache.clear();
+    return;
+  }
+  sarahKnowledgeLinksSessionCache.delete(cleanSchoolNpsn(npsn));
+}
+
+export async function loadActiveSarahKnowledgeLinksCached(
+  npsn: string | undefined,
+  role: 'guru' | 'siswa',
+  forceRefresh = false
+): Promise<SarahKnowledgeLink[]> {
+  const cleanNpsn = cleanSchoolNpsn(npsn);
+  if (!forceRefresh && sarahKnowledgeLinksSessionCache.has(cleanNpsn)) {
+    const cached = sarahKnowledgeLinksSessionCache.get(cleanNpsn) || [];
+    return filterActiveKnowledgeLinksByRole(cached, role);
+  }
+
+  try {
+    const snap = await getDocs(
+      collection(db, 'schools', cleanNpsn, 'sarah_knowledge_links')
+    );
+    const items: SarahKnowledgeLink[] = [];
+    snap.forEach((d) => {
+      items.push(mapDocToSarahKnowledgeLink(d.id, d.data()));
+    });
+    const sorted = sortKnowledgeLinksDesc(items);
+    sarahKnowledgeLinksSessionCache.set(cleanNpsn, sorted);
+    return filterActiveKnowledgeLinksByRole(sorted, role);
+  } catch {
+    const fallback = sarahKnowledgeLinksSessionCache.get(cleanNpsn) || [];
+    return filterActiveKnowledgeLinksByRole(fallback, role);
+  }
+}
+
+export function subscribeToSarahKnowledgeLinks(
+  npsn: string | undefined,
+  onUpdate: (items: SarahKnowledgeLink[]) => void,
+  onError?: (err: Error) => void
+): () => void {
+  const cleanNpsn = cleanSchoolNpsn(npsn);
+  return onSnapshot(
+    collection(db, 'schools', cleanNpsn, 'sarah_knowledge_links'),
+    (snap) => {
+      const items: SarahKnowledgeLink[] = [];
+      snap.forEach((d) => {
+        items.push(mapDocToSarahKnowledgeLink(d.id, d.data()));
+      });
+      const sorted = sortKnowledgeLinksDesc(items);
+      sarahKnowledgeLinksSessionCache.set(cleanNpsn, sorted);
+      onUpdate(sorted);
+    },
+    (err) => {
+      if (onError) onError(err as Error);
+    }
+  );
+}
+
+export async function saveSarahKnowledgeLink(
+  npsn: string | undefined,
+  input: {
+    id?: string;
+    title: string;
+    url: string;
+    target: SarahKnowledgeLinkTarget;
+    summary?: string;
+    active?: boolean;
+    createdBy: string;
+    createdAt?: string;
+  }
+): Promise<SarahKnowledgeLink> {
+  const cleanNpsn = cleanSchoolNpsn(npsn);
+  const id = cleanRecordId(
+    input.id || `skl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  );
+  const normalizedUrl = normalizeHttpUrl(input.url);
+  if (!isValidPublicHttpUrl(normalizedUrl)) {
+    throw new Error('URL sumber tidak valid. Gunakan format https://... atau http://...');
+  }
+
+  const nowIso = new Date().toISOString();
+  const payload: SarahKnowledgeLink = {
+    id,
+    title: String(input.title || '').trim().slice(0, 300),
+    url: normalizedUrl,
+    target: sanitizeKnowledgeLinkTarget(input.target),
+    summary: String(input.summary || '').trim().slice(0, 4000),
+    active: input.active !== false,
+    createdBy: String(input.createdBy || 'Admin').trim().slice(0, 160),
+    createdAt: input.createdAt || nowIso,
+    updatedAt: nowIso,
+  };
+
+  if (!payload.title) {
+    throw new Error('Judul / Topik Sumber wajib diisi.');
+  }
+
+  await setDoc(
+    doc(db, 'schools', cleanNpsn, 'sarah_knowledge_links', id),
+    payload,
+    { merge: true }
+  );
+
+  const prev = sarahKnowledgeLinksSessionCache.get(cleanNpsn) || [];
+  const next = sortKnowledgeLinksDesc([
+    payload,
+    ...prev.filter((item) => item.id !== id),
+  ]);
+  sarahKnowledgeLinksSessionCache.set(cleanNpsn, next);
+  return payload;
+}
+
+export async function toggleSarahKnowledgeLinkActive(
+  npsn: string | undefined,
+  linkId: string,
+  nextActive: boolean
+): Promise<void> {
+  const cleanNpsn = cleanSchoolNpsn(npsn);
+  const id = cleanRecordId(linkId);
+  const updatedAt = new Date().toISOString();
+  await setDoc(
+    doc(db, 'schools', cleanNpsn, 'sarah_knowledge_links', id),
+    { active: Boolean(nextActive), updatedAt },
+    { merge: true }
+  );
+
+  const prev = sarahKnowledgeLinksSessionCache.get(cleanNpsn);
+  if (prev) {
+    sarahKnowledgeLinksSessionCache.set(
+      cleanNpsn,
+      prev.map((item) =>
+        item.id === id ? { ...item, active: Boolean(nextActive), updatedAt } : item
+      )
+    );
+  }
+}
+
+export async function deleteSarahKnowledgeLink(
+  npsn: string | undefined,
+  linkId: string
+): Promise<void> {
+  const cleanNpsn = cleanSchoolNpsn(npsn);
+  const id = cleanRecordId(linkId);
+  await deleteDoc(doc(db, 'schools', cleanNpsn, 'sarah_knowledge_links', id));
+
+  const prev = sarahKnowledgeLinksSessionCache.get(cleanNpsn);
+  if (prev) {
+    sarahKnowledgeLinksSessionCache.set(
+      cleanNpsn,
+      prev.filter((item) => item.id !== id)
+    );
+  }
+}
+
+function normalizeUrlForComparison(rawUrl: string): string {
+  return String(rawUrl || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/[)\].,;!?'"`>]+$/g, '')
+    .replace(/\/+$/, '');
+}
+
+export function extractMatchedKnowledgeLinksFromText(
+  replyText: string,
+  links: SarahKnowledgeLink[]
+): SarahKnowledgeLink[] {
+  if (!replyText || !Array.isArray(links) || links.length === 0) return [];
+  const textLower = replyText.toLowerCase();
+  const urlMatchesInText = replyText.match(/https?:\/\/[^\s)\]>"'`]+/gi) || [];
+  const normalizedReplyUrls = new Set(
+    urlMatchesInText.map((u) => normalizeUrlForComparison(u)).filter(Boolean)
+  );
+
+  const matched: SarahKnowledgeLink[] = [];
+  const seenUrl = new Set<string>();
+
+  for (const link of links) {
+    if (!link?.url) continue;
+    const normLink = normalizeUrlForComparison(link.url);
+    if (!normLink || seenUrl.has(normLink)) continue;
+
+    const exactOrSubMatch =
+      normalizedReplyUrls.has(normLink) ||
+      textLower.includes(link.url.toLowerCase().replace(/\/+$/, '')) ||
+      Array.from(normalizedReplyUrls).some(
+        (found) => found.startsWith(normLink) || normLink.startsWith(found)
+      );
+
+    if (exactOrSubMatch) {
+      seenUrl.add(normLink);
+      matched.push(link);
+    }
+  }
+
+  return matched;
 }

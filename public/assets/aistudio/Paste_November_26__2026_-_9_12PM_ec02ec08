@@ -1,0 +1,395 @@
+Saya ingin Anda menambahkan dua fitur utama pada modul ujian CBT dan TKA di aplikasi web SERBU 21 menggunakan HTML, Tailwind CSS, dan JavaScript tanpa merusak sistem auto-save localStorage, isolasi multi-tenant (`schools/{npsn}`), maupun riwayat versi sebelumnya yang saat ini berada di v4.4.0:
+
+A. FITUR MODE KUNCI UJIAN (EXAM LOCK / MODE PROKTOR) DENGAN PIN DEFAULT `2121`
+B. FITUR PEMBARUAN SOAL & KUNCI JAWABAN SECARA LIVE (REAL-TIME HOTFIX) SAAT SISWA SEDANG UJIAN
+
+Terapkan seluruh spesifikasi berikut secara menyeluruh:
+
+====================================================================
+BAGIAN 1: MODE KUNCI UJIAN (EXAM LOCK) & PIN PENGAWAS (`2121`)
+====================================================================
+1. PENGATURAN DI PANEL ADMIN:
+   - Tetapkan konstanta fallback default `DEFAULT_PROCTOR_PIN = "2121"`.
+   - Tambahkan kolom **"PIN / Password Buka Kunci Ujian"** di menu Pengaturan Admin (nilai awal/placeholder `2121`, simpan ke dokumen sekolah di Firestore `schools/{npsn}`, dan gunakan `"2121"` apabila admin belum mengatur PIN kustom).
+   - Tambahkan toggle sakelar (Aktif / Nonaktif) untuk **"Mode Kunci Layar Penuh (Exam Lock)"** pada pengaturan ujian.
+
+2. PENGUNCIAN LAYAR PENUH & DETEKSI PELANGGARAN:
+   - Saat siswa menekan **"Mulai Ujian"** (CBT maupun TKA) dan Exam Lock aktif:
+     * Panggil `document.documentElement.requestFullscreen()` otomatis.
+     * Nonaktifkan klik kanan (`contextmenu`), salin-tempel (`copy`, `cut`, `paste`), serta pintasan developer tools (`F12`, `Ctrl+Shift+I`, `Ctrl+U`).
+   - Pasang listener `visibilitychange`, `window.blur`, dan `fullscreenchange`. Jika siswa menekan `Alt + Tab`, berpindah tab/aplikasi lain, mengecilkan layar, atau keluar layar penuh sebelum klik Selesai/Kirim:
+     * Munculkan layar overlay pengunci penuh (`z-index` tertinggi) bertuliskan: **"AKSES UJIAN TERKUNCI! Terdeteksi keluar dari layar ujian atau berpindah aplikasi. Hubungi Guru Pengawas untuk membuka kunci."**
+     * Tambah hitungan `violationCount` siswa dan ikutkan saat rekap hasil ujian disimpan ke Firestore.
+
+3. MEKANISME BUKA KUNCI (`Ctrl + C + B` & PIN `2121`):
+   - Tangkap kombinasi keyboard **`Ctrl + C + B`** secara bersamaan (serta sediakan tombol ikon gembok kecil di pojok layar overlay untuk perangkat layar sentuh HP/tablet).
+   - Munculkan dialog input **"Masukkan PIN / Password Pengawas"** yang memvalidasi terhadap PIN sekolah atau default `2121`.
+   - Jika benar: berikan opsi **"Lanjutkan Ujian (Kunci Kembali)"** (mengembalikan `requestFullscreen()`) atau **"Izinkan Keluar Mode Ujian (Buka Kunci Total)"**. Jika salah: tampilkan pesan merah **"PIN Pengawas salah!"**.
+   - Lepaskan kunci Exam Lock otomatis setelah siswa selesai mengirim jawaban.
+
+====================================================================
+BAGIAN 2: REVISI SOAL & KUNCI JAWABAN LIVE (REAL-TIME HOTFIX)
+====================================================================
+1. SINKRONISASI RINGAN & HEMAT KUOTA FIRESTORE:
+   - Buat mekanisme *real-time listener* (`onSnapshot`) HANYA pada **satu dokumen metadata ringan** milik paket ujian/TKA yang sedang dikerjakan siswa (misalnya field `revisionTimestamp` dan `revisionNote` pada dokumen paket soal di `schools/{npsn}/exams/{examId}`), BUKAN memasang `onSnapshot` pada setiap jawaban siswa, sehingga kuota pembacaan Firestore Spark tetap sangat hemat untuk 1.000 siswa.
+   - Setiap kali Guru atau Admin mengedit teks soal, pilihan ganda, gambar, maupun memperbaiki kunci jawaban yang salah ketik pada paket ujian yang sedang aktif lalu menekan **Simpan Perubahan**, sistem otomatis memperbarui timestamp revisi (`revisionTimestamp = serverTimestamp()`) pada dokumen paket soal tersebut.
+
+2. PEMBARUAN OTOMATIS DI LAYAR SISWA TANPA MENGHAPUS JAWABAN:
+   - Ketika listener siswa mendeteksi perubahan `revisionTimestamp` pada paket soal yang sedang dibuka:
+     * Aplikasi otomatis mengambil ulang data daftar soal terbaru dari Firestore dan memperbarui cache `localStorage` paket soal tersebut di perangkat siswa.
+     * **Pertahankan seluruh jawaban yang sudah dipilih/diketik siswa** (`studentAnswers` di `localStorage` tetap aman sesuai ID/nomor soal dan tidak ter-reset).
+     * Segera perbarui tampilan soal yang sedang aktif di layar siswa dengan teks/opsi yang baru saja direvisi guru.
+     * Tampilkan notifikasi banner/toast informatif yang lembut di bagian atas layar siswa selama 5 detik: **"Info Ujian: Guru baru saja memperbarui redaksi soal. Jawaban Anda tetap tersimpan aman."**
+   - Saat siswa menekan tombol **Kirim / Selesai Ujian**, penilaian skor otomatis dihitung menggunakan **kunci jawaban terbaru hasil revisi guru**, dan siswa yang sudah terlanjur mengirim sebelum revisi juga dapat dihitung ulang nilainya melalui tombol **"Hitung Ulang Skor (Recalculate)"** di tabel rekap hasil guru jika diperlukan.
+
+====================================================================
+BAGIAN 3: PEMBARUAN OTOMATIS VERSI & CHANGELOG (`v4.4.0` -> `v4.5.0`)
+====================================================================
+- Pertahankan seluruh riwayat versi yang sudah ada hingga `v4.4.0` di dalam array `CHANGELOG_DATA`.
+- Naikkan nomor versi sesuai Semantic Versioning dari `v4.4.0` menjadi **`v4.5.0`** dengan tanggal rilis **`26 November 2026`**.
+- Pastikan footer halaman Login otomatis menampilkan `"Versi 4.5.0 • Klik untuk lihat pembaruan"` dan tambahkan entri baru di urutan paling atas `CHANGELOG_DATA` yang merangkum dua fitur baru ini:
+  1. Mode Kunci Ujian (Exam Lock) layar penuh otomatis, deteksi pindah tab/Alt+Tab, serta buka kunci pengawas via `Ctrl + C + B` dan PIN `2121`.
+  2. Pembaruan soal dan kunci jawaban secara langsung (*Live Hotfix*) ke layar siswa saat ujian berlangsung tanpa menghapus jawaban yang sudah diisi, dilengkapi fitur hitung ulang skor di panel guru.
+
+ Saya ingin Anda melakukan optimasi performa menyeluruh (Anti-Freeze / Anti Page Unresponsive) pada aplikasi web SERBU 21 menggunakan HTML, Tailwind CSS, dan JavaScript tanpa menghapus fitur yang sudah ada (termasuk Exam Lock, Live Hotfix soal, AI SARAH, multi-tenant `schools/{npsn}`, maupun riwayat versi sebelumnya).
+
+Terapkan seluruh perbaikan teknis berikut untuk meringankan beban CPU dan memori RAM browser pada perangkat HP siswa maupun laptop sekolah:
+
+1. OPTIMASI AUTO-SAVE `localStorage` DENGAN DEBOUNCING & PEMISAHAN DATA:
+   - Terapkan mekanisme **debouncing (jeda 800ms - 1000ms)** pada proses penyimpanan `localStorage` saat siswa mengetik jawaban isian singkat atau esai agar penulisan disk tidak terjadi setiap kali satu huruf diketik.
+   - Pisahkan penyimpanan paket soal (bank soal) dan penyimpanan jawaban siswa (`studentAnswers`) ke dalam key `localStorage` yang terpisah, sehingga saat siswa memilih jawaban, browser hanya menulis objek jawaban yang sangat ringan (beberapa kilobyte), bukan menulis ulang seluruh teks dan gambar soal.
+   - Tambahkan mekanisme pembersihan otomatis (`cleanupExpiredCache`) untuk menghapus cache ujian lama yang sudah selesai lebih dari 3 hari agar kuota penyimpanan lokal browser tidak penuh.
+
+2. KOMPRESI GAMBAR OTOMATIS & LAZY LOADING ASET VISUAL:
+   - Pada fitur unggah/tempel gambar soal CBT/TKA maupun foto latar login, tambahkan fungsi kompresi sisi klien menggunakan HTML5 `<canvas>` sebelum disimpan/diunggah (ubah ukuran lebar maksimal menjadi `800px` dan format `image/webp` atau `image/jpeg` kualitas `0.75`) agar ukuran file tidak membengkak dan tidak membekukan memori browser.
+   - Terapkan atribut `loading="lazy"` dan `decoding="async"` pada seluruh elemen `<img>` di Perpustakaan Digital (buku BSE), galeri 56 stiker ekspresi SARAH, dan tampilan soal ujian.
+
+3. EFISIENSI RENDER DOM, PAGINASI & PENGURANGAN BEBAN GPU:
+   - Terapkan paginasi sisi klien (maksimal **20 baris per halaman** dengan navigasi Halaman Sebelumnya/Berikutnya) pada tabel besar seperti Rekapitulasi Nilai, Matriks Analisis Butir Soal TKA, dan Daftar Siswa agar browser tidak merender ratusan hingga ribuan elemen DOM sekaligus.
+   - Kurangi penggunaan efek CSS `backdrop-blur` berlapis di dalam elemen daftar atau tabel yang di-scroll panjang, ganti dengan latar belakang solid semi-transparan (`bg-white/95` atau `bg-slate-900/90`) agar proses gulir (*scrolling*) terasa mulus tanpa patah-patah di HP spesifikasi rendah.
+
+4. MANAJEMEN LISTENER FIRESTORE & PENANGANAN PROSES ASINKRON:
+   - Pastikan seluruh listener `onSnapshot` (seperti listener sinyal revisi soal) selalu dibersihkan (`unsubscribe()`) secara otomatis saat pengguna berpindah menu, keluar dari halaman ujian, atau logout agar tidak terjadi kebocoran memori (*memory leak*) dan listener ganda.
+   - Gunakan `requestAnimationFrame` atau jeda asinkron ringan (`setTimeout(..., 0)`) saat memproses impor CSV massal atau perhitungan skor banyak siswa agar utas utama (*main thread*) browser tetap responsif dan tidak memicu peringatan *"Page Unresponsive / Wait"*.
+
+5. PEMBARUAN OTOMATIS VERSI & CHANGELOG (`v4.5.0` -> `v4.5.1`):
+   - Pertahankan seluruh entri riwayat versi sebelumnya di dalam array `CHANGELOG_DATA`.
+   - Karena pembaruan ini berfokus pada perbaikan performa dan stabilitas tanpa menambah modul baru, naikkan angka **patch** sesuai aturan Semantic Versioning menjadi **`v4.5.1`** (atau naikkan +1 patch dari versi tertinggi yang tercatat di `CHANGELOG_DATA`) dengan tanggal rilis **`26 November 2026`**.
+   - Pastikan footer halaman Login otomatis menampilkan versi terbaru tersebut dan tambahkan entri baru di urutan paling atas `CHANGELOG_DATA` yang merangkum optimasi performa anti-macet (*debouncing* auto-save jawaban, kompresi gambar otomatis, paginasi tabel rekap & matriks, serta pembersihan listener memori).
+
+ Saya ingin Anda menambahkan fitur Tampilan Skor Langsung Setelah Siswa Selesai Mengerjakan Ujian sekaligus melakukan optimasi performa menyeluruh (Anti-Freeze / Anti Page Unresponsive) pada aplikasi web SERBU 21 menggunakan HTML, Tailwind CSS, dan JavaScript tanpa merusak fitur yang sudah ada (Exam Lock, Live Hotfix soal, AI SARAH, multi-tenant `schools/{npsn}`, maupun riwayat versi sebelumnya).
+
+Terapkan seluruh spesifikasi berikut secara menyeluruh:
+
+====================================================================
+BAGIAN 1: TAMPILAN SKOR LANGSUNG SETELAH UJIAN (CBT & TKA)
+====================================================================
+1. KARTU HASIL UJIAN INSTAN UNTUK SISWA:
+   - Segera setelah siswa menekan tombol **Kirim / Selesai Ujian** dan proses penyimpanan serta verifikasi skor (*read-back lock*) ke Firebase Firestore berhasil dikonfirmasi:
+     * Lepaskan kunci mode layar penuh (*Exam Lock*) secara otomatis.
+     * Tampilkan layar/kartu modal **Hasil Ujian Saya** yang rapi, ramah anak SD, dan responsif sebelum siswa kembali ke beranda.
+   - Informasi yang wajib ditampilkan pada kartu hasil siswa:
+     * Nama Siswa, Kelas, dan Judul Paket Ujian (CBT / Simulasi TKA / Tryout TKA).
+     * **Nilai Akhir** berukuran besar dengan indikator warna pencapaian (misal hijau untuk nilai >= KKM/75, biru/kuning untuk di bawahnya) serta pesan apresiasi penyemangat.
+     * Rincian statistik ringkas: **Jumlah Jawaban Benar**, **Jumlah Jawaban Salah**, **Total Soal**, dan **Durasi Pengerjaan** (dalam menit & detik).
+     * Status keterangan resmi: *"Nilai sudah tersimpan otomatis ke server sekolah & tercatat pada percobaan pertama"* (khusus TKA yang terkunci nilai pertamanya).
+   - Sertakan tombol **"Selesai & Kembali ke Beranda"** untuk menutup layar hasil, serta tombol **"Lihat Riwayat Nilai Saya"** agar siswa (maupun akun Wali Murid) dapat mengecek kembali daftar skor ujian yang pernah dikerjakan.
+
+2. PENGATURAN KONTROL VISIBILITAS SKOR OLEH GURU / ADMIN:
+   - Pada form pembuatan/pengaturan paket ujian CBT atau TKA, tambahkan sakelar toggle **"Tampilkan Skor Langsung ke Siswa Setelah Selesai"** (default: **Aktif / ON**).
+   - Jika guru menonaktifkan opsi tersebut untuk ujian tertentu, kartu setelah kirim tetap muncul dengan pesan: *"Jawaban berhasil dikirim dan tersimpan. Nilai akan diumumkan oleh Bapak/Ibu Guru."*
+
+====================================================================
+BAGIAN 2: OPTIMASI PERFORMA ANTI-FREEZE / ANTI WAIT RESPON
+====================================================================
+1. OPTIMASI AUTO-SAVE `localStorage` DENGAN DEBOUNCING & PEMISAHAN DATA:
+   - Terapkan mekanisme **debouncing (jeda 800ms - 1000ms)** pada proses penyimpanan `localStorage` saat siswa mengetik jawaban isian singkat atau esai agar penulisan disk tidak terjadi setiap kali satu huruf diketik.
+   - Pisahkan penyimpanan data paket soal (bank soal) dan penyimpanan jawaban siswa (`studentAnswers`) ke dalam key `localStorage` yang terpisah, sehingga saat siswa memilih jawaban, browser hanya menulis objek jawaban yang sangat ringan (beberapa kilobyte), bukan menulis ulang seluruh teks dan gambar soal.
+   - Tambahkan fungsi pembersihan otomatis (`cleanupExpiredCache`) untuk menghapus cache ujian lama yang sudah selesai lebih dari 3 hari agar memori lokal browser tidak penuh.
+
+2. KOMPRESI GAMBAR OTOMATIS & LAZY LOADING ASET VISUAL:
+   - Pada fitur unggah/tempel gambar soal CBT/TKA maupun foto latar login, tambahkan fungsi kompresi sisi klien menggunakan HTML5 `<canvas>` sebelum disimpan/diunggah (lebar maksimal `800px`, format `image/webp` atau `image/jpeg` kualitas `0.75`) agar ukuran file ringan dan tidak membekukan RAM browser.
+   - Terapkan atribut `loading="lazy"` dan `decoding="async"` pada seluruh elemen `<img>` di Perpustakaan Digital (buku BSE), galeri 56 stiker ekspresi SARAH, dan tampilan soal ujian.
+
+3. EFISIENSI RENDER DOM, PAGINASI & PENGURANGAN BEBAN GPU:
+   - Terapkan paginasi sisi klien (maksimal **20 baris per halaman** dengan navigasi Halaman Sebelumnya/Berikutnya) pada tabel besar seperti Rekapitulasi Nilai, Matriks Analisis Butir Soal TKA, dan Daftar Siswa agar browser tidak merender ratusan hingga ribuan elemen DOM sekaligus.
+   - Kurangi penggunaan efek CSS `backdrop-blur` berlapis di dalam elemen daftar atau tabel yang di-scroll panjang, ganti dengan latar belakang solid semi-transparan (`bg-white/95` atau `bg-slate-900/90`) agar proses gulir (*scrolling*) mulus di HP spesifikasi rendah.
+
+4. MANAJEMEN LISTENER FIRESTORE & PROSES ASINKRON:
+   - Pastikan seluruh listener `onSnapshot` selalu dibersihkan (`unsubscribe()`) saat pengguna berpindah menu, keluar dari halaman ujian, atau logout agar tidak terjadi kebocoran memori (*memory leak*).
+   - Gunakan `requestAnimationFrame` atau jeda asinkron ringan (`setTimeout(..., 0)`) saat memproses impor CSV massal atau hitung ulang skor banyak siswa agar utas utama (*main thread*) browser tetap responsif dan tidak memicu peringatan *"Page Unresponsive / Wait"*.
+
+====================================================================
+BAGIAN 3: PEMBARUAN OTOMATIS VERSI & CHANGELOG (`v4.6.0`)
+====================================================================
+- Pertahankan seluruh entri riwayat versi sebelumnya di dalam array `CHANGELOG_DATA`.
+- Karena pembaruan ini menambahkan fitur baru (Tampilan Skor Langsung Siswa) beserta optimasi performa menyeluruh, naikkan angka **minor** sesuai aturan Semantic Versioning menjadi **`v4.6.0`** (atau naikkan +1 minor dari versi tertinggi yang tercatat di `CHANGELOG_DATA`) dengan tanggal rilis **`26 November 2026`**.
+- Pastikan footer halaman Login otomatis menampilkan versi terbaru tersebut (`"Versi 4.6.0 • Klik untuk lihat pembaruan"`) dan tambahkan entri baru di urutan paling atas `CHANGELOG_DATA` yang merangkum fitur kartu hasil skor langsung siswa setelah ujian serta optimasi performa anti-macet.
+
+ Saya ingin Anda memperbaiki bug sinkronisasi penilaian pada modul ujian CBT dan TKA di aplikasi web SERBU 21 menggunakan HTML, Tailwind CSS, dan JavaScript tanpa merusak sistem isolasi multi-tenant (`schools/{npsn}`), Exam Lock, Live Hotfix soal, maupun riwayat versi sebelumnya.
+
+Masalah yang terjadi saat ini:
+1. Hasil analisis butir soal dan rekap nilai sering tidak sesuai dengan jawaban siswa (jawaban yang seharusnya benar semua justru terbaca salah).
+2. Ketika kunci jawaban soal diperbaiki atau jawaban siswa dikoreksi setelah nilai masuk, nilai akhir, analisis butir soal, dan rekap hasil tidak ikut berubah secara sinkron.
+3. Belum tersedia tombol **Reset Nilai Ujian per Mata Pelajaran / Paket Ujian** untuk mengulang ujian siswa jika terjadi kesalahan fatal pada soal/kunci jawaban saat tes berlangsung.
+
+Terapkan seluruh perbaikan dan fitur berikut secara menyeluruh:
+
+====================================================================
+BAGIAN 1: STANDARISASI PENCOCOKAN JAWABAN & KUNCI (`evaluateStudentAnswer`)
+====================================================================
+1. SATUKAN FUNGSI PENILAIAN (`evaluateStudentAnswer(question, studentAns)`):
+   - Hapus logika pengecekan benar/salah yang terpisah-pisah antara halaman ujian siswa, tabel analisis butir soal, dan rekap hasil. Semua komponen wajib memanggil satu fungsi inti yang sama: `evaluateStudentAnswer`.
+   - Lakukan normalisasi string sebelum membandingkan jawaban siswa dengan kunci jawaban:
+     * Ubah ke huruf kecil/besar seragam (`.toString().trim().toUpperCase()`), hilangkan spasi ganda, tanda titik setelah huruf opsi (misal `"A."` disamakan dengan `"A"`), dan tag HTML tersembunyi (`<p>`, `&nbsp;`).
+     * Jika kunci jawaban tersimpan dalam bentuk indeks angka (`0, 1, 2, 3`) sementara jawaban siswa tersimpan dalam bentuk huruf opsi (`"A", "B", "C", "D"`) atau teks opsi lengkap, konversikan keduanya ke format standar yang sama sebelum dibandingkan agar tidak terjadi salah baca.
+     * Untuk soal Isian Singkat, dukung pencocokan toleran (mengabaikan perbedaan huruf kapital dan spasi berlebih di awal/akhir).
+     * Untuk soal Pilihan Ganda Kompleks / Menjodohkan, urutkan array pilihan terlebih dahulu sebelum dibandingkan (`JSON.stringify(sortedAns) === JSON.stringify(sortedKey)`).
+
+====================================================================
+BAGIAN 2: SINKRONISASI TOTAL (JAWABAN -> NILAI -> ANALISIS -> REKAP)
+====================================================================
+1. SATU SUMBER DATA KEBENARAN (`singleSourceOfTruth`):
+   - Pastikan setiap dokumen hasil ujian siswa di Firestore menyimpan peta jawaban lengkap per ID/nomor soal (`answersMap: { [questionId]: studentAnswer }`), status benar/salah per nomor (`itemResults: { [questionId]: true/false }`), jumlah benar (`correctCount`), jumlah salah (`wrongCount`), dan nilai akhir (`finalScore`).
+   - Pastikan tampilan **Matriks Analisis Butir Soal** dan **Tabel Rekapitulasi Hasil** membaca langsung dari sumber data hasil siswa yang telah dinormalisasi tersebut, sehingga tidak mungkin lagi ada perbedaan antara nilai siswa dengan tanda centang/silang (✓/✗) di analisis butir soal.
+
+2. HITUNG ULANG & SINKRONISASI OTOMATIS (`recalculateExamResultsAndAnalysis`):
+   - Buat fungsi `recalculateExamResultsAndAnalysis(examId)` menggunakan `writeBatch` Firestore (maksimal 450 operasi per batch agar aman untuk 100+ siswa per jenjang).
+   - **Pemicu Otomatis:** Panggil fungsi ini secara otomatis setiap kali:
+     * Guru atau Admin menekan **Simpan Perubahan** pada paket soal/kunci jawaban yang sudah memiliki nilai siswa masuk.
+     * Guru mengoreksi/mengubah status jawaban atau skor esai siswa secara manual di menu koreksi/analisis.
+   - **Alur Kerja Sinkronisasi:**
+     * Ambil kunci jawaban terbaru dari paket soal `examId`.
+     * Hitung ulang setiap nomor soal untuk seluruh siswa yang sudah mengerjakan menggunakan `evaluateStudentAnswer`.
+     * Perbarui sekaligus `itemResults`, `correctCount`, `wrongCount`, `finalScore` (serta mempertahankan *tie-breaker* soal HOTS & durasi pengerjaan).
+     * Langsung perbarui tampilan tabel Rekap Hasil, Matriks Analisis Butir Soal, dan grafik Recharts di layar tanpa perlu refresh halaman, disertai notifikasi toast: **"Nilai, Analisis Butir Soal, dan Rekap Hasil seluruh siswa berhasil disinkronkan!"**
+   - Sediakan juga tombol manual **"Sinkronkan & Hitung Ulang Semua"** di header halaman Rekap Hasil & Analisis sebagai pengaman tambahan.
+
+====================================================================
+BAGIAN 3: FITUR RESET NILAI UJIAN PER MATA PELAJARAN / PAKET UJIAN
+====================================================================
+1. TOMBOL & MODAL RESET PER MAPEL / PAKET UJIAN:
+   - Pada halaman **Rekapitulasi Hasil Ujian** maupun daftar **Paket Ujian (CBT / Simulasi TKA / Tryout TKA)** di akun Guru dan Admin, tambahkan tombol berwarna merah **"Reset Nilai Mapel Ini"**.
+   - Ketika diklik, tampilkan modal konfirmasi dengan filter pilihan:
+     * **Target Paket / Mata Pelajaran:** otomatis terpilih sesuai mapel/paket ujian yang sedang dibuka (bisa diganti lewat dropdown mapel/paket ujian).
+     * **Target Kelas / Siswa:** pilihan *"Semua Kelas pada Mapel Ini"*, *"Per Kelas Tertentu"* (misal Kelas 6A saja), atau *"Siswa Tertentu"* (untuk mereset 1 anak saja jika mengalami kendala teknis).
+     * Kotak konfirmasi keamanan: wajib mengetik kata **`RESET`** (atau memasukkan PIN Admin) sebelum tombol eksekusi aktif agar tidak terhapus secara tidak sengaja.
+
+2. PROSES PENGHAPUSAN & PEMBUKAAN AKSES UJIAN ULANG:
+   - Saat dieksekusi, gunakan `writeBatch` Firestore untuk:
+     * Menghapus dokumen hasil pengerjaan siswa (`exam_results`) hanya untuk mata pelajaran/paket dan filter kelas/siswa yang dipilih (tanpa mengganggu nilai mata pelajaran lain).
+     * Membuka kembali status penguncian ujian (`isCompleted = false`, termasuk membuka kunci percobaan pertama TKA untuk siswa/mapel yang direset) agar siswa dapat langsung mengerjakan ulang ujian tersebut.
+     * Menghapus cache ujian terkait di penyimpanan lokal jika siswa membuka kembali paket soal tersebut.
+   - Langsung kosongkan/perbarui tabel Rekap Hasil dan Matriks Analisis Butir Soal untuk mapel tersebut dan tampilkan notifikasi sukses.
+
+====================================================================
+BAGIAN 4: PEMBARUAN OTOMATIS VERSI & CHANGELOG (`v4.7.0`)
+====================================================================
+- Pertahankan seluruh entri riwayat versi sebelumnya di dalam array `CHANGELOG_DATA`.
+- Naikkan angka **minor** sesuai aturan Semantic Versioning menjadi **`v4.7.0`** (atau +1 minor dari versi tertinggi yang tercatat di `CHANGELOG_DATA`) dengan tanggal rilis **`26 November 2026`**.
+- Pastikan footer halaman Login otomatis menampilkan versi terbaru tersebut (`"Versi 4.7.0 • Klik untuk lihat pembaruan"`) dan tambahkan entri baru di urutan paling atas `CHANGELOG_DATA` yang merangkum:
+  1. Perbaikan akurasi pencocokan kunci jawaban & normalisasi format opsi agar nilai, analisis butir soal, dan rekap hasil 100% sinkron.
+  2. Sinkronisasi otomatis (*batch recalculation*) pada nilai akhir, matriks analisis soal, dan rekapitulasi setiap kali kunci jawaban atau koreksi siswa diperbarui.
+  3. Penambahan fitur **Reset Nilai Ujian per Mata Pelajaran / Kelas / Siswa** lengkap dengan konfirmasi keamanan untuk ujian ulang.
+
+ Saya ingin Anda memperbaiki bug pada alur masuk ujian CBT dan TKA di aplikasi web SERBU 21 menggunakan HTML, Tailwind CSS, dan JavaScript tanpa merusak sistem auto-save localStorage, Exam Lock, tampilan skor langsung setelah selesai, maupun riwayat versi sebelumnya.
+
+Masalah yang terjadi saat ini:
+Ketika siswa baru membuka menu ujian CBT maupun TKA atau menekan tombol "Mulai Tes", modal pop-up konfirmasi **"Pengiriman Nilai Berhasil! — BERHASIL! Nilai Anda sudah masuk ke sistem Guru & Admin."** dengan tombol **"Selesai & Kembali ke Beranda"** justru langsung muncul menutupi layar. Akibatnya, siswa harus mengklik tombol tersebut terlebih dahulu (kerja 2 kali) sebelum dapat masuk ke halaman soal.
+
+Terapkan perbaikan berikut secara menyeluruh:
+
+1. RESET STATE MODAL SAAT MEMBUKA MENU & MEMULAI TES (CBT & TKA):
+   - Pastikan seluruh variabel state dan elemen DOM modal/overlay konfirmasi pengiriman nilai (modal *"Pengiriman Nilai Berhasil!"*) berada dalam kondisi **tertutup/tersembunyi (`hidden` / `false`) secara default** setiap kali halaman dimuat, saat siswa membuka daftar menu ujian CBT atau TKA, dan tepat sebelum fungsi `startExam()` / `mulaiUjian()` dijalankan.
+   - Pastikan tombol **"Mulai Tes / Kerjakan"** langsung membuka lembar soal ujian (dan mengaktifkan Exam Lock jika diaktifkan admin) tanpa pernah memicu event submit atau memunculkan pop-up pengiriman nilai.
+   - Jika modal hasil/konfirmasi tersebut sebelumnya tertinggal terbuka dari sesi ujian mata pelajaran sebelumnya, bersihkan state modal tersebut secara otomatis saat siswa menekan **"Selesai & Kembali ke Beranda"** maupun saat memilih paket ujian baru.
+
+2. BATASI PEMICU MODAL HANYA PADA PROSES KIRIM JAWABAN AKHIR:
+   - Pastikan pop-up konfirmasi **"Pengiriman Nilai Berhasil!"** (beserta tampilan rincian skor langsung siswa jika diaktifkan) **HANYA** boleh dipanggil di dalam blok sukses pengiriman jawaban akhir (`submitExam()` -> setelah verifikasi simpan ke Firestore berhasil), tidak pernah dipanggil di dalam `onSnapshot`, `useEffect`/inisialisasi halaman, maupun `startExam()`.
+
+3. PEMBARUAN OTOMATIS VERSI & CHANGELOG (SEMANTIC VERSIONING):
+   - Pertahankan seluruh entri riwayat versi sebelumnya di dalam array `CHANGELOG_DATA`.
+   - Karena pembaruan ini merupakan perbaikan bug alur masuk ujian, naikkan angka **patch** (+1 patch dari versi tertinggi saat ini di `CHANGELOG_DATA`, misal `v4.7.0` -> `v4.7.1`) dengan tanggal rilis **`26 November 2026`**.
+   - Pastikan footer halaman Login otomatis menampilkan versi terbaru tersebut dan tambahkan entri baru di urutan paling atas `CHANGELOG_DATA` dengan ringkasan: *"Menghilangkan pop-up 'Pengiriman Nilai Berhasil' yang muncul secara keliru saat siswa memulai tes CBT maupun TKA agar langsung masuk ke layar pengerjaan soal."*
+
+ Saya ingin Anda memperbaiki dan menyempurnakan fitur penyimpanan link Google Drive PPT pada menu **Bank Media Ajar** di aplikasi web SERBU 21 menggunakan HTML, Tailwind CSS, dan JavaScript tanpa merusak struktur database multi-tenant (`schools/{npsn}`), filter jenjang kelas, maupun riwayat versi sebelumnya.
+
+Masalah yang terjadi saat ini:
+Ketika Guru atau Admin memasukkan link Google Drive file PowerPoint (PPT / Google Slides) pada menu Bank Media Ajar dan menekan tombol Simpan, data gagal tersimpan ke database atau tidak muncul di daftar materi.
+
+Terapkan seluruh perbaikan berikut secara menyeluruh:
+
+1. NORMALISASI & EKSTRAKSI OTOMATIS ID GOOGLE DRIVE / GOOGLE SLIDES:
+   - Buat fungsi utilitas `parseGoogleDriveLink(rawUrl)` yang mendukung seluruh format tautan Google Drive maupun Google Slides:
+     * `https://drive.google.com/file/d/FILE_ID/view?usp=sharing`
+     * `https://drive.google.com/open?id=FILE_ID`
+     * `https://docs.google.com/presentation/d/FILE_ID/edit...`
+     * `https://docs.google.com/presentation/d/FILE_ID/pub...`
+   - Ekstrak `fileId` secara otomatis menggunakan Regex, lalu hasilkan dua URL standar yang bersih dan siap pakai:
+     * `viewUrl`: URL asli yang sudah dibersihkan untuk dibuka di tab baru.
+     * `embedUrl`: URL pratinjau langsung (`https://drive.google.com/file/d/${fileId}/preview` untuk file PPT/PDF atau `https://docs.google.com/presentation/d/${fileId}/embed` untuk Google Slides) agar materi PPT bisa langsung ditampilkan di dalam layar SERBU 21.
+   - Jika pengguna memasukkan link valid lain yang tidak terdeteksi pola ID-nya, tetap izinkan tersimpan sebagai `viewUrl` tanpa memblokir tombol simpan dengan error palsu.
+
+2. PERBAIKAN PATH FIRESTORE MULTI-TENANT & SANITASI PAYLOAD:
+   - Pastikan penyimpanan metadata Bank Media Ajar mengarah secara konsisten ke koleksi sekolah aktif:
+     `schools/{npsn}/bank_media_ajar` (dengan fallback ke `DEFAULT_NPSN` jika variabel NPSN sesi belum terisi, sehingga tidak pernah mengirim path `schools/undefined/...`).
+   - Pastikan tidak ada properti bernilai `undefined` di dalam objek dokumen sebelum memanggil `addDoc` atau `setDoc` (gunakan default string kosong `""` untuk deskripsi opsional, `serverTimestamp()` untuk `createdAt`, serta simpan `title`, `grade` / jenjang kelas 1–6, `subject` / mata pelajaran, `fileId`, `viewUrl`, `embedUrl`, dan `uploadedBy`).
+   - Bungkus proses simpan dengan blok `try { ... } catch (error) { ... }`:
+     * Tampilkan status loading pada tombol *"Menyimpan..."* agar tidak terjadi klik ganda.
+     * Jika berhasil: langsung tampilkan notifikasi toast hijau **"Link Media Ajar PPT berhasil disimpan!"**, reset form input, dan segarkan daftar kartu Bank Media Ajar di layar tanpa perlu refresh halaman.
+     * Jika gagal (misalnya karena Firestore Rules atau koneksi terputus): tampilkan pesan error spesifik dari `error.message` agar mudah didiagnosis.
+
+3. PRATINJAU LANGSUNG (EMBED VIEWER) & FILTER KELAS:
+   - Pada setiap kartu materi di Bank Media Ajar, sediakan dua tombol aksi:
+     * **"Buka PPT (Pratinjau)"**: membuka modal viewer `<iframe>` responsif menggunakan `embedUrl` langsung di dalam SERBU 21 (lengkap dengan tombol layar penuh untuk ditampilkan di Papan Interaktif Digital kelas).
+     * **"Buka di Drive"**: membuka `viewUrl` di tab baru.
+   - Pastikan filter berdasarkan **Jenjang Kelas (Kelas 1–6)** dan **Mata Pelajaran** tetap berfungsi akurat memfilter data dari koleksi yang sama.
+
+4. PEMBARUAN OTOMATIS VERSI & CHANGELOG (SEMANTIC VERSIONING):
+   - Pertahankan seluruh entri riwayat versi sebelumnya di dalam array `CHANGELOG_DATA`.
+   - Naikkan angka **patch** (+1 patch dari versi tertinggi saat ini di `CHANGELOG_DATA`) dengan tanggal rilis **`26 November 2026`**.
+   - Pastikan footer halaman Login otomatis menampilkan versi terbaru tersebut dan tambahkan entri baru di urutan paling atas `CHANGELOG_DATA` dengan ringkasan: *"Memperbaiki penyimpanan link Google Drive PPT pada Bank Media Ajar, normalisasi otomatis URL Drive/Slides, serta penyelarasan path database multi-tenant."*
+
+ Saya ingin Anda memperbaiki bug pada modal **"Tambah Media Ajar (PPT)"** di aplikasi web SERBU 21 menggunakan HTML, Tailwind CSS, dan JavaScript tanpa merusak sistem isolasi multi-tenant (`schools/{npsn}`) maupun riwayat versi sebelumnya.
+
+Masalah yang terjadi saat ini:
+Ketika Guru menekan tombol Simpan pada modal "Tambah Media Ajar (PPT)", tombol berubah menjadi **"Menyimpan..."** dan tombol "Batal" ikut nonaktif, tetapi modal tidak kunjung tertutup (macet terus di status "Menyimpan..."). Ketika pengguna akhirnya menekan tombol silang (X) di pojok kanan atas untuk menutup modal, data materi ajar ternyata tidak tersimpan ke database.
+
+Terapkan perbaikan teknis berikut secara menyeluruh:
+
+1. PERBAIKI ALUR PENYIMPANAN FIRESTORE & PENUTUPAN MODAL OTOMATIS:
+   - Pastikan fungsi `saveMediaAjar()` (atau handler submit form Tambah Media Ajar) berjalan menggunakan struktur `try { ... } catch (error) { ... } finally { ... }`:
+     * **Validasi Field Sebelum Mengunci Tombol:** Pastikan seluruh input wajib (`Judul Materi`, `Tingkat Kelas` yang terkunci otomatis sesuai kelas guru, `Mata Pelajaran`, `Bab`, `Pertemuan`, dan `Tautan Google Drive`) terbaca dengan benar, termasuk saat input `Tingkat Kelas` dalam keadaan `disabled`/terkunci (`Kelas 6`) agar nilainya tetap ikut terkirim dan tidak bernilai kosong/undefined.
+     * **Pencegahan Hang dengan Timeout Pengaman (`Promise.race`):** Bungkus panggilan `addDoc` / `setDoc` ke Firestore `schools/{npsn}/bank_media_ajar` dengan batas waktu maksimal **8 detik** (atau tulis dengan mode *optimistic UI* jika Firestore sedang lambat merespons acknowledgement jaringan) agar tombol tidak pernah macet selamanya di tulisan `"Menyimpan..."`.
+     * **Tutup Modal & Segarkan Daftar Otomatis:** Begitu operasi simpan selesai, **langsung tutup modal "Tambah Media Ajar (PPT)" secara otomatis**, reset form ke kondisi awal, tampilkan notifikasi toast hijau **"Media Ajar PPT berhasil disimpan!"**, dan langsung munculkan kartu materi baru tersebut di daftar Bank Media Ajar.
+     * **Blok `finally` Wajib:** Di dalam blok `finally`, selalu kembalikan teks tombol dari `"Menyimpan..."` menjadi `"Simpan Media Ajar"` dan aktifkan kembali tombol `"Batal"` agar pengguna tidak pernah terjebak jika terjadi error jaringan atau izin Firestore.
+     * **Tampilkan Pesan Error Jelas:** Jika masuk ke blok `catch (error)`, tampilkan pesan peringatan berwarna merah di dalam modal berisi alasan spesifik dari `error.message` (misalnya izin akses Firestore atau koneksi terputus).
+
+2. PASTIKAN FIELD `Bab` DAN `Pertemuan` TERSIMPAN DENGAN BENAR:
+   - Sertakan nilai dropdown `Bab` (misal: `"Bab 1"`) dan `Pertemuan` (misal: `"Pertemuan 1"`) ke dalam objek dokumen yang disimpan ke Firestore, serta tampilkan badge keterangan Bab & Pertemuan pada kartu materi ajar di halaman utama Bank Media Ajar.
+
+3. PEMBARUAN OTOMATIS VERSI & CHANGELOG (SEMANTIC VERSIONING):
+   - Pertahankan seluruh entri riwayat versi sebelumnya di dalam array `CHANGELOG_DATA`.
+   - Naikkan angka **patch** (+1 patch dari versi tertinggi saat ini di `CHANGELOG_DATA`) dengan tanggal rilis **`26 November 2026`**.
+   - Pastikan footer halaman Login otomatis menampilkan versi terbaru tersebut dan tambahkan entri baru di urutan paling atas `CHANGELOG_DATA` dengan ringkasan: *"Memperbaiki tombol 'Menyimpan...' yang macet pada modal Tambah Media Ajar (PPT) serta memastikan modal otomatis tertutup dan data langsung tersimpan ke daftar materi."*
+
+ Saya ingin Anda memperbarui tampilan modal pratinjau (Preview Viewer) pada fitur **Bank Media Ajar** di aplikasi web SERBU 21 menggunakan HTML, Tailwind CSS, dan JavaScript tanpa merusak koneksi Firebase Firestore maupun riwayat versi sebelumnya.
+
+Perubahan yang diinginkan berdasarkan tampilan saat ini:
+Saat ini modal pratinjau PPT/PDF masih tampil sebagai kotak dialog mengambang dengan margin kosong di kiri-kanan-atas-bawah layar. Ubah agar modal pratinjau langsung terbuka **Full Screen penuh (`100vw` x `100vh`)** sejak pertama kali materi diklik.
+
+Terapkan seluruh spesifikasi berikut secara menyeluruh:
+
+1. TAMPILAN MODAL FULL SCREEN PENUH (`w-screen h-screen inset-0`):
+   - Hilangkan seluruh margin/padding luar kotak modal pratinjau sehingga kontainer utama menggunakan `fixed inset-0 w-screen h-screen max-w-none max-h-none rounded-none z-[9999] flex flex-col bg-slate-950`.
+   - Buat header atas sangat ringkas dan tipis (`h-12` atau `py-2 px-4`) berisi judul materi, keterangan kelas/bab/pertemuan, tombol **"Layar Penuh Browser (Fullscreen)"**, tombol **"Buka Drive"**, dan tombol tutup merah **(X)**.
+   - Atur area `<iframe>` pratinjau Google Drive/Slides agar mengisi **100% sisa tinggi dan lebar layar** (`flex-1 w-full h-full border-0`) tanpa ruang kosong gelap yang terbuang di sisi kiri dan kanan.
+
+2. OTOMATIS MASUK MODE FULLSCREEN BROWSER SAAT PRATINJAU DIBUKA:
+   - Ketika tombol **"Buka PPT / Pratinjau"** diklik oleh guru atau siswa, selain menampilkan kontainer modal `100vw x 100vh`, panggil juga `containerElement.requestFullscreen()` secara otomatis (dibungkus blok `try...catch` agar tetap berjalan mulus jika browser perangkat tertentu membatasi API fullscreen).
+   - Ubah teks tombol di header menjadi **"Keluar Layar Penuh"** saat `document.fullscreenElement` sedang aktif, dan kembalikan ke **"Layar Penuh"** jika pengguna menekan `Esc`.
+   - Saat tombol tutup **(X)** diklik, pastikan aplikasi otomatis keluar dari `document.exitFullscreen()` (jika sedang aktif) sebelum menutup modal pratinjau.
+
+3. PEMBARUAN OTOMATIS VERSI & CHANGELOG (`v4.7.4` — SEMANTIC VERSIONING):
+   - Pertahankan seluruh entri riwayat versi sebelumnya di dalam array `CHANGELOG_DATA` tanpa menghapus satu pun.
+   - Karena pembaruan ini merupakan penyempurnaan tampilan pratinjau (*patch update*), naikkan angka **patch** menjadi **`v4.7.4`** (atau pastikan naik +1 patch dari versi tertinggi yang tercatat di `CHANGELOG_DATA`) dengan tanggal rilis **`26 November 2026`**.
+   - Pastikan label versi di footer halaman Login otomatis menampilkan versi terbaru tersebut (`"Versi 4.7.4 • Klik untuk lihat pembaruan"`).
+   - Tambahkan entri baru di urutan paling atas array `CHANGELOG_DATA` dengan judul **"Pratinjau Full Screen Bank Media Ajar"** dan rincian:
+     * Mengubah tampilan pratinjau slide PPT/PDF pada Bank Media Ajar agar langsung terbuka memenuhi 100% layar (`100vw x 100vh`) tanpa ruang kosong tepi.
+     * Menambahkan aktivasi otomatis mode Fullscreen browser saat materi dibuka serta keluar otomatis saat pratinjau ditutup untuk kenyamanan presentasi di kelas.
+
+
+ Saya ingin Anda menambahkan sistem **Manajemen Tahun Ajaran & Arsip Riwayat Mengajar Guru** pada aplikasi web SERBU 21 menggunakan HTML, Tailwind CSS, dan JavaScript tanpa merusak sistem isolasi multi-tenant (`schools/{npsn}`), fitur Exam Lock, Live Hotfix soal, Bank Media Ajar, maupun riwayat versi sebelumnya.
+
+Kebutuhan utama:
+Saat ini guru mengajar di suatu kelas pada tahun ajaran berjalan (misalnya Kelas 6 pada Tahun Ajaran 2026/2027). Ketika memasuki Tahun Ajaran baru (misalnya 2027/2028) dan penugasan guru berpindah mengajar ke kelas yang berbeda (misalnya Kelas 5):
+1. Seluruh data tahun ajaran sebelumnya (data siswa kelas 6, presensi QR, e-Rapor, jurnal 7 Kebiasaan Anak Indonesia Hebat, bank soal/nilai CBT & TKA, serta media ajar) **wajib tetap tersimpan aman sebagai arsip historis** dan tidak tertimpa atau terhapus.
+2. Ketika tahun ajaran diganti ke tahun ajaran baru dan kelas ampu guru diperbarui (misal menjadi Kelas 5), aplikasi otomatis menampilkan ruang kerja, daftar siswa, serta input nilai/presensi sesuai tahun ajaran dan kelas terbaru.
+
+Terapkan seluruh spesifikasi teknis berikut secara menyeluruh:
+
+====================================================================
+BAGIAN 1: PEMISAHAN DATABASE BERBASIS TAHUN AJARAN (`academicYear`)
+====================================================================
+1. STRUKTUR KONFIGURASI TAHUN AJARAN & PENUGASAN GURU:
+   - Pada dokumen sekolah `schools/{npsn}`, tambahkan pengaturan **Tahun Ajaran Aktif** (`activeAcademicYear`, contoh format: `"2026/2027"`) dan daftar tahun ajaran yang tersedia (`academicYears: ["2026/2027", "2027/2028", ...]`).
+   - Pada profil akun Guru di Firestore, simpan riwayat penugasan kelas per tahun ajaran dalam objek `teachingHistory` (misal: `{ "2026/2027": "Kelas 6", "2027/2028": "Kelas 5" }`) selain field `currentClass` aktif.
+   - Pastikan seluruh koleksi operasional (Data Siswa, Presensi QR, e-Rapor, Jurnal 7 Kebiasaan, Hasil Ujian CBT/TKA, Analisis Butir Soal, dan Bank Media Ajar) menyertakan atribut `academicYear` (atau tersimpan di bawah sub-koleksi tahun ajaran `schools/{npsn}/years/{academicYear}/...` dengan migrasi mundur otomatis agar data lama yang belum memiliki tag tahun ajaran otomatis terbaca sebagai tahun ajaran awal `"2026/2027"` tanpa hilang).
+
+====================================================================
+BAGIAN 2: PANEL PENGATURAN TAHUN AJARAN & KENAIKAN / PINDAH KELAS (ADMIN)
+====================================================================
+1. MENU KELOLA TAHUN AJARAN BARU DI PANEL ADMIN:
+   - Tambahkan tab/menu **"Tahun Ajaran & Penugasan"** pada Dasbor Admin dengan fitur:
+     * **Buat Tahun Ajaran Baru** (misal menambah `"2027/2028"`) dan tombol **"Aktifkan Tahun Ajaran Ini"**.
+     * **Atur Penugasan Kelas Guru per Tahun Ajaran:** Admin dapat menetapkan kelas yang diampu setiap guru pada tahun ajaran baru (misalnya mengubah penugasan Endi Soeprapto di `2027/2028` menjadi **Kelas 5**, sementara catatan `2026/2027` tetap tercatat sebagai **Kelas 6**).
+     * **Wizard Salin / Kenaikan Kelas Siswa (Opsional & Aman):** Sediakan fitur opsional untuk menyalin data siswa dari tahun ajaran lama ke tahun ajaran baru (misal siswa Kelas 4 naik ke Kelas 5, atau impor CSV siswa baru) tanpa menghapus catatan siswa di tahun ajaran lama.
+     * **Salin Bank Soal / Media Ajar (Opsional):** Sediakan opsi bagi guru untuk menyalin/mengimpor paket soal CBT/TKA atau link PPT Bank Media Ajar dari tahun ajaran sebelumnya ke tahun ajaran aktif jika materi masih relevan.
+
+====================================================================
+BAGIAN 3: PENGALIH TAHUN AJARAN (YEAR SWITCHER) & PENYESUAIAN OTOMATIS DI AKUN GURU
+====================================================================
+1. DROPDOWN PEMILIH TAHUN AJARAN DI HEADER DASBOR GURU & ADMIN:
+   - Tambahkan dropdown badge **"Tahun Ajaran: 2026/2027 (Aktif)"** di bilah atas (header) dasbor Guru dan Admin.
+   - **Perilaku Otomatis Saat Tahun Ajaran Aktif Berubah:**
+     * Begitu tahun ajaran baru diaktifkan (misal `2027/2028`) dan penugasan guru diset ke **Kelas 5**, seluruh menu (Beranda, Daftar Siswa, Cetak Kartu QR, Presensi, e-Rapor, CBT/TKA, dan Tambah Media Ajar) otomatis mengunci/menyesuaikan kelas ampu menjadi **Kelas 5** dan memuat data tahun ajaran `2027/2028`.
+   - **Mode Lihat Arsip Tahun Sebelumnya:**
+     * Jika guru memilih tahun ajaran sebelumnya (misal `2026/2027`) pada dropdown switcher di header, sistem otomatis menyesuaikan tampilan ke kelas yang diampu guru pada tahun tersebut (**Kelas 6**), menampilkan seluruh data siswa, nilai CBT/TKA, e-Rapor, dan presensi tahun `2026/2027`, serta menampilkan banner informasi halus di bagian atas: **"Mode Arsip Tahun Ajaran 2026/2027 (Kelas 6) — Data historis tersimpan aman."**
+
+====================================================================
+BAGIAN 4: PEMBARUAN OTOMATIS VERSI & CHANGELOG (`v4.8.0` — SEMANTIC VERSIONING)
+====================================================================
+- Pertahankan seluruh entri riwayat versi sebelumnya di dalam array `CHANGELOG_DATA`.
+- Karena pembaruan ini menambahkan fitur arsitektur utama baru (Manajemen Tahun Ajaran & Arsip Riwayat Mengajar Guru), naikkan angka **minor** sesuai Semantic Versioning menjadi **`v4.8.0`** (atau +1 minor dari versi tertinggi yang tercatat di `CHANGELOG_DATA`) dengan tanggal rilis **`26 November 2026`**.
+- Pastikan footer halaman Login otomatis menampilkan versi terbaru tersebut (`"Versi 4.8.0 • Klik untuk lihat pembaruan"`).
+- Tambahkan entri baru di urutan paling atas array `CHANGELOG_DATA` dengan judul **"Sistem Tahun Ajaran & Arsip Riwayat Mengajar Guru"** dan rincian:
+  * Menambahkan pengelolaan Tahun Ajaran aktif serta pemetaan penugasan kelas guru per tahun ajaran tanpa menghapus rekam jejak mengajar sebelumnya.
+  * Menambahkan fitur beralih tahun ajaran (Year Switcher) di dasbor Guru dan Admin untuk melihat arsip nilai, presensi, e-Rapor, dan soal tahun lalu secara utuh sekaligus menyesuaikan kelas ampu otomatis di tahun ajaran baru.
+
+
+ Saya ingin Anda menambahkan sistem **Manajemen Tahun Ajaran & Arsip Riwayat Mengajar Guru** pada aplikasi web SERBU 21 menggunakan HTML, Tailwind CSS, dan JavaScript tanpa merusak sistem isolasi multi-tenant (`schools/{npsn}`), fitur Exam Lock, Live Hotfix soal, Bank Media Ajar, maupun riwayat versi sebelumnya.
+
+Kebutuhan utama:
+Saat ini guru mengajar di suatu kelas pada tahun ajaran berjalan (misalnya Kelas 6 pada Tahun Ajaran 2026/2027). Ketika memasuki Tahun Ajaran baru (misalnya 2027/2028) dan penugasan guru berpindah mengajar ke kelas yang berbeda (misalnya Kelas 5):
+1. Seluruh data tahun ajaran sebelumnya (data siswa kelas 6, presensi QR, e-Rapor, jurnal 7 Kebiasaan Anak Indonesia Hebat, bank soal/nilai CBT & TKA, serta media ajar) **wajib tetap tersimpan aman sebagai arsip historis** dan tidak tertimpa atau terhapus.
+2. Ketika tahun ajaran diganti ke tahun ajaran baru dan kelas ampu guru diperbarui (misal menjadi Kelas 5), aplikasi otomatis menampilkan ruang kerja, daftar siswa, serta input nilai/presensi sesuai tahun ajaran dan kelas terbaru.
+
+Terapkan seluruh spesifikasi teknis berikut secara menyeluruh:
+
+====================================================================
+BAGIAN 1: PEMISAHAN DATABASE BERBASIS TAHUN AJARAN (`academicYear`)
+====================================================================
+1. STRUKTUR KONFIGURASI TAHUN AJARAN & PENUGASAN GURU:
+   - Pada dokumen sekolah `schools/{npsn}`, tambahkan pengaturan **Tahun Ajaran Aktif** (`activeAcademicYear`, contoh format: `"2026/2027"`) dan daftar tahun ajaran yang tersedia (`academicYears: ["2026/2027", "2027/2028", ...]`).
+   - Pada profil akun Guru di Firestore, simpan riwayat penugasan kelas per tahun ajaran dalam objek `teachingHistory` (misal: `{ "2026/2027": "Kelas 6", "2027/2028": "Kelas 5" }`) selain field `currentClass` aktif.
+   - Pastikan seluruh koleksi operasional (Data Siswa, Presensi QR, e-Rapor, Jurnal 7 Kebiasaan, Hasil Ujian CBT/TKA, Analisis Butir Soal, dan Bank Media Ajar) menyertakan atribut `academicYear` (atau tersimpan di bawah sub-koleksi tahun ajaran `schools/{npsn}/years/{academicYear}/...` dengan migrasi mundur otomatis agar data lama yang belum memiliki tag tahun ajaran otomatis terbaca sebagai tahun ajaran awal `"2026/2027"` tanpa hilang).
+
+====================================================================
+BAGIAN 2: PANEL PENGATURAN TAHUN AJARAN & KENAIKAN / PINDAH KELAS (ADMIN)
+====================================================================
+1. MENU KELOLA TAHUN AJARAN BARU DI PANEL ADMIN:
+   - Tambahkan tab/menu **"Tahun Ajaran & Penugasan"** pada Dasbor Admin dengan fitur:
+     * **Buat Tahun Ajaran Baru** (misal menambah `"2027/2028"`) dan tombol **"Aktifkan Tahun Ajaran Ini"**.
+     * **Atur Penugasan Kelas Guru per Tahun Ajaran:** Admin dapat menetapkan kelas yang diampu setiap guru pada tahun ajaran baru (misalnya mengubah penugasan Endi Soeprapto di `2027/2028` menjadi **Kelas 5**, sementara catatan `2026/2027` tetap tercatat sebagai **Kelas 6**).
+     * **Wizard Salin / Kenaikan Kelas Siswa (Opsional & Aman):** Sediakan fitur opsional untuk menyalin data siswa dari tahun ajaran lama ke tahun ajaran baru (misal siswa Kelas 4 naik ke Kelas 5, atau impor CSV siswa baru) tanpa menghapus catatan siswa di tahun ajaran lama.
+     * **Salin Bank Soal / Media Ajar (Opsional):** Sediakan opsi bagi guru untuk menyalin/mengimpor paket soal CBT/TKA atau link PPT Bank Media Ajar dari tahun ajaran sebelumnya ke tahun ajaran aktif jika materi masih relevan.
+
+====================================================================
+BAGIAN 3: PENGALIH TAHUN AJARAN (YEAR SWITCHER) & PENYESUAIAN OTOMATIS DI AKUN GURU
+====================================================================
+1. DROPDOWN PEMILIH TAHUN AJARAN DI HEADER DASBOR GURU & ADMIN:
+   - Tambahkan dropdown badge **"Tahun Ajaran: 2026/2027 (Aktif)"** di bilah atas (header) dasbor Guru dan Admin.
+   - **Perilaku Otomatis Saat Tahun Ajaran Aktif Berubah:**
+     * Begitu tahun ajaran baru diaktifkan (misal `2027/2028`) dan penugasan guru diset ke **Kelas 5**, seluruh menu (Beranda, Daftar Siswa, Cetak Kartu QR, Presensi, e-Rapor, CBT/TKA, dan Tambah Media Ajar) otomatis mengunci/menyesuaikan kelas ampu menjadi **Kelas 5** dan memuat data tahun ajaran `2027/2028`.
+   - **Mode Lihat Arsip Tahun Sebelumnya:**
+     * Jika guru memilih tahun ajaran sebelumnya (misal `2026/2027`) pada dropdown switcher di header, sistem otomatis menyesuaikan tampilan ke kelas yang diampu guru pada tahun tersebut (**Kelas 6**), menampilkan seluruh data siswa, nilai CBT/TKA, e-Rapor, dan presensi tahun `2026/2027`, serta menampilkan banner informasi halus di bagian atas: **"Mode Arsip Tahun Ajaran 2026/2027 (Kelas 6) — Data historis tersimpan aman."**
+
+====================================================================
+BAGIAN 4: PEMBARUAN OTOMATIS VERSI & CHANGELOG (`v4.8.0` — SEMANTIC VERSIONING)
+====================================================================
+- Pertahankan seluruh entri riwayat versi sebelumnya di dalam array `CHANGELOG_DATA`.
+- Karena pembaruan ini menambahkan fitur arsitektur utama baru (Manajemen Tahun Ajaran & Arsip Riwayat Mengajar Guru), naikkan angka **minor** sesuai Semantic Versioning menjadi **`v4.8.0`** (atau +1 minor dari versi tertinggi yang tercatat di `CHANGELOG_DATA`) dengan tanggal rilis **`26 November 2026`**.
+- Pastikan footer halaman Login otomatis menampilkan versi terbaru tersebut (`"Versi 4.8.0 • Klik untuk lihat pembaruan"`).
+- Tambahkan entri baru di urutan paling atas array `CHANGELOG_DATA` dengan judul **"Sistem Tahun Ajaran & Arsip Riwayat Mengajar Guru"** dan rincian:
+  * Menambahkan pengelolaan Tahun Ajaran aktif serta pemetaan penugasan kelas guru per tahun ajaran tanpa menghapus rekam jejak mengajar sebelumnya.
+  * Menambahkan fitur beralih tahun ajaran (Year Switcher) di dasbor Guru dan Admin untuk melihat arsip nilai, presensi, e-Rapor, dan soal tahun lalu secara utuh sekaligus menyesuaikan kelas ampu otomatis di tahun ajaran baru.

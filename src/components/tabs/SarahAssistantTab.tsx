@@ -41,6 +41,10 @@ import {
   MapPin,
   Scissors,
   Zap,
+  Link2,
+  Globe,
+  ExternalLink,
+  Power,
 } from 'lucide-react';
 import {
   ActiveUser,
@@ -98,6 +102,16 @@ import {
   subscribeToSarahStudentLogs,
   svgToDataUrl,
   syncSarahConfigToFirestore,
+  SarahKnowledgeLink,
+  SarahKnowledgeLinkTarget,
+  deleteSarahKnowledgeLink,
+  extractMatchedKnowledgeLinksFromText,
+  filterActiveKnowledgeLinksByRole,
+  isValidPublicHttpUrl,
+  loadActiveSarahKnowledgeLinksCached,
+  saveSarahKnowledgeLink,
+  subscribeToSarahKnowledgeLinks,
+  toggleSarahKnowledgeLinkActive,
 } from '../../utils/sarahFirestore';
 import { mapFirestorePermissionError, sanitizeInput } from '../../utils/sanitize';
 import { SarahMarkdown } from '../SarahMarkdown';
@@ -152,6 +166,7 @@ type SarahTeacherSubTab =
   | 'riset'
   | 'memori'
   | 'logs'
+  | 'links'
   | 'stickers';
 type SarahVisualStyleId = '3d_clay' | '3d_isometrik' | '2d_ceria' | 'diagram_edukatif';
 type SarahDocVisualChoice = SarahVisualStyleId | 'none';
@@ -411,9 +426,126 @@ export const SarahAssistantTab: React.FC<Props> = ({
   // Resolusi Mode Visual & Persona (Mode 1: exclusive_endi | Mode 3: standard_teacher)
   const sarahUserMode = useMemo(() => resolveSarahUserMode(activeUser), [activeUser]);
   const isExclusiveEndi = sarahUserMode === 'exclusive_endi';
+  const canManageKnowledgeLinks = activeUser.role === 'admin' || isExclusiveEndi;
   const [avatarLoadError, setAvatarLoadError] = useState(false);
   const [endiLocationContext, setEndiLocationContext] = useState<EndiLocationContext | null>(null);
   const [isRefreshingEndiGreeting, setIsRefreshingEndiGreeting] = useState(false);
+
+  // Basis Pengetahuan Link Sumber Informasi (hemat kuota: dimuat sekali per sesi)
+  const [sessionKnowledgeLinks, setSessionKnowledgeLinks] = useState<SarahKnowledgeLink[]>([]);
+  const [allSchoolKnowledgeLinks, setAllSchoolKnowledgeLinks] = useState<SarahKnowledgeLink[]>([]);
+  const [linkTitle, setLinkTitle] = useState('');
+  const [linkUrl, setLinkUrl] = useState('');
+  const [linkTarget, setLinkTarget] = useState<SarahKnowledgeLinkTarget>('all');
+  const [linkSummary, setLinkSummary] = useState('');
+  const [isSavingLink, setIsSavingLink] = useState(false);
+  const [togglingLinkId, setTogglingLinkId] = useState<string | null>(null);
+  const [deletingLinkId, setDeletingLinkId] = useState<string | null>(null);
+  const [linkToDeleteConfirm, setLinkToDeleteConfirm] = useState<SarahKnowledgeLink | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadActiveSarahKnowledgeLinksCached(profile?.npsn, 'guru')
+      .then((links) => {
+        if (!cancelled) {
+          setSessionKnowledgeLinks(links);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.npsn]);
+
+  useEffect(() => {
+    if (!canManageKnowledgeLinks || subTab !== 'links') return;
+    const unsub = subscribeToSarahKnowledgeLinks(
+      profile?.npsn,
+      (items) => {
+        setAllSchoolKnowledgeLinks(items);
+        setSessionKnowledgeLinks(filterActiveKnowledgeLinksByRole(items, 'guru'));
+      },
+      () => {}
+    );
+    return () => unsub();
+  }, [canManageKnowledgeLinks, subTab, profile?.npsn]);
+
+  const handleSaveKnowledgeLinkForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canManageKnowledgeLinks) return;
+    const cleanTitle = sanitizeInput(linkTitle, 280);
+    const cleanUrl = linkUrl.trim();
+    if (!cleanTitle) {
+      showToast('Judul / Topik Sumber wajib diisi.', 'error');
+      return;
+    }
+    if (!isValidPublicHttpUrl(cleanUrl)) {
+      showToast('URL / Link Sumber tidak valid. Gunakan awalan https:// atau http://', 'error');
+      return;
+    }
+    setIsSavingLink(true);
+    try {
+      const saved = await saveSarahKnowledgeLink(profile?.npsn, {
+        title: cleanTitle,
+        url: cleanUrl,
+        target: linkTarget,
+        summary: sanitizeInput(linkSummary, 3500),
+        active: true,
+        createdBy: activeUser.name || activeUser.username || 'Admin',
+      });
+      setSessionKnowledgeLinks((prev) => {
+        const merged = [saved, ...prev.filter((item) => item.id !== saved.id)];
+        return filterActiveKnowledgeLinksByRole(merged, 'guru');
+      });
+      setLinkTitle('');
+      setLinkUrl('');
+      setLinkTarget('all');
+      setLinkSummary('');
+      showToast('Link sumber pengetahuan SARAH berhasil disimpan!', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Gagal menyimpan link sumber pengetahuan.', 'error');
+    } finally {
+      setIsSavingLink(false);
+    }
+  };
+
+  const handleToggleKnowledgeLink = async (item: SarahKnowledgeLink) => {
+    if (!canManageKnowledgeLinks) return;
+    setTogglingLinkId(item.id);
+    const nextActive = !item.active;
+    try {
+      await toggleSarahKnowledgeLinkActive(profile?.npsn, item.id, nextActive);
+      const refreshed = await loadActiveSarahKnowledgeLinksCached(profile?.npsn, 'guru', true);
+      setSessionKnowledgeLinks(refreshed);
+      showToast(
+        nextActive
+          ? `Sumber "${item.title}" diaktifkan untuk SARAH.`
+          : `Sumber "${item.title}" dinonaktifkan sementara.`,
+        'success'
+      );
+    } catch {
+      showToast('Gagal mengubah status sumber pengetahuan.', 'error');
+    } finally {
+      setTogglingLinkId(null);
+    }
+  };
+
+  const handleConfirmDeleteKnowledgeLink = async () => {
+    if (!canManageKnowledgeLinks || !linkToDeleteConfirm) return;
+    const targetItem = linkToDeleteConfirm;
+    setDeletingLinkId(targetItem.id);
+    try {
+      await deleteSarahKnowledgeLink(profile?.npsn, targetItem.id);
+      const refreshed = await loadActiveSarahKnowledgeLinksCached(profile?.npsn, 'guru', true);
+      setSessionKnowledgeLinks(refreshed);
+      setLinkToDeleteConfirm(null);
+      showToast(`Link sumber "${targetItem.title}" berhasil dihapus.`, 'success');
+    } catch {
+      showToast('Gagal menghapus link sumber pengetahuan.', 'error');
+    } finally {
+      setDeletingLinkId(null);
+    }
+  };
 
   const sarahHeaderAvatarSrc = useMemo(() => {
     if (!isExclusiveEndi) return SARAH_STANDARD_AVATAR_URL;
@@ -1155,6 +1287,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         mediaAjarDocs,
         subjects,
         sarahConfig,
+        knowledgeLinks: sessionKnowledgeLinks,
       });
 
       const res = await callSarahAiStreamEndpoint(
@@ -1368,6 +1501,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         mediaAjarDocs,
         subjects,
         sarahConfig,
+        knowledgeLinks: sessionKnowledgeLinks,
       });
 
       const textPromise = callSarahAiEndpoint<SarahTextGeneratedResponse>({
@@ -1502,6 +1636,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         mediaAjarDocs,
         subjects,
         sarahConfig,
+        knowledgeLinks: sessionKnowledgeLinks,
       });
 
       const textPromise = callSarahAiEndpoint<SarahTextGeneratedResponse>({
@@ -1673,6 +1808,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         mediaAjarDocs,
         subjects,
         sarahConfig,
+        knowledgeLinks: sessionKnowledgeLinks,
       });
 
       setTimeout(() => {
@@ -1829,6 +1965,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
         mediaAjarDocs,
         subjects,
         sarahConfig,
+        knowledgeLinks: sessionKnowledgeLinks,
       });
 
       setTimeout(() => {
@@ -2023,6 +2160,9 @@ export const SarahAssistantTab: React.FC<Props> = ({
           { id: 'riset', label: 'Riset & Pengayaan', icon: Lightbulb },
           { id: 'memori', label: `Memori & Ajarkan (${knowledgeDocs.length})`, icon: Brain },
           { id: 'logs', label: `Pantau Tanya Siswa (${studentLogs.length})`, icon: Users },
+          ...(canManageKnowledgeLinks
+            ? [{ id: 'links', label: 'Sumber Pengetahuan SARAH (Link Rujukan)', icon: Link2 }]
+            : []),
           ...(isExclusiveEndi
             ? [{ id: 'stickers', label: 'Auto-Slicer Stiker (60)', icon: Scissors }]
             : []),
@@ -2519,6 +2659,30 @@ export const SarahAssistantTab: React.FC<Props> = ({
                       ) : (
                         <>
                           <SarahMarkdown content={msg.text} userMode={sarahUserMode} />
+                          {(() => {
+                            const matchedSources = extractMatchedKnowledgeLinksFromText(
+                              msg.text,
+                              sessionKnowledgeLinks
+                            );
+                            if (matchedSources.length === 0) return null;
+                            return (
+                              <div className="flex flex-wrap gap-1.5 pt-1.5">
+                                {matchedSources.map((srcLink) => (
+                                  <a
+                                    key={srcLink.id}
+                                    href={srcLink.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 font-bold text-[11px] transition shadow-2xs"
+                                  >
+                                    <Globe className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                                    <span>Baca Sumber: {srcLink.title}</span>
+                                    <ExternalLink className="w-3 h-3 text-sky-500 shrink-0" />
+                                  </a>
+                                ))}
+                              </div>
+                            );
+                          })()}
                           <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100">
                             <button
                               type="button"
@@ -4399,6 +4563,274 @@ export const SarahAssistantTab: React.FC<Props> = ({
                 </p>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* TAB KHUSUS ADMIN & ENDI: SUMBER PENGETAHUAN SARAH (LINK RUJUKAN)       */}
+      {/* ===================================================================== */}
+      {canManageKnowledgeLinks && subTab === 'links' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <form
+            onSubmit={handleSaveKnowledgeLinkForm}
+            className="lg:col-span-5 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4 h-fit"
+          >
+            <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
+              <div className="w-9 h-9 rounded-xl bg-sky-100 text-sky-700 flex items-center justify-center shrink-0">
+                <Link2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="font-display font-black text-sm text-slate-900">
+                  Sumber Pengetahuan SARAH (Link Rujukan)
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  Tambahkan tautan artikel Kemendikbud, situs edukasi, atau Google Drive/PDF resmi
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                Judul / Topik Sumber <span className="text-rose-600">*</span>
+              </label>
+              <input
+                type="text"
+                value={linkTitle}
+                onChange={(e) => setLinkTitle(e.target.value)}
+                placeholder="Misal: Panduan Pembelajaran & Asesmen Kurikulum Merdeka"
+                className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white text-xs font-bold text-slate-800 outline-none focus:border-sky-600"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                URL / Link Sumber <span className="text-rose-600">*</span>
+              </label>
+              <input
+                type="url"
+                value={linkUrl}
+                onChange={(e) => setLinkUrl(e.target.value)}
+                placeholder="https://kurikulum.kemdikbud.go.id/... atau https://drive.google.com/..."
+                className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white text-xs font-medium text-slate-800 outline-none focus:border-sky-600"
+              />
+              <p className="text-[10px] text-slate-500 mt-1">
+                Mendukung halaman web publik, artikel Kemendikbud, Google Docs/Drive publik, maupun tautan PDF.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                Target Pengguna
+              </label>
+              <select
+                value={linkTarget}
+                onChange={(e) => setLinkTarget(e.target.value as SarahKnowledgeLinkTarget)}
+                className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-300 bg-slate-50 text-xs font-bold text-slate-800 outline-none focus:border-sky-600"
+              >
+                <option value="all">Semua Pengguna (Guru &amp; Siswa)</option>
+                <option value="guru">Khusus Guru</option>
+                <option value="siswa">Khusus Siswa</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                Ringkasan / Kata Kunci Konten (Opsional)
+              </label>
+              <textarea
+                rows={4}
+                value={linkSummary}
+                onChange={(e) => setLinkSummary(e.target.value)}
+                placeholder="Tempelkan inti materi, poin penting, atau kata kunci dari tautan di atas agar SARAH dapat langsung merujuk isinya secara instan..."
+                className="w-full p-3 rounded-2xl border border-slate-300 bg-slate-50 focus:bg-white text-xs text-slate-800 outline-none focus:border-sky-600"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSavingLink}
+              className="w-full py-3 rounded-2xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-700 hover:to-indigo-700 text-white font-display font-black text-xs flex items-center justify-center gap-2 shadow-md transition cursor-pointer disabled:opacity-60"
+            >
+              {isSavingLink ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              <span>{isSavingLink ? 'Menyimpan...' : 'Simpan Link Sumber Pengetahuan'}</span>
+            </button>
+          </form>
+
+          <div className="lg:col-span-7 bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-display font-black text-sm text-slate-900">
+                  Daftar Link Rujukan Sekolah ({allSchoolKnowledgeLinks.length})
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Sumber berstatus Aktif otomatis disuntikkan ke asisten AI SARAH sesuai target pengguna
+                </p>
+              </div>
+              <span className="px-3 py-1 rounded-xl bg-sky-50 border border-sky-200 text-sky-800 font-bold text-[11px]">
+                {allSchoolKnowledgeLinks.filter((l) => l.active).length} Aktif
+              </span>
+            </div>
+
+            {allSchoolKnowledgeLinks.length > 0 ? (
+              <div className="space-y-3 max-h-[620px] overflow-y-auto pr-1">
+                {allSchoolKnowledgeLinks.map((item) => {
+                  const targetLabel =
+                    item.target === 'guru'
+                      ? 'Khusus Guru'
+                      : item.target === 'siswa'
+                      ? 'Khusus Siswa'
+                      : 'Semua Pengguna';
+                  const targetTone =
+                    item.target === 'guru'
+                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                      : item.target === 'siswa'
+                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                      : 'bg-indigo-50 text-indigo-700 border-indigo-200';
+
+                  return (
+                    <div
+                      key={item.id}
+                      className={`p-4 rounded-2xl border transition space-y-2.5 ${
+                        item.active
+                          ? 'bg-white border-slate-200 shadow-2xs'
+                          : 'bg-slate-50/70 border-slate-200 opacity-75'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span
+                              className={`px-2 py-0.5 rounded-lg border text-[10px] font-black uppercase ${
+                                item.active
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : 'bg-slate-200 text-slate-600 border-slate-300'
+                              }`}
+                            >
+                              {item.active ? 'Aktif' : 'Nonaktif'}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold ${targetTone}`}
+                            >
+                              {targetLabel}
+                            </span>
+                          </div>
+                          <h4 className="font-display font-black text-xs sm:text-sm text-slate-900">
+                            {item.title}
+                          </h4>
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-700 hover:text-sky-900 hover:underline break-all"
+                          >
+                            <Globe className="w-3 h-3 shrink-0" />
+                            <span>{item.url}</span>
+                            <ExternalLink className="w-3 h-3 shrink-0" />
+                          </a>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            disabled={togglingLinkId === item.id}
+                            onClick={() => void handleToggleKnowledgeLink(item)}
+                            title={item.active ? 'Nonaktifkan sumber ini' : 'Aktifkan sumber ini'}
+                            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 transition cursor-pointer disabled:opacity-50 ${
+                              item.active
+                                ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                            }`}
+                          >
+                            {togglingLinkId === item.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Power className="w-3.5 h-3.5" />
+                            )}
+                            <span>{item.active ? 'Aktif' : 'Nonaktif'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setLinkToDeleteConfirm(item)}
+                            title="Hapus link sumber"
+                            aria-label={`Hapus ${item.title}`}
+                            className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {item.summary && (
+                        <p className="text-xs text-slate-600 bg-slate-50 rounded-xl p-2.5 border border-slate-100 leading-relaxed whitespace-pre-wrap">
+                          {item.summary}
+                        </p>
+                      )}
+
+                      <div className="text-[10px] text-slate-400 flex items-center justify-between">
+                        <span>Ditambahkan oleh: {item.createdBy}</span>
+                        <span>Diperbarui: {formatSarahDateTime(item.updatedAt)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="py-16 text-center space-y-2 text-slate-400">
+                <Link2 className="w-10 h-10 mx-auto text-sky-200" />
+                <p className="text-xs font-bold text-slate-500">
+                  Belum ada link sumber pengetahuan tersimpan untuk sekolah ini.
+                </p>
+                <p className="text-[11px] text-slate-400 max-w-md mx-auto">
+                  Tambahkan tautan artikel pendidikan, regulasi Kurikulum Merdeka, atau modul materi Google Drive agar SARAH merujuknya secara akurat.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Link Sumber Pengetahuan */}
+      {linkToDeleteConfirm && (
+        <div className="fixed inset-0 z-[1050] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 no-print">
+          <div className="bg-white max-w-md w-full rounded-3xl p-6 shadow-2xl border-2 border-rose-200 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-display font-black text-sm text-slate-900">
+                  Hapus Sumber Pengetahuan SARAH?
+                </h3>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Apakah Anda yakin ingin menghapus link rujukan{' '}
+                  <strong className="text-slate-900">"{linkToDeleteConfirm.title}"</strong>?
+                  SARAH tidak lagi merujuk tautan ini setelah dihapus.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={deletingLinkId === linkToDeleteConfirm.id}
+                onClick={() => setLinkToDeleteConfirm(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={deletingLinkId === linkToDeleteConfirm.id}
+                onClick={() => void handleConfirmDeleteKnowledgeLink()}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+              >
+                {deletingLinkId === linkToDeleteConfirm.id && (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                )}
+                <span>Ya, Hapus</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

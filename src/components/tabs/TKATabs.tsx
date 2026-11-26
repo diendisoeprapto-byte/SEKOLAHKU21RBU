@@ -37,6 +37,7 @@ import {
   AlignCenter,
   Power,
   Lock,
+  Unlock,
   EyeOff,
   PauseCircle,
   RotateCcw,
@@ -153,6 +154,19 @@ import { QuestionContent } from '../QuestionContent';
 import { ManualTkaScoreModal, ManualTkaModalSeed } from './ManualTkaScoreModal';
 import { AnalisisButirMatrixPanel } from '../AnalisisButirMatrixPanel';
 import { FormattedMathText, FractionBuilderBar } from '../FormattedMathText';
+import {
+  UnlockScoreModal,
+  UnlockScoreActionMode,
+  UnlockMapelOption,
+} from '../modals/UnlockScoreModal';
+import {
+  ALL_TKA_MAPEL_KEYS,
+  canManageLockedScores,
+  getEffectiveCompletedTkaMapels,
+  unlockAndDeleteTkaForReexam,
+  unlockAndRecalculateTkaSubmissions,
+  unlockTkaForManualEdit,
+} from '../../utils/examScoreUnlock';
 import { MathPreviewPanel } from '../MathPreviewPanel';
 import {
   BenarSalahTableView,
@@ -1171,22 +1185,88 @@ export const TKATabs: React.FC<Props> = ({
     source: 'analisis' | 'rekap';
     targetPaket: string;
   } | null>(null);
+  const [selectedClearMapels, setSelectedClearMapels] = useState<TKAMapelScoreKey[]>(
+    () => [...ALL_TKA_MAPEL_KEYS]
+  );
+  const [singleTkaDeleteModal, setSingleTkaDeleteModal] = useState<{
+    record: any;
+    rawSub: TKASubmissionItem;
+    availableMapels: TKAMapelScoreKey[];
+    selectedMapels: TKAMapelScoreKey[];
+  } | null>(null);
   const [confirmClearLockedTka, setConfirmClearLockedTka] = useState<boolean>(false);
+  const [tkaUnlockModalState, setTkaUnlockModalState] = useState<{
+    targets: TKASubmissionItem[];
+    scopeLabel: string;
+    targetMapel?: string;
+  } | null>(null);
+  const hasScoreUnlockAuthority = canManageLockedScores(activeUser);
 
   const handleClearSubmissions = (
     source: 'analisis' | 'rekap' = 'rekap',
     targetPaket: string = 'all'
   ) => {
     setConfirmClearLockedTka(false);
+    const scopedSubs = tkaSubmissions.filter((sub) => {
+      if (targetPaket === 'all') return true;
+      const base = sub.paketDasar || extractBaseTkaPaket(sub.paket);
+      return base === targetPaket || sub.paket === targetPaket;
+    });
+    const presentSet = new Set<TKAMapelScoreKey>();
+    scopedSubs.forEach((sub) => {
+      getEffectiveCompletedTkaMapels(sub).forEach((m) => presentSet.add(m));
+    });
+    const activeMapels = ALL_TKA_MAPEL_KEYS.filter((m) => presentSet.has(m));
+    setSelectedClearMapels(
+      activeMapels.length > 0 ? activeMapels : [...ALL_TKA_MAPEL_KEYS]
+    );
     setClearTkaModalContext({ source, targetPaket });
   };
 
-  const executeClearTkaData = (scope: 'paket' | 'all') => {
+  const executeClearTkaData = async (scope: 'paket' | 'all') => {
     const targetPaket = clearTkaModalContext?.targetPaket || 'all';
+    const actor = activeUser.name || activeUser.username || 'admin';
+    const scopedSubs = tkaSubmissions.filter((sub) => {
+      if (scope === 'all' || targetPaket === 'all') return true;
+      const base = sub.paketDasar || extractBaseTkaPaket(sub.paket);
+      return base === targetPaket || sub.paket === targetPaket;
+    });
+
+    if (selectedClearMapels.length === 0) {
+      showToast('Pilih minimal 1 mata pelajaran yang ingin dihapus.', 'error');
+      return;
+    }
+
+    const presentSet = new Set<TKAMapelScoreKey>();
+    scopedSubs.forEach((sub) => {
+      getEffectiveCompletedTkaMapels(sub).forEach((m) => presentSet.add(m));
+    });
+    const availableInScope = ALL_TKA_MAPEL_KEYS.filter((m) => presentSet.has(m));
+    const allAvailableSelected =
+      availableInScope.length === 0 ||
+      availableInScope.every((m) => selectedClearMapels.includes(m));
+
+    if (!allAvailableSelected && scopedSubs.length > 0) {
+      const remaining = await unlockAndDeleteTkaForReexam({
+        targets: scopedSubs,
+        tkaQuestions,
+        unlockedBy: actor,
+        targetMapels: selectedClearMapels,
+      });
+      setTkaSubmissions(remaining);
+      setConfirmClearLockedTka(false);
+      setClearTkaModalContext(null);
+      showToast(
+        `Nilai TKA mapel ${selectedClearMapels.join(', ')} berhasil dihapus. Nilai mapel lain tetap dipertahankan.`,
+        'success'
+      );
+      return;
+    }
+
     if (scope === 'paket' && targetPaket !== 'all') {
       const remaining = clearTKAResultsFromStorage({ scope: 'paket', targetPaket });
       deleteTkaSubmissionsByPaketInFirestore(targetPaket).catch(() => {});
-      syncAllLocalToCloud(activeUser.name || 'admin').catch(() => {});
+      syncAllLocalToCloud(actor).catch(() => {});
 
       setTkaSubmissions(remaining);
       setConfirmClearLockedTka(false);
@@ -1197,7 +1277,7 @@ export const TKATabs: React.FC<Props> = ({
 
     clearTKAResultsFromStorage({ scope: 'all' });
     clearTkaSubmissionsInFirestore().catch(() => {});
-    syncAllLocalToCloud(activeUser.name || 'admin').catch(() => {});
+    syncAllLocalToCloud(actor).catch(() => {});
 
     setTkaSubmissions([]);
     setConfirmClearLockedTka(false);
@@ -5905,6 +5985,26 @@ export const TKATabs: React.FC<Props> = ({
               </div>
 
               <div className="flex flex-wrap items-center gap-2.5 lg:justify-end flex-1">
+                {hasScoreUnlockAuthority && (
+                  <button
+                    type="button"
+                    disabled={relevantSubmissions.length === 0}
+                    onClick={() =>
+                      setTkaUnlockModalState({
+                        targets: relevantSubmissions,
+                        scopeLabel: `${
+                          analisisPaketTka === 'all' ? 'Semua Paket TKA' : analisisPaketTka
+                        } · ${activeMapelLabel} (${activeKelasLabel})`,
+                        targetMapel: analisisMapelTka !== 'all' ? analisisMapelTka : undefined,
+                      })
+                    }
+                    className="bg-amber-500 hover:bg-amber-400 disabled:opacity-45 text-slate-950 font-display font-black px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                    title="Buka kunci nilai, hitung ulang sesuai kunci terbaru, atau hapus nilai untuk ujian ulang (Admin & Endi Soeprapto)"
+                  >
+                    <Unlock className="w-4 h-4" />
+                    <span>Buka Kunci Nilai (Admin/Endi)</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={isSyncingTkaCloud}
@@ -6262,12 +6362,15 @@ export const TKATabs: React.FC<Props> = ({
                           <th className="p-3 text-center">Durasi</th>
                           <th className="p-3 text-center">Status</th>
                           <th className="p-3 text-center">Keterangan</th>
+                          {hasScoreUnlockAuthority && (
+                            <th className="no-print p-3 text-right">Aksi</th>
+                          )}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {rankedAnalisisStudents.length === 0 ? (
                           <tr>
-                            <td colSpan={9} className="p-8 text-center text-slate-500">
+                            <td colSpan={hasScoreUnlockAuthority ? 10 : 9} className="p-8 text-center text-slate-500">
                               Belum ada data pengerjaan TKA yang sesuai dengan filter ({activeKelasLabel} · {activeMapelLabel}).
                             </td>
                           </tr>
@@ -6337,6 +6440,31 @@ export const TKATabs: React.FC<Props> = ({
                                     <span className="text-slate-400">—</span>
                                   )}
                                 </td>
+                                {hasScoreUnlockAuthority && (
+                                  <td className="no-print p-3 text-right whitespace-nowrap">
+                                    {(() => {
+                                      const rawSub = relevantSubmissions.find((s) => s.id === row.id);
+                                      if (!rawSub) return null;
+                                      return (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setTkaUnlockModalState({
+                                              targets: [rawSub],
+                                              scopeLabel: `${row.nama} · ${activeMapelLabel} (${row.paket})`,
+                                              targetMapel:
+                                                analisisMapelTka !== 'all' ? analisisMapelTka : undefined,
+                                            })
+                                          }
+                                          className="px-2.5 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                                          title={`Buka kunci nilai / koreksi ulang / hapus nilai TKA milik ${row.nama}`}
+                                        >
+                                          <Unlock className="w-3 h-3" /> Buka Kunci
+                                        </button>
+                                      );
+                                    })()}
+                                  </td>
+                                )}
                               </tr>
                             );
                           })
@@ -6969,6 +7097,34 @@ export const TKATabs: React.FC<Props> = ({
                     selectedMatrixMapel={resolvedMatrixMapel}
                     onChangeMatrixMapel={setAnalisisMatrixMapelTka}
                     showToast={showToast}
+                    canManageLocks={hasScoreUnlockAuthority}
+                    onOpenBulkUnlock={() => {
+                      const matchedIds = new Set(matrixSubmissions.map((m) => m.studentId));
+                      const targets = relevantSubmissions.filter((s) => matchedIds.has(s.studentId));
+                      setTkaUnlockModalState({
+                        targets: targets.length > 0 ? targets : relevantSubmissions,
+                        scopeLabel: `${
+                          analisisPaketTka === 'all' ? 'Semua Paket TKA' : analisisPaketTka
+                        } · ${resolvedMatrixMapel} (${activeKelasLabel})`,
+                        targetMapel: resolvedMatrixMapel,
+                      });
+                    }}
+                    onOpenStudentUnlock={(studentId, studentName) => {
+                      const matched = relevantSubmissions.find((s) => s.studentId === studentId);
+                      if (matched) {
+                        setTkaUnlockModalState({
+                          targets: [matched],
+                          scopeLabel: `${studentName} · ${resolvedMatrixMapel} (${
+                            matched.paketDasar || extractBaseTkaPaket(matched.paket)
+                          })`,
+                          targetMapel: resolvedMatrixMapel,
+                        });
+                      }
+                    }}
+                    isStudentLockedLookup={(studentId) => {
+                      const matched = relevantSubmissions.find((s) => s.studentId === studentId);
+                      return matched ? isTkaMapelLocked(matched, normMatrixMapel) : false;
+                    }}
                   />
                 );
               })()}
@@ -7615,6 +7771,27 @@ export const TKATabs: React.FC<Props> = ({
               </div>
 
               <div className="flex flex-wrap items-center lg:justify-end gap-2.5 flex-1">
+                {hasScoreUnlockAuthority && (
+                  <button
+                    type="button"
+                    disabled={filteredRecords.length === 0}
+                    onClick={() => {
+                      const filteredIds = new Set(filteredRecords.map((rec) => rec.id));
+                      const matchedSubs = tkaSubmissions.filter((s) => filteredIds.has(s.id));
+                      setTkaUnlockModalState({
+                        targets: matchedSubs.length > 0 ? matchedSubs : (filteredRecords as TKASubmissionItem[]),
+                        scopeLabel: `${
+                          hasilPaketTka === 'all' ? 'Semua Paket TKA' : hasilPaketTka
+                        } (${hasilKelasTka === 'all' ? 'Semua Kelas 6' : hasilKelasTka})`,
+                      });
+                    }}
+                    className="bg-amber-500 hover:bg-amber-400 disabled:opacity-45 text-slate-950 font-display font-black px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+                    title="Buka kunci nilai, hitung ulang sesuai kunci terbaru, atau hapus nilai untuk ujian ulang (Admin & Endi Soeprapto)"
+                  >
+                    <Unlock className="w-4 h-4" />
+                    <span>Buka Kunci Nilai (Admin/Endi)</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={openManualModalForNew}
@@ -8758,6 +8935,24 @@ export const TKATabs: React.FC<Props> = ({
                             >
                               <Download className="w-3 h-3" /> Unduh PDF
                             </button>
+                            {hasScoreUnlockAuthority && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const rawSub =
+                                    tkaSubmissions.find((s) => s.id === r.id) ||
+                                    (r as TKASubmissionItem);
+                                  setTkaUnlockModalState({
+                                    targets: [rawSub],
+                                    scopeLabel: `${r.nama} · ${r.paket}`,
+                                  });
+                                }}
+                                className="bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 px-2.5 py-1.5 rounded-xl font-display font-extrabold text-[11px] transition cursor-pointer flex items-center gap-1 whitespace-nowrap"
+                                title={`Buka kunci nilai / koreksi ulang / hapus nilai TKA milik ${r.nama}`}
+                              >
+                                <Unlock className="w-3 h-3" /> Buka Kunci
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => openManualModalForEdit(r)}
@@ -8773,35 +8968,55 @@ export const TKATabs: React.FC<Props> = ({
                             >
                               <Eye className="w-3 h-3" /> Lihat Rapor
                             </button>
-                            {confirmDeleteHasilId === r.id ? (
-                              <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-xl px-2 py-1">
-                                <span className="text-[10px] font-black text-rose-700">Hapus?</span>
+                            {(() => {
+                              const rawSub =
+                                tkaSubmissions.find((s) => s.id === r.id) ||
+                                (r as TKASubmissionItem);
+                              const rowMapels = getEffectiveCompletedTkaMapels(rawSub);
+                              if (confirmDeleteHasilId === r.id) {
+                                return (
+                                  <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-xl px-2 py-1">
+                                    <span className="text-[10px] font-black text-rose-700">Hapus?</span>
+                                    <button
+                                      type="button"
+                                      disabled={deletingHasilId === r.id}
+                                      onClick={() => void handleDeleteSingleTkaSubmission(r)}
+                                      className="px-2 py-0.5 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white text-[10px] font-black cursor-pointer"
+                                    >
+                                      {deletingHasilId === r.id ? '...' : 'Ya'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmDeleteHasilId(null)}
+                                      className="px-2 py-0.5 rounded-lg bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-bold cursor-pointer"
+                                    >
+                                      Batal
+                                    </button>
+                                  </div>
+                                );
+                              }
+                              return (
                                 <button
                                   type="button"
-                                  disabled={deletingHasilId === r.id}
-                                  onClick={() => void handleDeleteSingleTkaSubmission(r)}
-                                  className="px-2 py-0.5 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white text-[10px] font-black cursor-pointer"
+                                  onClick={() => {
+                                    if (rowMapels.length > 1) {
+                                      setSingleTkaDeleteModal({
+                                        record: r,
+                                        rawSub,
+                                        availableMapels: rowMapels,
+                                        selectedMapels: [rowMapels[0]],
+                                      });
+                                    } else {
+                                      setConfirmDeleteHasilId(r.id);
+                                    }
+                                  }}
+                                  className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-2.5 py-1.5 rounded-xl font-display font-extrabold text-[11px] transition cursor-pointer flex items-center gap-1 whitespace-nowrap"
+                                  title={`Hapus data nilai TKA milik ${r.nama}`}
                                 >
-                                  {deletingHasilId === r.id ? '...' : 'Ya'}
+                                  <Trash2 className="w-3 h-3" /> Hapus
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmDeleteHasilId(null)}
-                                  className="px-2 py-0.5 rounded-lg bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-bold cursor-pointer"
-                                >
-                                  Batal
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => setConfirmDeleteHasilId(r.id)}
-                                className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-2.5 py-1.5 rounded-xl font-display font-extrabold text-[11px] transition cursor-pointer flex items-center gap-1 whitespace-nowrap"
-                                title={`Hapus data nilai TKA milik ${r.nama}`}
-                              >
-                                <Trash2 className="w-3 h-3" /> Hapus
-                              </button>
-                            )}
+                              );
+                            })()}
                           </div>
                         </td>
                       </tr>
@@ -11239,11 +11454,26 @@ export const TKATabs: React.FC<Props> = ({
           const base = sub.paketDasar || extractBaseTkaPaket(sub.paket);
           return base === clearTkaModalContext.targetPaket || sub.paket === clearTkaModalContext.targetPaket;
         });
+        const presentMapelCounts = new Map<TKAMapelScoreKey, number>();
+        scopedSubs.forEach((sub) => {
+          getEffectiveCompletedTkaMapels(sub).forEach((m) => {
+            presentMapelCounts.set(m, (presentMapelCounts.get(m) || 0) + 1);
+          });
+        });
+        const clearableMapels = ALL_TKA_MAPEL_KEYS.filter((m) =>
+          presentMapelCounts.has(m)
+        );
         const lockedCountInScope = scopedSubs.filter((s) => isAnyTkaMapelLocked(s)).length;
         const requireLockAck = lockedCountInScope > 0 && !confirmClearLockedTka;
+        const noMapelPicked = clearableMapels.length > 0 && selectedClearMapels.length === 0;
+        const isPartialMapelClear =
+          clearableMapels.length > 1 &&
+          selectedClearMapels.length > 0 &&
+          selectedClearMapels.length < clearableMapels.length;
+
         return (
           <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-rose-200 animate-in fade-in zoom-in-95">
+            <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-rose-200 animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
               <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                 <h3 className="font-display font-black text-base text-slate-800 flex items-center gap-2">
                   <Trash2 className="w-5 h-5 text-rose-600" /> Kosongkan Data{' '}
@@ -11266,6 +11496,79 @@ export const TKATabs: React.FC<Props> = ({
                   Bank Soal TKA tidak akan ikut terhapus, hanya data nilai &amp; jawaban hasil ujian siswa.
                 </p>
               </div>
+
+              {clearableMapels.length > 0 && (
+                <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-black text-indigo-950">
+                      Pilih Mapel yang Akan Dihapus:
+                    </span>
+                    {clearableMapels.length > 1 && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedClearMapels(clearableMapels)}
+                          className="px-2 py-0.5 rounded-lg bg-white hover:bg-indigo-100 border border-indigo-200 text-[10px] font-bold text-indigo-700 cursor-pointer"
+                        >
+                          Pilih Semua
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedClearMapels([])}
+                          className="px-2 py-0.5 rounded-lg bg-white hover:bg-rose-50 border border-slate-200 text-[10px] font-bold text-slate-600 cursor-pointer"
+                        >
+                          Kosongkan
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                    {clearableMapels.map((mKey) => {
+                      const checked = selectedClearMapels.includes(mKey);
+                      const count = presentMapelCounts.get(mKey) || 0;
+                      return (
+                        <label
+                          key={mKey}
+                          className={`flex items-center justify-between gap-2 p-2 rounded-xl border text-xs cursor-pointer select-none ${
+                            checked
+                              ? 'bg-white border-indigo-500 text-indigo-950 font-bold'
+                              : 'bg-white/60 border-slate-200 text-slate-600'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                setSelectedClearMapels((prev) =>
+                                  prev.includes(mKey)
+                                    ? prev.filter((k) => k !== mKey)
+                                    : [...prev, mKey]
+                                )
+                              }
+                              className="rounded border-indigo-400 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
+                            />
+                            <span className="truncate">{mKey}</span>
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded-md bg-indigo-100 text-indigo-700 text-[10px] font-black shrink-0 tabular-nums">
+                            {count}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {isPartialMapelClear && (
+                    <p className="text-[11px] font-semibold text-emerald-700">
+                      Hanya mapel yang dicentang yang akan dihapus; nilai mapel lain tetap aman.
+                    </p>
+                  )}
+                  {noMapelPicked && (
+                    <p className="text-[11px] font-bold text-rose-600">
+                      Pilih minimal 1 mata pelajaran untuk dihapus.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {lockedCountInScope > 0 && (
                 <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-xs text-amber-950 space-y-2">
@@ -11294,23 +11597,31 @@ export const TKATabs: React.FC<Props> = ({
                 {clearTkaModalContext.targetPaket !== 'all' && (
                   <button
                     type="button"
-                    disabled={requireLockAck}
-                    onClick={() => executeClearTkaData('paket')}
+                    disabled={requireLockAck || noMapelPicked}
+                    onClick={() => void executeClearTkaData('paket')}
                     className="w-full px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-45 disabled:cursor-not-allowed text-white text-xs font-display font-black cursor-pointer shadow-xs transition flex items-center justify-center gap-1.5"
                   >
                     <Trash2 className="w-4 h-4" />
-                    <span>Kosongkan Paket "{clearTkaModalContext.targetPaket}" Saja</span>
+                    <span>
+                      {isPartialMapelClear
+                        ? `Hapus ${selectedClearMapels.length} Mapel Terpilih di "${clearTkaModalContext.targetPaket}"`
+                        : `Kosongkan Paket "${clearTkaModalContext.targetPaket}" Saja`}
+                    </span>
                   </button>
                 )}
 
                 <button
                   type="button"
-                  disabled={requireLockAck}
-                  onClick={() => executeClearTkaData('all')}
+                  disabled={requireLockAck || noMapelPicked}
+                  onClick={() => void executeClearTkaData('all')}
                   className="w-full px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-45 disabled:cursor-not-allowed text-white text-xs font-display font-black cursor-pointer shadow-sm transition flex items-center justify-center gap-1.5"
                 >
                   <Trash2 className="w-4 h-4" />
-                  <span>Kosongkan Semua Data Hasil &amp; Analisis TKA</span>
+                  <span>
+                    {isPartialMapelClear
+                      ? `Hapus ${selectedClearMapels.length} Mapel Terpilih di Semua Paket TKA`
+                      : 'Kosongkan Semua Data Hasil & Analisis TKA'}
+                  </span>
                 </button>
 
                 <button
@@ -11323,6 +11634,267 @@ export const TKATabs: React.FC<Props> = ({
               </div>
             </div>
           </div>
+        );
+      })()}
+
+      {/* ================= MODAL HAPUS NILAI PER MAPEL (BARIS SISWA TKA) ================= */}
+      {singleTkaDeleteModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-rose-200 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-display font-black text-base text-slate-800 flex items-center gap-2">
+                  <Trash2 className="w-5 h-5 text-rose-600" /> Hapus Nilai TKA per Mapel
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {singleTkaDeleteModal.record?.nama || singleTkaDeleteModal.rawSub.studentName} ·{' '}
+                  {singleTkaDeleteModal.rawSub.paketDasar ||
+                    extractBaseTkaPaket(singleTkaDeleteModal.rawSub.paket)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSingleTkaDeleteModal(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-full cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-black text-indigo-950">
+                  Pilih Mapel yang Ingin Dihapus:
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSingleTkaDeleteModal((prev) =>
+                        prev ? { ...prev, selectedMapels: [...prev.availableMapels] } : null
+                      )
+                    }
+                    className="px-2 py-0.5 rounded-lg bg-white hover:bg-indigo-100 border border-indigo-200 text-[10px] font-bold text-indigo-700 cursor-pointer"
+                  >
+                    Semua
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSingleTkaDeleteModal((prev) =>
+                        prev ? { ...prev, selectedMapels: [] } : null
+                      )
+                    }
+                    className="px-2 py-0.5 rounded-lg bg-white hover:bg-rose-50 border border-slate-200 text-[10px] font-bold text-slate-600 cursor-pointer"
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                {singleTkaDeleteModal.availableMapels.map((mKey) => {
+                  const checked = singleTkaDeleteModal.selectedMapels.includes(mKey);
+                  const skor = Number(singleTkaDeleteModal.rawSub.scoresPerMapel?.[mKey] ?? 0);
+                  return (
+                    <label
+                      key={mKey}
+                      className={`flex items-center justify-between gap-2 p-2.5 rounded-xl border text-xs cursor-pointer select-none ${
+                        checked
+                          ? 'bg-white border-rose-500 text-rose-950 font-bold'
+                          : 'bg-white/70 border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      <span className="flex items-center gap-2 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() =>
+                            setSingleTkaDeleteModal((prev) => {
+                              if (!prev) return null;
+                              const exists = prev.selectedMapels.includes(mKey);
+                              return {
+                                ...prev,
+                                selectedMapels: exists
+                                  ? prev.selectedMapels.filter((k) => k !== mKey)
+                                  : [...prev.selectedMapels, mKey],
+                              };
+                            })
+                          }
+                          className="rounded border-rose-400 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                        />
+                        <span className="truncate">{mKey}</span>
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[11px] font-mono font-bold">
+                        Nilai: {skor}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-slate-600">
+                Nilai mapel yang tidak dicentang akan tetap tersimpan dan rata-rata siswa dihitung ulang otomatis.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setSingleTkaDeleteModal(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={
+                  singleTkaDeleteModal.selectedMapels.length === 0 ||
+                  deletingHasilId === singleTkaDeleteModal.rawSub.id
+                }
+                onClick={async () => {
+                  const ctx = singleTkaDeleteModal;
+                  if (!ctx || ctx.selectedMapels.length === 0) return;
+                  if (ctx.selectedMapels.length >= ctx.availableMapels.length) {
+                    setSingleTkaDeleteModal(null);
+                    await handleDeleteSingleTkaSubmission(ctx.record);
+                    return;
+                  }
+                  setDeletingHasilId(ctx.rawSub.id);
+                  try {
+                    const actor = activeUser.name || activeUser.username || 'admin';
+                    const remaining = await unlockAndDeleteTkaForReexam({
+                      targets: [ctx.rawSub],
+                      tkaQuestions,
+                      unlockedBy: actor,
+                      targetMapels: ctx.selectedMapels,
+                    });
+                    setTkaSubmissions(remaining);
+                    if (selectedHasilStudent?.id === ctx.rawSub.id) {
+                      setSelectedHasilStudent(null);
+                    }
+                    setSingleTkaDeleteModal(null);
+                    showToast(
+                      `Nilai ${ctx.selectedMapels.join(', ')} milik "${
+                        ctx.record?.nama || ctx.rawSub.studentName
+                      }" berhasil dihapus!`,
+                      'success'
+                    );
+                  } finally {
+                    setDeletingHasilId(null);
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-45 text-white text-xs font-display font-black cursor-pointer shadow-sm flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Hapus {singleTkaDeleteModal.selectedMapels.length} Mapel Terpilih</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tkaUnlockModalState && (() => {
+        const mapelCounts = new Map<TKAMapelScoreKey, number>();
+        tkaUnlockModalState.targets.forEach((sub) => {
+          getEffectiveCompletedTkaMapels(sub).forEach((m) => {
+            mapelCounts.set(m, (mapelCounts.get(m) || 0) + 1);
+          });
+        });
+        const tkaMapelOptions: UnlockMapelOption[] = ALL_TKA_MAPEL_KEYS
+          .filter((m) => mapelCounts.has(m))
+          .map((m) => ({
+            key: m,
+            label: m,
+            count: mapelCounts.get(m) || 0,
+          }));
+        const fallbackOptions: UnlockMapelOption[] =
+          tkaMapelOptions.length > 0
+            ? tkaMapelOptions
+            : ALL_TKA_MAPEL_KEYS.map((m) => ({ key: m, label: m }));
+        const initialSelected = tkaUnlockModalState.targetMapel
+          ? [normalizeTkaMapelKey(tkaUnlockModalState.targetMapel)]
+          : undefined;
+
+        return (
+          <UnlockScoreModal
+            isOpen={Boolean(tkaUnlockModalState)}
+            examType="TKA"
+            scopeLabel={tkaUnlockModalState.scopeLabel}
+            itemCount={tkaUnlockModalState.targets.length}
+            hasAnswersCount={
+              tkaUnlockModalState.targets.filter(
+                (s) => s.answers && Object.keys(s.answers).length > 0
+              ).length
+            }
+            availableMapels={fallbackOptions}
+            initialSelectedMapels={initialSelected}
+            schoolProctorPin={profile?.proctorPin}
+            showToast={showToast}
+            onClose={() => setTkaUnlockModalState(null)}
+            onExecuteAction={async (mode: UnlockScoreActionMode, selectedMapels: string[]) => {
+              const actor = activeUser.name || activeUser.username || 'Admin';
+              const targets = tkaUnlockModalState.targets;
+              const targetMapel = tkaUnlockModalState.targetMapel;
+              const effectiveSelected =
+                selectedMapels.length > 0
+                  ? selectedMapels
+                  : targetMapel
+                  ? [targetMapel]
+                  : undefined;
+              const selectedLabel =
+                effectiveSelected && effectiveSelected.length < fallbackOptions.length
+                  ? effectiveSelected.join(', ')
+                  : '';
+
+              if (mode === 'recalculate') {
+                const res = await unlockAndRecalculateTkaSubmissions({
+                  targets,
+                  tkaQuestions,
+                  unlockedBy: actor,
+                  targetMapel,
+                  targetMapels: effectiveSelected,
+                });
+                setTkaSubmissions(res.updatedAllSubmissions);
+                showToast(
+                  res.skippedNoAnswersCount > 0
+                    ? `${res.recalculatedCount} nilai TKA${selectedLabel ? ` (${selectedLabel})` : ''} berhasil dihitung ulang sesuai kunci terbaru (${res.skippedNoAnswersCount} data tanpa log jawaban dilewati).`
+                    : `${res.recalculatedCount} nilai TKA${selectedLabel ? ` (${selectedLabel})` : ''} berhasil dibuka kuncinya & dihitung ulang sesuai kunci jawaban terbaru!`,
+                  'success'
+                );
+              } else if (mode === 'delete_reexam') {
+                const remaining = await unlockAndDeleteTkaForReexam({
+                  targets,
+                  tkaQuestions,
+                  unlockedBy: actor,
+                  targetMapel,
+                  targetMapels: effectiveSelected,
+                });
+                setTkaSubmissions(remaining);
+                showToast(
+                  selectedLabel
+                    ? `${targets.length} nilai TKA mapel ${selectedLabel} dihapus. Nilai mapel lain tetap aman & siswa dapat mengerjakan ulang mapel tersebut.`
+                    : `${targets.length} data nilai TKA dihapus & kunci percobaan pertama dibuka. Siswa dapat ujian ulang.`,
+                  'success'
+                );
+              } else {
+                const updated = await unlockTkaForManualEdit({
+                  targets,
+                  unlockedBy: actor,
+                  targetMapel,
+                  targetMapels: effectiveSelected,
+                });
+                setTkaSubmissions(updated);
+                showToast(
+                  `Kunci nilai TKA${selectedLabel ? ` (${selectedLabel})` : ''} untuk ${targets.length} siswa berhasil dibuka. Anda kini dapat mengubah nilai manual.`,
+                  'success'
+                );
+                if (targets.length === 1) {
+                  const updatedSingle = updated.find((s) => s.id === targets[0].id) || targets[0];
+                  openManualModalForEdit(updatedSingle);
+                }
+              }
+              setTkaUnlockModalState(null);
+            }}
+          />
         );
       })()}
     </section>

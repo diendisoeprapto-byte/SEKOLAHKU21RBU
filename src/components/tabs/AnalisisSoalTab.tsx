@@ -12,6 +12,8 @@ import {
   Trash2,
   X,
   Trophy,
+  Lock,
+  Unlock,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {
@@ -61,6 +63,17 @@ import {
   SarahAnalysisStudentRow,
 } from '../SarahExamAnalysisPanel';
 import { AnalisisButirMatrixPanel } from '../AnalisisButirMatrixPanel';
+import {
+  UnlockScoreModal,
+  UnlockScoreActionMode,
+  UnlockMapelOption,
+} from '../modals/UnlockScoreModal';
+import {
+  canManageLockedScores,
+  unlockAndDeleteCbtForReexam,
+  unlockAndRecalculateCbtResults,
+  unlockCbtForManualEdit,
+} from '../../utils/examScoreUnlock';
 
 export const PAKET_SOAL_LIST = [
   'Sumatif 1 (AS 1)',
@@ -122,7 +135,14 @@ export const AnalisisSoalTab: React.FC<Props> = ({
   const [activeTab, setActiveTab] = useState<'peringkat' | 'grafik' | 'matriks' | 'distribusi' | 'kesukaran'>('peringkat');
   const [activeChartTab, setActiveChartTab] = useState<'kesukaran' | 'pembeda' | 'ketuntasan'>('kesukaran');
   const [isClearModalOpen, setIsClearModalOpen] = useState<boolean>(false);
+  const [selectedClearCbtMapels, setSelectedClearCbtMapels] = useState<string[]>([]);
   const [confirmDeleteStudentRowKey, setConfirmDeleteStudentRowKey] = useState<string | null>(null);
+  const [analisisUnlockModalState, setAnalisisUnlockModalState] = useState<{
+    targets: CBTExamResult[];
+    scopeLabel: string;
+    initialSelectedMapels?: string[];
+  } | null>(null);
+  const hasScoreUnlockAuthority = canManageLockedScores(activeUser);
   const [cbtExams, setCbtExams] = useState<CBTExam[]>(() => getStoredCBTExams());
   const [cbtResults, setCbtResults] = useState<CBTExamResult[]>(
     () => getStoredCBTResults().filter((r) => !isTkaResultEntry(r))
@@ -291,24 +311,79 @@ export const AnalisisSoalTab: React.FC<Props> = ({
     }
   }, [submittedExamBuckets, termCbtResults, selectedMapel, selectedPaket, selectedClass, propActiveClass]);
 
+  const paketResultsAcrossMapels = useMemo(() => {
+    const selectedPaketLower = selectedPaket.trim().toLowerCase();
+    return termCbtResults.filter((r) => {
+      const rCls = getResultClass(r);
+      if (selectedClass !== 'all' && rCls && rCls !== selectedClass) {
+        return false;
+      }
+      const linkedExam = examById.get(r.examId);
+      const rMapel = (r.mapel || linkedExam?.mapel || selectedMapel).trim();
+      const rPaket = (
+        r.paketName ||
+        linkedExam?.paketName ||
+        linkedExam?.subPaket ||
+        linkedExam?.judul ||
+        ''
+      )
+        .trim()
+        .toLowerCase();
+      return (
+        rPaket === selectedPaketLower ||
+        doesExamResultMatchTarget(r, selectedPaket, rMapel)
+      );
+    });
+  }, [termCbtResults, selectedPaket, selectedClass, selectedMapel, studentById, studentByName, examById]);
+
+  const openClearCbtModal = () => {
+    const presentMapels = Array.from(
+      new Set(
+        paketResultsAcrossMapels.map((r) => {
+          const linkedExam = examById.get(r.examId);
+          return String(r.mapel || linkedExam?.mapel || selectedMapel).trim();
+        })
+      )
+    );
+    const matchedActive = presentMapels.find(
+      (m) => m.toLowerCase() === selectedMapel.trim().toLowerCase()
+    );
+    setSelectedClearCbtMapels(
+      matchedActive ? [matchedActive] : presentMapels.length > 0 ? [presentMapels[0]] : [selectedMapel]
+    );
+    setIsClearModalOpen(true);
+  };
+
   const executeClearCbtData = (scope: 'paket' | 'all') => {
     if (scope === 'paket') {
-      const targetIds = matchingExamResults.map((r) => ({
+      const mapelsToDelete =
+        selectedClearCbtMapels.length > 0 ? selectedClearCbtMapels : [selectedMapel];
+      const mapelsLower = new Set(mapelsToDelete.map((m) => m.trim().toLowerCase()));
+      const targetsToClear = paketResultsAcrossMapels.filter((r) => {
+        const linkedExam = examById.get(r.examId);
+        const rMapel = String(r.mapel || linkedExam?.mapel || selectedMapel)
+          .trim()
+          .toLowerCase();
+        return mapelsLower.has(rMapel);
+      });
+      const targetIds = targetsToClear.map((r) => ({
         examId: r.examId,
         studentId: r.studentId,
         nisn: r.nisn,
       }));
-      clearCBTResultsFromStorage({
-        scope: 'paket',
-        targetPaket: selectedPaket,
-        targetMapel: selectedMapel,
+      mapelsToDelete.forEach((mName) => {
+        clearCBTResultsFromStorage({
+          scope: 'paket',
+          targetPaket: selectedPaket,
+          targetMapel: mName,
+        });
       });
       void Promise.allSettled(targetIds.map((item) => deleteSingleCbtResultFromFirestore(item)));
       syncAllLocalToCloud('admin').catch(() => {});
       setCbtResults(getStoredCBTResults().filter((r) => !isTkaResultEntry(r)));
       setIsClearModalOpen(false);
       showToast?.(
-        `Data hasil CBT "${selectedPaket}" (${selectedMapel}) berhasil dikosongkan & status performa siswa direset!`,
+        `Data hasil CBT "${selectedPaket}" (${mapelsToDelete.join(', ')}) berhasil dikosongkan & status performa siswa direset!`,
         'success'
       );
       return;
@@ -1195,9 +1270,33 @@ export const AnalisisSoalTab: React.FC<Props> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 lg:justify-end flex-1">
+          {hasScoreUnlockAuthority && (
+            <button
+              type="button"
+              disabled={paketResultsAcrossMapels.length === 0 && matchingExamResults.length === 0}
+              onClick={() => {
+                const targets =
+                  paketResultsAcrossMapels.length > 0
+                    ? paketResultsAcrossMapels
+                    : matchingExamResults;
+                setAnalisisUnlockModalState({
+                  targets,
+                  scopeLabel: `${selectedPaket} (${
+                    selectedClass === 'all' ? 'Semua Kelas' : selectedClass
+                  })`,
+                  initialSelectedMapels: [selectedMapel],
+                });
+              }}
+              className="bg-amber-500 hover:bg-amber-400 disabled:opacity-45 text-slate-950 font-display font-black px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
+              title="Buka kunci nilai, hitung ulang sesuai kunci terbaru, atau hapus nilai untuk ujian ulang (Admin & Endi Soeprapto)"
+            >
+              <Unlock className="w-4 h-4" />
+              <span>Buka Kunci Nilai (Admin/Endi)</span>
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setIsClearModalOpen(true)}
+            onClick={openClearCbtModal}
             className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 font-display font-bold px-3.5 py-2 rounded-xl text-xs border border-rose-400/30 flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
             title="Kosongkan data hasil CBT siswa dan reset statistik performa"
           >
@@ -1603,6 +1702,17 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                               <div>
                                 <div className="flex items-center gap-1.5 flex-wrap">
                                   <span>{row.student.nama}</span>
+                                  {row.matchedResult &&
+                                    row.matchedResult.isScoreLocked !== false &&
+                                    row.matchedResult.isLocked !== false &&
+                                    row.matchedResult.sumberNilai !== 'INPUT_MANUAL' && (
+                                      <span
+                                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-[9px] font-black"
+                                        title="Nilai ujian CBT terkunci otomatis"
+                                      >
+                                        <Lock className="w-2.5 h-2.5" /> Terkunci
+                                      </span>
+                                    )}
                                   {isInclusivePackage && (
                                     <span className="px-1.5 py-0.5 rounded-md text-[10px] font-black bg-purple-100 text-purple-900">
                                       ABK
@@ -1671,14 +1781,31 @@ export const AnalisisSoalTab: React.FC<Props> = ({
                                   </button>
                                 </div>
                               ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmDeleteStudentRowKey(rowDelKey)}
-                                  className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
-                                  title={`Hapus data nilai CBT milik ${row.student.nama}`}
-                                >
-                                  <Trash2 className="w-3 h-3" /> Hapus
-                                </button>
+                                <div className="inline-flex items-center justify-end gap-1.5">
+                                  {hasScoreUnlockAuthority && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setAnalisisUnlockModalState({
+                                          targets: [row.matchedResult!],
+                                          scopeLabel: `${row.student.nama} · ${selectedMapel} (${selectedPaket})`,
+                                        })
+                                      }
+                                      className="px-2.5 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                                      title={`Buka kunci nilai / koreksi ulang / hapus nilai milik ${row.student.nama}`}
+                                    >
+                                      <Unlock className="w-3 h-3" /> Buka Kunci
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteStudentRowKey(rowDelKey)}
+                                    className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-display font-extrabold inline-flex items-center gap-1 cursor-pointer transition whitespace-nowrap"
+                                    title={`Hapus data nilai CBT milik ${row.student.nama}`}
+                                  >
+                                    <Trash2 className="w-3 h-3" /> Hapus
+                                  </button>
+                                </div>
                               )
                             ) : (
                               <span className="text-[10px] text-slate-400 font-semibold">Simulasi</span>
@@ -2024,6 +2151,43 @@ export const AnalisisSoalTab: React.FC<Props> = ({
             teachers={teachers}
             kktp={effectiveKkm}
             showToast={showToast}
+            canManageLocks={hasScoreUnlockAuthority}
+            onOpenBulkUnlock={() => {
+              const targets =
+                paketResultsAcrossMapels.length > 0
+                  ? paketResultsAcrossMapels
+                  : matchingExamResults;
+              setAnalisisUnlockModalState({
+                targets,
+                scopeLabel: `${selectedPaket} (${
+                  selectedClass === 'all' ? 'Semua Kelas' : selectedClass
+                })`,
+                initialSelectedMapels: [selectedMapel],
+              });
+            }}
+            onOpenStudentUnlock={(studentId, studentName) => {
+              const studentTargets = paketResultsAcrossMapels.filter(
+                (r) => r.studentId === studentId
+              );
+              const matched = matchingExamResults.find((r) => r.studentId === studentId);
+              const targets =
+                studentTargets.length > 0 ? studentTargets : matched ? [matched] : [];
+              if (targets.length > 0) {
+                setAnalisisUnlockModalState({
+                  targets,
+                  scopeLabel: `${studentName} · ${selectedPaket}`,
+                  initialSelectedMapels: [selectedMapel],
+                });
+              }
+            }}
+            isStudentLockedLookup={(studentId) => {
+              const matched = matchingExamResults.find((r) => r.studentId === studentId);
+              return matched
+                ? matched.isScoreLocked !== false &&
+                    matched.isLocked !== false &&
+                    matched.sumberNilai !== 'INPUT_MANUAL'
+                : false;
+            }}
           />
         )}
 
@@ -2256,66 +2420,267 @@ export const AnalisisSoalTab: React.FC<Props> = ({
         </div>
       </div>
 
-      {isClearModalOpen && (
-        <div className="no-print fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="font-display font-black text-base text-slate-900 flex items-center gap-2">
-                  <Trash2 className="w-5 h-5 text-rose-600" /> Kosongkan Data Hasil CBT
-                </h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Pilih cakupan data hasil ujian CBT siswa yang ingin dikosongkan.
+      {isClearModalOpen && (() => {
+        const clearMapelCounts = new Map<string, { label: string; count: number }>();
+        paketResultsAcrossMapels.forEach((r) => {
+          const linkedExam = examById.get(r.examId);
+          const mLabel = String(r.mapel || linkedExam?.mapel || selectedMapel).trim();
+          const mKey = mLabel.toLowerCase();
+          const existing = clearMapelCounts.get(mKey);
+          if (existing) {
+            existing.count += 1;
+          } else {
+            clearMapelCounts.set(mKey, { label: mLabel, count: 1 });
+          }
+        });
+        const clearMapelOptions = Array.from(clearMapelCounts.values());
+        const noMapelSelected =
+          clearMapelOptions.length > 0 && selectedClearCbtMapels.length === 0;
+
+        return (
+          <div className="no-print fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 space-y-4 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-display font-black text-base text-slate-900 flex items-center gap-2">
+                    <Trash2 className="w-5 h-5 text-rose-600" /> Kosongkan Data Hasil CBT
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Pilih mapel dan cakupan data hasil ujian CBT siswa yang ingin dikosongkan.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsClearModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-full cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1.5 leading-relaxed">
+                <p className="font-bold">
+                  Tindakan ini akan mengosongkan riwayat skor CBT dan mereset Statistik Performa Siswa (termasuk sinkronisasi Cloud Firestore).
+                </p>
+                <p className="text-[11px] text-rose-700">
+                  Bank Soal CBT tidak akan ikut terhapus, hanya data nilai hasil pengerjaan CBT siswa.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsClearModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-full cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1.5 leading-relaxed">
-              <p className="font-bold">
-                Tindakan ini akan mengosongkan riwayat skor CBT dan mereset Statistik Performa Siswa (termasuk sinkronisasi Cloud Firestore).
-              </p>
-              <p className="text-[11px] text-rose-700">
-                Bank Soal CBT tidak akan ikut terhapus, hanya data nilai hasil pengerjaan CBT siswa.
-              </p>
-            </div>
+              {clearMapelOptions.length > 0 && (
+                <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-black text-indigo-950">
+                      Pilih Mapel pada "{selectedPaket}" yang Dihapus:
+                    </span>
+                    {clearMapelOptions.length > 1 && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSelectedClearCbtMapels(clearMapelOptions.map((m) => m.label))
+                          }
+                          className="px-2 py-0.5 rounded-lg bg-white hover:bg-indigo-100 border border-indigo-200 text-[10px] font-bold text-indigo-700 cursor-pointer"
+                        >
+                          Pilih Semua
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedClearCbtMapels([])}
+                          className="px-2 py-0.5 rounded-lg bg-white hover:bg-rose-50 border border-slate-200 text-[10px] font-bold text-slate-600 cursor-pointer"
+                        >
+                          Kosongkan
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                    {clearMapelOptions.map((opt) => {
+                      const checked = selectedClearCbtMapels.some(
+                        (m) => m.trim().toLowerCase() === opt.label.toLowerCase()
+                      );
+                      return (
+                        <label
+                          key={opt.label}
+                          className={`flex items-center justify-between gap-2 p-2 rounded-xl border text-xs cursor-pointer select-none ${
+                            checked
+                              ? 'bg-white border-indigo-500 text-indigo-950 font-bold'
+                              : 'bg-white/60 border-slate-200 text-slate-600'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                setSelectedClearCbtMapels((prev) =>
+                                  checked
+                                    ? prev.filter(
+                                        (k) => k.trim().toLowerCase() !== opt.label.toLowerCase()
+                                      )
+                                    : [...prev, opt.label]
+                                )
+                              }
+                              className="rounded border-indigo-400 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
+                            />
+                            <span className="truncate">{opt.label}</span>
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded-md bg-indigo-100 text-indigo-700 text-[10px] font-black shrink-0 tabular-nums">
+                            {opt.count}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {noMapelSelected && (
+                    <p className="text-[11px] font-bold text-rose-600">
+                      Pilih minimal 1 mata pelajaran untuk dihapus.
+                    </p>
+                  )}
+                </div>
+              )}
 
-            <div className="flex flex-col gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => executeClearCbtData('paket')}
-                className="w-full px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-display font-black cursor-pointer shadow-xs transition flex items-center justify-center gap-1.5"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span>Kosongkan "{selectedPaket}" ({selectedMapel}) Saja</span>
-              </button>
+              <div className="flex flex-col gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={noMapelSelected}
+                  onClick={() => executeClearCbtData('paket')}
+                  className="w-full px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-45 disabled:cursor-not-allowed text-white text-xs font-display font-black cursor-pointer shadow-xs transition flex items-center justify-center gap-1.5"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>
+                    Kosongkan "{selectedPaket}" (
+                    {selectedClearCbtMapels.length > 0
+                      ? selectedClearCbtMapels.join(', ')
+                      : selectedMapel}
+                    ) Saja
+                  </span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => executeClearCbtData('all')}
-                className="w-full px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-display font-black cursor-pointer shadow-sm transition flex items-center justify-center gap-1.5"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span>Kosongkan Semua Data Hasil CBT</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => executeClearCbtData('all')}
+                  className="w-full px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-display font-black cursor-pointer shadow-sm transition flex items-center justify-center gap-1.5"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Kosongkan Semua Data Hasil CBT</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setIsClearModalOpen(false)}
-                className="w-full px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer transition"
-              >
-                Batal
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setIsClearModalOpen(false)}
+                  className="w-full px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer transition"
+                >
+                  Batal
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
+
+      {analisisUnlockModalState && (() => {
+        const mapelCountMap = new Map<string, { label: string; count: number }>();
+        analisisUnlockModalState.targets.forEach((t) => {
+          const linkedExam = examById.get(t.examId);
+          const rawMapel = String(t.mapel || linkedExam?.mapel || selectedMapel).trim();
+          const keyLower = rawMapel.toLowerCase();
+          const existing = mapelCountMap.get(keyLower);
+          if (existing) {
+            existing.count += 1;
+          } else {
+            mapelCountMap.set(keyLower, { label: rawMapel, count: 1 });
+          }
+        });
+        const analisisMapelOptions: UnlockMapelOption[] = Array.from(
+          mapelCountMap.values()
+        ).map((entry) => ({
+          key: entry.label,
+          label: entry.label,
+          count: entry.count,
+        }));
+
+        return (
+          <UnlockScoreModal
+            isOpen={Boolean(analisisUnlockModalState)}
+            examType="CBT"
+            scopeLabel={analisisUnlockModalState.scopeLabel}
+            itemCount={analisisUnlockModalState.targets.length}
+            hasAnswersCount={
+              analisisUnlockModalState.targets.filter(
+                (r) => r.jawabanSiswa && Object.keys(r.jawabanSiswa).length > 0
+              ).length
+            }
+            availableMapels={analisisMapelOptions}
+            initialSelectedMapels={analisisUnlockModalState.initialSelectedMapels}
+            schoolProctorPin={profile?.proctorPin}
+            showToast={(msg, type) => showToast?.(msg, type)}
+            onClose={() => setAnalisisUnlockModalState(null)}
+            onExecuteAction={async (mode: UnlockScoreActionMode, selectedMapels: string[]) => {
+              const actor = activeUser?.name || activeUser?.username || 'Admin';
+              const selectedLowerSet = new Set(
+                selectedMapels.map((m) => String(m || '').trim().toLowerCase())
+              );
+              const targets =
+                analisisMapelOptions.length > 0 && selectedLowerSet.size > 0
+                  ? analisisUnlockModalState.targets.filter((t) => {
+                      const linkedExam = examById.get(t.examId);
+                      const mName = String(t.mapel || linkedExam?.mapel || selectedMapel)
+                        .trim()
+                        .toLowerCase();
+                      return selectedLowerSet.has(mName);
+                    })
+                  : analisisUnlockModalState.targets;
+
+              if (targets.length === 0) {
+                showToast?.('Tidak ada data CBT yang cocok dengan mapel terpilih.', 'error');
+                return;
+              }
+
+              const mapelNote =
+                selectedMapels.length > 0 && selectedMapels.length < analisisMapelOptions.length
+                  ? ` (${selectedMapels.join(', ')})`
+                  : '';
+
+              if (mode === 'recalculate') {
+                const res = await unlockAndRecalculateCbtResults({
+                  targets,
+                  exams: cbtExams,
+                  unlockedBy: actor,
+                });
+                setCbtResults(res.updatedAllNonTkaResults);
+                showToast?.(
+                  res.skippedNoAnswersCount > 0
+                    ? `${res.recalculatedCount} nilai CBT${mapelNote} & Matriks Analisis berhasil dihitung ulang sesuai kunci terbaru (${res.skippedNoAnswersCount} data manual tanpa jawaban dilewati).`
+                    : `${res.recalculatedCount} nilai CBT${mapelNote} & Matriks Analisis berhasil dihitung ulang sesuai kunci jawaban terbaru!`,
+                  'success'
+                );
+              } else if (mode === 'delete_reexam') {
+                const remaining = await unlockAndDeleteCbtForReexam({
+                  targets,
+                  unlockedBy: actor,
+                });
+                setCbtResults(remaining);
+                showToast?.(
+                  `${targets.length} data nilai CBT${mapelNote} dihapus. Nilai mapel lain tetap aman & siswa dapat mengerjakan ulang mapel tersebut.`,
+                  'success'
+                );
+              } else {
+                const updated = await unlockCbtForManualEdit({
+                  targets,
+                  unlockedBy: actor,
+                });
+                setCbtResults(updated);
+                showToast?.(
+                  `Kunci nilai CBT${mapelNote} untuk ${targets.length} data berhasil dibuka. Silakan edit nilai melalui menu Rekap CBT.`,
+                  'success'
+                );
+              }
+              setAnalisisUnlockModalState(null);
+            }}
+          />
+        );
+      })()}
     </section>
   );
 };

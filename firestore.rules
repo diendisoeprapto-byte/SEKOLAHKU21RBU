@@ -296,5 +296,114 @@ service cloud.firestore {
         allow delete: if ownerId == 'endi_soeprapto';
       }
     }
+
+    // Multi-Tenant Sekolah (schools/{npsn}) — Administrasi Pembelajaran & Supervisi
+    match /schools/{npsn} {
+      function isValidTenantId(id) {
+        return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      }
+
+      function isValidLearningDoc(d) {
+        return
+          d.id is string && d.id.size() > 0 && d.id.size() <= 160 &&
+          d.teacherId is string && d.teacherId.size() <= 160 &&
+          d.teacherName is string && d.teacherName.size() > 0 && d.teacherName.size() <= 200 &&
+          d.academicYear is string && d.academicYear.size() <= 40 &&
+          d.kelas is string && d.kelas.size() <= 60 &&
+          d.type in ['atp', 'prota', 'promes', 'modul_ajar', 'ppi_lkpd'] &&
+          d.title is string && d.title.size() > 0 && d.title.size() <= 400 &&
+          d.driveUrl is string && d.driveUrl.size() <= 2000 &&
+          d.status in ['Menunggu Verifikasi', 'Perlu Revisi', 'Disetujui & Terverifikasi (QR)'] &&
+          d.updatedAt is string && d.updatedAt.size() <= 60 &&
+          (!('contentDraft' in d) || (d.contentDraft is string && d.contentDraft.size() <= 20000)) &&
+          (!('supervisorNote' in d) || (d.supervisorNote is string && d.supervisorNote.size() <= 2000)) &&
+          (!('verifiedAt' in d) || (d.verifiedAt is string && d.verifiedAt.size() <= 60));
+      }
+
+      function isValidLearningJournal(d) {
+        return
+          d.id is string && d.id.size() > 0 && d.id.size() <= 160 &&
+          d.teacherId is string && d.teacherId.size() <= 160 &&
+          d.teacherName is string && d.teacherName.size() > 0 && d.teacherName.size() <= 200 &&
+          d.academicYear is string && d.academicYear.size() <= 40 &&
+          d.kelas is string && d.kelas.size() <= 60 &&
+          d.date is string && d.date.size() > 0 && d.date.size() <= 30 &&
+          d.mapel is string && d.mapel.size() > 0 && d.mapel.size() <= 150 &&
+          d.objective is string && d.objective.size() > 0 && d.objective.size() <= 3000 &&
+          d.achievement in ['Tercapai', 'Sebagian', 'Tertunda'] &&
+          (!('tpCode' in d) || (d.tpCode is string && d.tpCode.size() <= 40)) &&
+          (!('tpText' in d) || (d.tpText is string && d.tpText.size() <= 2000)) &&
+          (!('attendanceSummary' in d) || (d.attendanceSummary is string && d.attendanceSummary.size() <= 1000)) &&
+          (!('attendanceTotal' in d) || d.attendanceTotal is number) &&
+          (!('attendancePresent' in d) || d.attendancePresent is number) &&
+          (!('attendanceSakit' in d) || d.attendanceSakit is number) &&
+          (!('attendanceIzin' in d) || d.attendanceIzin is number) &&
+          (!('attendanceAlpa' in d) || d.attendanceAlpa is number) &&
+          (!('attendanceRecorded' in d) || d.attendanceRecorded is bool) &&
+          (!('reflection' in d) || (d.reflection is string && d.reflection.size() <= 3000)) &&
+          d.createdAt is string && d.createdAt.size() <= 60;
+      }
+
+      function isValidLearningRemedial(d) {
+        return
+          d.id is string && d.id.size() > 0 && d.id.size() <= 160 &&
+          d.teacherId is string && d.teacherId.size() <= 160 &&
+          d.teacherName is string && d.teacherName.size() > 0 && d.teacherName.size() <= 200 &&
+          d.academicYear is string && d.academicYear.size() <= 40 &&
+          d.kelas is string && d.kelas.size() <= 60 &&
+          d.studentName is string && d.studentName.size() > 0 && d.studentName.size() <= 200 &&
+          d.subject is string && d.subject.size() > 0 && d.subject.size() <= 150 &&
+          d.type in ['Remedial', 'Pengayaan', 'Pembinaan Khusus'] &&
+          d.description is string && d.description.size() > 0 && d.description.size() <= 3000 &&
+          (!('actionTaken' in d) || (d.actionTaken is string && d.actionTaken.size() <= 3000)) &&
+          d.date is string && d.date.size() <= 30 &&
+          d.createdAt is string && d.createdAt.size() <= 60;
+      }
+
+      function isValidSarahKnowledgeLink(d) {
+        return
+          d.id is string && d.id.size() > 0 && d.id.size() <= 160 &&
+          d.title is string && d.title.size() > 0 && d.title.size() <= 300 &&
+          d.url is string && d.url.size() > 0 && d.url.size() <= 2000 &&
+          d.target in ['all', 'guru', 'siswa'] &&
+          (!('summary' in d) || (d.summary is string && d.summary.size() <= 4000)) &&
+          d.active is bool &&
+          d.createdBy is string && d.createdBy.size() <= 160 &&
+          (!('createdAt' in d) || (d.createdAt is string && d.createdAt.size() <= 60)) &&
+          d.updatedAt is string && d.updatedAt.size() <= 60;
+      }
+
+      allow read: if isValidTenantId(npsn);
+      allow create, update: if isValidTenantId(npsn);
+      allow delete: if false;
+
+      match /learning_docs/{docId} {
+        allow get: if isValidTenantId(npsn) && isValidTenantId(docId);
+        allow list: if isValidTenantId(npsn);
+        allow create, update: if isValidTenantId(npsn) && isValidTenantId(docId) && isValidLearningDoc(request.resource.data);
+        allow delete: if isValidTenantId(npsn) && isValidTenantId(docId);
+      }
+
+      match /learning_journals/{journalId} {
+        allow get: if isValidTenantId(npsn) && isValidTenantId(journalId);
+        allow list: if isValidTenantId(npsn);
+        allow create, update: if isValidTenantId(npsn) && isValidTenantId(journalId) && isValidLearningJournal(request.resource.data);
+        allow delete: if isValidTenantId(npsn) && isValidTenantId(journalId);
+      }
+
+      match /learning_remedials/{recordId} {
+        allow get: if isValidTenantId(npsn) && isValidTenantId(recordId);
+        allow list: if isValidTenantId(npsn);
+        allow create, update: if isValidTenantId(npsn) && isValidTenantId(recordId) && isValidLearningRemedial(request.resource.data);
+        allow delete: if isValidTenantId(npsn) && isValidTenantId(recordId);
+      }
+
+      match /sarah_knowledge_links/{linkId} {
+        allow get: if isValidTenantId(npsn) && isValidTenantId(linkId);
+        allow list: if isValidTenantId(npsn);
+        allow create, update: if isValidTenantId(npsn) && isValidTenantId(linkId) && isValidSarahKnowledgeLink(request.resource.data);
+        allow delete: if isValidTenantId(npsn) && isValidTenantId(linkId);
+      }
+    }
   }
 }

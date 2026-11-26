@@ -1637,6 +1637,11 @@ export const StudentDashboard: React.FC<Props> = ({
       clearStudentExamDraft(currentStudent.id, currentExam.id);
       setDraftRevisionTick((t) => t + 1);
     }
+    try {
+      localStorage.removeItem('sekolahku_pending_submission_lock_v1');
+    } catch {
+      // ignore storage lock removal errors
+    }
 
     const acakSoal =
       viewMode === 'tka'

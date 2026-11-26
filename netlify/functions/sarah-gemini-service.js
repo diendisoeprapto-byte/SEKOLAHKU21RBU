@@ -197,6 +197,10 @@ function buildConfigForModel(
     delete nextConfig.thinkingBudget;
   }
 
+  if (nextConfig.responseMimeType === 'application/json' || nextConfig.responseSchema) {
+    delete nextConfig.tools;
+  }
+
   if (!isGemini3Or4) {
     delete nextConfig.thinkingConfig;
     return nextConfig;
@@ -417,6 +421,7 @@ function buildDeterministicCacheKey({
   systemInstruction,
   responseMimeType,
   responseSchema,
+  tools,
   cacheScope,
   explicitKey,
 }) {
@@ -430,6 +435,7 @@ function buildDeterministicCacheKey({
     contents,
     responseMimeType: responseMimeType || '',
     responseSchema: responseSchema || null,
+    tools: tools || null,
   });
   return crypto.createHash('sha256').update(raw).digest('hex');
 }
@@ -719,6 +725,7 @@ export async function askSarahGemini({
         systemInstruction: finalConfig.systemInstruction,
         responseMimeType: finalConfig.responseMimeType,
         responseSchema: finalConfig.responseSchema,
+        tools: finalConfig.tools,
         cacheScope,
         explicitKey: cacheKey,
       })
@@ -751,8 +758,10 @@ export async function askSarahGemini({
         const candidateModel = candidateModels[mIdx];
         const hasNextFallback = mIdx < candidateModels.length - 1;
         const modelConfig = buildConfigForModel(finalConfig, candidateModel, fastChat, speedMode);
+        const hasTools = Array.isArray(modelConfig.tools) && modelConfig.tools.length > 0;
+        const fastCapMs = hasTools ? Math.max(FAST_CHAT_TIMEOUT_MS, 14000) : FAST_CHAT_TIMEOUT_MS;
         const perAttemptTimeoutMs = fastChat
-          ? Math.min(Number(timeoutMs) || FAST_CHAT_TIMEOUT_MS, FAST_CHAT_TIMEOUT_MS)
+          ? Math.min(Number(timeoutMs) || fastCapMs, fastCapMs)
           : Number(timeoutMs) || DEFAULT_TIMEOUT_MS;
         const maxAttemptsThisModel = mIdx === 0 ? 1 + maxSilentRetries : 1;
 
@@ -769,14 +778,40 @@ export async function askSarahGemini({
           }
 
           try {
-            const rawResponse = await runAttemptWithAbortAndTimeout({
-              ai,
-              model: candidateModel,
-              contents,
-              config: modelConfig,
-              timeoutMs: perAttemptTimeoutMs,
-              externalSignal: signal,
-            });
+            let rawResponse;
+            try {
+              rawResponse = await runAttemptWithAbortAndTimeout({
+                ai,
+                model: candidateModel,
+                contents,
+                config: modelConfig,
+                timeoutMs: perAttemptTimeoutMs,
+                externalSignal: signal,
+              });
+            } catch (toolErr) {
+              const td = parseGeminiErrorDetails(toolErr);
+              const tLower = td.cleanMessage.toLowerCase();
+              const isToolUnsupported =
+                hasTools &&
+                td.statusCode === 400 &&
+                (tLower.includes('search') ||
+                  tLower.includes('tool') ||
+                  tLower.includes('grounding') ||
+                  tLower.includes('not supported'));
+              if (!isToolUnsupported) {
+                throw toolErr;
+              }
+              const configWithoutTools = { ...modelConfig };
+              delete configWithoutTools.tools;
+              rawResponse = await runAttemptWithAbortAndTimeout({
+                ai,
+                model: candidateModel,
+                contents,
+                config: configWithoutTools,
+                timeoutMs: perAttemptTimeoutMs,
+                externalSignal: signal,
+              });
+            }
 
             clearModelCooldown(candidateModel);
             const text = typeof rawResponse?.text === 'string' ? rawResponse.text : '';
@@ -910,8 +945,10 @@ export async function askSarahGeminiStream({
       const candidateModel = candidateModels[mIdx];
       const hasNextFallback = mIdx < candidateModels.length - 1;
       const modelConfig = buildConfigForModel(finalConfig, candidateModel, fastChat, speedMode);
+      const hasTools = Array.isArray(modelConfig.tools) && modelConfig.tools.length > 0;
+      const fastCapMs = hasTools ? Math.max(FAST_CHAT_TIMEOUT_MS, 14000) : FAST_CHAT_TIMEOUT_MS;
       const perAttemptTimeoutMs = fastChat
-        ? Math.min(Number(timeoutMs) || FAST_CHAT_TIMEOUT_MS, FAST_CHAT_TIMEOUT_MS)
+        ? Math.min(Number(timeoutMs) || fastCapMs, fastCapMs)
         : Number(timeoutMs) || DEFAULT_TIMEOUT_MS;
 
       if (signal?.aborted) {
@@ -919,15 +956,43 @@ export async function askSarahGeminiStream({
       }
 
       try {
-        const streamed = await runStreamAttemptWithAbortAndTimeout({
-          ai,
-          model: candidateModel,
-          contents,
-          config: modelConfig,
-          timeoutMs: perAttemptTimeoutMs,
-          externalSignal: signal,
-          onChunk,
-        });
+        let streamed;
+        try {
+          streamed = await runStreamAttemptWithAbortAndTimeout({
+            ai,
+            model: candidateModel,
+            contents,
+            config: modelConfig,
+            timeoutMs: perAttemptTimeoutMs,
+            externalSignal: signal,
+            onChunk,
+          });
+        } catch (toolErr) {
+          const td = parseGeminiErrorDetails(toolErr);
+          const tLower = td.cleanMessage.toLowerCase();
+          const isToolUnsupported =
+            hasTools &&
+            !toolErr?.receivedAnyChunk &&
+            td.statusCode === 400 &&
+            (tLower.includes('search') ||
+              tLower.includes('tool') ||
+              tLower.includes('grounding') ||
+              tLower.includes('not supported'));
+          if (!isToolUnsupported) {
+            throw toolErr;
+          }
+          const configWithoutTools = { ...modelConfig };
+          delete configWithoutTools.tools;
+          streamed = await runStreamAttemptWithAbortAndTimeout({
+            ai,
+            model: candidateModel,
+            contents,
+            config: configWithoutTools,
+            timeoutMs: perAttemptTimeoutMs,
+            externalSignal: signal,
+            onChunk,
+          });
+        }
 
         clearModelCooldown(candidateModel);
         return {

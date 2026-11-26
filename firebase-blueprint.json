@@ -310,6 +310,92 @@
       "properties": {
         "updatedAt": { "type": "string" }
       }
+    },
+    "LearningAdminDoc": {
+      "title": "LearningAdminDoc",
+      "description": "Dokumen perangkat ajar guru (ATP, Prota, Promes, Modul Ajar, PPI & LKPD Adaptif) terisolasi per sekolah NPSN",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 160 },
+        "teacherId": { "type": "string", "maxLength": 160 },
+        "teacherName": { "type": "string", "maxLength": 200 },
+        "academicYear": { "type": "string", "maxLength": 40 },
+        "kelas": { "type": "string", "maxLength": 60 },
+        "type": { "type": "string", "enum": ["atp", "prota", "promes", "modul_ajar", "ppi_lkpd"] },
+        "title": { "type": "string", "maxLength": 400 },
+        "driveUrl": { "type": "string", "maxLength": 2000 },
+        "contentDraft": { "type": "string", "maxLength": 20000 },
+        "status": { "type": "string", "enum": ["Menunggu Verifikasi", "Perlu Revisi", "Disetujui & Terverifikasi (QR)"] },
+        "supervisorNote": { "type": "string", "maxLength": 2000 },
+        "verifiedAt": { "type": "string", "maxLength": 60 },
+        "updatedAt": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["id", "teacherId", "teacherName", "academicYear", "kelas", "type", "title", "driveUrl", "status", "updatedAt"]
+    },
+    "TeachingJournal": {
+      "title": "TeachingJournal",
+      "description": "Jurnal mengajar harian (agenda kelas) terintegrasi kehadiran murid & Tujuan Pembelajaran (TP) kurikulum",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 160 },
+        "teacherId": { "type": "string", "maxLength": 160 },
+        "teacherName": { "type": "string", "maxLength": 200 },
+        "academicYear": { "type": "string", "maxLength": 40 },
+        "kelas": { "type": "string", "maxLength": 60 },
+        "date": { "type": "string", "maxLength": 30 },
+        "mapel": { "type": "string", "maxLength": 150 },
+        "tpCode": { "type": "string", "maxLength": 40 },
+        "tpText": { "type": "string", "maxLength": 2000 },
+        "objective": { "type": "string", "maxLength": 3000 },
+        "attendanceTotal": { "type": "number" },
+        "attendancePresent": { "type": "number" },
+        "attendanceSakit": { "type": "number" },
+        "attendanceIzin": { "type": "number" },
+        "attendanceAlpa": { "type": "number" },
+        "attendanceSummary": { "type": "string", "maxLength": 1000 },
+        "attendanceRecorded": { "type": "boolean" },
+        "achievement": { "type": "string", "enum": ["Tercapai", "Sebagian", "Tertunda"] },
+        "reflection": { "type": "string", "maxLength": 3000 },
+        "createdAt": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["id", "teacherId", "teacherName", "academicYear", "kelas", "date", "mapel", "objective", "achievement", "createdAt"]
+    },
+    "StudentRemedialRecord": {
+      "title": "StudentRemedialRecord",
+      "description": "Catatan tindak lanjut remedial, pengayaan, dan pembinaan khusus siswa per sekolah",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 160 },
+        "teacherId": { "type": "string", "maxLength": 160 },
+        "teacherName": { "type": "string", "maxLength": 200 },
+        "academicYear": { "type": "string", "maxLength": 40 },
+        "kelas": { "type": "string", "maxLength": 60 },
+        "studentName": { "type": "string", "maxLength": 200 },
+        "subject": { "type": "string", "maxLength": 150 },
+        "type": { "type": "string", "enum": ["Remedial", "Pengayaan", "Pembinaan Khusus"] },
+        "description": { "type": "string", "maxLength": 3000 },
+        "actionTaken": { "type": "string", "maxLength": 3000 },
+        "date": { "type": "string", "maxLength": 30 },
+        "createdAt": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["id", "teacherId", "teacherName", "academicYear", "kelas", "studentName", "subject", "type", "description", "date", "createdAt"]
+    },
+    "SarahKnowledgeLink": {
+      "title": "SarahKnowledgeLink",
+      "description": "Daftar link sumber informasi/rujukan eksternal kurasi Admin atau Endi Soeprapto untuk basis pengetahuan AI SARAH",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 160 },
+        "title": { "type": "string", "maxLength": 300 },
+        "url": { "type": "string", "maxLength": 2000 },
+        "target": { "type": "string", "enum": ["all", "guru", "siswa"] },
+        "summary": { "type": "string", "maxLength": 4000 },
+        "active": { "type": "boolean" },
+        "createdBy": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "maxLength": 60 },
+        "updatedAt": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["id", "title", "url", "target", "active", "createdBy", "updatedAt"]
     }
   },
   "firestore": {
@@ -400,6 +486,22 @@
     "/settings/{settingId}": {
       "schema": "AppSetting",
       "description": "Konfigurasi global aplikasi SERBU 21 (tampilan login, kredensial admin, pengaturan CBT)"
+    },
+    "/schools/{npsn}/learning_docs/{docId}": {
+      "schema": "LearningAdminDoc",
+      "description": "Repositori perangkat ajar (ATP, Prota, Promes, Modul Ajar, PPI) terisolasi per NPSN sekolah"
+    },
+    "/schools/{npsn}/learning_journals/{journalId}": {
+      "schema": "TeachingJournal",
+      "description": "Jurnal mengajar harian terintegrasi kehadiran & TP per NPSN sekolah"
+    },
+    "/schools/{npsn}/learning_remedials/{recordId}": {
+      "schema": "StudentRemedialRecord",
+      "description": "Catatan tindak lanjut remedial & pembinaan siswa per NPSN sekolah"
+    },
+    "/schools/{npsn}/sarah_knowledge_links/{linkId}": {
+      "schema": "SarahKnowledgeLink",
+      "description": "Basis pengetahuan link sumber rujukan AI SARAH per NPSN sekolah"
     }
   }
 }

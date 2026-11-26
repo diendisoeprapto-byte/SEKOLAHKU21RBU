@@ -45,6 +45,15 @@ import {
 } from '../types';
 import { isEndiSoepraptoUser } from '../utils/sarahAttachments';
 
+export const canAccessLearningAdmin = (user: ActiveUser, profile?: SchoolProfile): boolean => {
+  if (user.role === 'siswa') return false;
+  if (user.role === 'admin') return true;
+  if (isEndiSoepraptoUser(user) || (user.name || '').toLowerCase().includes('endi soeprapto') || (user.username || '').toLowerCase().includes('endi')) return true;
+  if ((user.detail || '').toLowerCase().includes('kepala sekolah')) return true;
+  if (profile?.isLearningAdminPublic) return true;
+  return false;
+};
+
 export type TabId =
   | 'dashboard'
   | 'profil-sekolah'
@@ -82,6 +91,7 @@ export type TabId =
   | 'portal-alumni'
   | 'perpustakaan'
   | 'asisten-sarah'
+  | 'administrasi-pembelajaran'
   | 'super-access-endi';
 
 interface Props {
@@ -349,6 +359,20 @@ export const Sidebar: React.FC<Props> = ({
               <Presentation className={`w-5 h-5 ${activeTab === 'media-ajar' ? 'text-white' : 'text-rose-600'}`} />
               <span>Bank Media Ajar (PPT)</span>
             </button>
+
+            {canAccessLearningAdmin(activeUser, profile) && (!searchQuery || 'administrasi pembelajaran supervisi perangkat ajar jurnal'.includes(searchQuery)) && (
+              <button
+                onClick={() => onSelectTab('administrasi-pembelajaran')}
+                className={`w-full px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-3 text-left transition ${
+                  activeTab === 'administrasi-pembelajaran'
+                    ? 'bg-gradient-to-r from-rose-600 to-amber-600 text-white shadow-md'
+                    : 'text-slate-700 hover:bg-rose-50 border border-rose-200 bg-rose-50/40'
+                }`}
+              >
+                <BookOpen className={`w-5 h-5 ${activeTab === 'administrasi-pembelajaran' ? 'text-white' : 'text-rose-600'}`} />
+                <span>Administrasi Pembelajaran</span>
+              </button>
+            )}
           </nav>
         ) : (
           /* Admin / Guru Navigation */
@@ -618,6 +642,20 @@ export const Sidebar: React.FC<Props> = ({
                     >
                       <Presentation className="w-4 h-4" />
                       <span>Bank Media Ajar (PPT)</span>
+                    </button>
+                  )}
+
+                  {canAccessLearningAdmin(activeUser, profile) && (!searchQuery || 'administrasi pembelajaran supervisi perangkat ajar jurnal'.includes(searchQuery)) && (
+                    <button
+                      onClick={() => onSelectTab('administrasi-pembelajaran')}
+                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
+                        activeTab === 'administrasi-pembelajaran'
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'text-slate-700 hover:bg-amber-50'
+                      }`}
+                    >
+                      <BookOpen className="w-4 h-4" />
+                      <span>Administrasi Pembelajaran</span>
                     </button>
                   )}
                 </div>

@@ -222,6 +222,37 @@ function buildRagContextBlock(ragContext = {}, role = '') {
     }
   }
 
+  if (Array.isArray(ragContext.knowledgeLinks) && ragContext.knowledgeLinks.length > 0) {
+    const allowedLinks = ragContext.knowledgeLinks
+      .filter((item) => {
+        if (!item || typeof item !== 'object') return false;
+        const url = sanitizeString(item.url || '', 1500);
+        const title = sanitizeString(item.title || '', 250);
+        if (!url || !title) return false;
+        const target = sanitizeString(item.target || 'all', 20).toLowerCase();
+        if (isStudentRole) {
+          return target === 'all' || target === 'siswa';
+        }
+        return target === 'all' || target === 'guru';
+      })
+      .slice(0, 18);
+
+    if (allowedLinks.length > 0) {
+      const linkLines = allowedLinks.map((item, idx) => {
+        const summary = sanitizeString(item.summary || '', 1200);
+        return `[Sumber-${idx + 1}] Judul: ${sanitizeString(item.title, 250)}\nURL: ${sanitizeString(
+          item.url,
+          1500
+        )}${summary ? `\nRingkasan / Kata Kunci: ${summary}` : ''}`;
+      });
+      parts.push(
+        `DAFTAR SUMBER PENGETAHUAN SEKOLAH (LINK RUJUKAN RESMI):\n${linkLines.join(
+          '\n\n'
+        )}\n\nATURAN PENGGUNAAN SUMBER PENGETAHUAN SEKOLAH:\nPrioritaskan informasi dan referensi dari daftar Sumber Pengetahuan Sekolah berikut apabila relevan dengan pertanyaan pengguna. Apabila menjawab berdasarkan atau berkaitan dengan salah satu link tersebut, sertakan tautan sumbernya secara rapi di bagian bawah jawaban.`
+      );
+    }
+  }
+
   return parts.join('\n\n');
 }
 
@@ -1305,12 +1336,15 @@ export async function processSarahRequest(body = {}, options = {}) {
         speedMode,
         contents,
         systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo, examReviewBlock),
-        timeoutMs: 8000,
+        timeoutMs: 14000,
         retries: 2,
         fastChat: true,
         useCache: cleanHistory.length === 0 && !sanitizedExamReview.requestedExamId,
         cacheScope: `student_chat_${sanitizeString(userInfo.kelas || 'sd', 20)}`,
         signal: requestSignal,
+        config: {
+          tools: [{ googleSearch: {} }],
+        },
       });
 
       return {
@@ -1367,12 +1401,15 @@ export async function processSarahRequest(body = {}, options = {}) {
         speedMode,
         contents,
         systemInstruction: buildTeacherBaseSystem(ragBlock, userInfo, true, endiLocationContext),
-        timeoutMs: hasAttachments ? 20000 : 8000,
+        timeoutMs: hasAttachments ? 22000 : 14000,
         retries: hasAttachments ? 1 : 2,
         fastChat: !hasAttachments,
         useCache: allowSharedCache,
         cacheScope: 'teacher_general_chat',
         signal: requestSignal,
+        config: {
+          tools: [{ googleSearch: {} }],
+        },
       });
 
       let replyText = (response.text || '').trim();
@@ -1406,6 +1443,7 @@ export async function processSarahRequest(body = {}, options = {}) {
       signal: requestSignal,
       config: {
         maxOutputTokens: 2400,
+        tools: [{ googleSearch: {} }],
       },
     });
 
@@ -1520,9 +1558,12 @@ export async function processSarahStreamRequest(body = {}, options = {}) {
         speedMode,
         contents,
         systemInstruction: buildStudentSystemInstruction(ragBlock, userInfo, examReviewBlock),
-        timeoutMs: 8000,
+        timeoutMs: 14000,
         fastChat: true,
         signal: requestSignal,
+        config: {
+          tools: [{ googleSearch: {} }],
+        },
         onChunk,
       });
 
@@ -1574,9 +1615,12 @@ export async function processSarahStreamRequest(body = {}, options = {}) {
         speedMode,
         contents,
         systemInstruction: buildTeacherBaseSystem(ragBlock, userInfo, true, endiLocationContext),
-        timeoutMs: hasAttachments ? 20000 : 8000,
+        timeoutMs: hasAttachments ? 22000 : 14000,
         fastChat: !hasAttachments,
         signal: requestSignal,
+        config: {
+          tools: [{ googleSearch: {} }],
+        },
         onChunk: (delta, full) => {
           if (typeof onChunk !== 'function') return;
           if (userMode === 'standard_teacher') {

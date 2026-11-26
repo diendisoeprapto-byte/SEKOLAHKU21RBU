@@ -1189,20 +1189,26 @@ export const getStoredTKACpTp = (): TKACpTp[] => {
       let mutated = false;
       const sanitized = parsed.map((cp) => {
         let kode = cp.kodeCp || '';
-        if (kode.toUpperCase().startsWith('CP') || kode.includes('CP')) {
+        if (kode.toUpperCase().startsWith('CP') || kode.includes('CP') || !kode.startsWith('KOM-')) {
           kode = kode.replace(/^CP[-_]?/i, 'KOM-');
-          if (!kode.startsWith('KOM-')) kode = 'KOM-' + kode;
+          if (!kode.startsWith('KOM-')) {
+            kode = 'KOM-' + kode.replace(/^KOM[-_]?/i, '');
+          }
           mutated = true;
         }
         return {
           ...cp,
           kodeCp: kode,
           tpList: (cp.tpList || []).map((tp) => {
-            if (tp.kodeTp && tp.kodeTp.startsWith('TP-')) {
+            let tpKode = tp.kodeTp || '';
+            if (tpKode.toUpperCase().startsWith('TP') || tpKode.includes('TP') || !tpKode.startsWith('SK-')) {
+              tpKode = tpKode.replace(/^TP[-_]?/i, 'SK-');
+              if (!tpKode.startsWith('SK-')) {
+                tpKode = 'SK-' + tpKode.replace(/^SK[-_]?/i, '');
+              }
               mutated = true;
-              return { ...tp, kodeTp: tp.kodeTp.replace('TP-', 'SK-') };
             }
-            return tp;
+            return { ...tp, kodeTp: tpKode };
           }),
         };
       });
@@ -1392,7 +1398,13 @@ export interface TKASubmissionItem {
   updatedAt?: string;
   sumberNilai?: 'UJIAN_TKA' | 'INPUT_MANUAL';
   isLocked?: boolean;
+  isScoreLocked?: boolean;
+  isCompleted?: boolean;
+  hasAttempted?: boolean;
   waktuTerkunci?: string;
+  unlockedAndRecalculatedBy?: string;
+  unlockedAt?: string;
+  recalculatedAt?: string;
   lockedMapels?: Record<
     string,
     {

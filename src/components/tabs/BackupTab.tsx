@@ -19,6 +19,8 @@ import {
   UserCheck,
   ShieldCheck,
   AlertCircle,
+  Lock,
+  BookOpenCheck,
 } from 'lucide-react';
 import { ExamDeletionLogEntry, SchoolProfile, Student } from '../../types';
 import {
@@ -1069,6 +1071,139 @@ export const BackupTab: React.FC<Props> = ({
             </div>
           </div>
         </div>
+
+        {/* Pengaturan Fitur Khusus Admin (Administrasi Pembelajaran & Mode Kunci Ujian) */}
+        {isAdmin && (
+          <div className="p-6 rounded-3xl bg-gradient-to-br from-indigo-50/80 via-white to-amber-50/70 border-2 border-indigo-200 space-y-5 shadow-xs">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-indigo-100 pb-3">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-display font-black text-sm sm:text-base text-slate-900">
+                    Pengaturan Keamanan Ujian &amp; Hak Akses Modul Guru
+                  </h4>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Kelola Mode Kunci Ujian (Exam Lock / PIN Pengawas) dan aktivasi bertahap modul Administrasi Pembelajaran ke seluruh guru.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Toggle Menu Administrasi Pembelajaran untuk Semua Guru */}
+              <div className="p-4 rounded-2xl bg-white border border-indigo-200/80 flex flex-col justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                    <BookOpenCheck className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="font-display font-black text-xs sm:text-sm text-slate-900">
+                      Aktifkan Menu Administrasi Pembelajaran untuk Semua Guru
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                      Saat <strong>Nonaktif</strong>, menu ini hanya tampil di akun <strong>Endi Soeprapto</strong> &amp; <strong>Kepala Sekolah</strong>. Saat <strong>Aktif</strong>, seluruh guru dapat mengisi perangkat ajar &amp; jurnal harian.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                  <span
+                    className={`text-[11px] font-black px-2.5 py-0.5 rounded-full ${
+                      profile.isLearningAdminPublic
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {profile.isLearningAdminPublic ? 'Aktif untuk Semua Guru' : 'Khusus Endi Soeprapto & Kepsek'}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={Boolean(profile.isLearningAdminPublic)}
+                    onClick={() => {
+                      const nextVal = !profile.isLearningAdminPublic;
+                      onSaveProfile({ ...profile, isLearningAdminPublic: nextVal });
+                      showToast(
+                        nextVal
+                          ? 'Menu Administrasi Pembelajaran kini aktif untuk seluruh akun guru!'
+                          : 'Menu Administrasi Pembelajaran dikembalikan khusus ke Endi Soeprapto & Kepala Sekolah.',
+                        'success'
+                      );
+                    }}
+                    className={`relative w-14 h-7 rounded-full transition-colors cursor-pointer p-1 ${
+                      profile.isLearningAdminPublic ? 'bg-emerald-500' : 'bg-slate-400'
+                    }`}
+                  >
+                    <span
+                      className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                        profile.isLearningAdminPublic ? 'translate-x-7' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {/* Pengaturan PIN Pengawas & Exam Lock */}
+              <div className="p-4 rounded-2xl bg-white border border-amber-200/90 flex flex-col justify-between gap-3">
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-display font-black text-xs sm:text-sm text-slate-900">
+                      Mode Kunci Layar Penuh (Exam Lock)
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={profile.examLockEnabled !== false}
+                      onClick={() => {
+                        const nextVal = profile.examLockEnabled === false;
+                        onSaveProfile({ ...profile, examLockEnabled: nextVal });
+                        showToast(
+                          nextVal
+                            ? 'Mode Kunci Layar Penuh (Exam Lock) diaktifkan!'
+                            : 'Mode Kunci Layar Penuh (Exam Lock) dinonaktifkan.',
+                          'success'
+                        );
+                      }}
+                      className={`relative w-12 h-6 rounded-full transition-colors cursor-pointer p-0.5 ${
+                        profile.examLockEnabled !== false ? 'bg-emerald-500' : 'bg-slate-400'
+                      }`}
+                    >
+                      <span
+                        className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                          profile.examLockEnabled !== false ? 'translate-x-6' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        PIN / Password Buka Kunci Ujian (Pengawas):
+                      </label>
+                      <input
+                        type="text"
+                        value={profile.proctorPin ?? '2121'}
+                        onChange={(e) =>
+                          onSaveProfile({
+                            ...profile,
+                            proctorPin: e.target.value.trim() || '2121',
+                          })
+                        }
+                        placeholder="2121"
+                        maxLength={16}
+                        className="w-full px-3 py-1.5 rounded-xl border border-slate-300 bg-slate-50 focus:bg-white font-mono font-bold text-xs text-slate-900 outline-none focus:border-amber-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  Gunakan kombinasi <kbd className="px-1 py-0.5 bg-slate-100 rounded border border-slate-200 font-mono font-bold">Ctrl+C+B</kbd> saat ujian atau modal Buka Kunci Nilai dengan PIN ini (default: <strong>2121</strong>).
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Ubah & Reset Password Administrator */}
         {isAdmin && onOpenChangePassword && (

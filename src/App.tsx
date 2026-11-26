@@ -113,6 +113,7 @@ import { ManajemenASAJTab } from './components/tabs/ManajemenASAJTab';
 import { PortalAlumniTab } from './components/tabs/PortalAlumniTab';
 import { PerpustakaanTab } from './components/tabs/PerpustakaanTab';
 import { MediaAjarTab } from './components/tabs/MediaAjarTab';
+import { AdministrasiPembelajaranTab } from './components/tabs/AdministrasiPembelajaranTab';
 import { SarahAssistantTab } from './components/tabs/SarahAssistantTab';
 import { SarahStudentWidget } from './components/SarahStudentWidget';
 import { StudentDashboard } from './components/StudentDashboard';
@@ -504,6 +505,24 @@ export default function App() {
               saveStoredTKAResults(
                 filterExamResultsByResetMeta(localTka, 'tka', mergedMeta)
               );
+            }
+            const tkaClearedAt = Number(mergedMeta.tkaClearedAt || 0);
+            const deletedTkaIds = mergedMeta.deletedTkaIds || {};
+            if (tkaClearedAt > 0 || Object.keys(deletedTkaIds).length > 0) {
+              const localSubs = getStoredTKASubmissions();
+              if (localSubs.length > 0) {
+                const keptSubs = localSubs.filter((item) => {
+                  const ts = item.updatedAt ? Date.parse(item.updatedAt) : 0;
+                  const safeTs = Number.isFinite(ts) ? ts : 0;
+                  if (tkaClearedAt > 0 && safeTs <= tkaClearedAt) return false;
+                  const delTs = item.id ? Number(deletedTkaIds[item.id] || 0) : 0;
+                  if (delTs > 0 && safeTs <= delTs) return false;
+                  return true;
+                });
+                if (keptSubs.length !== localSubs.length) {
+                  saveStoredTKASubmissions(keptSubs);
+                }
+              }
             }
           } catch {}
         }
@@ -1763,6 +1782,21 @@ export default function App() {
                   students={students}
                   profile={profile}
                   showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'administrasi-pembelajaran' && (
+                <AdministrasiPembelajaranTab
+                  activeUser={activeUser}
+                  profile={profile}
+                  teachers={teachers}
+                  students={students}
+                  attendanceRecords={attendanceRecords}
+                  subjects={subjects}
+                  activeYear={activeYear}
+                  activeClass={activeClass}
+                  showToast={showToast}
+                  onUpdateSchoolProfile={(updated) => handleSaveProfile({ ...profile, ...updated })}
                 />
               )}
 
