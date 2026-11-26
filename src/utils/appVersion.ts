@@ -29,6 +29,16 @@ export interface ChangelogVersionItem {
 
 export const CHANGELOG_DATA: ChangelogVersionItem[] = [
   {
+    version: 'v4.4.0',
+    date: '26 November 2026',
+    title: 'Pelacakan Lokasi Live Realtime & Jadwal Sholat Presisi',
+    highlights: [
+      'Implementasi sistem pelacakan lokasi live realtime berbasis sensor GPS perangkat presisi tinggi yang memantau pergerakan posisi pengguna secara dinamis.',
+      'Dukungan multi-tier IP Geolocation & reverse geocoding otomatis (Kelurahan, Kecamatan, Kota, Provinsi) saat GPS terbatas peramban/iframe.',
+      'Penambahan widget indikator Lokasi Live & Jadwal Sholat di bilah atas (Header) aplikasi dengan modal detail koordinat, tautan Google Maps, serta kalkulasi waktu sholat 5 waktu akurat.',
+    ],
+  },
+  {
     version: 'v4.3.3',
     date: '26 November 2026',
     title: 'Penyederhanaan Tampilan Badge Versi & Catatan Pembaruan',

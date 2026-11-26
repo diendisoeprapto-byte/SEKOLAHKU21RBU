@@ -1,4 +1,5 @@
 import { SARAH_REALISTIC_STICKERS_ENDI, findRealisticEndiSticker } from './sarahStickers';
+import { getLiveLocationData } from './liveLocation';
 
 export interface PrayerScheduleTimes {
   Subuh: string;
@@ -218,61 +219,30 @@ async function fetchPrayerTimesForLocation(
   }
 }
 
-export async function resolveEndiLocationAndPrayerSchedule(): Promise<EndiLocationContext> {
-  const { dateStr, ddMmYyyy } = getTodayIsoWib();
-  const cacheKey = `${PRAYER_CACHE_PREFIX}${dateStr}`;
-
-  const coords = await detectDeviceCoordinates();
-
-  if (typeof window !== 'undefined') {
-    try {
-      const cachedRaw = window.localStorage.getItem(cacheKey);
-      if (cachedRaw) {
-        const cached = JSON.parse(cachedRaw) as EndiLocationContext;
-        if (
-          cached &&
-          cached.dateStr === dateStr &&
-          cached.prayerTimes?.Subuh &&
-          cached.locationName
-        ) {
-          // Gunakan cache harian bila koordinat masih berdekatan atau sama-sama fallback
-          const deltaLat = Math.abs((cached.latitude || 0) - coords.latitude);
-          const deltaLng = Math.abs((cached.longitude || 0) - coords.longitude);
-          if ((coords.isFallbackLocation && cached.isFallbackLocation) || (deltaLat < 0.05 && deltaLng < 0.05)) {
-            return cached;
-          }
-        }
-      }
-    } catch {
-      // Ignore cache read issues
-    }
+export async function resolveEndiLocationAndPrayerSchedule(
+  forceRefresh = false
+): Promise<EndiLocationContext> {
+  const { dateStr } = getTodayIsoWib();
+  try {
+    const live = await getLiveLocationData(forceRefresh);
+    return {
+      latitude: live.latitude,
+      longitude: live.longitude,
+      locationName: live.locationName,
+      isFallbackLocation: !live.isLive,
+      dateStr,
+      prayerTimes: live.prayerTimes,
+    };
+  } catch {
+    return {
+      latitude: DEFAULT_FALLBACK_LAT,
+      longitude: DEFAULT_FALLBACK_LNG,
+      locationName: DEFAULT_FALLBACK_LOCATION,
+      isFallbackLocation: true,
+      dateStr,
+      prayerTimes: DEFAULT_JAKARTA_PRAYER_TIMES,
+    };
   }
-
-  const [locationName, prayerTimes] = await Promise.all([
-    coords.isFallbackLocation
-      ? Promise.resolve(DEFAULT_FALLBACK_LOCATION)
-      : reverseGeocodeLocationName(coords.latitude, coords.longitude),
-    fetchPrayerTimesForLocation(coords.latitude, coords.longitude, ddMmYyyy),
-  ]);
-
-  const result: EndiLocationContext = {
-    latitude: coords.latitude,
-    longitude: coords.longitude,
-    locationName: locationName || DEFAULT_FALLBACK_LOCATION,
-    isFallbackLocation: coords.isFallbackLocation,
-    dateStr,
-    prayerTimes,
-  };
-
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.setItem(cacheKey, JSON.stringify(result));
-    } catch {
-      // Ignore storage quota errors
-    }
-  }
-
-  return result;
 }
 
 export function detectEnteredPrayerWindow(
@@ -304,9 +274,11 @@ export function detectEnteredPrayerWindow(
   return null;
 }
 
-export async function buildEndiGreetingAndPrayerCheck(): Promise<EndiGreetingAndPrayerResult> {
+export async function buildEndiGreetingAndPrayerCheck(
+  forceRefresh = false
+): Promise<EndiGreetingAndPrayerResult> {
   const { dateStr, hour, minute, totalMinutes } = getTodayIsoWib();
-  const location = await resolveEndiLocationAndPrayerSchedule();
+  const location = await resolveEndiLocationAndPrayerSchedule(forceRefresh);
   const jamWib = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} WIB`;
 
   let timePeriod: EndiGreetingAndPrayerResult['timePeriod'] = 'pagi';

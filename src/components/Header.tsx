@@ -1,7 +1,9 @@
-import React, { useMemo, useEffect } from 'react';
-import { Menu, Calendar, Clock, GraduationCap, Power, KeyRound, Lock, Camera } from 'lucide-react';
+import React, { useMemo, useEffect, useState } from 'react';
+import { Menu, Calendar, Clock, GraduationCap, Power, KeyRound, Lock, Camera, MapPin, Compass } from 'lucide-react';
 import { SchoolProfile, ActiveUser, ActiveExamHeaderStatus, hasAdminMenuAccess } from '../types';
 import { ACADEMIC_YEARS, CLASSES_LIST } from '../utils/storage';
+import { useLiveLocation } from '../utils/liveLocation';
+import { LiveLocationModal } from './modals/LiveLocationModal';
 
 interface Props {
   profile: SchoolProfile;
@@ -35,6 +37,9 @@ export const Header: React.FC<Props> = ({
   isExamActive = false,
 }) => {
   const isAdminAccess = hasAdminMenuAccess(activeUser);
+  const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
+  const { location, isCalibrating, refreshLocation } = useLiveLocation();
+
   // Deteksi peran user: Kepsek, Administrator, Guru Mata Pelajaran, Tata Usaha, atau Guru Kelas
   const isGuruKelas = useMemo(() => {
     if (activeUser.role !== 'guru') return false;
@@ -121,8 +126,34 @@ export const Header: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Filters and Profile */}
+        {/* Filters, Live Location and Profile */}
         <div className="flex flex-wrap items-center gap-2.5">
+          {/* Live Location & Prayer Times Header Badge */}
+          {!isExamActive && (
+            <button
+              type="button"
+              onClick={() => setIsLocationModalOpen(true)}
+              className="group flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-white/15 hover:bg-white/25 border border-white/25 text-white transition cursor-pointer text-xs font-bold shadow-2xs active:scale-95"
+              title="Klik untuk melihat detail GPS Live, koordinat presisi, dan jadwal sholat realtime"
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-300"></span>
+              </span>
+              <MapPin className="w-3.5 h-3.5 text-yellow-300 group-hover:scale-110 transition shrink-0" />
+              <span className="truncate max-w-[120px] sm:max-w-[170px] font-semibold text-white">
+                {location.locationName}
+              </span>
+              <span className="hidden sm:inline text-[10px] bg-black/25 px-2 py-0.5 rounded-lg font-mono text-yellow-200">
+                {location.activePrayer
+                  ? `Sholat ${location.activePrayer}`
+                  : location.nextPrayer
+                  ? `${location.nextPrayer.name} ${location.nextPrayer.time}`
+                  : 'Live'}
+              </span>
+            </button>
+          )}
+
           {activeExamStatus?.isRunning && (
             <div className="flex items-center gap-3 bg-slate-900/95 text-white px-3.5 py-1.5 rounded-2xl border-2 border-yellow-400 shadow-md">
               <div className="flex items-center gap-2 font-mono">
@@ -289,6 +320,15 @@ export const Header: React.FC<Props> = ({
           )}
         </div>
       </div>
+
+      {/* Modal Detail Lokasi Live & Jadwal Sholat */}
+      <LiveLocationModal
+        isOpen={isLocationModalOpen}
+        onClose={() => setIsLocationModalOpen(false)}
+        location={location}
+        isCalibrating={isCalibrating}
+        onRefresh={refreshLocation}
+      />
     </header>
   );
 };

@@ -698,7 +698,7 @@ export const SarahAssistantTab: React.FC<Props> = ({
     if (!isExclusiveEndi || isRefreshingEndiGreeting) return;
     setIsRefreshingEndiGreeting(true);
     try {
-      const greetingRes = await buildEndiGreetingAndPrayerCheck();
+      const greetingRes = await buildEndiGreetingAndPrayerCheck(true);
       setEndiLocationContext(greetingRes.location);
       const greetId = `endi_greet_${Date.now()}`;
       setChatMessages((prev) => [
