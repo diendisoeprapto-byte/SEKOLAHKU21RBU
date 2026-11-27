@@ -34,6 +34,7 @@ import {
   Presentation,
   MessageCircleHeart,
   ShieldAlert,
+  Power,
 } from 'lucide-react';
 import {
   ActiveExamHeaderStatus,
@@ -105,6 +106,8 @@ interface Props {
   onOpenChangePassword?: () => void;
   onOpenAdminProfile?: () => void;
   activeExamStatus?: ActiveExamHeaderStatus | null;
+  onLogout?: () => void;
+  isExamActive?: boolean;
 }
 
 export const Sidebar: React.FC<Props> = ({
@@ -118,8 +121,11 @@ export const Sidebar: React.FC<Props> = ({
   onOpenChangePassword,
   onOpenAdminProfile,
   activeExamStatus,
+  onLogout,
+  isExamActive = false,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     group1: false,
     group2: false,
@@ -166,11 +172,22 @@ export const Sidebar: React.FC<Props> = ({
               }
               className="w-12 h-12 rounded-2xl object-cover border-2 border-rose-600 shadow-xs bg-white cursor-zoom-in shrink-0"
             />
-            <div className="min-w-0 flex-1">
-              <span className="inline-block text-[10px] font-extrabold uppercase bg-rose-600 text-white px-2.5 py-0.5 rounded-full leading-tight">
-                {activeUser.role}
-              </span>
-              <h4 className="font-display font-black text-sm text-slate-800 truncate mt-1">
+            <div
+              onClick={() => setIsUserMenuOpen((prev) => !prev)}
+              className="min-w-0 flex-1 cursor-pointer select-none group"
+              title="Klik nama user untuk membuka pilihan menu keluar"
+            >
+              <div className="flex items-center justify-between gap-1">
+                <span className="inline-block text-[10px] font-extrabold uppercase bg-rose-600 text-white px-2.5 py-0.5 rounded-full leading-tight">
+                  {activeUser.role}
+                </span>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 text-slate-400 group-hover:text-rose-600 transition-transform ${
+                    isUserMenuOpen ? 'rotate-180 text-rose-600' : ''
+                  }`}
+                />
+              </div>
+              <h4 className="font-display font-black text-sm text-slate-800 truncate mt-1 group-hover:text-rose-600 transition">
                 {activeUser.name}
               </h4>
               <p className="text-xs text-slate-500 truncate">{activeUser.detail}</p>
@@ -185,6 +202,33 @@ export const Sidebar: React.FC<Props> = ({
               <Camera className="w-3.5 h-3.5 text-rose-600" />
               <span>Ubah Logo / Foto Profil Admin</span>
             </button>
+          )}
+
+          {/* Pilihan Menu Keluar di Nama User */}
+          {isUserMenuOpen && (
+            <div className="pt-2 border-t border-rose-200/80 space-y-1.5 animate-in fade-in duration-150">
+              {isAdminAccess && onOpenChangePassword && (
+                <button
+                  type="button"
+                  onClick={onOpenChangePassword}
+                  className="w-full px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-display font-extrabold text-[11px] flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer"
+                >
+                  <KeyRound className="w-3.5 h-3.5 text-amber-700" />
+                  <span>Rubah Password Admin</span>
+                </button>
+              )}
+              {onLogout && !isExamActive ? (
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="w-full px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold text-[11px] flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer"
+                  title="Keluar dari akun aplikasi"
+                >
+                  <Power className="w-3.5 h-3.5" />
+                  <span>Keluar dari Akun</span>
+                </button>
+              ) : null}
+            </div>
           )}
         </div>
 

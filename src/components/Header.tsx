@@ -1,5 +1,5 @@
-import React, { useMemo, useEffect, useState } from 'react';
-import { Menu, Calendar, Clock, GraduationCap, Power, KeyRound, Lock, Camera, MapPin, Compass } from 'lucide-react';
+import React, { useMemo, useEffect, useState, useRef } from 'react';
+import { Menu, Calendar, Clock, GraduationCap, Power, KeyRound, Lock, Camera, MapPin, Compass, ChevronDown } from 'lucide-react';
 import { SchoolProfile, ActiveUser, ActiveExamHeaderStatus, hasAdminMenuAccess } from '../types';
 import { ACADEMIC_YEARS, CLASSES_LIST } from '../utils/storage';
 import { useLiveLocation } from '../utils/liveLocation';
@@ -38,7 +38,33 @@ export const Header: React.FC<Props> = ({
 }) => {
   const isAdminAccess = hasAdminMenuAccess(activeUser);
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
   const { location, isCalibrating, refreshLocation } = useLiveLocation();
+
+  // Tutup menu profil user saat klik di luar atau tekan tombol Escape
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsUserMenuOpen(false);
+      }
+    };
+
+    if (isUserMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isUserMenuOpen]);
 
   // Deteksi peran user: Kepsek, Administrator, Guru Mata Pelajaran, Tata Usaha, atau Guru Kelas
   const isGuruKelas = useMemo(() => {
@@ -248,13 +274,19 @@ export const Header: React.FC<Props> = ({
             </div>
           )}
 
-          {/* User profile with photo */}
-          {isAdminAccess && onOpenAdminProfile ? (
+          {/* User profile: Klik nama user untuk menampilkan menu profil & pilihan Keluar */}
+          <div className="relative" ref={userMenuRef}>
             <button
               type="button"
-              onClick={onOpenAdminProfile}
-              className="group flex items-center gap-2.5 bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-2xl border border-white/25 transition cursor-pointer"
-              title="Ubah Logo & Foto Profil Admin"
+              onClick={() => setIsUserMenuOpen((prev) => !prev)}
+              className={`group flex items-center gap-2 sm:gap-2.5 px-3 py-1.5 rounded-2xl border transition cursor-pointer select-none text-left ${
+                isUserMenuOpen
+                  ? 'bg-white/25 border-yellow-300 shadow-md ring-2 ring-yellow-300/40'
+                  : 'bg-white/15 hover:bg-white/25 border-white/25'
+              }`}
+              title="Klik nama user untuk membuka menu akun & pilihan keluar"
+              aria-expanded={isUserMenuOpen}
+              aria-haspopup="true"
             >
               <div className="relative shrink-0">
                 <img
@@ -263,61 +295,147 @@ export const Header: React.FC<Props> = ({
                       ? profile.adminFotoUrl || activeUser.fotoUrl || profile.logoSekolahUrl
                       : activeUser.fotoUrl || profile.adminFotoUrl || profile.logoSekolahUrl
                   }
-                  alt="Foto User"
-                  className="w-8 h-8 rounded-xl object-cover bg-white border border-yellow-300"
+                  alt={activeUser.name}
+                  className="w-8 h-8 rounded-xl object-cover bg-white border border-yellow-300 shadow-2xs"
                 />
-                <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-yellow-400 text-slate-900 flex items-center justify-center shadow-xs group-hover:scale-110 transition">
-                  <Camera className="w-2.5 h-2.5" />
+                <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[8px] font-bold shadow-2xs ring-1 ring-white">
+                  ✓
                 </span>
               </div>
-              <div className="hidden sm:block text-left leading-tight">
-                <div className="font-display font-extrabold text-xs text-white truncate max-w-[120px]">
+              <div className="text-left leading-tight max-w-[120px] sm:max-w-[150px]">
+                <div className="font-display font-extrabold text-xs text-white truncate group-hover:text-yellow-200 transition">
                   {activeUser.name}
                 </div>
-                <div className="text-[10px] text-yellow-200 font-semibold truncate max-w-[120px]">
-                  Ubah Logo / Foto
+                <div className="text-[10px] text-yellow-200 font-semibold truncate">
+                  {activeUser.detail || (activeUser.role === 'admin' ? 'Administrator' : activeUser.role)}
                 </div>
               </div>
-            </button>
-          ) : (
-            <div className="flex items-center gap-2.5 bg-white/15 px-3 py-1.5 rounded-2xl border border-white/25">
-              <img
-                src={activeUser.fotoUrl || profile.logoSekolahUrl}
-                alt="Foto User"
-                className="w-8 h-8 rounded-xl object-cover bg-white border border-yellow-300"
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-white/80 transition-transform duration-200 shrink-0 ${
+                  isUserMenuOpen ? 'rotate-180 text-yellow-300' : 'group-hover:translate-y-0.5'
+                }`}
               />
-              <div className="hidden sm:block text-left leading-tight">
-                <div className="font-display font-extrabold text-xs text-white truncate max-w-[120px]">
-                  {activeUser.name}
+            </button>
+
+            {/* Dropdown Menu Pilihan Akun & Keluar */}
+            {isUserMenuOpen && (
+              <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 bg-white rounded-3xl shadow-2xl border-2 border-rose-100 overflow-hidden z-50 animate-in fade-in slide-in-from-top-2 duration-150 text-slate-800">
+                {/* Header Profil User */}
+                <div className="p-4 bg-gradient-to-br from-rose-50 via-white to-amber-50/70 border-b border-rose-100">
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={
+                        activeUser.role === 'admin'
+                          ? profile.adminFotoUrl || activeUser.fotoUrl || profile.logoSekolahUrl
+                          : activeUser.fotoUrl || profile.adminFotoUrl || profile.logoSekolahUrl
+                      }
+                      alt={activeUser.name}
+                      className="w-12 h-12 rounded-2xl object-cover bg-white border-2 border-rose-500 shadow-xs shrink-0"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="inline-block text-[10px] font-black uppercase bg-rose-600 text-white px-2 py-0.5 rounded-full tracking-wider leading-none">
+                          {activeUser.role}
+                        </span>
+                        {activeUser.kelasDiampu && (
+                          <span className="inline-block text-[10px] font-black uppercase bg-amber-500 text-white px-2 py-0.5 rounded-full leading-none">
+                            {activeUser.kelasDiampu}
+                          </span>
+                        )}
+                      </div>
+                      <h4 className="font-display font-black text-sm text-slate-800 truncate mt-1.5" title={activeUser.name}>
+                        {activeUser.name}
+                      </h4>
+                      <p className="text-xs text-slate-500 truncate">{activeUser.detail || activeUser.username}</p>
+                    </div>
+                  </div>
+                  <div className="mt-2.5 pt-2 border-t border-rose-100/80 flex items-center justify-between text-[11px] text-slate-500">
+                    <span className="truncate">{profile.name}</span>
+                    <span className="font-bold text-rose-600 shrink-0">{year} • {semester}</span>
+                  </div>
                 </div>
-                <div className="text-[10px] text-yellow-200 font-semibold truncate max-w-[120px]">
-                  {activeUser.detail}
+
+                {/* Daftar Pilihan Menu Akun */}
+                <div className="p-2 space-y-1">
+                  {isAdminAccess && onOpenAdminProfile && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        onOpenAdminProfile();
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-2xl text-left text-xs font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-700 transition cursor-pointer"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                        <Camera className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-extrabold text-slate-800">Ubah Logo & Foto Profil</div>
+                        <div className="text-[10px] text-slate-400 font-medium">Pengaturan logo sekolah & avatar</div>
+                      </div>
+                    </button>
+                  )}
+
+                  {isAdminAccess && onOpenChangePassword && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        onOpenChangePassword();
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-2xl text-left text-xs font-bold text-slate-700 hover:bg-amber-50 hover:text-amber-800 transition cursor-pointer"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                        <KeyRound className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-extrabold text-slate-800">Rubah Password Admin</div>
+                        <div className="text-[10px] text-slate-400 font-medium">Perbarui kata sandi administrator</div>
+                      </div>
+                    </button>
+                  )}
+
+                  {isAdminAccess && (
+                    <div className="my-1 border-t border-slate-100" />
+                  )}
+
+                  {/* Pilihan Menu Keluar */}
+                  {!isExamActive ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        onLogout();
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-2xl text-left text-xs font-bold text-rose-600 hover:bg-rose-600 hover:text-white transition group cursor-pointer"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-600 group-hover:bg-white group-hover:text-rose-600 flex items-center justify-center shrink-0 transition">
+                        <Power className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-extrabold text-rose-700 group-hover:text-white transition">
+                          Keluar dari Akun
+                        </div>
+                        <div className="text-[10px] text-rose-400 group-hover:text-rose-100 font-medium transition">
+                          Akhiri sesi login aplikasi SERBU 21
+                        </div>
+                      </div>
+                    </button>
+                  ) : (
+                    <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200 text-amber-800 text-xs">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>Keluar Terkunci</span>
+                      </div>
+                      <p className="text-[11px] text-amber-700 mt-0.5">
+                        Sesi ujian sedang aktif. Selesaikan atau kumpulkan ujian terlebih dahulu.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-          )}
-
-          {isAdminAccess && onOpenChangePassword && (
-            <button
-              type="button"
-              onClick={onOpenChangePassword}
-              className="bg-yellow-400 hover:bg-yellow-300 text-slate-900 font-display font-black text-xs px-3 py-2 rounded-2xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-              title="Rubah Password Administrator"
-            >
-              <KeyRound className="w-3.5 h-3.5 text-slate-900 shrink-0" />
-              <span>Rubah Password</span>
-            </button>
-          )}
-
-          {!isExamActive && (
-            <button
-              type="button"
-              onClick={onLogout}
-              className="bg-white text-rose-700 hover:bg-rose-50 font-display font-extrabold text-xs px-3.5 py-2 rounded-2xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <Power className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Keluar</span>
-            </button>
-          )}
+            )}
+          </div>
         </div>
       </div>
 

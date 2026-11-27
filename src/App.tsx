@@ -1448,6 +1448,8 @@ export default function App() {
                   hasAdminMenuAccess(activeUser) ? () => setIsAdminProfileModalOpen(true) : undefined
                 }
                 activeExamStatus={activeExamStatus}
+                onLogout={handleLogout}
+                isExamActive={isExamActive}
               />
             )}
 

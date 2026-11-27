@@ -202,16 +202,71 @@ export const CHANGELOG_DATA: ChangelogVersionItem[] = [
   },
 ];
 
+// KAMUS NAMA KODE RILIS GENERASI (A–Z / v1.0 – v26.0)
+export const RELEASE_CODENAMES: Record<number, string> = {
+  1: 'Aksara Perintis',
+  2: 'Bina Karsa',
+  3: 'Cipta Sarana',
+  4: 'Daya Inklusi',
+  5: 'Ekosistem Merdeka',
+  6: 'Fajar Literasi',
+  7: 'Gema Budi',
+  8: 'Harmoni Cendekia',
+  9: 'Ilmu Bestari',
+  10: 'Jejak Karya',
+  11: 'Karsa Mandiri',
+  12: 'Lentera Ilmu',
+  13: 'Merdeka Belajar',
+  14: 'Nalar Kritis',
+  15: 'Olah Rasa',
+  16: 'Pamong Sejati',
+  17: 'Qalbu Cendekia',
+  18: 'Ruang Tumbuh',
+  19: 'Sinergi Bangsa',
+  20: 'Taman Siswa',
+  21: 'Ukir Prestasi',
+  22: 'Visi Peradaban',
+  23: 'Wawasan Nusantara',
+  24: 'Xenia Nusantara',
+  25: 'Yakin Mandiri',
+  26: 'Zaman Gemilang',
+};
+
+export function getMajorVersionNumber(versionString?: string | number): number {
+  if (typeof versionString === 'number') {
+    return Number.isFinite(versionString) && versionString > 0 ? Math.floor(versionString) : 4;
+  }
+  if (!versionString) return 4;
+  const match = String(versionString).trim().match(/^[vV]?(\d+)/);
+  if (match && match[1]) {
+    const num = parseInt(match[1], 10);
+    return Number.isFinite(num) && num > 0 ? num : 4;
+  }
+  return 4;
+}
+
+export function getReleaseCodename(versionString?: string | number): string {
+  const major = getMajorVersionNumber(versionString);
+  return RELEASE_CODENAMES[major] || 'Daya Inklusi';
+}
+
+export function getGenerationBadgeLabel(versionString?: string | number): string {
+  const major = getMajorVersionNumber(versionString);
+  const codename = getReleaseCodename(versionString);
+  return `Generasi ${major} • ${codename}`;
+}
+
 // Alias untuk kompatibilitas kode yang sudah ada
 export const CHANGELOG_LIST = CHANGELOG_DATA;
 
 // SUMBER KEBENARAN TUNGGAL DINAMIS BERDASARKAN ELEMEN TERATAS CHANGELOG_DATA:
 export const CURRENT_CHANGELOG_ITEM = CHANGELOG_DATA[0];
-export const APP_VERSION = CHANGELOG_DATA[0]?.version || 'v4.8.0';
+export const APP_VERSION = CHANGELOG_DATA[0]?.version || 'v4.14.2';
 export const RELEASE_DATE = CHANGELOG_DATA[0]?.date || '26 November 2026';
 export const RELEASE_DATE_SHORT = RELEASE_DATE.replace('November', 'Nov').replace('Desember', 'Des');
 export const APP_VERSION_NUMBER = APP_VERSION.replace(/^v/i, '');
-export const APP_VERSION_FOOTER_TEXT = `Versi ${APP_VERSION_NUMBER}`;
+export const APP_VERSION_CODENAME = getReleaseCodename(APP_VERSION);
+export const APP_VERSION_FOOTER_TEXT = `Versi ${APP_VERSION_NUMBER} "${APP_VERSION_CODENAME}"`;
 export const APP_VERSION_TOOLTIP = 'Klik untuk melihat catatan pembaruan aplikasi SERBU 21';
 
 export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
