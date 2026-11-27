@@ -42,6 +42,13 @@ export const Header: React.FC<Props> = ({
   const userMenuRef = useRef<HTMLDivElement>(null);
   const { location, isCalibrating, refreshLocation } = useLiveLocation();
 
+  // Kunci tombol keluar HANYA berlaku jika siswa sedang aktif mengerjakan soal ujian (timer & soal berjalan).
+  // Ketika belum masuk/mulai ujian atau sedang membuka menu lain, tombol keluar selalu aktif.
+  const isStudentTakingExam =
+    activeUser.role === 'siswa' &&
+    Boolean(isExamActive) &&
+    Boolean(activeExamStatus?.isRunning);
+
   // Tutup menu profil user saat klik di luar atau tekan tombol Escape
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -110,7 +117,7 @@ export const Header: React.FC<Props> = ({
       <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
         {/* Brand & Toggle */}
         <div className="flex items-center gap-3">
-          {!isExamActive && (
+          {!isStudentTakingExam && (
             <button
               type="button"
               onClick={onToggleSidebar}
@@ -155,7 +162,7 @@ export const Header: React.FC<Props> = ({
         {/* Filters, Live Location and Profile */}
         <div className="flex flex-wrap items-center gap-2.5">
           {/* Live Location & Prayer Times Header Badge */}
-          {!isExamActive && (
+          {!isStudentTakingExam && (
             <button
               type="button"
               onClick={() => setIsLocationModalOpen(true)}
@@ -399,8 +406,8 @@ export const Header: React.FC<Props> = ({
                     <div className="my-1 border-t border-slate-100" />
                   )}
 
-                  {/* Pilihan Menu Keluar */}
-                  {!isExamActive ? (
+                  {/* Pilihan Menu Keluar: Terkunci HANYA saat siswa sedang aktif mengerjakan ujian */}
+                  {!isStudentTakingExam ? (
                     <button
                       type="button"
                       onClick={() => {

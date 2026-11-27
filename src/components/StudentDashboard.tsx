@@ -229,10 +229,23 @@ export const StudentDashboard: React.FC<Props> = ({
       setViewMode('kebiasaan');
     } else if (initialTab === 'ujian') {
       setViewMode('cbt');
+      setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
+      try {
+        localStorage.removeItem('sekolahku_pending_submission_lock_v1');
+      } catch {}
     } else if (initialTab === 'tes-tka-siswa') {
       setViewMode('tka');
+      // Pastikan ketika baru membuka menu ujian TKA, modal hasil/pengiriman nilai tertutup & terkontrol bersih
+      setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
+      try {
+        localStorage.removeItem('sekolahku_pending_submission_lock_v1');
+      } catch {}
     } else if (initialTab === 'dashboard') {
       setViewMode('home');
+      setIsExamRunning(false);
+      onExamActiveChange?.(false);
+      onExamStatusChange?.(null);
+      setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
     }
   }, [initialTab]);
 
@@ -244,27 +257,31 @@ export const StudentDashboard: React.FC<Props> = ({
 
   useEffect(() => {
     onExamActiveChange?.(isExamRunning);
+    return () => {
+      onExamActiveChange?.(false);
+    };
   }, [isExamRunning, onExamActiveChange]);
 
+  useEffect(() => {
+    return () => {
+      onExamActiveChange?.(false);
+      onExamStatusChange?.(null);
+    };
+  }, [onExamActiveChange, onExamStatusChange]);
+
+  // Sinkronisasi data tertunda di latar belakang secara senyap (silent background sync)
+  // TIDAK memunculkan modal 'Pengiriman Nilai Berhasil' saat baru membuka menu ujian
   useEffect(() => {
     try {
       const pendingRaw = localStorage.getItem('sekolahku_pending_submission_lock_v1');
       if (pendingRaw) {
         const item = JSON.parse(pendingRaw);
         if (item && item.idUjian) {
-          onExamActiveChange?.(true);
-          setSubmittingModalState({
-            isOpen: true,
-            status: 'retry',
-            attemptCount: 1,
-            message:
-              'Mendeteksi nilai ujian yang tertunda sebelumnya. Sistem sedang menyelesaikan pengiriman ke database sekolah...',
-          });
           void (async () => {
             let recovered = false;
             let recAttempt = 0;
             const docId = buildCbtResultDocId(item.idUjian, item.nisn || item.nama);
-            while (!recovered && recAttempt < 25) {
+            while (!recovered && recAttempt < 10) {
               recAttempt++;
               try {
                 if (item.category === 'tka') {
@@ -328,21 +345,23 @@ export const StudentDashboard: React.FC<Props> = ({
                 await new Promise((res) => setTimeout(res, 4000));
               }
             }
-            if (recovered) {
-              setSubmittingModalState({
-                isOpen: true,
-                status: 'success',
-                attemptCount: recAttempt,
-                message: 'BERHASIL! Nilai Anda sudah masuk ke sistem Guru & Admin.',
-              });
-            }
+            // Hapus data tertunda setelah tersinkronisasi agar tidak muncul kembali
+            try {
+              localStorage.removeItem('sekolahku_pending_submission_lock_v1');
+            } catch {}
           })();
+        } else {
+          try {
+            localStorage.removeItem('sekolahku_pending_submission_lock_v1');
+          } catch {}
         }
       }
     } catch {
-      // ignore
+      try {
+        localStorage.removeItem('sekolahku_pending_submission_lock_v1');
+      } catch {}
     }
-  }, [activeYear, activeSemester, onExamActiveChange]);
+  }, [activeYear, activeSemester]);
   const [runningExamSnapshot, setRunningExamSnapshot] = useState<ExamOptionItem | null>(null);
   const [runningSoalList, setRunningSoalList] = useState<CBTQuestion[]>([]);
   const [currentQIndex, setCurrentQIndex] = useState<number>(0);
@@ -1954,6 +1973,12 @@ export const StudentDashboard: React.FC<Props> = ({
       if (!success) {
         await new Promise((res) => setTimeout(res, 4000));
       }
+    }
+
+    if (success) {
+      try {
+        localStorage.removeItem('sekolahku_pending_submission_lock_v1');
+      } catch {}
     }
 
     setSubmittingModalState({
@@ -3968,6 +3993,9 @@ export const StudentDashboard: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => {
+                  try {
+                    localStorage.removeItem('sekolahku_pending_submission_lock_v1');
+                  } catch {}
                   setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
                   setIsExamRunning(false);
                   onExamActiveChange?.(false);

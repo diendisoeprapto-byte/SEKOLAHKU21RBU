@@ -35,6 +35,7 @@ import {
   MessageCircleHeart,
   ShieldAlert,
   Power,
+  Lock,
 } from 'lucide-react';
 import {
   ActiveExamHeaderStatus,
@@ -217,17 +218,24 @@ export const Sidebar: React.FC<Props> = ({
                   <span>Rubah Password Admin</span>
                 </button>
               )}
-              {onLogout && !isExamActive ? (
-                <button
-                  type="button"
-                  onClick={onLogout}
-                  className="w-full px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold text-[11px] flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer"
-                  title="Keluar dari akun aplikasi"
-                >
-                  <Power className="w-3.5 h-3.5" />
-                  <span>Keluar dari Akun</span>
-                </button>
-              ) : null}
+              {onLogout && (
+                !isStudentTakingExam ? (
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    className="w-full px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold text-[11px] flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer"
+                    title="Keluar dari akun aplikasi"
+                  >
+                    <Power className="w-3.5 h-3.5" />
+                    <span>Keluar dari Akun</span>
+                  </button>
+                ) : (
+                  <div className="p-2 bg-amber-50 rounded-xl border border-amber-200 text-amber-800 text-[11px] font-bold flex items-center justify-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>Keluar Terkunci Saat Ujian</span>
+                  </div>
+                )
+              )}
             </div>
           )}
         </div>

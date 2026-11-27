@@ -199,18 +199,6 @@ export default function App() {
   const [activeExamStatus, setActiveExamStatus] = useState<ActiveExamHeaderStatus | null>(null);
   const [isExamActive, setIsExamActive] = useState<boolean>(false);
 
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isExamActive) {
-        e.preventDefault();
-        e.returnValue = 'Ujian sedang berlangsung! Jika Anda meninggalkan halaman ini, progres ujian bisa terganggu.';
-        return e.returnValue;
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [isExamActive]);
-
   const [isOwnershipModalOpen, setIsOwnershipModalOpen] = useState(false);
   const ownershipStatus = React.useMemo(() => verifySystemOwnershipIntegrity(), []);
   const logoClickTrackerRef = React.useRef<{ count: number; lastClickAt: number }>({
@@ -1003,6 +991,26 @@ export default function App() {
     localStorage.setItem('sekolahku_last_tab', tab);
   };
 
+  // Reset kunci ujian jika pengguna membuka menu/tab lain di luar modul ujian CBT/TKA
+  useEffect(() => {
+    if (activeTab !== 'ujian' && activeTab !== 'tes-tka-siswa') {
+      setIsExamActive(false);
+      setActiveExamStatus(null);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (activeUser?.role === 'siswa' && isExamActive && Boolean(activeExamStatus?.isRunning)) {
+        e.preventDefault();
+        e.returnValue = 'Ujian sedang berlangsung! Jika Anda meninggalkan halaman ini, progres ujian bisa terganggu.';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [activeUser?.role, isExamActive, activeExamStatus?.isRunning]);
+
   // Activity tracking and 30-minute inactivity auto-logout
   useEffect(() => {
     if (!activeUser) return;
@@ -1434,7 +1442,7 @@ export default function App() {
           />
 
           <div className="max-w-[1600px] w-full mx-auto flex-1 flex flex-col lg:flex-row gap-6 p-4 sm:p-6">
-            {!isExamActive && (
+            {!(activeUser?.role === 'siswa' && isExamActive && Boolean(activeExamStatus?.isRunning)) && (
               <Sidebar
                 activeTab={activeTab}
                 onSelectTab={setActiveTab}
