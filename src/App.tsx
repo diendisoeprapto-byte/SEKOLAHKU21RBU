@@ -151,6 +151,7 @@ import {
 import {
   subscribeToTkaQuestionsCollection,
   saveTkaQuestionsBatchToFirestore,
+  fetchTkaQuestionsFromFirestore,
   subscribeToTkaSubmissionsCollection,
   saveTkaSubmissionsBatchToFirestore,
   getPendingTkaSubmissions,
@@ -163,7 +164,13 @@ import {
 import {
   subscribeToCbtExamsCollection,
   saveCbtExamsBatchToFirestore,
+  fetchCbtExamsFromFirestore,
 } from './utils/cbtFirestore';
+import {
+  stripAnswerKeysFromCbtExam,
+  stripAnswerKeysFromQuestion,
+  syncAllExamsSeparatedToTenant,
+} from './utils/examAnswerKeyFirestore';
 import {
   subscribeToCbtResultsCollection,
   applyMergedCbtResultsToLocal,
@@ -194,6 +201,7 @@ export default function App() {
   const tkaSubmissionsCollectionLoadedRef = React.useRef(false);
   const cbtExamsCollectionLoadedRef = React.useRef(false);
   const adminTkaReconciledRef = React.useRef(false);
+  const separatedExamsSyncedRef = React.useRef(false);
   const activeUserRef = React.useRef<ActiveUser | null>(null);
   const [restoreTick, setRestoreTick] = useState(0);
   const [activeExamStatus, setActiveExamStatus] = useState<ActiveExamHeaderStatus | null>(null);
@@ -518,7 +526,7 @@ export default function App() {
 
       if (didMutateFromRemote && !tkaQuestionsCollectionLoadedRef.current) {
         const pulledQuestions = getStoredTKAQuestions();
-        if (pulledQuestions.length > 0 && hasStoredTKAQuestionsLocal()) {
+        if (pulledQuestions.length > 0 && hasStoredTKAQuestionsLocal() && activeUserRef.current?.role && activeUserRef.current.role !== 'siswa') {
           tkaQuestionsCollectionLoadedRef.current = true;
           safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
           saveTkaQuestionsBatchToFirestore(pulledQuestions).catch((err) =>
@@ -529,7 +537,7 @@ export default function App() {
 
       if (didMutateFromRemote && !cbtExamsCollectionLoadedRef.current) {
         const pulledCbtExams = getStoredCBTExams();
-        if (pulledCbtExams.length > 0 && hasStoredCBTExamsLocal()) {
+        if (pulledCbtExams.length > 0 && hasStoredCBTExamsLocal() && activeUserRef.current?.role && activeUserRef.current.role !== 'siswa') {
           cbtExamsCollectionLoadedRef.current = true;
           safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
           saveCbtExamsBatchToFirestore(pulledCbtExams).catch((err) =>
@@ -568,7 +576,7 @@ export default function App() {
           cloudData.students)
       ) {
         enqueueCloudPayload(cloudData);
-      } else if (activeUserRef.current?.role !== 'siswa') {
+      } else if (activeUserRef.current && activeUserRef.current.role !== 'siswa') {
         // Seed initial local data into cloud ONLY jika login sebagai guru/admin
         syncAllLocalToCloud('initial_seed');
         if (!tkaQuestionsCollectionLoadedRef.current) {
@@ -724,15 +732,19 @@ export default function App() {
         await idbHydrationPromise;
         if (!isMounted) return;
         const alreadySeeded = localStorage.getItem('sekolahku_tka_questions_seeded') === 'true';
+        const isStaffUser = Boolean(activeUserRef.current && activeUserRef.current.role !== 'siswa');
 
         if (firestoreTkaQuestions.length > 0) {
           tkaQuestionsCollectionLoadedRef.current = true;
           markLargeCollectionHydratedFromCloud('sekolahku_tka_questions');
           safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
+          const storedPayload = isStaffUser
+            ? firestoreTkaQuestions
+            : firestoreTkaQuestions.map((q) => stripAnswerKeysFromQuestion(q));
           runWithoutStorageSync(() => {
-            saveStoredTKAQuestions(firestoreTkaQuestions);
+            saveStoredTKAQuestions(storedPayload);
           });
-        } else if (!tkaQuestionsCollectionLoadedRef.current && !alreadySeeded) {
+        } else if (!tkaQuestionsCollectionLoadedRef.current && !alreadySeeded && isStaffUser) {
           const hasStoredLocal = hasStoredTKAQuestionsLocal();
           if (hasStoredLocal) {
             const localQuestions = getStoredTKAQuestions();
@@ -856,17 +868,21 @@ export default function App() {
         await idbHydrationPromise;
         if (!isMounted) return;
         const alreadySeeded = localStorage.getItem('sekolahku_cbt_exams_seeded') === 'true';
+        const isStaffUser = Boolean(activeUserRef.current && activeUserRef.current.role !== 'siswa');
 
         if (firestoreCbtExams.length > 0) {
           cbtExamsCollectionLoadedRef.current = true;
           markLargeCollectionHydratedFromCloud('sekolahku_cbt_exams');
           safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
+          const storedPayload = isStaffUser
+            ? firestoreCbtExams
+            : firestoreCbtExams.map((ex) => stripAnswerKeysFromCbtExam(ex));
           runWithoutStorageSync(() => {
-            saveStoredCBTExams(firestoreCbtExams);
+            saveStoredCBTExams(storedPayload);
           });
-        } else if (!cbtExamsCollectionLoadedRef.current && !alreadySeeded) {
+        } else if (!cbtExamsCollectionLoadedRef.current && !alreadySeeded && isStaffUser) {
           const hasStoredLocal = hasStoredCBTExamsLocal();
-          if (hasStoredLocal && activeUserRef.current?.role !== 'siswa') {
+          if (hasStoredLocal) {
             const localExams = getStoredCBTExams();
             if (localExams.length > 0) {
               cbtExamsCollectionLoadedRef.current = true;
@@ -965,9 +981,33 @@ export default function App() {
     if (students.length > 0) {
       reconcileAndSyncLocalTkaSubmissions(students).catch(() => {});
     }
-    if (activeUser.role !== 'siswa' && !adminTkaReconciledRef.current) {
-      adminTkaReconciledRef.current = true;
-      reconcileTkaFromCloudBackup().catch(() => {});
+    if (activeUser.role !== 'siswa') {
+      if (!adminTkaReconciledRef.current) {
+        adminTkaReconciledRef.current = true;
+        reconcileTkaFromCloudBackup().catch(() => {});
+      }
+      if (!separatedExamsSyncedRef.current) {
+        separatedExamsSyncedRef.current = true;
+        Promise.all([
+          fetchCbtExamsFromFirestore().catch(() => []),
+          fetchTkaQuestionsFromFirestore().catch(() => []),
+        ])
+          .then(([cloudCbt, cloudTka]) => {
+            const cbtToUse = cloudCbt.length > 0 ? cloudCbt : getStoredCBTExams();
+            const tkaToUse = cloudTka.length > 0 ? cloudTka : getStoredTKAQuestions();
+            runWithoutStorageSync(() => {
+              if (cloudCbt.length > 0) saveStoredCBTExams(cloudCbt);
+              if (cloudTka.length > 0) saveStoredTKAQuestions(cloudTka);
+            });
+            window.dispatchEvent(new Event('sekolahku-cbt-exams-updated'));
+            window.dispatchEvent(new Event('sekolahku-tka-questions-updated'));
+            return syncAllExamsSeparatedToTenant({
+              cbtExams: cbtToUse,
+              tkaQuestions: tkaToUse,
+            });
+          })
+          .catch(() => {});
+      }
     }
   }, [activeUser, students]);
 
@@ -1218,6 +1258,7 @@ export default function App() {
 
   // Login & Logout: default always opens Beranda Sekolah ('dashboard')
   const handleLoginSuccess = (user: ActiveUser) => {
+    activeUserRef.current = user;
     setActiveUser(user);
     void ensureFirebaseSessionUser(user);
     localStorage.setItem('sekolahku_active_user', JSON.stringify(user));
@@ -1235,12 +1276,24 @@ export default function App() {
     localStorage.setItem('userUid', user.studentData?.id || '');
     setIsSidebarOpen(false); // Menu tampil dalam posisi minimize saat login
     if (user.role === 'siswa') {
+      // Pastikan seluruh soal di storage siswa bersih dari kunci jawaban
+      runWithoutStorageSync(() => {
+        const currentCbt = getStoredCBTExams();
+        if (currentCbt.length > 0) {
+          saveStoredCBTExams(currentCbt.map((ex) => stripAnswerKeysFromCbtExam(ex)));
+        }
+        const currentTka = getStoredTKAQuestions();
+        if (currentTka.length > 0) {
+          saveStoredTKAQuestions(currentTka.map((q) => stripAnswerKeysFromQuestion(q)));
+        }
+      });
       // Selalu tampilkan portal dashboard kartu utama siswa saat baru login
       setActiveTab('dashboard');
       if (user.studentData?.kelas) {
         setActiveClass(user.studentData.kelas);
       }
     } else {
+      separatedExamsSyncedRef.current = false;
       // Selalu tampilkan menu beranda sekolah saat baru login
       setActiveTab('dashboard');
       if (user.kelasDiampu) {
@@ -1250,6 +1303,18 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    activeUserRef.current = null;
+    separatedExamsSyncedRef.current = false;
+    runWithoutStorageSync(() => {
+      const currentCbt = getStoredCBTExams();
+      if (currentCbt.length > 0) {
+        saveStoredCBTExams(currentCbt.map((ex) => stripAnswerKeysFromCbtExam(ex)));
+      }
+      const currentTka = getStoredTKAQuestions();
+      if (currentTka.length > 0) {
+        saveStoredTKAQuestions(currentTka.map((q) => stripAnswerKeysFromQuestion(q)));
+      }
+    });
     setActiveUser(null);
     setActiveExamStatus(null);
     localStorage.removeItem('sekolahku_active_user');
@@ -1870,6 +1935,7 @@ export default function App() {
                   profile={profile}
                   onUpdateProfile={handleSaveProfile}
                   showToast={showToast}
+                  onBackupRestored={handleRefreshStateAfterRestore}
                 />
               )}
             </main>

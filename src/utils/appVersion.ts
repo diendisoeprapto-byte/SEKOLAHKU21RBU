@@ -29,6 +29,46 @@ export interface ChangelogVersionItem {
 
 export const CHANGELOG_DATA: ChangelogVersionItem[] = [
   {
+    version: 'v5.1.0',
+    date: '27 November 2026',
+    title: 'Keamanan Kunci Jawaban Terpisah, Jitter Ujian Serentak & Pusat Full Backup Sekolah',
+    highlights: [
+      'Pemisahan Kunci Jawaban Ujian CBT & TKA ke dokumen terproteksi (schools/{npsn}/exam_answer_keys/{examId}) sehingga paket soal di browser siswa bersih dari kunci jawaban dan bobot (Anti-Intip Inspect Element & Network Tab), serta terintegrasi penuh dengan evaluateStudentAnswer, Buka Kunci & Hitung Ulang Nilai, dan Tanya SARAH.',
+      'Implementasi mekanisme random jitter antrean cerdas (1–4 detik) dengan indikator "Mengamankan & Mengirim Jawaban ke Server..." saat tombol Selesai Ujian ditekan pada ujian serentak berskala besar (>30 peserta) untuk mencegah write spike kuota Firestore.',
+      'Penambahan Pusat Pencadangan & Pemulihan Data (Full Backup & Restore) di Pengaturan Admin & Super-Access Endi Soeprapto: ekspor penuh database sekolah (Backup_SERBU21_[NPSN]_[Tanggal].json) serta pemulihan bertahap maksimal 400 dokumen per batch dengan konfirmasi PIN Admin dan mode gabung tanpa menimpa data yang lebih baru.',
+    ],
+  },
+  {
+    version: 'v5.0.3',
+    date: '27 November 2026',
+    title: 'Grafik Perkembangan Nilai Per Paket Tes & Multi-Mata Pelajaran',
+    highlights: [
+      'Menyesuaikan grafik perkembangan nilai siswa agar dikelompokkan per Paket Tes (Sumatif, ASTS, ASAS, Simulasi, Try Out) dengan menampilkan batang capaian seluruh mata pelajaran di dalam masing-masing paket beserta garis tren rata-rata paket.',
+      'Menambahkan filter Paket Tes, tabel Ringkasan Nilai Per Paket Tes (interaktif saat diklik untuk menyorot mata pelajaran di dalam paket tersebut), serta rincian per paket pada ekspor Excel dan cetak PDF A4.',
+      'Menyempurnakan grafik Lintas Paket TKA (5 mata pelajaran + garis rata total) dan grafik Laporan Nilai CBT Guru agar dapat menampilkan perkembangan per Paket Tes beserta sebaran mata pelajaran di dalamnya.',
+    ],
+  },
+  {
+    version: 'v5.0.2',
+    date: '27 November 2026',
+    title: 'Perbaikan Menyeluruh Mesin Penilaian 6 Tipe Soal (CBT & TKA)',
+    highlights: [
+      'Memperbaiki bug penilaian soal Benar/Salah (termasuk pengisian jawaban berbentuk objek peta pernyataan & kunci bernomor seperti "1. Benar, 2. Salah") agar jawaban yang benar seluruhnya selalu memperoleh poin penuh.',
+      'Menyatukan mesin penilaian CBT, TKA, Analisis Butir Soal, Rekapitulasi, Koreksi Ulang, dan Ulasan AI SARAH ke satu sumber kebenaran di examEngine untuk seluruh 6 tipe soal (PG, PG Kompleks, Benar/Salah, Menjodohkan, Isian Singkat, dan Uraian).',
+      'Memperbaiki sanitasi pengiriman jawaban siswa agar jawaban terstruktur (PG, Benar/Salah, Menjodohkan) tersimpan utuh tanpa terkonversi menjadi [object Object].',
+    ],
+  },
+  {
+    version: 'v5.0.1',
+    date: '27 November 2026',
+    title: 'Mode Presentasi Satu Slide per Layar Penuh & Thumbnail Hover di Bank Media Ajar',
+    highlights: [
+      'Memperbaiki mode layar penuh Bank Media Ajar agar terkunci tepat satu slide per layar (tanpa gulir ke bawah) lengkap dengan konversi otomatis halaman PDF/PPTX/Google Slides.',
+      'Menambahkan efek transisi halus "slide-in" berbasis transform & fade saat berpindah antar-slide menggunakan keyboard, sentuhan papan interaktif, maupun tombol navigasi bawah.',
+      'Menambahkan deretan pratinjau thumbnail slide yang otomatis muncul saat kursor diarahkan ke bilah kontrol bawah untuk melompat langsung ke nomor slide tertentu.',
+    ],
+  },
+  {
     version: 'v5.0.0',
     date: '27 November 2026',
     title: 'SERBU 21 Generasi 5: Ekosistem Sekolah Terpadu & Mesin Penilaian Universal 6 Tipe Soal',

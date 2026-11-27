@@ -83,6 +83,13 @@ import {
   verifyHasilUjianSelesai,
 } from '../utils/sarahExamAccess';
 import { pickStudent3DStickerForReview } from '../utils/sarahStickers';
+import {
+  SeparatedAnswerKeyEntry,
+  buildTkaExamDocId,
+  fetchAllExamAnswerKeysForTenant,
+  fetchExamAnswerKeysFromFirestore,
+  stripAnswerKeysFromCbtExam,
+} from '../utils/examAnswerKeyFirestore';
 
 interface Props {
   activeUser: ActiveUser;
@@ -190,6 +197,9 @@ export const SarahStudentWidget: React.FC<Props> = ({
   const [examDataVersion, setExamDataVersion] = useState(0);
   const [isExamReviewOpen, setIsExamReviewOpen] = useState(false);
   const [pinnedReviewExamId, setPinnedReviewExamId] = useState<string | null>(null);
+  const [completedExamKeysByExamId, setCompletedExamKeysByExamId] = useState<
+    Record<string, Record<string, SeparatedAnswerKeyEntry>>
+  >({});
 
   useEffect(() => {
     setActiveAvatarType(resolveAvatarTypeFromReligion(currentStudent?.agama));
@@ -203,6 +213,10 @@ export const SarahStudentWidget: React.FC<Props> = ({
   currentStudentRef.current = currentStudent;
   const cbtExamsRef = useRef<CBTExam[]>(cbtExams);
   cbtExamsRef.current = cbtExams;
+  const completedExamKeysRef = useRef<Record<string, Record<string, SeparatedAnswerKeyEntry>>>(
+    completedExamKeysByExamId
+  );
+  completedExamKeysRef.current = completedExamKeysByExamId;
   const handleSendRef = useRef<
     (e?: React.FormEvent, overridePrompt?: string, overrideExamId?: string | null) => void
   >(() => {});
@@ -237,7 +251,9 @@ export const SarahStudentWidget: React.FC<Props> = ({
 
   useEffect(() => {
     const unsubCfg = subscribeToSarahConfig(setSarahConfig);
-    const unsubExams = subscribeToCbtExamsCollection(setCbtExams);
+    const unsubExams = subscribeToCbtExamsCollection((exams) => {
+      setCbtExams(exams.map((ex) => stripAnswerKeysFromCbtExam(ex)));
+    });
     const unsubKb = subscribeToSarahKnowledgeBase(setKnowledgeDocs);
     const unsubMedia = subscribeToMediaAjarForSarah(setMediaAjarDocs);
 
@@ -270,7 +286,8 @@ export const SarahStudentWidget: React.FC<Props> = ({
 
       const freshBundle = buildStudentExamReviewBundle(
         currentStudentRef.current,
-        cbtExamsRef.current
+        cbtExamsRef.current,
+        completedExamKeysRef.current
       );
 
       let matchedCompleted: SarahCompletedExamReview | undefined;
@@ -408,9 +425,60 @@ export const SarahStudentWidget: React.FC<Props> = ({
     }
   }, [messages, isOpen, isThinking]);
 
+  useEffect(() => {
+    if (!currentStudent || isExamRunningRef.current) return;
+    if (!isOpen && !isExamReviewOpen) return;
+
+    const prelim = buildStudentExamReviewBundle(currentStudent, cbtExams);
+    const completedIds = new Set<string>();
+    const uncompletedIds = new Set<string>();
+
+    prelim.uncompletedExams.forEach((u) => {
+      if (u.examId) uncompletedIds.add(u.examId);
+      if (u.category === 'tka' && u.paketName && u.mapel) {
+        uncompletedIds.add(buildTkaExamDocId(u.paketName, u.mapel));
+      }
+    });
+
+    prelim.completedExams.forEach((e) => {
+      if (e.examId && !uncompletedIds.has(e.examId)) {
+        completedIds.add(e.examId);
+      }
+      if (e.category === 'tka' && e.paketName && e.mapel) {
+        const docId = buildTkaExamDocId(e.paketName, e.mapel);
+        if (!uncompletedIds.has(docId)) {
+          completedIds.add(docId);
+        }
+      }
+    });
+
+    if (completedIds.size === 0) {
+      setCompletedExamKeysByExamId({});
+      return;
+    }
+
+    let cancelled = false;
+    fetchAllExamAnswerKeysForTenant(profile?.npsn)
+      .then(({ byExamId }) => {
+        if (cancelled) return;
+        const filtered: Record<string, Record<string, SeparatedAnswerKeyEntry>> = {};
+        Object.entries(byExamId).forEach(([examIdKey, keysMap]) => {
+          if (completedIds.has(examIdKey) && !uncompletedIds.has(examIdKey)) {
+            filtered[examIdKey] = keysMap;
+          }
+        });
+        setCompletedExamKeysByExamId(filtered);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, isExamReviewOpen, currentStudent, cbtExams, examDataVersion, profile?.npsn]);
+
   const examReviewBundle = useMemo(
-    () => buildStudentExamReviewBundle(currentStudent, cbtExams),
-    [currentStudent, cbtExams, examDataVersion]
+    () => buildStudentExamReviewBundle(currentStudent, cbtExams, completedExamKeysByExamId),
+    [currentStudent, cbtExams, examDataVersion, completedExamKeysByExamId]
   );
 
   const pinnedReviewExam = useMemo(
@@ -537,7 +605,11 @@ export const SarahStudentWidget: React.FC<Props> = ({
     const question = sanitizeInput(overridePrompt ?? inputText, 1500);
     if (!question || isThinking) return;
 
-    const freshExamBundle = buildStudentExamReviewBundle(currentStudent, cbtExams);
+    const freshExamBundle = buildStudentExamReviewBundle(
+      currentStudent,
+      cbtExams,
+      completedExamKeysByExamId
+    );
     const activeExamIdToSend =
       overrideExamId !== undefined ? overrideExamId : pinnedReviewExamId;
 
@@ -819,7 +891,42 @@ export const SarahStudentWidget: React.FC<Props> = ({
       setFirestoreCheckState('verified');
       setStatusLabel('Memeriksa Result Cache (id_ujian, nisn)...');
 
-      const wrongQuestions = exam.questions
+      let resolvedExam = exam;
+      const needsKeyHydration =
+        exam.questions.length > 0 &&
+        exam.questions.some((q) => !q.correctAnswer || q.correctAnswer === '-');
+      if (needsKeyHydration) {
+        const lookupId =
+          exam.category === 'tka'
+            ? buildTkaExamDocId(exam.paketName, exam.mapel)
+            : exam.examId;
+        const fetchedKeys =
+          (await fetchExamAnswerKeysFromFirestore(lookupId, profile?.npsn)) ||
+          (lookupId !== exam.examId
+            ? await fetchExamAnswerKeysFromFirestore(exam.examId, profile?.npsn)
+            : null);
+        if (fetchedKeys) {
+          const nextKeysMap = {
+            ...completedExamKeysRef.current,
+            [lookupId]: fetchedKeys,
+            [exam.examId]: fetchedKeys,
+          };
+          setCompletedExamKeysByExamId(nextKeysMap);
+          const refreshedBundle = buildStudentExamReviewBundle(
+            currentStudentRef.current,
+            cbtExamsRef.current,
+            nextKeysMap
+          );
+          const updatedMatch = refreshedBundle.completedExams.find(
+            (item) => item.examId === exam.examId || (item.category === exam.category && item.judul === exam.judul)
+          );
+          if (updatedMatch) {
+            resolvedExam = updatedMatch;
+          }
+        }
+      }
+
+      const wrongQuestions = resolvedExam.questions
         .filter((q) => !q.isCorrect)
         .map((q) => ({
           no: q.no,
@@ -829,7 +936,7 @@ export const SarahStudentWidget: React.FC<Props> = ({
           correctAnswer: q.correctAnswer,
           pembahasan: q.pembahasan,
         }));
-      const correctNumbers = exam.questions
+      const correctNumbers = resolvedExam.questions
         .filter((q) => q.isCorrect)
         .map((q) => q.no);
 

@@ -18,6 +18,9 @@ import {
   UserCheck,
   Filter,
   Link2,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
 } from 'lucide-react';
 import {
   addDoc,
@@ -33,6 +36,7 @@ import {
 } from 'firebase/firestore';
 import { ActiveUser, SchoolProfile, Student } from '../../types';
 import { auth, db, handleFirestoreError, OperationType } from '../../utils/firebase';
+import { loadPresentationSlides, ParsedSlide } from '../../utils/slideDeckLoader';
 
 export interface MediaAjarItem {
   id: string;
@@ -416,13 +420,86 @@ export const MediaAjarTab: React.FC<Props> = ({
   const [deletingItem, setDeletingItem] = useState<MediaAjarItem | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
 
-  // State Modal Slide Viewer & Fullscreen Presentation Mode
+  // State Modal Slide Viewer & Fullscreen Single-Slide Presentation Mode
   const [viewingItem, setViewingItem] = useState<MediaAjarItem | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isDockVisible, setIsDockVisible] = useState<boolean>(true);
+  const [isBottomBarHovered, setIsBottomBarHovered] = useState<boolean>(false);
+  const [slides, setSlides] = useState<ParsedSlide[]>([]);
+  const [totalSlidesCount, setTotalSlidesCount] = useState<number>(1);
+  const [currentSlideIndex, setCurrentSlideIndex] = useState<number>(0);
+  const [slideDirection, setSlideDirection] = useState<'next' | 'prev' | 'fade'>('fade');
+  const [isLoadingSlides, setIsLoadingSlides] = useState<boolean>(false);
   const viewerContainerRef = useRef<HTMLDivElement | null>(null);
   const dockHideTimerRef = useRef<number | null>(null);
   const isDockHoveredRef = useRef<boolean>(false);
+  const slidesCountRef = useRef<number>(1);
+  const isPresentingRef = useRef<boolean>(false);
+  const exitingViaControlRef = useRef<boolean>(false);
+  const previousBodyOverflowRef = useRef<string>('');
+  const previousHtmlOverflowRef = useRef<string>('');
+
+  const isPresenting = Boolean(viewingItem);
+
+  useEffect(() => {
+    isPresentingRef.current = isPresenting;
+  }, [isPresenting]);
+
+  useEffect(() => {
+    slidesCountRef.current = Math.max(1, slides.length);
+  }, [slides.length]);
+
+  const getFullscreenElement = (): Element | null => {
+    if (typeof document === 'undefined') return null;
+    const doc = document as Document & { webkitFullscreenElement?: Element | null };
+    return doc.fullscreenElement || doc.webkitFullscreenElement || null;
+  };
+
+  const requestBrowserFullscreen = async (targetEl: HTMLElement | null): Promise<void> => {
+    if (!targetEl) return;
+    const el = targetEl as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+    if (typeof el.requestFullscreen === 'function') {
+      await el.requestFullscreen();
+    } else if (typeof el.webkitRequestFullscreen === 'function') {
+      await el.webkitRequestFullscreen();
+    }
+  };
+
+  const exitBrowserFullscreen = async (): Promise<void> => {
+    if (typeof document === 'undefined') return;
+    const doc = document as Document & {
+      webkitExitFullscreen?: () => Promise<void> | void;
+    };
+    if (typeof doc.exitFullscreen === 'function') {
+      await doc.exitFullscreen();
+    } else if (typeof doc.webkitExitFullscreen === 'function') {
+      await doc.webkitExitFullscreen();
+    }
+  };
+
+  const lockBodyOverflow = () => {
+    if (typeof document === 'undefined') return;
+    if (document.body.style.overflow !== 'hidden') {
+      previousBodyOverflowRef.current = document.body.style.overflow;
+    }
+    if (document.documentElement.style.overflow !== 'hidden') {
+      previousHtmlOverflowRef.current = document.documentElement.style.overflow;
+    }
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+  };
+
+  const unlockBodyOverflow = () => {
+    if (typeof document === 'undefined') return;
+    document.body.style.overflow =
+      previousBodyOverflowRef.current === 'hidden' ? '' : previousBodyOverflowRef.current;
+    document.documentElement.style.overflow =
+      previousHtmlOverflowRef.current === 'hidden' ? '' : previousHtmlOverflowRef.current;
+    previousBodyOverflowRef.current = '';
+    previousHtmlOverflowRef.current = '';
+  };
 
   const clearDockHideTimer = () => {
     if (dockHideTimerRef.current !== null) {
@@ -441,34 +518,164 @@ export const MediaAjarTab: React.FC<Props> = ({
     }, 3000);
   };
 
+  const goToSlide = (targetIndex: number) => {
+    const maxIndex = Math.max(0, slidesCountRef.current - 1);
+    const clamped = Math.max(0, Math.min(maxIndex, targetIndex));
+    setCurrentSlideIndex((prev) => {
+      if (clamped === prev) return prev;
+      setSlideDirection(clamped > prev ? 'next' : 'prev');
+      return clamped;
+    });
+    revealDock();
+  };
+
+  const goToNextSlide = () => {
+    setCurrentSlideIndex((prev) => {
+      const maxIndex = Math.max(0, slidesCountRef.current - 1);
+      if (prev >= maxIndex) return prev;
+      setSlideDirection('next');
+      return prev + 1;
+    });
+    revealDock();
+  };
+
+  const goToPrevSlide = () => {
+    setCurrentSlideIndex((prev) => {
+      if (prev <= 0) return prev;
+      setSlideDirection('prev');
+      return prev - 1;
+    });
+    revealDock();
+  };
+
   const openMediaPreview = (mediaItem: MediaAjarItem) => {
+    // Eksekusi penguncian overflow secara sinkron tepat saat masuk mode presentasi/fullscreen
+    lockBodyOverflow();
+    exitingViaControlRef.current = false;
+    setSlides([]);
+    setTotalSlidesCount(1);
+    setCurrentSlideIndex(0);
+    setSlideDirection('fade');
+    setIsBottomBarHovered(false);
+    isDockHoveredRef.current = false;
     setViewingItem(mediaItem);
     revealDock();
-    if (
-      typeof document !== 'undefined' &&
-      !document.fullscreenElement &&
-      document.documentElement?.requestFullscreen
-    ) {
-      document.documentElement.requestFullscreen().catch(() => {});
+    if (typeof document !== 'undefined' && !getFullscreenElement()) {
+      requestBrowserFullscreen(document.documentElement).catch(() => {});
     }
   };
 
   const closeMediaPreview = () => {
+    // Pulihkan overflow segera secara sinkron saat keluar lewat Escape atau tombol kontrol UI
+    unlockBodyOverflow();
     clearDockHideTimer();
     isDockHoveredRef.current = false;
-    if (typeof document !== 'undefined' && document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
+    setIsBottomBarHovered(false);
+    if (getFullscreenElement()) {
+      exitingViaControlRef.current = true;
+      exitBrowserFullscreen().catch(() => {
+        exitingViaControlRef.current = false;
+      });
     }
     setViewingItem(null);
   };
 
   useEffect(() => {
     const onFsChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
+      const fsActive = Boolean(getFullscreenElement());
+      setIsFullscreen(fsActive);
+      if (fsActive) {
+        lockBodyOverflow();
+        return;
+      }
+
+      if (exitingViaControlRef.current) {
+        exitingViaControlRef.current = false;
+        unlockBodyOverflow();
+        return;
+      }
+
+      // Saat browser keluar dari native fullscreen (mis. Escape), reset overflow & tutup mode presentasi
+      unlockBodyOverflow();
+      if (isPresentingRef.current) {
+        clearDockHideTimer();
+        isDockHoveredRef.current = false;
+        setIsBottomBarHovered(false);
+        setViewingItem(null);
+      }
     };
     document.addEventListener('fullscreenchange', onFsChange);
-    return () => document.removeEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('webkitfullscreenchange', onFsChange);
+      unlockBodyOverflow();
+    };
   }, []);
+
+  // Ekstraksi halaman slide PDF/PPTX agar bisa ditampilkan tepat 1 slide per layar penuh
+  useEffect(() => {
+    if (!viewingItem) {
+      setSlides([]);
+      setIsLoadingSlides(false);
+      return;
+    }
+
+    const abortController = new AbortController();
+    const embedFallbackUrl = resolvePresentationPreviewUrl(viewingItem);
+    const fileId =
+      extractGoogleDriveFileId(viewingItem.drive_url) ||
+      extractGoogleDriveFileId(viewingItem.embed_url);
+    const isSlides =
+      isGoogleSlidesUrl(viewingItem.drive_url) || isGoogleSlidesUrl(viewingItem.embed_url);
+
+    if (!fileId) {
+      setSlides(
+        embedFallbackUrl
+          ? [
+              {
+                index: 0,
+                kind: 'embed-fallback',
+                title: viewingItem.judul,
+                embedUrl: embedFallbackUrl,
+                aspectRatio: 16 / 9,
+              },
+            ]
+          : []
+      );
+      setTotalSlidesCount(1);
+      setIsLoadingSlides(false);
+      return;
+    }
+
+    setIsLoadingSlides(true);
+    loadPresentationSlides({
+      fileId,
+      isGoogleSlides: isSlides,
+      embedFallbackUrl,
+      judul: viewingItem.judul,
+      signal: abortController.signal,
+      onProgress: (loadedSlides, totalPages) => {
+        if (abortController.signal.aborted) return;
+        setSlides(loadedSlides);
+        setTotalSlidesCount(Math.max(loadedSlides.length, totalPages));
+      },
+    })
+      .then((finalSlides) => {
+        if (abortController.signal.aborted) return;
+        setSlides(finalSlides);
+        setTotalSlidesCount(Math.max(1, finalSlides.length));
+        setIsLoadingSlides(false);
+      })
+      .catch((err) => {
+        if (abortController.signal.aborted || err?.name === 'AbortError') return;
+        setIsLoadingSlides(false);
+      });
+
+    return () => {
+      abortController.abort();
+    };
+  }, [viewingItem]);
 
   useEffect(() => {
     if (!viewingItem) {
@@ -490,15 +697,40 @@ export const MediaAjarTab: React.FC<Props> = ({
         closeMediaPreview();
         return;
       }
-      if (!isTyping && e.key.toLowerCase() === 'f') {
+      if (isTyping) return;
+
+      if (
+        e.key === 'ArrowRight' ||
+        e.key === 'ArrowDown' ||
+        e.key === ' ' ||
+        e.key === 'PageDown'
+      ) {
         e.preventDefault();
-        const targetEl = viewerContainerRef.current || document.documentElement;
-        if (!document.fullscreenElement) {
-          targetEl?.requestFullscreen?.().catch(() => {});
-        } else {
-          document.exitFullscreen().catch(() => {});
-        }
-        revealDock();
+        goToNextSlide();
+        return;
+      }
+
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') {
+        e.preventDefault();
+        goToPrevSlide();
+        return;
+      }
+
+      if (e.key === 'Home') {
+        e.preventDefault();
+        goToSlide(0);
+        return;
+      }
+
+      if (e.key === 'End') {
+        e.preventDefault();
+        goToSlide(Math.max(0, slidesCountRef.current - 1));
+        return;
+      }
+
+      if (e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        handleToggleFullscreen();
       }
     };
 
@@ -741,13 +973,20 @@ export const MediaAjarTab: React.FC<Props> = ({
     const targetEl = viewerContainerRef.current || document.documentElement;
     if (!targetEl) return;
     try {
-      if (!document.fullscreenElement) {
-        await targetEl.requestFullscreen();
+      if (!getFullscreenElement()) {
+        lockBodyOverflow();
+        await requestBrowserFullscreen(targetEl);
       } else {
-        await document.exitFullscreen();
+        exitingViaControlRef.current = true;
+        unlockBodyOverflow();
+        await exitBrowserFullscreen();
       }
       revealDock();
     } catch {
+      exitingViaControlRef.current = false;
+      if (!isPresentingRef.current) {
+        unlockBodyOverflow();
+      }
       showToast('Mode layar penuh tidak didukung oleh browser atau perangkat ini.', 'error');
     }
   };
@@ -976,7 +1215,7 @@ export const MediaAjarTab: React.FC<Props> = ({
                     <div className="absolute inset-0 bg-slate-950/0 group-hover:bg-slate-950/20 transition-colors flex items-center justify-center">
                       <span className="opacity-0 group-hover:opacity-100 transition-opacity px-3 py-1.5 rounded-lg bg-white/95 text-slate-900 text-[11px] font-bold shadow-sm inline-flex items-center gap-1.5">
                         <Eye className="w-3.5 h-3.5 text-rose-600" />
-                        <span>Pratinjau Slide</span>
+                        <span>Mulai Presentasi</span>
                       </span>
                     </div>
 
@@ -1039,10 +1278,11 @@ export const MediaAjarTab: React.FC<Props> = ({
                     <button
                       type="button"
                       onClick={() => openMediaPreview(item)}
+                      title="Mulai Presentasi / Layar Penuh"
                       className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-rose-600 text-white font-display font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
                     >
                       <Eye className="w-3.5 h-3.5" />
-                      <span>Lihat Slide</span>
+                      <span>Mulai Presentasi</span>
                     </button>
 
                     {safeDriveHref && (
@@ -1322,119 +1562,62 @@ export const MediaAjarTab: React.FC<Props> = ({
         </div>
       )}
 
-      {/* MODE PRESENTASI SLIDESHOW LAYAR PENUH (100vw x 100vh) */}
-      {viewingItem && (() => {
-        const presentationUrl = resolvePresentationPreviewUrl(viewingItem);
+      {/* MODE PRESENTASI SATU SLIDE PER LAYAR PENUH (SINGLE-SLIDE VIEWPORT LOCK) */}
+      {isPresenting && viewingItem && (() => {
         const safeDriveUrl = getSafeExternalUrl(viewingItem.drive_url);
+        const totalSlides = Math.max(slides.length, totalSlidesCount, 1);
+        const safeIndex = Math.max(0, Math.min(slides.length - 1, currentSlideIndex));
+        const activeSlide = slides[safeIndex];
+        const canPaginate = slides.length > 1;
+        const slideAnimationClass =
+          slideDirection === 'next'
+            ? 'slide-in-next'
+            : slideDirection === 'prev'
+            ? 'slide-in-prev'
+            : 'slide-in-fade';
 
         return (
           <div
             ref={viewerContainerRef}
             onMouseMove={revealDock}
             onTouchStart={revealDock}
-            className="fixed inset-0 z-[9999] w-screen h-screen bg-black overflow-hidden select-none"
+            className="fixed inset-0 w-screen h-screen overflow-hidden z-[9999] bg-slate-950 flex items-center justify-center select-none"
           >
-            {/* Zona sensitif tepi atas agar floating dock mudah muncul kembali meski kursor di atas iframe */}
+            {/* Zona sensitif tepi bawah agar bilah kontrol bawah mudah muncul kembali */}
             <div
               onMouseEnter={revealDock}
               onTouchStart={revealDock}
-              className="absolute top-0 inset-x-0 h-5 z-20"
+              className="absolute bottom-0 inset-x-0 h-8 z-20"
             />
 
-            {/* Auto-Hide Floating Capsule Dock */}
+            {/* Container 1 Slide Aktif per Layar Penuh (Semua slide lain disembunyikan dengan class hidden) */}
             <div
-              onMouseEnter={() => {
-                isDockHoveredRef.current = true;
-                revealDock();
+              onClick={(e) => {
+                if (!canPaginate) {
+                  revealDock();
+                  return;
+                }
+                const rect = e.currentTarget.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                if (clickX < rect.width * 0.45) {
+                  goToPrevSlide();
+                } else {
+                  goToNextSlide();
+                }
               }}
-              onMouseLeave={() => {
-                isDockHoveredRef.current = false;
-                revealDock();
-              }}
-              className={`absolute top-4 left-1/2 -translate-x-1/2 z-30 max-w-[94vw] transition-all duration-300 ${
-                isDockVisible
-                  ? 'opacity-100 translate-y-0 pointer-events-auto'
-                  : 'opacity-0 -translate-y-4 pointer-events-none'
-              }`}
+              className="relative w-full h-full flex flex-col justify-center items-center p-4 sm:p-8 md:p-16 overflow-hidden cursor-pointer"
             >
-              <div className="bg-slate-950/80 backdrop-blur-md border border-white/15 rounded-full shadow-2xl px-3 sm:px-4 py-2 flex items-center gap-2 sm:gap-3 text-white">
-                <div className="flex items-center gap-2 min-w-0 max-w-[42vw] sm:max-w-[360px]">
-                  <span className="w-7 h-7 rounded-full bg-rose-600/90 flex items-center justify-center shrink-0">
-                    <Presentation className="w-3.5 h-3.5 text-white" />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="font-display font-bold text-xs sm:text-sm text-white truncate">
-                      {viewingItem.judul}
-                    </div>
-                    <div className="hidden md:flex items-center gap-1.5 text-[10px] text-slate-300 truncate">
-                      <span className="text-rose-300 font-semibold">{viewingItem.mapel}</span>
-                      <span>•</span>
-                      <span>Kelas {viewingItem.kelas}</span>
-                      <span>•</span>
-                      <span className="truncate">{viewingItem.bab}</span>
-                    </div>
-                  </div>
+              {isLoadingSlides && slides.length === 0 ? (
+                <div className="w-full max-w-2xl rounded-3xl bg-slate-900/90 border border-white/10 p-8 text-center text-white space-y-3 shadow-2xl">
+                  <Loader2 className="w-9 h-9 text-rose-400 animate-spin mx-auto" />
+                  <p className="font-display font-bold text-base">
+                    Menyiapkan Slide Presentasi...
+                  </p>
+                  <p className="text-xs text-slate-300">
+                    Memuat halaman {viewingItem.judul} sesuai format asli agar tampil satu slide per layar penuh.
+                  </p>
                 </div>
-
-                <div className="h-5 w-px bg-white/15 shrink-0" />
-
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={handleToggleFullscreen}
-                    title="Beralih Layar Penuh (Pintasan: F)"
-                    className="px-2.5 sm:px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
-                  >
-                    {isFullscreen ? (
-                      <>
-                        <Minimize2 className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Normal</span>
-                      </>
-                    ) : (
-                      <>
-                        <Maximize2 className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Fullscreen</span>
-                      </>
-                    )}
-                  </button>
-
-                  {safeDriveUrl && (
-                    <a
-                      href={safeDriveUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Buka materi di tab baru Google Drive"
-                      className="px-2.5 sm:px-3 py-1.5 rounded-full bg-sky-600/90 hover:bg-sky-500 text-white text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">Buka di Tab Baru</span>
-                    </a>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={closeMediaPreview}
-                    title="Keluar Presentasi (Pintasan: Esc)"
-                    className="px-2.5 sm:px-3 py-1.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Keluar</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Canvas Slideshow 100vw x 100vh */}
-            <div className="w-full h-full bg-black">
-              {presentationUrl ? (
-                <iframe
-                  src={presentationUrl}
-                  title={viewingItem.judul}
-                  className="w-full h-full border-0 bg-black"
-                  allow="autoplay; fullscreen"
-                  allowFullScreen
-                />
-              ) : (
+              ) : slides.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center p-6 text-center text-slate-300 space-y-3">
                   <AlertTriangle className="w-10 h-10 text-amber-400" />
                   <p className="text-sm font-bold">
@@ -1442,13 +1625,256 @@ export const MediaAjarTab: React.FC<Props> = ({
                   </p>
                   <button
                     type="button"
-                    onClick={closeMediaPreview}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeMediaPreview();
+                    }}
                     className="px-4 py-2 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold cursor-pointer"
                   >
                     Tutup Presentasi
                   </button>
                 </div>
+              ) : (
+                slides.map((slide, idx) => {
+                  const isActive = idx === safeIndex;
+                  if (!isActive) {
+                    return (
+                      <div key={`hidden-slide-${slide.index}`} className="hidden" aria-hidden="true" />
+                    );
+                  }
+
+                  return (
+                    <div
+                      key={`${viewingItem.id}-slide-${slide.index}`}
+                      className={`w-full h-full flex flex-col justify-center items-center overflow-hidden ${slideAnimationClass}`}
+                    >
+                      {slide.kind === 'pdf-image' && slide.imageUrl ? (
+                        <div className="w-full h-full flex items-center justify-center overflow-hidden">
+                          <img
+                            src={slide.imageUrl}
+                            alt={`Slide ${idx + 1} - ${viewingItem.judul}`}
+                            draggable={false}
+                            className="max-w-full max-h-[calc(100vh-7.5rem)] w-auto h-auto object-contain rounded-xl shadow-[0_24px_80px_rgba(0,0,0,0.65)] bg-white"
+                          />
+                        </div>
+                      ) : (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="relative w-full max-w-[min(100%,calc((100vh-8rem)*16/9))] aspect-[16/9] max-h-[calc(100vh-7.5rem)] rounded-2xl overflow-hidden bg-black shadow-[0_24px_80px_rgba(0,0,0,0.65)] border border-white/10"
+                        >
+                          {slide.embedUrl ? (
+                            <iframe
+                              src={slide.embedUrl}
+                              title={viewingItem.judul}
+                              className="w-full h-full border-0 bg-black"
+                              allow="autoplay; fullscreen"
+                              allowFullScreen
+                            />
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               )}
+
+              {/* Tombol Navigasi Samping Kiri / Kanan untuk Papan Interaktif Digital */}
+              {canPaginate && (
+                <>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      goToPrevSlide();
+                    }}
+                    disabled={safeIndex <= 0}
+                    aria-label="Slide Sebelumnya"
+                    className={`hidden sm:flex absolute left-4 md:left-6 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-slate-900/65 hover:bg-slate-800/90 border border-white/15 text-white items-center justify-center backdrop-blur-md transition-all cursor-pointer disabled:opacity-20 disabled:cursor-not-allowed ${
+                      isDockVisible ? 'opacity-90' : 'opacity-0'
+                    }`}
+                  >
+                    <ChevronLeft className="w-6 h-6" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      goToNextSlide();
+                    }}
+                    disabled={safeIndex >= slides.length - 1}
+                    aria-label="Slide Berikutnya"
+                    className={`hidden sm:flex absolute right-4 md:right-6 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-slate-900/65 hover:bg-slate-800/90 border border-white/15 text-white items-center justify-center backdrop-blur-md transition-all cursor-pointer disabled:opacity-20 disabled:cursor-not-allowed ${
+                      isDockVisible ? 'opacity-90' : 'opacity-0'
+                    }`}
+                  >
+                    <ChevronRight className="w-6 h-6" />
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* Bilah Kontrol Melayang Bawah (Auto-Hide 3 Detik + Thumbnail Strip Saat Hover) */}
+            <div
+              onClick={(e) => e.stopPropagation()}
+              onMouseEnter={() => {
+                isDockHoveredRef.current = true;
+                setIsBottomBarHovered(true);
+                revealDock();
+              }}
+              onMouseLeave={() => {
+                isDockHoveredRef.current = false;
+                setIsBottomBarHovered(false);
+                revealDock();
+              }}
+              className={`absolute bottom-5 left-1/2 -translate-x-1/2 z-30 max-w-[94vw] flex flex-col items-center gap-2.5 transition-all duration-300 ${
+                isDockVisible
+                  ? 'opacity-100 translate-y-0 pointer-events-auto'
+                  : 'opacity-0 translate-y-4 pointer-events-none'
+              }`}
+            >
+              {/* Deretan Thumbnail Slide Tersembunyi: Otomatis Mekar Hanya Saat Kursor Hover di Bilah Kontrol Bawah */}
+              {slides.length > 0 && (
+                <div
+                  className={`w-full max-w-[88vw] transition-all duration-300 ease-out overflow-hidden ${
+                    isBottomBarHovered
+                      ? 'max-h-36 opacity-100 translate-y-0 pointer-events-auto'
+                      : 'max-h-0 opacity-0 translate-y-2 pointer-events-none'
+                  }`}
+                >
+                  <div className="bg-slate-950/90 backdrop-blur-md border border-white/15 rounded-2xl px-3 py-2.5 shadow-2xl">
+                    <div className="slide-thumb-strip flex items-center gap-2.5 overflow-x-auto pb-1">
+                      {slides.map((slideItem, idx) => {
+                        const isThumbActive = idx === safeIndex;
+                        return (
+                          <button
+                            key={`thumb-${slideItem.index}`}
+                            type="button"
+                            onClick={() => goToSlide(idx)}
+                            title={`Lompat ke Slide ${idx + 1}`}
+                            className={`group/thumb relative shrink-0 w-24 aspect-[16/9] rounded-lg overflow-hidden border-2 transition-all cursor-pointer bg-white ${
+                              isThumbActive
+                                ? 'border-rose-500 ring-2 ring-rose-500/40 scale-[1.03]'
+                                : 'border-white/15 opacity-75 hover:opacity-100 hover:border-white/50'
+                            }`}
+                          >
+                            {slideItem.thumbnailUrl || slideItem.imageUrl ? (
+                              <img
+                                src={slideItem.thumbnailUrl || slideItem.imageUrl}
+                                alt={`Thumbnail Slide ${idx + 1}`}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full bg-gradient-to-br from-slate-50 to-slate-200 p-1.5 flex flex-col justify-between text-left">
+                                <span className="text-[8px] font-bold text-slate-400">
+                                  Slide {idx + 1}
+                                </span>
+                                <span className="text-[9px] font-extrabold text-slate-800 line-clamp-2 leading-tight">
+                                  {slideItem.title || viewingItem.judul}
+                                </span>
+                              </div>
+                            )}
+                            <span
+                              className={`absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold ${
+                                isThumbActive
+                                  ? 'bg-rose-600 text-white'
+                                  : 'bg-slate-950/80 text-white'
+                              }`}
+                            >
+                              {idx + 1}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Kapsul Kontrol Minimalis Bawah */}
+              <div className="bg-slate-950/85 backdrop-blur-md border border-white/15 rounded-full shadow-2xl px-3 sm:px-4 py-2 flex items-center gap-1.5 sm:gap-2.5 text-white">
+                <div className="hidden lg:flex items-center gap-2 max-w-[220px] pr-1">
+                  <span className="w-6 h-6 rounded-full bg-rose-600/90 flex items-center justify-center shrink-0">
+                    <Presentation className="w-3.5 h-3.5 text-white" />
+                  </span>
+                  <span className="font-display font-bold text-xs text-white truncate">
+                    {viewingItem.judul}
+                  </span>
+                </div>
+
+                {canPaginate && (
+                  <>
+                    <div className="hidden lg:block h-4 w-px bg-white/15 shrink-0" />
+                    <button
+                      type="button"
+                      onClick={goToPrevSlide}
+                      disabled={safeIndex <= 0}
+                      title="Slide Sebelumnya (Panah Kiri)"
+                      className="px-2.5 sm:px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-35 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Sebelumnya</span>
+                    </button>
+
+                    <span className="px-2.5 py-1 rounded-full bg-white/10 text-[11px] sm:text-xs font-mono font-bold text-slate-100 whitespace-nowrap">
+                      Slide {safeIndex + 1} / {totalSlides}
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={goToNextSlide}
+                      disabled={safeIndex >= slides.length - 1}
+                      title="Slide Berikutnya (Panah Kanan / Spasi)"
+                      className="px-2.5 sm:px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-35 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+                    >
+                      <span className="hidden sm:inline">Berikutnya</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                )}
+
+                {!canPaginate && activeSlide && (
+                  <span className="px-2.5 py-1 rounded-full bg-white/10 text-[11px] font-mono font-bold text-slate-200 whitespace-nowrap">
+                    Slide 1 / 1
+                  </span>
+                )}
+
+                <div className="h-4 w-px bg-white/15 shrink-0" />
+
+                <button
+                  type="button"
+                  onClick={handleToggleFullscreen}
+                  title="Beralih Layar Penuh (Pintasan: F)"
+                  className="px-2.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+                >
+                  {isFullscreen ? (
+                    <Minimize2 className="w-3.5 h-3.5" />
+                  ) : (
+                    <Maximize2 className="w-3.5 h-3.5" />
+                  )}
+                </button>
+
+                {safeDriveUrl && (
+                  <a
+                    href={safeDriveUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Buka materi di tab baru Google Drive"
+                    className="px-2.5 py-1.5 rounded-full bg-sky-600/90 hover:bg-sky-500 text-white text-xs font-bold flex items-center gap-1 transition whitespace-nowrap"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+
+                <button
+                  type="button"
+                  onClick={closeMediaPreview}
+                  title="Keluar Layar Penuh (Pintasan: Esc)"
+                  className="px-3 py-1.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Keluar Layar Penuh</span>
+                </button>
+              </div>
             </div>
           </div>
         );

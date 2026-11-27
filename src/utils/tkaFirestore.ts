@@ -15,6 +15,7 @@ import { DEFAULT_STUDENTS } from '../data/defaultData';
 import {
   runWithoutStorageSync,
   saveStoredTKAQuestions,
+  getStoredTKAQuestions,
   getStoredTKASubmissions,
   saveStoredTKASubmissions,
   getStoredCBTResults,
@@ -35,6 +36,10 @@ import {
 import { compressDataUrlImage } from './imageUtils';
 import { formatDurasiDetik } from './examRanking';
 import { writeDocWithRetry } from './cbtResultFirestore';
+import {
+  syncSeparatedAllTkaQuestionsToTenant,
+  syncSeparatedTkaBucketToTenant,
+} from './examAnswerKeyFirestore';
 
 export const TKA_QUESTIONS_COLLECTION = 'tka_questions';
 export const TKA_SUBMISSIONS_COLLECTION = 'tka_submissions';
@@ -422,6 +427,20 @@ export async function saveSingleTkaQuestionToFirestore(
       serverTime: serverTimestamp(),
     });
     await setDoc(docRef, cleanQuestion, { merge: true });
+    const mergedBucket = [
+      ...getStoredTKAQuestions().filter(
+        (q) =>
+          q.id !== questionId &&
+          q.jenisTka === sizeSafeQuestion.jenisTka &&
+          q.mapel === sizeSafeQuestion.mapel
+      ),
+      { ...sizeSafeQuestion, id: questionId },
+    ];
+    await syncSeparatedTkaBucketToTenant(
+      mergedBucket,
+      sizeSafeQuestion.jenisTka,
+      sizeSafeQuestion.mapel
+    );
     safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
     return true;
   } catch (error) {
@@ -436,7 +455,18 @@ export async function saveSingleTkaQuestionToFirestore(
 export async function deleteTkaQuestionFromFirestore(questionId: string): Promise<boolean> {
   try {
     const safeId = sanitizeQuestionId(questionId);
+    const localBefore = getStoredTKAQuestions();
+    const targetQ = localBefore.find((q) => q.id === safeId);
     await deleteDoc(doc(db, TKA_QUESTIONS_COLLECTION, safeId));
+    if (targetQ) {
+      const remainingBucket = localBefore.filter(
+        (q) =>
+          q.id !== safeId && q.jenisTka === targetQ.jenisTka && q.mapel === targetQ.mapel
+      );
+      await syncSeparatedTkaBucketToTenant(remainingBucket, targetQ.jenisTka, targetQ.mapel);
+    } else {
+      await syncSeparatedAllTkaQuestionsToTenant(localBefore.filter((q) => q.id !== safeId));
+    }
     safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
     return true;
   } catch (error) {
@@ -475,6 +505,27 @@ export async function saveTkaQuestionsBatchToFirestore(
           batch.set(docRef, cleanQuestion, { merge: true });
         });
         await batch.commit();
+      }
+      const existingAll = getStoredTKAQuestions();
+      const mapById = new Map<string, TKAQuestion>();
+      existingAll.forEach((q) => mapById.set(q.id, q));
+      sizeSafeQuestions.forEach((q, idx) => {
+        const qId = sanitizeQuestionId(q.id, startOrderIndex + idx);
+        mapById.set(qId, { ...q, id: qId });
+      });
+      const affectedPairs = new Map<string, { jenisTka: string; mapel: string }>();
+      sizeSafeQuestions.forEach((q) => {
+        const key = `${q.jenisTka}__${q.mapel}`;
+        if (!affectedPairs.has(key)) {
+          affectedPairs.set(key, { jenisTka: q.jenisTka, mapel: q.mapel });
+        }
+      });
+      const mergedAll = Array.from(mapById.values());
+      for (const pair of affectedPairs.values()) {
+        const bucketQs = mergedAll.filter(
+          (q) => q.jenisTka === pair.jenisTka && q.mapel === pair.mapel
+        );
+        await syncSeparatedTkaBucketToTenant(bucketQs, pair.jenisTka, pair.mapel);
       }
     }
     safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
@@ -519,6 +570,7 @@ export async function replaceTkaQuestionsInFirestore(
     if (normalized.length > 0) {
       await saveTkaQuestionsBatchToFirestore(normalized);
     }
+    await syncSeparatedAllTkaQuestionsToTenant(normalized);
 
     safeSetLocalStorage('sekolahku_tka_questions_seeded', 'true');
     runWithoutStorageSync(() => {

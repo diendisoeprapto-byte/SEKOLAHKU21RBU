@@ -52,14 +52,17 @@ import {
 import * as XLSX from 'xlsx';
 import {
   ResponsiveContainer,
+  ComposedChart,
   BarChart,
   Bar,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Cell,
   ReferenceLine,
+  Legend,
 } from 'recharts';
 import { Student, TKACpTp, TKAQuestion, TKAJenis, ActiveUser, Teacher, SchoolProfile, isSiswaInklusi, isAbkExcludedFromTka, BenarSalahItem, MenjodohkanData } from '../../types';
 import { TKA_JENIS_LIST, TKA_MAPEL_LIST } from '../../data/defaultData';
@@ -207,6 +210,15 @@ import {
   extractImageFilesFromClipboard,
   extractImageFilesFromDataTransfer,
 } from '../../utils/imageDropPaste';
+import {
+  buildTkaExamDocId,
+  computeConcurrentSubmitJitterMs,
+  detectLargeConcurrentExam,
+  extractAnswerKeysFromQuestions,
+  fetchAllExamAnswerKeysForTenant,
+  mergeQuestionsWithAnswerKeys,
+  stripAnswerKeysFromQuestion,
+} from '../../utils/examAnswerKeyFirestore';
 
 function slugifyTkaId(val: string): string {
   return String(val || '')
@@ -390,6 +402,7 @@ export const TKATabs: React.FC<Props> = ({
     'peringkat' | 'grafik' | 'matriks' | 'distribusi' | 'kesukaran'
   >('peringkat');
   const [analisisChartTab, setAnalisisChartTab] = useState<'kesukaran' | 'ketuntasan' | 'pembeda'>('kesukaran');
+  const [tkaLintasChartMode, setTkaLintasChartMode] = useState<'per_mapel' | 'rata_total'>('per_mapel');
   const [isExportingAnalisisPdf, setIsExportingAnalisisPdf] = useState<boolean>(false);
 
   // 5. Report & Hasil TKA State (mendukung 120+ siswa & multi-rombel)
@@ -630,12 +643,17 @@ export const TKATabs: React.FC<Props> = ({
   };
 
   const resumeFromTkaDraft = (draft: TKAExamRoomDraft) => {
-    const baseQuestions = tkaQuestions.filter((q) => {
+    const rawBaseQuestions = tkaQuestions.filter((q) => {
       if (q.jenisTka !== draft.paketName) return false;
       if (draft.mapelName && draft.mapelName !== 'all' && q.mapel !== draft.mapelName) return false;
       return true;
     });
-    if (baseQuestions.length === 0) return;
+    if (rawBaseQuestions.length === 0) return;
+
+    const baseQuestions =
+      activeUser.role === 'siswa' || subType === 'tes-tka-siswa'
+        ? rawBaseQuestions.map((q) => stripAnswerKeysFromQuestion(q))
+        : rawBaseQuestions;
 
     const restoredList = restoreQuestionsFromSnapshot(baseQuestions, draft.runningQuestionOrder);
     const safeIdx = Math.min(Math.max(0, draft.currentQuestionIdx || 0), Math.max(0, restoredList.length - 1));
@@ -6950,30 +6968,113 @@ export const TKATabs: React.FC<Props> = ({
                           {overallSimulasiAggregate.totalSimulasiTerlaksana} paket terlaksana · Rata-rata gabungan: <strong className="text-purple-800">{overallSimulasiAggregate.grandAvgTotal}</strong>
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setInternalSubType('hasil-tka');
-                          setHasilViewMode('rekap_semua_simulasi');
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-display font-black text-xs flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap"
-                      >
-                        <Trophy className="w-3.5 h-3.5" />
-                        <span>Buka Matriks Nilai Lengkap</span>
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl text-[11px] font-bold">
+                          <button
+                            type="button"
+                            onClick={() => setTkaLintasChartMode('per_mapel')}
+                            className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                              tkaLintasChartMode === 'per_mapel'
+                                ? 'bg-white text-slate-900 shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            Per Mata Pelajaran
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTkaLintasChartMode('rata_total')}
+                            className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                              tkaLintasChartMode === 'rata_total'
+                                ? 'bg-white text-slate-900 shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            Rata Total
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInternalSubType('hasil-tka');
+                            setHasilViewMode('rekap_semua_simulasi');
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-display font-black text-xs flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap"
+                        >
+                          <Trophy className="w-3.5 h-3.5" />
+                          <span>Buka Matriks Nilai Lengkap</span>
+                        </button>
+                      </div>
                     </div>
 
                     {testedSimulasiRows.length > 0 && (
-                      <div className="w-full h-[170px]">
+                      <div className="w-full h-[230px]">
                         <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={activeSimulasiRows} margin={{ top: 8, right: 12, left: -16, bottom: 2 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
-                            <XAxis dataKey="shortName" tick={{ fontSize: 10, fontWeight: 700, fill: '#334155' }} tickLine={false} />
-                            <YAxis domain={[0, 100]} tick={{ fontSize: 10, fontWeight: 600, fill: '#64748B' }} axisLine={false} tickLine={false} />
-                            <Tooltip />
-                            <ReferenceLine y={effectiveKkm} stroke="#E11D48" strokeDasharray="4 4" />
-                            <Bar dataKey="avgTotal" name="Rata-rata Nilai Total" fill="#7C3AED" radius={[6, 6, 0, 0]} maxBarSize={32} />
-                          </BarChart>
+                          {tkaLintasChartMode === 'per_mapel' ? (
+                            <ComposedChart data={activeSimulasiRows} margin={{ top: 10, right: 12, left: -16, bottom: 2 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
+                              <XAxis dataKey="shortName" tick={{ fontSize: 10, fontWeight: 700, fill: '#334155' }} tickLine={false} />
+                              <YAxis domain={[0, 100]} tick={{ fontSize: 10, fontWeight: 600, fill: '#64748B' }} axisLine={false} tickLine={false} />
+                              <ReferenceLine y={effectiveKkm} stroke="#E11D48" strokeDasharray="4 4" />
+                              <Tooltip
+                                cursor={{ fill: '#F8FAFC' }}
+                                content={({ active, payload }) => {
+                                  if (!active || !payload || !payload.length) return null;
+                                  const d = payload[0].payload as (typeof activeSimulasiRows)[number];
+                                  const mapelRows = [
+                                    { label: 'B. Indonesia', val: d.avgIndo, color: '#e11d48' },
+                                    { label: 'Matematika', val: d.avgMtk, color: '#2563eb' },
+                                    { label: 'IPAS', val: d.avgIpas, color: '#059669' },
+                                    { label: 'B. Inggris', val: d.avgInggris, color: '#d97706' },
+                                    { label: 'KKA', val: d.avgKka, color: '#7c3aed' },
+                                  ].filter((m) => typeof m.val === 'number');
+                                  return (
+                                    <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-lg text-xs space-y-1.5 min-w-[200px]">
+                                      <div className="font-display font-black text-slate-900 border-b border-slate-100 pb-1">
+                                        {d.paketName} ({d.pesertaCount} peserta)
+                                      </div>
+                                      {mapelRows.map((m) => (
+                                        <div key={m.label} className="flex items-center justify-between gap-3">
+                                          <span className="inline-flex items-center gap-1.5 text-slate-700">
+                                            <span className="w-2 h-2 rounded-xs" style={{ backgroundColor: m.color }} />
+                                            {m.label}
+                                          </span>
+                                          <span className="font-mono font-bold tabular-nums text-slate-900">{m.val}</span>
+                                        </div>
+                                      ))}
+                                      <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                                        <span className="font-bold text-slate-700">Rata Total Paket</span>
+                                        <span className="font-mono font-black text-purple-800 tabular-nums">{d.avgTotal}</span>
+                                      </div>
+                                    </div>
+                                  );
+                                }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: '11px' }} />
+                              <Bar dataKey="avgIndo" name="B. Indo" fill="#e11d48" radius={[4, 4, 0, 0]} maxBarSize={18} />
+                              <Bar dataKey="avgMtk" name="Matematika" fill="#2563eb" radius={[4, 4, 0, 0]} maxBarSize={18} />
+                              <Bar dataKey="avgIpas" name="IPAS" fill="#059669" radius={[4, 4, 0, 0]} maxBarSize={18} />
+                              <Bar dataKey="avgInggris" name="B. Inggris" fill="#d97706" radius={[4, 4, 0, 0]} maxBarSize={18} />
+                              <Bar dataKey="avgKka" name="KKA" fill="#7c3aed" radius={[4, 4, 0, 0]} maxBarSize={18} />
+                              <Line
+                                type="monotone"
+                                dataKey="avgTotal"
+                                name="Rata Total"
+                                stroke="#0f172a"
+                                strokeWidth={2.5}
+                                dot={{ r: 4, fill: '#0f172a', stroke: '#ffffff', strokeWidth: 2 }}
+                              />
+                            </ComposedChart>
+                          ) : (
+                            <BarChart data={activeSimulasiRows} margin={{ top: 8, right: 12, left: -16, bottom: 2 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
+                              <XAxis dataKey="shortName" tick={{ fontSize: 10, fontWeight: 700, fill: '#334155' }} tickLine={false} />
+                              <YAxis domain={[0, 100]} tick={{ fontSize: 10, fontWeight: 600, fill: '#64748B' }} axisLine={false} tickLine={false} />
+                              <Tooltip />
+                              <ReferenceLine y={effectiveKkm} stroke="#E11D48" strokeDasharray="4 4" />
+                              <Bar dataKey="avgTotal" name="Rata-rata Nilai Total" fill="#7C3AED" radius={[6, 6, 0, 0]} maxBarSize={32} />
+                            </BarChart>
+                          )}
                         </ResponsiveContainer>
                       </div>
                     )}
@@ -9570,17 +9671,19 @@ export const TKATabs: React.FC<Props> = ({
           return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
         };
 
-        // Active exam questions filtered by selected paket and optional mapel
+        // Active exam questions filtered by selected paket and optional mapel (stripped from answer keys)
         const getMatchingTkaQuestions = (paket: string, mapel?: string | null) => {
-          return tkaQuestions.filter((q) => {
-            if (q.jenisTka !== paket) return false;
-            if (mapel && mapel !== 'all' && q.mapel !== mapel) return false;
-            return true;
-          });
+          return tkaQuestions
+            .filter((q) => {
+              if (q.jenisTka !== paket) return false;
+              if (mapel && mapel !== 'all' && q.mapel !== mapel) return false;
+              return true;
+            })
+            .map((q) => stripAnswerKeysFromQuestion(q));
         };
 
         const displayExamQuestions = tkaRunningQuestions.length > 0
-          ? tkaRunningQuestions
+          ? tkaRunningQuestions.map((q) => stripAnswerKeysFromQuestion(q))
           : (activeExamPaket ? getMatchingTkaQuestions(activeExamPaket, activeExamMapel) : []);
         const activeQuestion = displayExamQuestions[currentQuestionIdx] || displayExamQuestions[0];
 
@@ -9635,10 +9738,24 @@ export const TKATabs: React.FC<Props> = ({
           }
           if (acakJawabanTka) {
             list = list.map((q) => {
-              if (q.opsi && q.opsi.length > 0) {
+              if ((q.tipe === 'pg' || q.tipe === 'pg_kompleks') && q.opsi && q.opsi.length > 0) {
+                const indices = q.opsi.map((_, i) => i).sort(() => Math.random() - 0.5);
+                const nextOpsi = indices.map((oldIdx) => q.opsi![oldIdx]);
+                const newToOldLetter: Record<string, string> = {};
+                const nextOpsiGambar: Record<string, string> = {};
+                indices.forEach((oldIdx, newIdx) => {
+                  const oldL = String.fromCharCode(65 + oldIdx);
+                  const newL = String.fromCharCode(65 + newIdx);
+                  newToOldLetter[newL] = oldL;
+                  if (q.opsiGambar?.[oldL]) {
+                    nextOpsiGambar[newL] = q.opsiGambar[oldL];
+                  }
+                });
                 return {
                   ...q,
-                  opsi: [...q.opsi].sort(() => Math.random() - 0.5),
+                  opsi: nextOpsi,
+                  optionShuffleMap: newToOldLetter,
+                  ...(q.opsiGambar ? { opsiGambar: nextOpsiGambar } : {}),
                 };
               }
               return q;
@@ -9715,6 +9832,36 @@ export const TKATabs: React.FC<Props> = ({
           if (isSavingTkaSubmission) return;
           setIsSavingTkaSubmission(true);
           try {
+            // Jitter pengiriman serentak 1-4 detik jika peserta > 30 siswa untuk mencegah write spike Firestore Spark
+            const concurrentCheck = detectLargeConcurrentExam({
+              students,
+              category: 'tka',
+            });
+            const jitterMs = computeConcurrentSubmitJitterMs(concurrentCheck.isLargeScale);
+            if (jitterMs > 0) {
+              await new Promise((res) => setTimeout(res, jitterMs));
+            }
+
+            // Ambil kunci jawaban & pembobotan terproteksi dari `schools/{npsn}/exam_answer_keys`
+            const allTkaKeys = await fetchAllExamAnswerKeysForTenant();
+            const fallbackTeacherKeys =
+              activeUser.role !== 'siswa' ? extractAnswerKeysFromQuestions(tkaQuestions) : {};
+
+            const mergedDisplayQuestions = displayExamQuestions.map((q) => {
+              const bucketId = buildTkaExamDocId(
+                activeExamPaket || q.jenisTka || 'Simulasi 1',
+                q.mapel || 'Bahasa Indonesia'
+              );
+              const bucketKeyMap =
+                allTkaKeys.byExamId[bucketId] && Object.keys(allTkaKeys.byExamId[bucketId]).length > 0
+                  ? allTkaKeys.byExamId[bucketId]
+                  : Object.keys(allTkaKeys.flatByQuestionId).length > 0
+                  ? allTkaKeys.flatByQuestionId
+                  : fallbackTeacherKeys;
+              return mergeQuestionsWithAnswerKeys([q], bucketKeyMap)[0];
+            });
+            const mergedById = new Map(mergedDisplayQuestions.map((mq) => [mq.id, mq]));
+
             let totalScoreEarned = 0;
             let totalMaxScore = 0;
 
@@ -9726,7 +9873,7 @@ export const TKATabs: React.FC<Props> = ({
               'Koding dan Kecerdasan Artifisial (KKA)': { earned: 0, max: 0 },
             };
 
-            displayExamQuestions.forEach((q) => {
+            mergedDisplayQuestions.forEach((q) => {
               const studentAns = studentAnswers[q.id];
               const weight = q.bobot || 10;
               const res = evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, weight, q.opsi, q);
@@ -9768,7 +9915,7 @@ export const TKATabs: React.FC<Props> = ({
             const durationUsedMinutes = Math.max(1, Math.ceil(durasiDetik / 60));
 
             const { benarHots, totalHots } = computeExamHotsStats(
-              displayExamQuestions,
+              mergedDisplayQuestions,
               studentAnswers,
               (q, ans) =>
                 evaluateQuestionScore(q.tipe, ans, q.kunciJawaban, q.bobot || 10, q.opsi, q).isCorrect
@@ -9816,8 +9963,8 @@ export const TKATabs: React.FC<Props> = ({
                 const canonicalMapelQs = getMatchingTkaQuestions(paketBase, mKey);
                 const mapelQs =
                   canonicalMapelQs.length > 0
-                    ? canonicalMapelQs
-                    : displayExamQuestions.filter((q) => normalizeTkaMapelKey(q.mapel) === mKey);
+                    ? canonicalMapelQs.map((cq) => mergedById.get(cq.id) || cq)
+                    : mergedDisplayQuestions.filter((q) => normalizeTkaMapelKey(q.mapel) === mKey);
                 const noBetul: number[] = [];
                 const noSalah: number[] = [];
                 mapelQs.forEach((q, qIdx) => {
@@ -9898,7 +10045,7 @@ export const TKATabs: React.FC<Props> = ({
               {isSavingTkaSubmission && (
                 <div className="p-3.5 rounded-2xl bg-amber-50 border-2 border-amber-300 text-amber-950 text-xs font-extrabold flex items-center gap-2.5 animate-pulse shadow-xs">
                   <Loader2 className="w-4 h-4 animate-spin text-amber-700 shrink-0" />
-                  <span>Sedang menyimpan jawaban... Jangan tutup halaman</span>
+                  <span>Mengamankan &amp; Mengirim Jawaban ke Server... Jangan tutup halaman</span>
                 </div>
               )}
 

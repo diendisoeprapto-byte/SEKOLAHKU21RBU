@@ -396,6 +396,45 @@
         "updatedAt": { "type": "string", "maxLength": 60 }
       },
       "required": ["id", "title", "url", "target", "active", "createdBy", "updatedAt"]
+    },
+    "SanitizedExam": {
+      "title": "SanitizedExam",
+      "description": "Dokumen paket soal CBT/TKA bersih tanpa kunci jawaban & pembobotan untuk dimuat aman di browser siswa",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 160 },
+        "category": { "type": "string", "enum": ["cbt", "tka"] },
+        "judul": { "type": "string", "maxLength": 300 },
+        "mapel": { "type": "string", "maxLength": 160 },
+        "kelas": { "type": "string", "maxLength": 60 },
+        "paketName": { "type": "string", "maxLength": 160 },
+        "subPaket": { "type": "string", "maxLength": 80 },
+        "durasiMenit": { "type": "number" },
+        "aktif": { "type": "boolean" },
+        "isSoalChunk": { "type": "boolean" },
+        "parentExamId": { "type": "string", "maxLength": 160 },
+        "chunkIndex": { "type": "number" },
+        "soalChunkCount": { "type": "number" },
+        "soalList": { "type": "array" },
+        "updatedAt": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["id", "category", "judul", "mapel", "soalList", "updatedAt"]
+    },
+    "ExamAnswerKey": {
+      "title": "ExamAnswerKey",
+      "description": "Dokumen terproteksi berisi kunci jawaban, pembobotan, rubrik, dan pembahasan ujian CBT/TKA per NPSN sekolah",
+      "type": "object",
+      "properties": {
+        "examId": { "type": "string", "maxLength": 160 },
+        "category": { "type": "string", "enum": ["cbt", "tka"] },
+        "npsn": { "type": "string", "maxLength": 40 },
+        "judul": { "type": "string", "maxLength": 300 },
+        "mapel": { "type": "string", "maxLength": 160 },
+        "paketName": { "type": "string", "maxLength": 160 },
+        "keysByQuestionId": { "type": "object" },
+        "updatedAt": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["examId", "category", "npsn", "keysByQuestionId", "updatedAt"]
     }
   },
   "firestore": {
@@ -502,6 +541,14 @@
     "/schools/{npsn}/sarah_knowledge_links/{linkId}": {
       "schema": "SarahKnowledgeLink",
       "description": "Basis pengetahuan link sumber rujukan AI SARAH per NPSN sekolah"
+    },
+    "/schools/{npsn}/exams/{examId}": {
+      "schema": "SanitizedExam",
+      "description": "Dokumen soal CBT/TKA bersih tanpa kunci jawaban untuk browser siswa per NPSN sekolah"
+    },
+    "/schools/{npsn}/exam_answer_keys/{examId}": {
+      "schema": "ExamAnswerKey",
+      "description": "Dokumen terproteksi kunci jawaban dan pembobotan CBT/TKA terpisah per NPSN sekolah"
     }
   }
 }

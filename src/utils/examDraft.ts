@@ -7,6 +7,7 @@ export const TKA_EXAM_DRAFT_STORAGE_KEY = 'sekolahku_tka_exam_drafts_v1';
 export interface QuestionOrderSnapshot {
   id: string;
   opsi?: string[];
+  optionShuffleMap?: Record<string, string>;
 }
 
 export interface StudentExamDraft {
@@ -82,11 +83,14 @@ export const countAnsweredQuestions = (answers: Record<string, any>): number => 
 };
 
 export const buildQuestionOrderSnapshot = (
-  list: Array<{ id: string; opsi?: string[] }>
+  list: Array<{ id: string; opsi?: string[]; optionShuffleMap?: Record<string, string> }>
 ): QuestionOrderSnapshot[] => {
   return list.map((q) => ({
     id: q.id,
     ...(q.opsi && q.opsi.length > 0 ? { opsi: [...q.opsi] } : {}),
+    ...(q.optionShuffleMap && Object.keys(q.optionShuffleMap).length > 0
+      ? { optionShuffleMap: { ...q.optionShuffleMap } }
+      : {}),
   }));
 };
 
@@ -108,6 +112,7 @@ export const restoreQuestionsFromSnapshot = <T extends CBTQuestion | TKAQuestion
       restored.push({
         ...found,
         ...(snap.opsi && snap.opsi.length > 0 ? { opsi: [...snap.opsi] } : {}),
+        ...(snap.optionShuffleMap ? { optionShuffleMap: { ...snap.optionShuffleMap } } : {}),
       });
     }
   });

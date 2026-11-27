@@ -45,14 +45,17 @@ import type { TabId } from '../Sidebar';
 import * as XLSX from 'xlsx';
 import {
   ResponsiveContainer,
+  ComposedChart,
   BarChart,
   Bar,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ReferenceLine,
   Cell,
+  Legend,
 } from 'recharts';
 import {
   Subject,
@@ -265,6 +268,7 @@ export const CBTTab: React.FC<Props> = ({
   const [reportSearch, setReportSearch] = useState<string>('');
   const [reportRowsPerPage, setReportRowsPerPage] = useState<30 | 60 | 120 | 'all'>(30);
   const [reportPage, setReportPage] = useState<number>(1);
+  const [cbtReportChartMode, setCbtReportChartMode] = useState<'per_paket' | 'per_mapel'>('per_paket');
   const [selectedCbtReportRow, setSelectedCbtReportRow] = useState<any | null>(null);
   const [confirmDeleteCbtRowId, setConfirmDeleteCbtRowId] = useState<string | null>(null);
   const [manualCbtModalSeed, setManualCbtModalSeed] = useState<ManualCbtModalSeed | null>(null);
@@ -1348,10 +1352,34 @@ export const CBTTab: React.FC<Props> = ({
     }
     if (acakJawaban) {
       qList = qList.map((q) => {
-        if (q.opsi && q.opsi.length > 0) {
+        if ((q.tipe === 'pg' || q.tipe === 'pg_kompleks') && q.opsi && q.opsi.length > 0) {
+          const indices = q.opsi.map((_, i) => i).sort(() => Math.random() - 0.5);
+          const nextOpsi = indices.map((oldIdx) => q.opsi![oldIdx]);
+          const oldToNewLetter: Record<string, string> = {};
+          const nextOpsiGambar: Record<string, string> = {};
+          indices.forEach((oldIdx, newIdx) => {
+            const oldL = String.fromCharCode(65 + oldIdx);
+            const newL = String.fromCharCode(65 + newIdx);
+            oldToNewLetter[oldL] = newL;
+            if (q.opsiGambar?.[oldL]) {
+              nextOpsiGambar[newL] = q.opsiGambar[oldL];
+            }
+          });
+          let nextKunci = q.kunciJawaban;
+          if (typeof q.kunciJawaban === 'string' && /^[A-Fa-f]$/.test(q.kunciJawaban.trim())) {
+            const upper = q.kunciJawaban.trim().toUpperCase();
+            nextKunci = oldToNewLetter[upper] || q.kunciJawaban;
+          } else if (Array.isArray(q.kunciJawaban)) {
+            nextKunci = q.kunciJawaban.map((k) => {
+              const trimK = String(k || '').trim().toUpperCase();
+              return /^[A-F]$/.test(trimK) ? oldToNewLetter[trimK] || k : k;
+            });
+          }
           return {
             ...q,
-            opsi: [...q.opsi].sort(() => Math.random() - 0.5),
+            opsi: nextOpsi,
+            kunciJawaban: nextKunci,
+            ...(q.opsiGambar ? { opsiGambar: nextOpsiGambar } : {}),
           };
         }
         return q;
@@ -3797,6 +3825,83 @@ export const CBTTab: React.FC<Props> = ({
             };
           });
 
+          // Paket-based chart data (per Paket Tes dengan berbagai Mata Pelajaran di dalamnya)
+          const cbtChartPalette = ['#059669', '#2563eb', '#e11d48', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#4f46e5'];
+          const shortenCbtPaket = (paket: string) => {
+            const m = paket.match(/Sumatif\s*(\d+)/i);
+            if (m && !paket.toLowerCase().includes('tengah') && !paket.toLowerCase().includes('akhir')) {
+              return `Sumatif ${m[1]}`;
+            }
+            if (paket.toLowerCase().includes('asts')) return 'ASTS';
+            if (paket.toLowerCase().includes('asas')) return 'ASAS';
+            return paket.replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+          };
+          const shortenCbtMapel = (m: string) => {
+            const l = m.toLowerCase();
+            if (l.includes('ipas') || l.includes('ilmu pengetahuan alam')) return 'IPAS';
+            if (l.includes('bahasa indonesia')) return 'B. Indo';
+            if (l.includes('bahasa inggris')) return 'B. Inggris';
+            if (l.includes('pendidikan pancasila')) return 'Pancasila';
+            if (l.includes('pendidikan agama')) return 'PAI';
+            if (l.includes('jasmani') || l === 'pjok') return 'PJOK';
+            return m.length > 14 ? `${m.slice(0, 12)}…` : m;
+          };
+          const paketBucketMap = new Map<string, { sum: number; count: number; mapels: Map<string, { sum: number; count: number }> }>();
+          const cbtChartMapelSet = new Set<string>();
+          filteredCbtRows.forEach((r) => {
+            cbtChartMapelSet.add(r.mapel);
+            const pKey = r.paket || 'Reguler';
+            if (!paketBucketMap.has(pKey)) {
+              paketBucketMap.set(pKey, { sum: 0, count: 0, mapels: new Map() });
+            }
+            const pb = paketBucketMap.get(pKey)!;
+            pb.sum += r.nilai;
+            pb.count += 1;
+            const curM = pb.mapels.get(r.mapel) || { sum: 0, count: 0 };
+            pb.mapels.set(r.mapel, { sum: curM.sum + r.nilai, count: curM.count + 1 });
+          });
+          const cbtChartMapelSeries = Array.from(cbtChartMapelSet)
+            .sort((a, b) => a.localeCompare(b, 'id'))
+            .map((fullMapel, idx) => ({
+              fullMapel,
+              shortMapel: shortenCbtMapel(fullMapel),
+              dataKey: `m_${fullMapel.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
+              color: cbtChartPalette[idx % cbtChartPalette.length],
+            }));
+          const cbtPaketChartData = Array.from(paketBucketMap.entries())
+            .sort(([a], [b]) => {
+              const idxA = paketList.indexOf(a);
+              const idxB = paketList.indexOf(b);
+              if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+              if (idxA !== -1) return -1;
+              if (idxB !== -1) return 1;
+              return a.localeCompare(b, 'id');
+            })
+            .map(([paketName, stat]) => {
+              const row: Record<string, any> = {
+                paketName,
+                shortPaket: shortenCbtPaket(paketName),
+                rataRata: Math.round(stat.sum / stat.count),
+                peserta: stat.count,
+                mapelDetails: [] as { fullMapel: string; shortMapel: string; avg: number; peserta: number; color: string }[],
+              };
+              cbtChartMapelSeries.forEach((ms) => {
+                const mStat = stat.mapels.get(ms.fullMapel);
+                if (mStat && mStat.count > 0) {
+                  const avgVal = Math.round(mStat.sum / mStat.count);
+                  row[ms.dataKey] = avgVal;
+                  row.mapelDetails.push({
+                    fullMapel: ms.fullMapel,
+                    shortMapel: ms.shortMapel,
+                    avg: avgVal,
+                    peserta: mStat.count,
+                    color: ms.color,
+                  });
+                }
+              });
+              return row;
+            });
+
           const topCbtStudents = filteredCbtRows.slice(0, 5);
           const kepsekCbt = resolveKepalaSekolah(teachers, profile);
           const waliCbt =
@@ -4220,41 +4325,129 @@ export const CBTTab: React.FC<Props> = ({
                   {/* Chart + Top 5 Students */}
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 print-avoid-break">
                     <div className="lg:col-span-7 bg-white p-5 print:p-3 rounded-2xl border border-slate-200 space-y-3">
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
                         <div>
                           <h3 className="font-display font-black text-sm text-slate-900 flex items-center gap-1.5">
-                            <BarChart3 className="w-4 h-4 text-emerald-600" /> Rata-rata Nilai CBT per Mata Pelajaran
+                            <BarChart3 className="w-4 h-4 text-emerald-600" />
+                            <span>
+                              {cbtReportChartMode === 'per_paket'
+                                ? 'Perkembangan Nilai CBT per Paket Tes'
+                                : 'Rata-rata Nilai CBT per Mata Pelajaran'}
+                            </span>
                           </h3>
-                          <p className="text-[11px] text-slate-500">Perbandingan capaian mapel terhadap ambang KKTP (75)</p>
+                          <p className="text-[11px] text-slate-500">
+                            {cbtReportChartMode === 'per_paket'
+                              ? 'Capaian berbagai mata pelajaran di setiap paket tes terhadap ambang KKTP (75)'
+                              : 'Perbandingan capaian mapel terhadap ambang KKTP (75)'}
+                          </p>
+                        </div>
+                        <div className="no-print flex items-center gap-1 p-1 bg-slate-100 rounded-xl text-[11px] font-bold">
+                          <button
+                            type="button"
+                            onClick={() => setCbtReportChartMode('per_paket')}
+                            className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                              cbtReportChartMode === 'per_paket'
+                                ? 'bg-white text-slate-900 shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            Per Paket Tes
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCbtReportChartMode('per_mapel')}
+                            className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                              cbtReportChartMode === 'per_mapel'
+                                ? 'bg-white text-slate-900 shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            Per Mapel
+                          </button>
                         </div>
                       </div>
-                      <div className="w-full h-[220px]">
+                      <div className="w-full h-[235px]">
                         <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={cbtMapelChartData} margin={{ top: 10, right: 12, left: -16, bottom: 4 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
-                            <XAxis dataKey="mapel" tick={{ fontSize: 10, fontWeight: 700, fill: '#334155' }} tickLine={false} />
-                            <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#64748B' }} axisLine={false} tickLine={false} />
-                            <ReferenceLine y={75} stroke="#e11d48" strokeDasharray="4 4" />
-                            <Tooltip
-                              content={({ active, payload }) => {
-                                if (!active || !payload || !payload.length) return null;
-                                const d = payload[0].payload as (typeof cbtMapelChartData)[number];
-                                return (
-                                  <div className="bg-white border border-slate-200 rounded-xl p-2.5 shadow-md text-xs space-y-1">
-                                    <div className="font-bold text-slate-900">{d.fullMapel}</div>
-                                    <div className="text-emerald-700 font-mono font-black tabular-nums">
-                                      Rata-rata: {d.rataRata} ({d.peserta} pengerjaan)
+                          {cbtReportChartMode === 'per_paket' ? (
+                            <ComposedChart data={cbtPaketChartData} margin={{ top: 10, right: 12, left: -16, bottom: 4 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
+                              <XAxis dataKey="shortPaket" tick={{ fontSize: 10, fontWeight: 700, fill: '#334155' }} tickLine={false} />
+                              <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#64748B' }} axisLine={false} tickLine={false} />
+                              <ReferenceLine y={75} stroke="#e11d48" strokeDasharray="4 4" />
+                              <Tooltip
+                                cursor={{ fill: '#F8FAFC' }}
+                                content={({ active, payload }) => {
+                                  if (!active || !payload || !payload.length) return null;
+                                  const d = payload[0].payload as (typeof cbtPaketChartData)[number];
+                                  return (
+                                    <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-lg text-xs space-y-1.5 min-w-[200px]">
+                                      <div className="font-bold text-slate-900 border-b border-slate-100 pb-1">
+                                        {d.paketName} ({d.peserta} pengerjaan)
+                                      </div>
+                                      {d.mapelDetails.map((md: any) => (
+                                        <div key={md.fullMapel} className="flex items-center justify-between gap-3">
+                                          <span className="inline-flex items-center gap-1.5 text-slate-700">
+                                            <span className="w-2 h-2 rounded-xs" style={{ backgroundColor: md.color }} />
+                                            {md.shortMapel}
+                                          </span>
+                                          <span className="font-mono font-bold tabular-nums text-slate-900">{md.avg}</span>
+                                        </div>
+                                      ))}
+                                      <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                                        <span className="font-semibold text-slate-600">Rata-rata Paket</span>
+                                        <span className="font-mono font-black text-emerald-700 tabular-nums">{d.rataRata}</span>
+                                      </div>
                                     </div>
-                                  </div>
-                                );
-                              }}
-                            />
-                            <Bar dataKey="rataRata" radius={[6, 6, 0, 0]} maxBarSize={40}>
-                              {cbtMapelChartData.map((entry) => (
-                                <Cell key={`cbt-bar-${entry.fullMapel}`} fill={entry.fill} />
+                                  );
+                                }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: '11px' }} />
+                              {cbtChartMapelSeries.map((ms) => (
+                                <Bar
+                                  key={ms.dataKey}
+                                  dataKey={ms.dataKey}
+                                  name={ms.shortMapel}
+                                  fill={ms.color}
+                                  radius={[4, 4, 0, 0]}
+                                  maxBarSize={22}
+                                />
                               ))}
-                            </Bar>
-                          </BarChart>
+                              <Line
+                                type="monotone"
+                                dataKey="rataRata"
+                                name="Rata-rata Paket"
+                                stroke="#0f172a"
+                                strokeWidth={2.5}
+                                dot={{ r: 4, fill: '#0f172a', stroke: '#ffffff', strokeWidth: 2 }}
+                              />
+                            </ComposedChart>
+                          ) : (
+                            <BarChart data={cbtMapelChartData} margin={{ top: 10, right: 12, left: -16, bottom: 4 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
+                              <XAxis dataKey="mapel" tick={{ fontSize: 10, fontWeight: 700, fill: '#334155' }} tickLine={false} />
+                              <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#64748B' }} axisLine={false} tickLine={false} />
+                              <ReferenceLine y={75} stroke="#e11d48" strokeDasharray="4 4" />
+                              <Tooltip
+                                content={({ active, payload }) => {
+                                  if (!active || !payload || !payload.length) return null;
+                                  const d = payload[0].payload as (typeof cbtMapelChartData)[number];
+                                  return (
+                                    <div className="bg-white border border-slate-200 rounded-xl p-2.5 shadow-md text-xs space-y-1">
+                                      <div className="font-bold text-slate-900">{d.fullMapel}</div>
+                                      <div className="text-emerald-700 font-mono font-black tabular-nums">
+                                        Rata-rata: {d.rataRata} ({d.peserta} pengerjaan)
+                                      </div>
+                                    </div>
+                                  );
+                                }}
+                              />
+                              <Bar dataKey="rataRata" radius={[6, 6, 0, 0]} maxBarSize={40}>
+                                {cbtMapelChartData.map((entry) => (
+                                  <Cell key={`cbt-bar-${entry.fullMapel}`} fill={entry.fill} />
+                                ))}
+                              </Bar>
+                            </BarChart>
+                          )}
                         </ResponsiveContainer>
                       </div>
                     </div>

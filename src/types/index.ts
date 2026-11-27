@@ -219,7 +219,9 @@ export interface CBTQuestion {
   menjodohkanData?: MenjodohkanData; // dua kolom menjodohkan (Kolom Kiri & Kolom Kanan)
   kunciJawaban: string | string[]; // string or array for multiselect
   bobot: number;
+  rubrik?: string;
   pembahasan?: string;
+  optionShuffleMap?: Record<string, string>; // runtime non-leaking map: newOptionLetter -> originalOptionLetter
   cpId?: string; // Capaian Pembelajaran referensi
   tpId?: string; // Tujuan Pembelajaran referensi
   gambarUrl?: string;

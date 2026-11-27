@@ -499,49 +499,66 @@ export function resolveBenarSalahItems(q?: {
   kunciJawaban?: string | string[];
 }): BenarSalahItem[] {
   if (!q) return [];
+  const parseBsChoice = (raw: any): 'Benar' | 'Salah' => {
+    const clean = String(raw || '')
+      .replace(/^\d+\s*[\.\)\-:]\s*/, '')
+      .trim()
+      .toLowerCase();
+    if (['s', 'salah', 'false', '0', 'tidak', 'no', 'f'].includes(clean)) return 'Salah';
+    return 'Benar';
+  };
+
   if (Array.isArray(q.benarSalahItems) && q.benarSalahItems.length > 0) {
     return q.benarSalahItems
       .filter((it) => Boolean(it && (it.pernyataan || '').trim()))
       .map((it, idx) => ({
         id: it.id || `bs_${idx + 1}`,
         pernyataan: it.pernyataan,
-        kunci: it.kunci === 'Salah' ? 'Salah' : 'Benar',
+        kunci: parseBsChoice(it.kunci),
       }));
   }
 
   const isLegacyChoiceOpsi =
     Array.isArray(q.opsi) &&
     q.opsi.length === 2 &&
-    q.opsi.every((o) => /^(benar|salah)$/i.test((o || '').trim()));
+    q.opsi.every((o) => /^(?:[a-b][\.\)]\s*)?(benar|salah)$/i.test((o || '').trim()));
 
   if (Array.isArray(q.opsi) && q.opsi.length > 0 && !isLegacyChoiceOpsi) {
     const kunciArr = Array.isArray(q.kunciJawaban)
       ? q.kunciJawaban
       : String(q.kunciJawaban || '')
-          .split(',')
-          .map((s) => s.trim());
+          .split(/[,;\n]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
     return q.opsi
       .filter((o) => Boolean(o && o.trim()))
-      .map((text, idx) => {
-        const rawKey = (kunciArr[idx] || '').replace(/^\d+\.\s*/, '').trim().toLowerCase();
-        return {
-          id: `bs_${idx + 1}`,
-          pernyataan: text,
-          kunci: rawKey === 'salah' || rawKey === 's' ? 'Salah' : 'Benar',
-        };
-      });
+      .map((text, idx) => ({
+        id: `bs_${idx + 1}`,
+        pernyataan: text,
+        kunci: parseBsChoice(kunciArr[idx]),
+      }));
   }
 
   const singleKey = Array.isArray(q.kunciJawaban)
-    ? q.kunciJawaban[0] || 'Benar'
-    : String(q.kunciJawaban || 'Benar');
+    ? q.kunciJawaban[0] || ''
+    : String(q.kunciJawaban || '');
   const norm = singleKey.trim().toLowerCase();
-  if (norm === 'benar' || norm === 'salah') {
+  if (isLegacyChoiceOpsi && q.opsi && (norm === 'a' || norm === 'b')) {
+    const pickedOpt = q.opsi[norm === 'a' ? 0 : 1] || '';
     return [
       {
         id: 'bs_1',
         pernyataan: 'Pernyataan pada soal di atas',
-        kunci: norm === 'salah' ? 'Salah' : 'Benar',
+        kunci: /salah/i.test(pickedOpt) ? 'Salah' : 'Benar',
+      },
+    ];
+  }
+  if (['b', 's', 'benar', 'salah', 'true', 'false'].includes(norm)) {
+    return [
+      {
+        id: 'bs_1',
+        pernyataan: 'Pernyataan pada soal di atas',
+        kunci: parseBsChoice(norm),
       },
     ];
   }

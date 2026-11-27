@@ -116,8 +116,8 @@ export const Header: React.FC<Props> = ({
   return (
     <header className="bg-gradient-to-r from-rose-600 via-rose-700 to-red-600 text-white shadow-lg sticky top-0 z-40 no-print">
       <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
-        {/* Left Side: Tahun Ajaran, Semester, & Kelas Filters + Sidebar Toggle */}
-        <div className="flex flex-wrap items-center gap-2.5">
+        {/* Left Side: Brand, Logo & Sidebar Toggle */}
+        <div className="flex items-center gap-3">
           {!isStudentTakingExam && (
             <button
               type="button"
@@ -129,8 +129,42 @@ export const Header: React.FC<Props> = ({
             </button>
           )}
 
+          <div
+            onClick={onLogoSecretClick}
+            className="flex items-center gap-3 select-none cursor-pointer"
+          >
+            <div className="flex items-center gap-1.5">
+              <img
+                src={profile.logoKemendikbudUrl}
+                alt="Logo Kemendikbud"
+                className="w-10 h-10 rounded-2xl bg-white p-1 object-contain shadow-md border-2 border-sky-300 shrink-0"
+              />
+              <img
+                src={profile.logoSekolahUrl}
+                alt="Logo Sekolah"
+                className="w-10 h-10 rounded-2xl bg-white p-1 object-contain shadow-md border-2 border-yellow-300 shrink-0"
+              />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-display font-black text-lg sm:text-xl tracking-tight">
+                  SERBU 21 • {profile.name}
+                </span>
+                <span className="bg-yellow-300 text-slate-900 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase">
+                  {activeUser.role}
+                </span>
+              </div>
+              <p className="text-xs text-rose-100">
+                Sistem Edukasi, Rapor, dan Basis Data Utama • {profile.provinsi} • Kurikulum Merdeka
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Center: Tahun Ajaran, Semester, & Kelas Filters */}
+        <div className="flex flex-wrap items-center justify-center gap-2.5 my-1 sm:my-0">
           {activeUser.role !== 'siswa' && (
-            <div className="flex flex-wrap items-center gap-2 bg-white/15 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/25">
+            <div className="flex flex-wrap items-center gap-2 bg-white/15 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/25 shadow-inner">
               <div className="flex items-center gap-1.5">
                 <Calendar className="w-3.5 h-3.5 text-yellow-300" />
                 <select
@@ -190,7 +224,7 @@ export const Header: React.FC<Props> = ({
           )}
         </div>
 
-        {/* Right Side: Live Location (above user) + User Profile + Brand/Logo on the Far Right */}
+        {/* Right Side: Live Location (above user) + User Profile on the Far Right */}
         <div className="flex flex-wrap items-center gap-3 ml-auto">
           {activeExamStatus?.isRunning && (
             <div className="flex items-center gap-3 bg-slate-900/95 text-white px-3.5 py-1.5 rounded-2xl border-2 border-yellow-400 shadow-md">
@@ -414,38 +448,6 @@ export const Header: React.FC<Props> = ({
                   </div>
                 </div>
               )}
-            </div>
-          </div>
-
-          {/* Brand & Logo on Far Right */}
-          <div
-            onClick={onLogoSecretClick}
-            className="flex items-center gap-3 select-none cursor-pointer ml-1"
-          >
-            <div className="text-right hidden sm:block">
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <span className="bg-yellow-300 text-slate-900 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase">
-                  {activeUser.role}
-                </span>
-                <span className="font-display font-black text-lg sm:text-xl tracking-tight">
-                  SERBU 21 • {profile.name}
-                </span>
-              </div>
-              <p className="text-xs text-rose-100">
-                Sistem Edukasi, Rapor, dan Basis Data Utama • {profile.provinsi} • Kurikulum Merdeka
-              </p>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <img
-                src={profile.logoKemendikbudUrl}
-                alt="Logo Kemendikbud"
-                className="w-10 h-10 rounded-2xl bg-white p-1 object-contain shadow-md border-2 border-sky-300 shrink-0"
-              />
-              <img
-                src={profile.logoSekolahUrl}
-                alt="Logo Sekolah"
-                className="w-10 h-10 rounded-2xl bg-white p-1 object-contain shadow-md border-2 border-yellow-300 shrink-0"
-              />
             </div>
           </div>
         </div>

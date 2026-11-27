@@ -26,6 +26,13 @@ import {
   resolveBenarSalahItems,
   resolveMenjodohkanData,
 } from './questionFormat';
+import {
+  SeparatedAnswerKeyEntry,
+  buildTkaExamDocId,
+  mergeQuestionsWithAnswerKeys,
+  resolveBuiltInSampleExamKeys,
+  stripAnswerKeysFromCbtExam,
+} from './examAnswerKeyFirestore';
 
 export interface SarahReviewedQuestionItem {
   no: number;
@@ -302,6 +309,10 @@ const SAMPLE_CBT_LOOKUP: Record<string, CBTExam> = {
   },
 };
 
+const SANITIZED_SAMPLE_CBT_LOOKUP: Record<string, CBTExam> = Object.fromEntries(
+  Object.entries(SAMPLE_CBT_LOOKUP).map(([id, ex]) => [id, stripAnswerKeysFromCbtExam(ex)])
+);
+
 function slugifyTka(val: string): string {
   return String(val || '')
     .toLowerCase()
@@ -457,7 +468,8 @@ function buildReviewedQuestions(
 
 export function buildStudentExamReviewBundle(
   student: Student | undefined,
-  liveCbtExams?: CBTExam[]
+  liveCbtExams?: CBTExam[],
+  completedExamKeysByExamId?: Record<string, Record<string, SeparatedAnswerKeyEntry>>
 ): SarahExamReviewBundle {
   if (!student) {
     return { completedExams: [], uncompletedExams: [] };
@@ -475,7 +487,8 @@ export function buildStudentExamReviewBundle(
   const completedMap = new Map<string, SarahCompletedExamReview>();
 
   const findMatchingCbtExam = (res: CBTExamResult): CBTExam | undefined => {
-    const byId = cbtExams.find((ex) => ex.id === res.examId) || SAMPLE_CBT_LOOKUP[res.examId];
+    const byId =
+      cbtExams.find((ex) => ex.id === res.examId) || SANITIZED_SAMPLE_CBT_LOOKUP[res.examId];
     if (byId) return byId;
     const targetMapel = (res.mapel || '').trim().toLowerCase();
     const targetPaket = (res.paketName || '').trim().toLowerCase();
@@ -527,7 +540,13 @@ export function buildStudentExamReviewBundle(
       const judul = examObj?.judul || res.judul || `Ujian CBT ${res.mapel || ''}`.trim();
       const mapel = examObj?.mapel || res.mapel || 'Umum';
       const paketName = examObj?.paketName || res.paketName || judul;
-      const soalList = examObj?.soalList || [];
+      const rawSoalList = examObj?.soalList || [];
+      const keysMap =
+        completedExamKeysByExamId?.[examId] ||
+        completedExamKeysByExamId?.[res.examId] ||
+        resolveBuiltInSampleExamKeys(examId) ||
+        resolveBuiltInSampleExamKeys(res.examId);
+      const soalList = mergeQuestionsWithAnswerKeys(rawSoalList, keysMap);
       const { questions, correctCount } = buildReviewedQuestions(soalList, res.jawabanSiswa);
       const dedupKey = `cbt:${examId}`;
 
@@ -559,7 +578,13 @@ export function buildStudentExamReviewBundle(
       const grp = tkaGroupMap.get(`${paketName}__${normMapel}`);
       const examId =
         res.examId || grp?.examId || `tka_live_${slugifyTka(paketName)}_${slugifyTka(normMapel)}`;
-      const soalList = grp?.questions || [];
+      const tkaKeyDocId = buildTkaExamDocId(paketName, grp?.mapel || rawMapel);
+      const rawSoalList = grp?.questions || [];
+      const keysMap =
+        completedExamKeysByExamId?.[tkaKeyDocId] ||
+        completedExamKeysByExamId?.[examId] ||
+        resolveBuiltInSampleExamKeys(examId);
+      const soalList = mergeQuestionsWithAnswerKeys(rawSoalList, keysMap);
       const { questions, correctCount } = buildReviewedQuestions(soalList, res.jawabanSiswa);
       const dedupKey = `tka:${paketName.toLowerCase()}__${normMapel}`;
 
@@ -598,7 +623,13 @@ export function buildStudentExamReviewBundle(
         const scoreVal = Number(sub.scoresPerMapel?.[normMapel] ?? sub.skorTotal ?? 0);
         const grp = tkaGroupMap.get(`${paketName}__${normMapel}`);
         const examId = grp?.examId || `tka_live_${slugifyTka(paketName)}_${slugifyTka(normMapel)}`;
-        const soalList = grp?.questions || [];
+        const tkaKeyDocId = buildTkaExamDocId(paketName, grp?.mapel || normMapel);
+        const rawSoalList = grp?.questions || [];
+        const keysMap =
+          completedExamKeysByExamId?.[tkaKeyDocId] ||
+          completedExamKeysByExamId?.[examId] ||
+          resolveBuiltInSampleExamKeys(examId);
+        const soalList = mergeQuestionsWithAnswerKeys(rawSoalList, keysMap);
         const { questions, correctCount } = buildReviewedQuestions(soalList, sub.answers);
         const dedupKey = `tka:${paketName.toLowerCase()}__${normMapel}`;
 

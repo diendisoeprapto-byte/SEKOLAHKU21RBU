@@ -14,6 +14,10 @@ import {
 import { db } from './firebase';
 import { CBTExam, CBTQuestion } from '../types';
 import { runWithoutStorageSync, saveStoredCBTExams, safeSetLocalStorage } from './storage';
+import {
+  saveSeparatedCbtExamToTenant,
+  deleteSeparatedExamFromTenant,
+} from './examAnswerKeyFirestore';
 
 export const CBT_EXAMS_COLLECTION = 'cbt_exams';
 const SOAL_CHUNK_MARKER = '__soalchunk_';
@@ -243,6 +247,11 @@ export async function saveCbtExamToFirestore(
       }
     }
 
+    await saveSeparatedCbtExamToTenant({
+      ...exam,
+      id: examId,
+    });
+
     safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
     return true;
   } catch (error) {
@@ -271,6 +280,7 @@ export async function deleteCbtExamFromFirestore(examId: string): Promise<boolea
     if (prevChunkCount > 0) {
       await deleteChunkDocsRange(safeId, 0, prevChunkCount);
     }
+    await deleteSeparatedExamFromTenant(safeId);
     safeSetLocalStorage('sekolahku_cbt_exams_seeded', 'true');
     return true;
   } catch (error) {
@@ -321,13 +331,18 @@ export async function replaceCbtExamsInFirestore(exams: CBTExam[]): Promise<bool
       }
     });
 
-    if (staleIds.length > 0) {
+      if (staleIds.length > 0) {
       const CHUNK_SIZE = 350;
       for (let i = 0; i < staleIds.length; i += CHUNK_SIZE) {
         const chunk = staleIds.slice(i, i + CHUNK_SIZE);
         const batch = writeBatch(db);
         chunk.forEach((id) => batch.delete(doc(db, CBT_EXAMS_COLLECTION, id)));
         await batch.commit();
+        for (const staleId of chunk) {
+          if (!staleId.includes(SOAL_CHUNK_MARKER)) {
+            await deleteSeparatedExamFromTenant(staleId);
+          }
+        }
       }
     }
 

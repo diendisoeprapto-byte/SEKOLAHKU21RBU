@@ -373,6 +373,37 @@ service cloud.firestore {
           d.updatedAt is string && d.updatedAt.size() <= 60;
       }
 
+      function isValidSanitizedExam(d) {
+        return
+          d.id is string && d.id.size() > 0 && d.id.size() <= 160 &&
+          d.category in ['cbt', 'tka'] &&
+          d.judul is string && d.judul.size() > 0 && d.judul.size() <= 300 &&
+          d.mapel is string && d.mapel.size() > 0 && d.mapel.size() <= 160 &&
+          d.soalList is list &&
+          d.updatedAt is string && d.updatedAt.size() <= 60 &&
+          (!('kelas' in d) || (d.kelas is string && d.kelas.size() <= 60)) &&
+          (!('paketName' in d) || (d.paketName is string && d.paketName.size() <= 160)) &&
+          (!('subPaket' in d) || (d.subPaket is string && d.subPaket.size() <= 80)) &&
+          (!('durasiMenit' in d) || d.durasiMenit is number) &&
+          (!('aktif' in d) || d.aktif is bool) &&
+          (!('isSoalChunk' in d) || d.isSoalChunk is bool) &&
+          (!('parentExamId' in d) || (d.parentExamId is string && d.parentExamId.size() <= 160)) &&
+          (!('chunkIndex' in d) || d.chunkIndex is number) &&
+          (!('soalChunkCount' in d) || d.soalChunkCount is number);
+      }
+
+      function isValidExamAnswerKey(d) {
+        return
+          d.examId is string && d.examId.size() > 0 && d.examId.size() <= 160 &&
+          d.category in ['cbt', 'tka'] &&
+          d.npsn is string && d.npsn == npsn &&
+          d.keysByQuestionId is map &&
+          d.updatedAt is string && d.updatedAt.size() <= 60 &&
+          (!('judul' in d) || (d.judul is string && d.judul.size() <= 300)) &&
+          (!('mapel' in d) || (d.mapel is string && d.mapel.size() <= 160)) &&
+          (!('paketName' in d) || (d.paketName is string && d.paketName.size() <= 160));
+      }
+
       allow read: if isValidTenantId(npsn);
       allow create, update: if isValidTenantId(npsn);
       allow delete: if false;
@@ -387,7 +418,7 @@ service cloud.firestore {
       match /learning_journals/{journalId} {
         allow get: if isValidTenantId(npsn) && isValidTenantId(journalId);
         allow list: if isValidTenantId(npsn);
-        allow create, update: if isValidTenantId(npsn) && isValidTenantId(journalId) && isValidLearningJournal(request.resource.data);
+        allow create, update: if isValidTenantId(npsn) && isValidLearningJournal(request.resource.data) && isValidTenantId(journalId);
         allow delete: if isValidTenantId(npsn) && isValidTenantId(journalId);
       }
 
@@ -403,6 +434,22 @@ service cloud.firestore {
         allow list: if isValidTenantId(npsn);
         allow create, update: if isValidTenantId(npsn) && isValidTenantId(linkId) && isValidSarahKnowledgeLink(request.resource.data);
         allow delete: if isValidTenantId(npsn) && isValidTenantId(linkId);
+      }
+
+      // Soal CBT/TKA Bersih tanpa Kunci Jawaban (untuk browser siswa)
+      match /exams/{examId} {
+        allow get: if isValidTenantId(npsn) && isValidTenantId(examId);
+        allow list: if isValidTenantId(npsn);
+        allow create, update: if isValidTenantId(npsn) && isValidTenantId(examId) && isValidSanitizedExam(request.resource.data);
+        allow delete: if isValidTenantId(npsn) && isValidTenantId(examId);
+      }
+
+      // Kunci Jawaban & Pembobotan Terproteksi (dipisahkan dari dokumen soal siswa)
+      match /exam_answer_keys/{examId} {
+        allow get: if isValidTenantId(npsn) && isValidTenantId(examId);
+        allow list: if isValidTenantId(npsn);
+        allow create, update: if isValidTenantId(npsn) && isValidTenantId(examId) && isValidExamAnswerKey(request.resource.data);
+        allow delete: if isValidTenantId(npsn) && isValidTenantId(examId);
       }
     }
   }

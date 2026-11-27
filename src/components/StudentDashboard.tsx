@@ -106,6 +106,15 @@ import { BenarSalahTableView, MenjodohkanColumnsView } from './StructuredQuestio
 import { resolveBenarSalahItems, resolveMenjodohkanData } from '../utils/questionFormat';
 import { StudentPerformanceStats } from './StudentPerformanceStats';
 import { saveHasilUjianToFirestore } from '../utils/sarahExamAccess';
+import {
+  buildTkaExamDocId,
+  computeConcurrentSubmitJitterMs,
+  detectLargeConcurrentExam,
+  fetchExamAnswerKeysFromFirestore,
+  mergeQuestionsWithAnswerKeys,
+  resolveBuiltInSampleExamKeys,
+  stripAnswerKeysFromQuestion,
+} from '../utils/examAnswerKeyFirestore';
 
 
 interface Props {
@@ -171,7 +180,12 @@ export const StudentDashboard: React.FC<Props> = ({
     return 'home';
   });
 
-  const [cbtExamsState, setCbtExamsState] = useState<CBTExam[]>(() => getStoredCBTExams());
+  const [cbtExamsState, setCbtExamsState] = useState<CBTExam[]>(() =>
+    getStoredCBTExams().map((ex) => ({
+      ...ex,
+      soalList: Array.isArray(ex.soalList) ? ex.soalList.map((q) => stripAnswerKeysFromQuestion(q)) : [],
+    }))
+  );
   const [cbtDurations, setCbtDurations] = useState<Record<string, number>>(() => getStoredCBTDurations());
   const [cbtActivePackages, setCbtActivePackages] = useState<Record<string, boolean>>(() =>
     getStoredCBTActivePackages()
@@ -180,18 +194,26 @@ export const StudentDashboard: React.FC<Props> = ({
   const [tkaActivePackages, setTkaActivePackages] = useState<Record<string, boolean>>(() =>
     getStoredTKAActivePackages()
   );
-  const [tkaQuestionsState, setTkaQuestionsState] = useState<TKAQuestion[]>(() => getStoredTKAQuestions());
+  const [tkaQuestionsState, setTkaQuestionsState] = useState<TKAQuestion[]>(() =>
+    getStoredTKAQuestions().map((q) => stripAnswerKeysFromQuestion(q))
+  );
 
   useEffect(() => {
     const syncCbt = () => {
-      setCbtExamsState(getStoredCBTExams());
+      setCbtExamsState(
+        getStoredCBTExams().map((ex) => ({
+          ...ex,
+          soalList: Array.isArray(ex.soalList) ? ex.soalList.map((q) => stripAnswerKeysFromQuestion(q)) : [],
+        }))
+      );
       setCbtDurations(getStoredCBTDurations());
       setCbtActivePackages(getStoredCBTActivePackages());
     };
     const syncCbtDurations = () => setCbtDurations(getStoredCBTDurations());
     const syncDurations = () => setTkaDurations(getStoredTKADurations());
     const syncTkaActive = () => setTkaActivePackages(getStoredTKAActivePackages());
-    const syncTkaQuestions = () => setTkaQuestionsState(getStoredTKAQuestions());
+    const syncTkaQuestions = () =>
+      setTkaQuestionsState(getStoredTKAQuestions().map((q) => stripAnswerKeysFromQuestion(q)));
     const syncCloudAll = () => {
       syncCbt();
       syncDurations();
@@ -217,12 +239,17 @@ export const StudentDashboard: React.FC<Props> = ({
   }, []);
 
   useEffect(() => {
-    setCbtExamsState(getStoredCBTExams());
+    setCbtExamsState(
+      getStoredCBTExams().map((ex) => ({
+        ...ex,
+        soalList: Array.isArray(ex.soalList) ? ex.soalList.map((q) => stripAnswerKeysFromQuestion(q)) : [],
+      }))
+    );
     setCbtDurations(getStoredCBTDurations());
     setCbtActivePackages(getStoredCBTActivePackages());
     setTkaDurations(getStoredTKADurations());
     setTkaActivePackages(getStoredTKAActivePackages());
-    setTkaQuestionsState(getStoredTKAQuestions());
+    setTkaQuestionsState(getStoredTKAQuestions().map((q) => stripAnswerKeysFromQuestion(q)));
   }, [viewMode]);
 
   useEffect(() => {
@@ -872,7 +899,7 @@ export const StudentDashboard: React.FC<Props> = ({
         kelas: ex.kelas,
         isTeacherCreated: true,
         isActive: isExamActive,
-        soalList: ex.soalList,
+        soalList: ex.soalList.map((q) => stripAnswerKeysFromQuestion(q)),
       });
     });
 
@@ -899,45 +926,40 @@ export const StudentDashboard: React.FC<Props> = ({
             tipe: 'pg',
             pertanyaan: 'Organ tubuh manusia yang berfungsi sebagai organ utama pernapasan dan tempat pertukaran oksigen dengan karbondioksida adalah...',
             opsi: ['A. Paru-paru', 'B. Jantung', 'C. Lambung', 'D. Ginjal'],
-            kunciJawaban: 'A',
-            bobot: 20,
-            pembahasan: 'Paru-paru adalah organ utama sistem pernapasan manusia tempat terjadinya difusi O2 dan CO2 di alveolus.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'cbt_q2',
             tipe: 'pg',
             pertanyaan: 'Bagian darah yang bertugas mengangkut oksigen ke seluruh sel-sel tubuh adalah...',
             opsi: ['A. Sel darah putih (Leukosit)', 'B. Sel darah merah (Eritrosit)', 'C. Keping darah (Trombosit)', 'D. Plasma darah'],
-            kunciJawaban: 'B',
-            bobot: 20,
-            pembahasan: 'Eritrosit mengandung hemoglobin yang mengikat oksigen untuk diedarkan ke seluruh tubuh.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'cbt_q3',
             tipe: 'pg',
             pertanyaan: 'Hewan berikut ini bernapas menggunakan trakea adalah...',
             opsi: ['A. Ikan mas', 'B. Belalang', 'C. Katak dewasa', 'D. Cacing tanah'],
-            kunciJawaban: 'B',
-            bobot: 20,
-            pembahasan: 'Serangga seperti belalang bernapas menggunakan pembuluh trakea.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'cbt_q4',
             tipe: 'pg',
             pertanyaan: 'Peredaran darah dari jantung menuju ke seluruh tubuh dan kembali lagi ke jantung disebut...',
             opsi: ['A. Peredaran darah kecil', 'B. Peredaran darah besar', 'C. Peredaran darah terbuka', 'D. Peredaran getah bening'],
-            kunciJawaban: 'B',
-            bobot: 20,
-            pembahasan: 'Peredaran darah sistemik (besar) mengalirkan darah dari ventrikel kiri jantung ke seluruh tubuh lalu kembali ke atrium kanan.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'cbt_q5',
             tipe: 'pg',
             pertanyaan: 'Upaya menjaga kesehatan sistem pernapasan pada masa pancaroba adalah...',
             opsi: ['A. Merokok di ruangan tertutup', 'B. Menggunakan masker saat berdebu dan berolahraga rutin', 'C. Tidur larut malam setiap hari', 'D. Mengonsumsi makanan berpengawet tinggi'],
-            kunciJawaban: 'B',
-            bobot: 20,
-            pembahasan: 'Menggunakan masker dan berolahraga secara teratur menjaga imunitas dan saluran pernapasan tetap bersih.',
+            kunciJawaban: '',
+            bobot: 0,
           },
         ],
       },
@@ -956,36 +978,32 @@ export const StudentDashboard: React.FC<Props> = ({
             tipe: 'pg',
             pertanyaan: 'Hasil dari 150 + 25 × 4 - 100 adalah...',
             opsi: ['A. 150', 'B. 600', 'C. 175', 'D. 250'],
-            kunciJawaban: 'A',
-            bobot: 25,
-            pembahasan: 'Dahulukan perkalian: 25 x 4 = 100. Kemudian 150 + 100 - 100 = 150.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'cbt_m2',
             tipe: 'pg',
             pertanyaan: 'Suhu di dalam lemari es mula-mula -4°C. Ketika listrik padam, suhu naik 2°C setiap 10 menit. Setelah 30 menit, suhu lemari es menjadi...',
             opsi: ['A. 2°C', 'B. -2°C', 'C. 6°C', 'D. 0°C'],
-            kunciJawaban: 'A',
-            bobot: 25,
-            pembahasan: 'Kenaikan suhu = (30 / 10) x 2°C = 6°C. Suhu akhir = -4°C + 6°C = 2°C.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'cbt_m3',
             tipe: 'pg',
             pertanyaan: 'FPB dari bilangan 36, 54, dan 72 adalah...',
             opsi: ['A. 9', 'B. 12', 'C. 18', 'D. 24'],
-            kunciJawaban: 'C',
-            bobot: 25,
-            pembahasan: 'Faktor persekutuan terbesar dari 36, 54, dan 72 adalah 18.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'cbt_m4',
             tipe: 'pg',
             pertanyaan: 'Ibu memiliki 3 kantong beras, masing-masing berisi 2,5 kg. Beras tersebut dibagikan kepada 5 orang tetangga sama rata. Setiap tetangga menerima...',
             opsi: ['A. 1,5 kg', 'B. 1,2 kg', 'C. 1,8 kg', 'D. 2,0 kg'],
-            kunciJawaban: 'A',
-            bobot: 25,
-            pembahasan: 'Total beras = 3 x 2,5 = 7,5 kg. Dibagi 5 orang = 7,5 / 5 = 1,5 kg.',
+            kunciJawaban: '',
+            bobot: 0,
           },
         ],
       },
@@ -1004,27 +1022,24 @@ export const StudentDashboard: React.FC<Props> = ({
             tipe: 'pg',
             pertanyaan: 'Teks yang berisi penjelasan mengenai peristiwa alam, sosial, atau budaya secara ilmiah disebut teks...',
             opsi: ['A. Narasi', 'B. Eksplanasi', 'C. Fiksi', 'D. Deskripsi'],
-            kunciJawaban: 'B',
-            bobot: 33,
-            pembahasan: 'Teks eksplanasi menjelaskan proses terjadinya suatu fenomena alam atau sosial dengan kausalitas.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'cbt_bi2',
             tipe: 'pg',
             pertanyaan: 'Ide pokok pada paragraf induktif berada di...',
             opsi: ['A. Awal paragraf', 'B. Akhir paragraf', 'C. Awal dan akhir paragraf', 'D. Tengah paragraf'],
-            kunciJawaban: 'B',
-            bobot: 33,
-            pembahasan: 'Paragraf induktif menyajikan kalimat-kalimat penjelas terlebih dahulu kemudian disimpulkan di akhir paragraf.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'cbt_bi3',
             tipe: 'pg',
             pertanyaan: 'Kata tanya yang tepat untuk menggali alasan atau penyebab terjadinya suatu fenomena adalah...',
             opsi: ['A. Siapa', 'B. Kapan', 'C. Mengapa', 'D. Dimana'],
-            kunciJawaban: 'C',
-            bobot: 34,
-            pembahasan: 'Kata tanya "Mengapa" menanyakan sebab atau alasan peristiwa terjadi.',
+            kunciJawaban: '',
+            bobot: 0,
           },
         ],
       },
@@ -1043,27 +1058,24 @@ export const StudentDashboard: React.FC<Props> = ({
             tipe: 'pg',
             pertanyaan: 'Sila dalam Pancasila yang mendasari pentingnya musyawarah untuk mencapai mufakat adalah sila ke-...',
             opsi: ['A. 2', 'B. 3', 'C. 4', 'D. 5'],
-            kunciJawaban: 'C',
-            bobot: 34,
-            pembahasan: 'Sila ke-4: Kerakyatan yang Dipimpin oleh Hikmat Kebijaksanaan dalam Permusyawaratan/Perwakilan.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'cbt_p2',
             tipe: 'pg',
             pertanyaan: 'Mendapatkan kasih sayang dan pendidikan yang layak dari orang tua di rumah merupakan contoh...',
             opsi: ['A. Hak anak', 'B. Kewajiban anak', 'C. Hukuman anak', 'D. Paksaan anak'],
-            kunciJawaban: 'A',
-            bobot: 33,
-            pembahasan: 'Kasih sayang dan pendidikan adalah hak dasar yang wajib dipenuhi orang tua untuk anak.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'cbt_p3',
             tipe: 'pg',
             pertanyaan: 'Sikap yang harus kita tunjukkan ketika pendapat kita tidak diterima dalam musyawarah kelas adalah...',
             opsi: ['A. Marah dan meninggalkan ruangan', 'B. Menerima dengan lapang dada demi kepentingan bersama', 'C. Memaksa teman agar sependapat', 'D. Mogok belajar'],
-            kunciJawaban: 'B',
-            bobot: 33,
-            pembahasan: 'Musyawarah menuntut sikap lapang dada menghargai keputusan mufakat bersama.',
+            kunciJawaban: '',
+            bobot: 0,
           },
         ],
       },
@@ -1129,7 +1141,7 @@ export const StudentDashboard: React.FC<Props> = ({
       paketName: grp.jenisTka,
       subPaket: 'Paket 1',
       isTeacherCreated: true,
-      soalList: grp.list,
+      soalList: grp.list.map((q) => stripAnswerKeysFromQuestion(q)),
     }));
 
     const sampleTkaDefaults: ExamOptionItem[] = [
@@ -1152,9 +1164,8 @@ export const StudentDashboard: React.FC<Props> = ({
               'C. Gawai adalah penyebab tunggal rusaknya interaksi antar teman sebaya.',
               'D. Orang tua tidak perlu membatasi waktu jika anak berprestasi.',
             ],
-            kunciJawaban: 'A',
-            bobot: 50,
-            pembahasan: 'Simpulan merangkum sebab akibat teks: pengawasan batasan waktu mengatasi dampak kecanduan.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'tka_bi2',
@@ -1166,9 +1177,8 @@ export const StudentDashboard: React.FC<Props> = ({
               'C. Makanan di kantin sekolah adalah makanan paling lezat di seluruh nusantara.',
               'D. Pelajaran Matematika selalu menyenangkan bagi semua peserta didik tanpa kecuali.',
             ],
-            kunciJawaban: 'B',
-            bobot: 50,
-            pembahasan: 'Kalimat B dapat dibuktikan dengan data empiris BMKG yang obyektif sehingga berstatus fakta.',
+            kunciJawaban: '',
+            bobot: 0,
           },
         ],
       },
@@ -1186,18 +1196,16 @@ export const StudentDashboard: React.FC<Props> = ({
             tipe: 'pg',
             pertanyaan: 'Sebuah denah ruang kelas digambar dengan skala 1 : 100. Jika panjang kelas pada denah adalah 8 cm dan lebar 6 cm, maka luas sebenarnya ruang kelas tersebut adalah...',
             opsi: ['A. 48 meter persegi', 'B. 480 meter persegi', 'C. 24 meter persegi', 'D. 14 meter persegi'],
-            kunciJawaban: 'A',
-            bobot: 50,
-            pembahasan: 'Panjang asli = 8 x 100 cm = 8 m. Lebar asli = 6 x 100 cm = 6 m. Luas = 8 m x 6 m = 48 m².',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'tka_mtk2',
             tipe: 'pg',
             pertanyaan: 'Sebuah akuarium berbentuk balok dengan panjang 80 cm, lebar 50 cm, dan tinggi 60 cm terisi air 3/4 bagian. Volume air di dalam akuarium tersebut adalah...',
             opsi: ['A. 180 liter', 'B. 240 liter', 'C. 120 liter', 'D. 360 liter'],
-            kunciJawaban: 'A',
-            bobot: 50,
-            pembahasan: 'Volume penuh = 80 x 50 x 60 = 240.000 cm³ = 240 liter. Terisi 3/4 bagian = 3/4 x 240 liter = 180 liter.',
+            kunciJawaban: '',
+            bobot: 0,
           },
         ],
       },
@@ -1220,9 +1228,8 @@ export const StudentDashboard: React.FC<Props> = ({
               'C. Populasi elang meningkat berlipat ganda',
               'D. Populasi padi menjadi berlimpah ruah tanpa gangguan',
             ],
-            kunciJawaban: 'A',
-            bobot: 50,
-            pembahasan: 'Katak adalah predator belalang. Jika katak berkurang, belalang berkembang biak tanpa kendali dan memangsa padi.',
+            kunciJawaban: '',
+            bobot: 0,
           },
           {
             id: 'tka_ip2',
@@ -1234,9 +1241,8 @@ export const StudentDashboard: React.FC<Props> = ({
               'C. Membakar sampah plastik di pekarangan belakang',
               'D. Menggunakan kendaraan bermotor bahan bakar fosil untuk jarak 100 meter',
             ],
-            kunciJawaban: 'A',
-            bobot: 50,
-            pembahasan: 'Pembangkit listrik tenaga surya memanfaatkan sinar matahari bebas emisi karbon.',
+            kunciJawaban: '',
+            bobot: 0,
           },
         ],
       },
@@ -1357,7 +1363,8 @@ export const StudentDashboard: React.FC<Props> = ({
 
   // Evaluasi skor menggunakan unified examEngine (mendukung seluruh 6 tipe soal)
   const gradeQuestionAnswer = (q: CBTQuestion, studentAns: any): { isCorrect: boolean; earnedScore: number } => {
-    return evaluateStudentAnswer(q, studentAns);
+    const qWeight = Number(q.bobot) > 0 ? Number(q.bobot) : 10;
+    return evaluateStudentAnswer({ ...q, bobot: qWeight }, studentAns);
   };
 
   // Simpan referensi state ujian terbaru agar aman saat logout/unmount/beforeunload
@@ -1630,16 +1637,30 @@ export const StudentDashboard: React.FC<Props> = ({
         ? localStorage.getItem('sekolahku_tka_acak_jawaban') === 'true'
         : localStorage.getItem('sekolahku_cbt_acak_jawaban') === 'true';
 
-    let preparedList = [...currentExam.soalList];
+    let preparedList = currentExam.soalList.map((q) => stripAnswerKeysFromQuestion(q));
     if (acakSoal) {
       preparedList = [...preparedList].sort(() => Math.random() - 0.5);
     }
     if (acakJawaban) {
       preparedList = preparedList.map((q) => {
-        if (q.opsi && q.opsi.length > 0) {
+        if ((q.tipe === 'pg' || q.tipe === 'pg_kompleks') && q.opsi && q.opsi.length > 0) {
+          const indices = q.opsi.map((_, i) => i).sort(() => Math.random() - 0.5);
+          const nextOpsi = indices.map((oldIdx) => q.opsi![oldIdx]);
+          const newToOldLetter: Record<string, string> = {};
+          const nextOpsiGambar: Record<string, string> = {};
+          indices.forEach((oldIdx, newIdx) => {
+            const oldL = String.fromCharCode(65 + oldIdx);
+            const newL = String.fromCharCode(65 + newIdx);
+            newToOldLetter[newL] = oldL;
+            if (q.opsiGambar?.[oldL]) {
+              nextOpsiGambar[newL] = q.opsiGambar[oldL];
+            }
+          });
           return {
             ...q,
-            opsi: [...q.opsi].sort(() => Math.random() - 0.5),
+            opsi: nextOpsi,
+            optionShuffleMap: newToOldLetter,
+            ...(q.opsiGambar ? { opsiGambar: nextOpsiGambar } : {}),
           };
         }
         return q;
@@ -1725,20 +1746,88 @@ export const StudentDashboard: React.FC<Props> = ({
     setIsSavingSubmission(true);
     setOfflineQueueNotice(false);
 
-    const sanitizedAnswers: Record<string, string | string[]> = {};
+    const sanitizeAnswerValue = (value: unknown): any => {
+      if (value === undefined || value === null) return '';
+      if (typeof value === 'boolean' || typeof value === 'number') return value;
+      if (Array.isArray(value)) return value.map((item) => sanitizeAnswerValue(item));
+      if (typeof value === 'object') {
+        const cleanObj: Record<string, any> = {};
+        Object.entries(value as Record<string, unknown>).forEach(([k, v]) => {
+          const cleanK = sanitizeInput(k, 120);
+          if (cleanK) cleanObj[cleanK] = sanitizeAnswerValue(v);
+        });
+        return cleanObj;
+      }
+      return sanitizeInput(value, 2000);
+    };
+
+    const sanitizedAnswers: Record<string, any> = {};
     Object.entries(answers).forEach(([qId, val]) => {
-      sanitizedAnswers[qId] = Array.isArray(val)
-        ? val.map((v) => sanitizeInput(v, 500))
-        : sanitizeInput(val, 2000);
+      sanitizedAnswers[qId] = sanitizeAnswerValue(val);
     });
 
-    const evaluatedQuestions = activeExamSoalList.length > 0 ? activeExamSoalList : finishedExam.soalList;
+    const rawEvaluatedQuestions = activeExamSoalList.length > 0 ? activeExamSoalList : finishedExam.soalList;
     const answeredCount = countAnsweredQuestions(sanitizedAnswers);
+
+    setSubmittingModalState({
+      isOpen: true,
+      status: 'submitting',
+      attemptCount: 1,
+      message: 'Mengamankan & Mengirim Jawaban ke Server...',
+    });
+
+    if (isAutoSubmit) {
+      setTimeUpModal({
+        isOpen: true,
+        status: 'submitting',
+        examTitle: finishedExam.judul,
+        category: finishedExam.category,
+        answeredCount,
+        totalQuestions: rawEvaluatedQuestions.length,
+        score: null,
+        cloudSaved: false,
+      });
+      showToast(
+        'Waktu ujian telah berakhir! Jawaban Anda sedang diamankan & dikirim otomatis ke server...',
+        'error'
+      );
+    }
+
+    // Jitter cerdas 1–4 detik untuk mencegah write spike pada ujian serentak berskala besar (>30 peserta)
+    const concurrentCheck = detectLargeConcurrentExam({
+      students,
+      targetClass: finishedExam.kelas || activeClass,
+      category: finishedExam.category,
+    });
+    const jitterMs = computeConcurrentSubmitJitterMs(concurrentCheck.isLargeScale);
+    if (jitterMs > 0) {
+      await new Promise((res) => setTimeout(res, jitterMs));
+    }
+
+    // Ambil kunci jawaban & pembobotan terproteksi secara in-memory sesaat sebelum penilaian
+    const protectedKeyDocId =
+      finishedExam.category === 'tka'
+        ? buildTkaExamDocId(finishedExam.paketName, finishedExam.mapel)
+        : finishedExam.id;
+    let fetchedKeys = await fetchExamAnswerKeysFromFirestore(protectedKeyDocId);
+    if (!fetchedKeys && finishedExam.category === 'tka') {
+      fetchedKeys = await fetchExamAnswerKeysFromFirestore(finishedExam.id);
+    }
+    if (!fetchedKeys) {
+      fetchedKeys = resolveBuiltInSampleExamKeys(finishedExam.id);
+    }
+
+    const evaluatedQuestions = fetchedKeys
+      ? mergeQuestionsWithAnswerKeys(rawEvaluatedQuestions, fetchedKeys)
+      : rawEvaluatedQuestions;
+    const evaluatedById = new Map(evaluatedQuestions.map((eq) => [eq.id, eq]));
+
     let earned = 0;
     let max = 0;
 
     evaluatedQuestions.forEach((q) => {
-      max += q.bobot || 10;
+      const w = Number(q.bobot) > 0 ? Number(q.bobot) : 10;
+      max += w;
       const ans = sanitizedAnswers[q.id];
       const evalRes = gradeQuestionAnswer(q, ans);
       earned += evalRes.earnedScore;
@@ -1746,7 +1835,7 @@ export const StudentDashboard: React.FC<Props> = ({
 
     const canonicalList =
       finishedExam.soalList && finishedExam.soalList.length > 0
-        ? finishedExam.soalList
+        ? finishedExam.soalList.map((q) => evaluatedById.get(q.id) || q)
         : evaluatedQuestions;
     const noSoalBetul: number[] = [];
     const noSoalSalah: number[] = [];
@@ -1772,23 +1861,6 @@ export const StudentDashboard: React.FC<Props> = ({
 
     const rawGrade = max > 0 ? Math.round((earned / max) * 100) : 100;
     const finalGrade = Number.isFinite(rawGrade) ? rawGrade : 0;
-
-    if (isAutoSubmit) {
-      setTimeUpModal({
-        isOpen: true,
-        status: 'submitting',
-        examTitle: finishedExam.judul,
-        category: finishedExam.category,
-        answeredCount,
-        totalQuestions: evaluatedQuestions.length,
-        score: null,
-        cloudSaved: false,
-      });
-      showToast(
-        'Waktu ujian telah berakhir! Jawaban Anda sedang dikirim otomatis ke database sebelum sesi ditutup...',
-        'error'
-      );
-    }
 
     // Rekam ke CBT Results di storage (beserta metadata ujian & HOTS + durasiDetik)
     const activeFilters = getActiveFilters();
@@ -1883,7 +1955,7 @@ export const StudentDashboard: React.FC<Props> = ({
         message:
           attempt > 1
             ? `Koneksi sedang lambat (Wait Response). Jawaban Anda aman, sistem sedang mengirim ulang otomatis... (Percobaan ke-${attempt}). Mohon jangan tutup halaman ini.`
-            : 'Mengirim nilai ujian ke server (Tahan Wait Response)...',
+            : 'Mengamankan & Mengirim Jawaban ke Server...',
       });
 
       try {
@@ -3411,9 +3483,11 @@ export const StudentDashboard: React.FC<Props> = ({
                           : 'Uraian'}
                       </span>
                     </div>
-                    <span className="text-xs font-bold bg-slate-100 text-slate-700 px-3 py-1 rounded-xl">
-                      Bobot: {q.bobot} Poin
-                    </span>
+                    {Number(q.bobot) > 0 && (
+                      <span className="text-xs font-bold bg-slate-100 text-slate-700 px-3 py-1 rounded-xl">
+                        Bobot: {q.bobot} Poin
+                      </span>
+                    )}
                   </div>
 
                   {/* Pertanyaan & Gambar Soal (Judul terpisah & posisi gambar sesuai pengaturan) */}
@@ -3959,7 +4033,9 @@ export const StudentDashboard: React.FC<Props> = ({
             <h3 className="font-display font-black text-lg text-slate-900">
               {submittingModalState.status === 'success'
                 ? 'Pengiriman Nilai Berhasil!'
-                : 'Pengiriman Nilai (Tahan Wait Response)'}
+                : submittingModalState.status === 'retry'
+                ? 'Pengiriman Nilai (Tahan Wait Response)'
+                : 'Mengamankan & Mengirim Jawaban ke Server...'}
             </h3>
             <p className="text-xs text-slate-600 leading-relaxed">
               {submittingModalState.message}

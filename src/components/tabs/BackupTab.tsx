@@ -48,6 +48,7 @@ import {
   extractImageFilesFromClipboard,
   extractImageFilesFromDataTransfer,
 } from '../../utils/imageDropPaste';
+import { SchoolFullBackupCard } from '../SchoolFullBackupCard';
 
 interface Props {
   profile: SchoolProfile;
@@ -684,6 +685,16 @@ export const BackupTab: React.FC<Props> = ({
             </button>
           </div>
         </div>
+
+        {/* Pusat Pencadangan & Pemulihan Full Database Sekolah (Khusus Admin) */}
+        {isAdmin && (
+          <SchoolFullBackupCard
+            profile={profile}
+            activeUserName={activeUserName}
+            showToast={showToast}
+            onBackupRestored={onBackupRestored}
+          />
+        )}
 
         {/* Backup and Restore */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

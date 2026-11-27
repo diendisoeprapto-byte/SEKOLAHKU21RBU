@@ -1,16 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ResponsiveContainer,
-  AreaChart,
-  Area,
+  ComposedChart,
   BarChart,
   Bar,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ReferenceLine,
   Legend,
+  Cell,
 } from 'recharts';
 import * as XLSX from 'xlsx';
 import {
@@ -25,15 +26,21 @@ import {
   FileSpreadsheet,
   Printer,
   BookOpen,
+  Layers,
+  RotateCcw,
 } from 'lucide-react';
 import { CBTExamResult, SchoolProfile, Student, isAbkExcludedFromTka } from '../types';
 import {
+  extractBaseTkaPaket,
   getStoredCBTResults,
   getStoredTKAResults,
   getStoredTKASubmissions,
+  normalizeTkaMapelKey,
+  TKAMapelScoreKey,
   TKASubmissionItem,
 } from '../utils/storage';
 import { getLocalTodayStr } from '../utils/dateUtils';
+import { TKA_MAPEL_LIST } from '../data/defaultData';
 
 interface ExamCatalogMeta {
   id: string;
@@ -58,62 +65,190 @@ interface Props {
 interface PerformanceEntry {
   key: string;
   examId?: string;
-  paketName?: string;
+  paketName: string;
+  shortPaket: string;
   urutan: number;
   labelPendek: string;
   judul: string;
   mapel: string;
+  shortMapel: string;
   category: 'CBT' | 'TKA';
   nilai: number;
-  cbtNilai?: number;
-  tkaNilai?: number;
+  recordedAt: number;
   waktu: string;
   status: 'Tuntas' | 'Perlu Latihan';
 }
 
+interface PaketSubjectBreakdown {
+  mapel: string;
+  shortMapel: string;
+  nilai: number;
+  category: 'CBT' | 'TKA';
+  status: 'Tuntas' | 'Perlu Latihan';
+  waktu: string;
+  judul: string;
+}
+
+interface PaketChartRow {
+  paketKey: string;
+  paketName: string;
+  shortPaket: string;
+  category: 'CBT' | 'TKA' | 'Campuran';
+  sortOrder: number;
+  firstRecordedAt: number;
+  rataRata: number;
+  highest: number;
+  lowest: number;
+  mapelCount: number;
+  tuntasCount: number;
+  subjects: PaketSubjectBreakdown[];
+  scoresByMapel: Record<string, number>;
+  [dynamicField: string]: any;
+}
+
 const KKTP_THRESHOLD = 75;
+
+const SUBJECT_PALETTE = [
+  '#e11d48', // Rose
+  '#2563eb', // Blue
+  '#059669', // Emerald
+  '#d97706', // Amber
+  '#7c3aed', // Violet
+  '#0891b2', // Cyan
+  '#db2777', // Pink
+  '#4f46e5', // Indigo
+  '#65a30d', // Lime
+  '#ea580c', // Orange
+];
+
+function canonicalizeMapelName(rawMapel: string): string {
+  const m = (rawMapel || '').trim();
+  const low = m.toLowerCase();
+  if (!m) return 'Umum';
+  if (low.includes('ipas') || low.includes('ilmu pengetahuan alam')) return 'IPAS';
+  if (low.includes('koding') || low.includes('kka') || low.includes('artifisial')) {
+    return 'Koding dan Kecerdasan Artifisial (KKA)';
+  }
+  if (low.includes('bahasa indonesia')) return 'Bahasa Indonesia';
+  if (low.includes('bahasa inggris')) return 'Bahasa Inggris';
+  if (low === 'matematika' || low.includes('matematika')) return 'Matematika';
+  if (low.includes('pendidikan pancasila') || low === 'pancasila' || low === 'ppkn') {
+    return 'Pendidikan Pancasila';
+  }
+  if (low.includes('pendidikan agama') || low === 'pai') return 'Pendidikan Agama Islam';
+  if (low.includes('jasmani') || low === 'pjok') return 'PJOK';
+  return m;
+}
+
+function normalizeMapelCompareKey(mapel: string): string {
+  return canonicalizeMapelName(mapel).toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function shortenMapel(mapel: string): string {
+  const canonical = canonicalizeMapelName(mapel);
+  const low = canonical.toLowerCase();
+  if (low === 'ipas') return 'IPAS';
+  if (low.includes('koding')) return 'KKA';
+  if (low.includes('pendidikan agama')) return 'PAI';
+  if (low.includes('pendidikan pancasila')) return 'Pancasila';
+  if (low === 'pjok') return 'PJOK';
+  if (low.includes('bahasa indonesia')) return 'B. Indo';
+  if (low.includes('bahasa inggris')) return 'B. Inggris';
+  if (low === 'matematika') return 'Matematika';
+  return canonical.length > 14 ? `${canonical.slice(0, 12)}…` : canonical;
+}
+
+function shortenPaketName(paketName: string): string {
+  const clean = (paketName || '').trim();
+  if (!clean) return 'Tes';
+  const sumatifMatch = clean.match(/Sumatif\s*(\d+)/i);
+  if (sumatifMatch && !clean.toLowerCase().includes('tengah') && !clean.toLowerCase().includes('akhir') && !clean.toLowerCase().includes('inklusi')) {
+    return `Sumatif ${sumatifMatch[1]}`;
+  }
+  if (clean.toLowerCase().includes('asts')) return 'ASTS';
+  if (clean.toLowerCase().includes('asas')) return 'ASAS';
+  if (clean.toLowerCase().includes('remedial')) {
+    const num = clean.match(/\d+/)?.[0];
+    return num ? `Rem ${num}` : 'Remedial';
+  }
+  if (clean.toLowerCase().includes('inklusi')) {
+    const num = clean.match(/\d+/)?.[0];
+    return num ? `Inklusi ${num}` : 'Inklusi';
+  }
+  return clean
+    .replace(/^Tryout TKA\s*/i, 'TO TKA ')
+    .replace(/^Try Out\s*/i, 'TO ')
+    .replace(/^Simulasi\s*/i, 'Sim ')
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .trim();
+}
+
+function getPaketSortOrder(paketName: string, category: 'CBT' | 'TKA'): number {
+  const low = paketName.toLowerCase();
+  const num = Number(paketName.match(/\d+/)?.[0] || 0);
+  if (category === 'CBT') {
+    if (low.includes('sumatif') && !low.includes('tengah') && !low.includes('akhir') && !low.includes('inklusi')) {
+      return 100 + (num || 1);
+    }
+    if (low.includes('asts') || low.includes('tengah semester')) return 150;
+    if (low.includes('asas') || low.includes('akhir semester')) return 190;
+    if (low.includes('remedial')) return 200 + (num || 1);
+    if (low.includes('inklusi')) return 250 + (num || 1);
+    return 300;
+  }
+  if (low.includes('simulasi')) return 400 + (num || 1);
+  if (low.includes('tryout tka')) return 500 + (num || 1);
+  if (low.includes('try out')) return 600 + (num || 1);
+  return 700;
+}
+
+function inferPaketFromJudul(judul: string, category: 'CBT' | 'TKA'): string {
+  const raw = (judul || '').trim();
+  const low = raw.toLowerCase();
+  if (category === 'TKA') {
+    const simMatch = raw.match(/(Simulasi\s*\d+|Try\s*Out\s*\d+|Tryout\s*TKA\s*\d+)/i);
+    if (simMatch) return simMatch[1].replace(/\s+/g, ' ').trim();
+    const prefix = raw.split(' - ')[0]?.trim();
+    if (prefix) return extractBaseTkaPaket(prefix);
+    return 'Latihan TKA';
+  }
+  if (low.includes('asts')) return 'ASTS (Sumatif Tengah Semester)';
+  if (low.includes('asas')) return 'ASAS (Sumatif Akhir Semester)';
+  const sumatifMatch = raw.match(/(Sumatif\s*(?:Inklusi\s*)?\d+(?:\s*\(AS\s*\d+\))?)/i);
+  if (sumatifMatch) return sumatifMatch[1].trim();
+  const remedialMatch = raw.match(/(Remedial\s*\d+)/i);
+  if (remedialMatch) return remedialMatch[1].trim();
+  const prefix = raw.split(' - ')[0]?.trim();
+  return prefix || 'Penilaian CBT';
+}
 
 function inferExamMeta(
   res: CBTExamResult,
   examLookup: Map<string, ExamCatalogMeta>
-): { category: 'CBT' | 'TKA'; mapel: string; judul: string } {
-  if (res.category && res.mapel && res.judul) {
-    return {
-      category: res.category === 'tka' ? 'TKA' : 'CBT',
-      mapel: res.mapel,
-      judul: res.judul,
-    };
-  }
+): { category: 'CBT' | 'TKA'; mapel: string; judul: string; paketName: string } {
   const found = examLookup.get(res.examId);
-  if (found) {
-    return {
-      category: found.category === 'tka' ? 'TKA' : 'CBT',
-      mapel: found.mapel,
-      judul: found.judul,
-    };
-  }
-  const isTka = res.examId.toLowerCase().startsWith('tka_');
+  const category: 'CBT' | 'TKA' =
+    res.category === 'tka' || found?.category === 'tka' || res.examId.toLowerCase().startsWith('tka_')
+      ? 'TKA'
+      : 'CBT';
+
   const cleanTitle = res.examId
     .replace(/^tka_live_|^tka_|^cbt_/i, '')
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
-  return {
-    category: isTka ? 'TKA' : 'CBT',
-    mapel: res.mapel || (isTka ? 'TKA Terpadu' : 'Penilaian CBT'),
-    judul: res.judul || cleanTitle || (isTka ? 'Latihan TKA' : 'Ujian CBT'),
-  };
-}
 
-function shortenMapel(mapel: string): string {
-  const m = mapel.trim();
-  if (m.toLowerCase().includes('ilmu pengetahuan alam')) return 'IPAS';
-  if (m.toLowerCase().includes('koding')) return 'KKA';
-  if (m.toLowerCase().includes('pendidikan agama')) return 'PAI';
-  if (m.toLowerCase().includes('pendidikan pancasila')) return 'Pancasila';
-  if (m.toLowerCase().includes('jasmani')) return 'PJOK';
-  if (m.toLowerCase().includes('bahasa indonesia')) return 'B. Indo';
-  if (m.toLowerCase().includes('bahasa inggris')) return 'B. Inggris';
-  return m.length > 14 ? `${m.slice(0, 12)}…` : m;
+  const judul = res.judul || found?.judul || cleanTitle || (category === 'TKA' ? 'Latihan TKA' : 'Ujian CBT');
+  const mapelRaw = res.mapel || found?.mapel || (category === 'TKA' ? 'TKA Terpadu' : 'Penilaian CBT');
+  const mapel = canonicalizeMapelName(mapelRaw);
+
+  const rawPaket = res.paketName || found?.paketName || '';
+  const paketName = rawPaket
+    ? category === 'TKA'
+      ? extractBaseTkaPaket(rawPaket)
+      : rawPaket.trim()
+    : inferPaketFromJudul(judul, category);
+
+  return { category, mapel, judul, paketName };
 }
 
 export const StudentPerformanceStats: React.FC<Props> = ({
@@ -128,8 +263,9 @@ export const StudentPerformanceStats: React.FC<Props> = ({
   showToast,
 }) => {
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'CBT' | 'TKA'>('all');
+  const [selectedPaket, setSelectedPaket] = useState<string>('all');
   const [selectedSubject, setSelectedSubject] = useState<string>('all');
-  const [chartView, setChartView] = useState<'trend' | 'subject'>('trend');
+  const [chartView, setChartView] = useState<'paket' | 'subject'>('paket');
   const [cbtResults, setCbtResults] = useState<CBTExamResult[]>(() => getStoredCBTResults());
   const [tkaResults, setTkaResults] = useState<CBTExamResult[]>(() => getStoredTKAResults());
   const [tkaSubmissions, setTkaSubmissions] = useState<TKASubmissionItem[]>(() =>
@@ -172,18 +308,20 @@ export const StudentPerformanceStats: React.FC<Props> = ({
     };
 
     const collected: PerformanceEntry[] = [];
-    const seenTkaPakets = new Set<string>();
+    const seenResultKeys = new Set<string>();
 
-    // 1. Riwayat hasil CBT & TKA dari pengerjaan ujian siswa
+    // 1. Riwayat hasil CBT & TKA dari pengerjaan ujian siswa (per paket + per mapel)
     const combinedRawResults = [...cbtResults, ...tkaResults];
     combinedRawResults.forEach((res, idx) => {
-      if (!matchStudent(res.studentId, res.studentName)) return;
+      if (!matchStudent(res.studentId, res.studentName, res.nisn)) return;
       const meta = inferExamMeta(res, examLookup);
+      if (isExcludedFromTka && meta.category === 'TKA') return;
+
+      const dedupKey = `${meta.category}__${meta.paketName.toLowerCase()}__${normalizeMapelCompareKey(meta.mapel)}`;
+      if (seenResultKeys.has(dedupKey)) return;
+      seenResultKeys.add(dedupKey);
+
       const score = Math.max(0, Math.min(100, Math.round(Number(res.nilai) || 0)));
-      if (meta.category === 'TKA') {
-        const paketGuess = res.paketName || examLookup.get(res.examId)?.paketName || meta.judul;
-        seenTkaPakets.add(paketGuess.toLowerCase());
-      }
       const timeLabel = res.tanggal
         ? `${res.tanggal} · ${res.waktuSelesai || '-'}`
         : res.waktuSelesai || '-';
@@ -191,49 +329,105 @@ export const StudentPerformanceStats: React.FC<Props> = ({
       collected.push({
         key: `res_${res.examId}_${idx}`,
         examId: res.examId,
-        paketName: res.paketName || examLookup.get(res.examId)?.paketName,
+        paketName: meta.paketName,
+        shortPaket: shortenPaketName(meta.paketName),
         urutan: collected.length + 1,
-        labelPendek: `${meta.category} ${collected.length + 1}`,
+        labelPendek: `${shortenPaketName(meta.paketName)} · ${shortenMapel(meta.mapel)}`,
         judul: meta.judul,
         mapel: meta.mapel,
+        shortMapel: shortenMapel(meta.mapel),
         category: meta.category,
         nilai: score,
-        cbtNilai: meta.category === 'CBT' ? score : undefined,
-        tkaNilai: meta.category === 'TKA' ? score : undefined,
+        recordedAt: Number(res.recordedAt) || idx + 1,
         waktu: timeLabel,
         status: score >= KKTP_THRESHOLD ? 'Tuntas' : 'Perlu Latihan',
       });
     });
 
-    // 2. Rekap submission TKA yang diinput/disinkronkan dari modul TKA
+    // 2. Rekap submission TKA: bongkar per mata pelajaran di dalam paket tes
     if (!isExcludedFromTka) {
       tkaSubmissions.forEach((sub, idx) => {
         if (!matchStudent(sub.studentId, sub.studentName, sub.nisn)) return;
-        const paketName = sub.paket || `TKA ${idx + 1}`;
-        if (seenTkaPakets.has(paketName.toLowerCase())) return;
-        const score = Math.max(0, Math.min(100, Math.round(Number(sub.skorTotal) || 0)));
-        collected.push({
-          key: `sub_${sub.id || idx}`,
-          paketName: sub.paketDasar || paketName,
-          urutan: collected.length + 1,
-          labelPendek: `TKA ${collected.length + 1}`,
-          judul: `${paketName} (Rekap Terpadu)`,
-          mapel: 'TKA Terpadu',
-          category: 'TKA',
-          nilai: score,
-          tkaNilai: score,
-          waktu: sub.tanggalUjian || '-',
-          status: score >= KKTP_THRESHOLD ? 'Tuntas' : 'Perlu Latihan',
+        const paketName = extractBaseTkaPaket(sub.paketDasar || sub.paket || `TKA ${idx + 1}`);
+        const completedNormKeys = new Set(
+          (Array.isArray(sub.completedMapels) ? sub.completedMapels : []).map((m) =>
+            normalizeTkaMapelKey(m)
+          )
+        );
+
+        let unpackedAnyMapel = false;
+        TKA_MAPEL_LIST.forEach((rawMapel) => {
+          const mapelKey: TKAMapelScoreKey = normalizeTkaMapelKey(rawMapel);
+          const rawScore = sub.scoresPerMapel?.[mapelKey];
+          const hasScore =
+            completedNormKeys.has(mapelKey) || (typeof rawScore === 'number' && rawScore > 0);
+          if (!hasScore) return;
+
+          unpackedAnyMapel = true;
+          const canonicalMapel = canonicalizeMapelName(mapelKey);
+          const dedupKey = `TKA__${paketName.toLowerCase()}__${normalizeMapelCompareKey(canonicalMapel)}`;
+          if (seenResultKeys.has(dedupKey)) return;
+          seenResultKeys.add(dedupKey);
+
+          const score = Math.max(0, Math.min(100, Math.round(Number(rawScore) || 0)));
+          const parsedTime = sub.updatedAt ? Date.parse(sub.updatedAt) : NaN;
+
+          collected.push({
+            key: `sub_${sub.id || idx}_${normalizeMapelCompareKey(canonicalMapel)}`,
+            paketName,
+            shortPaket: shortenPaketName(paketName),
+            urutan: collected.length + 1,
+            labelPendek: `${shortenPaketName(paketName)} · ${shortenMapel(canonicalMapel)}`,
+            judul: `${paketName} - ${canonicalMapel}`,
+            mapel: canonicalMapel,
+            shortMapel: shortenMapel(canonicalMapel),
+            category: 'TKA',
+            nilai: score,
+            recordedAt: Number.isFinite(parsedTime) ? parsedTime : 10000 + idx,
+            waktu: sub.tanggalUjian || '-',
+            status: score >= KKTP_THRESHOLD ? 'Tuntas' : 'Perlu Latihan',
+          });
         });
+
+        // Fallback jika submission lama hanya memiliki skorTotal tanpa rincian mapel
+        if (!unpackedAnyMapel) {
+          const dedupKey = `TKA__${paketName.toLowerCase()}__tkaterpadu`;
+          if (!seenResultKeys.has(dedupKey)) {
+            seenResultKeys.add(dedupKey);
+            const score = Math.max(0, Math.min(100, Math.round(Number(sub.skorTotal) || 0)));
+            collected.push({
+              key: `sub_${sub.id || idx}`,
+              paketName,
+              shortPaket: shortenPaketName(paketName),
+              urutan: collected.length + 1,
+              labelPendek: `${shortenPaketName(paketName)} · TKA`,
+              judul: `${paketName} (Rekap Terpadu)`,
+              mapel: 'TKA Terpadu',
+              shortMapel: 'TKA',
+              category: 'TKA',
+              nilai: score,
+              recordedAt: 10000 + idx,
+              waktu: sub.tanggalUjian || '-',
+              status: score >= KKTP_THRESHOLD ? 'Tuntas' : 'Perlu Latihan',
+            });
+          }
+        }
       });
     }
 
     return collected
-      .filter((item) => !(isExcludedFromTka && item.category === 'TKA'))
+      .sort((a, b) => {
+        const orderDiff =
+          getPaketSortOrder(a.paketName, a.category) -
+          getPaketSortOrder(b.paketName, b.category);
+        if (orderDiff !== 0) return orderDiff;
+        if (a.paketName !== b.paketName) return a.paketName.localeCompare(b.paketName, 'id');
+        if (a.recordedAt !== b.recordedAt) return a.recordedAt - b.recordedAt;
+        return a.mapel.localeCompare(b.mapel, 'id');
+      })
       .map((item, idx) => ({
         ...item,
         urutan: idx + 1,
-        labelPendek: `#${idx + 1} ${shortenMapel(item.mapel)}`,
       }));
   }, [student, isExcludedFromTka, cbtResults, tkaResults, tkaSubmissions, examLookup]);
 
@@ -242,11 +436,34 @@ export const StudentPerformanceStats: React.FC<Props> = ({
     return entries.filter((e) => e.category === categoryFilter);
   }, [entries, categoryFilter]);
 
+  const availablePakets = useMemo(() => {
+    const map = new Map<string, { name: string; order: number }>();
+    categoryEntries.forEach((e) => {
+      if (!map.has(e.paketName)) {
+        map.set(e.paketName, {
+          name: e.paketName,
+          order: getPaketSortOrder(e.paketName, e.category),
+        });
+      }
+    });
+    return Array.from(map.values())
+      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, 'id'))
+      .map((p) => p.name);
+  }, [categoryEntries]);
+
+  const effectivePaket =
+    selectedPaket === 'all' || availablePakets.includes(selectedPaket) ? selectedPaket : 'all';
+
+  const paketFilteredEntries = useMemo(() => {
+    if (effectivePaket === 'all') return categoryEntries;
+    return categoryEntries.filter((e) => e.paketName === effectivePaket);
+  }, [categoryEntries, effectivePaket]);
+
   const availableSubjects = useMemo(() => {
-    return Array.from(new Set(categoryEntries.map((e) => e.mapel))).sort((a, b) =>
+    return Array.from(new Set(paketFilteredEntries.map((e) => e.mapel))).sort((a, b) =>
       a.localeCompare(b, 'id')
     );
-  }, [categoryEntries]);
+  }, [paketFilteredEntries]);
 
   const effectiveSubject =
     selectedSubject === 'all' || availableSubjects.includes(selectedSubject)
@@ -256,23 +473,139 @@ export const StudentPerformanceStats: React.FC<Props> = ({
   const filteredEntries = useMemo(() => {
     const base =
       effectiveSubject === 'all'
-        ? categoryEntries
-        : categoryEntries.filter((e) => e.mapel === effectiveSubject);
+        ? paketFilteredEntries
+        : paketFilteredEntries.filter((e) => e.mapel === effectiveSubject);
 
     return base.map((item, idx) => ({
       ...item,
       urutan: idx + 1,
-      labelPendek:
-        effectiveSubject === 'all'
-          ? `#${idx + 1} ${shortenMapel(item.mapel)}`
-          : `#${idx + 1} ${item.category}`,
     }));
-  }, [categoryEntries, effectiveSubject]);
+  }, [paketFilteredEntries, effectiveSubject]);
+
+  // Data Grafik Perkembangan PER PAKET TES yang di dalamnya berisi berbagai Mata Pelajaran
+  const { paketChartData, activeChartMapels } = useMemo(() => {
+    const paketMap = new Map<string, PaketChartRow>();
+    const mapelSet = new Set<string>();
+
+    filteredEntries.forEach((entry) => {
+      mapelSet.add(entry.mapel);
+      const groupKey = `${entry.category}__${entry.paketName}`;
+      if (!paketMap.has(groupKey)) {
+        paketMap.set(groupKey, {
+          paketKey: groupKey,
+          paketName: entry.paketName,
+          shortPaket: entry.shortPaket,
+          category: entry.category,
+          sortOrder: getPaketSortOrder(entry.paketName, entry.category),
+          firstRecordedAt: entry.recordedAt,
+          rataRata: 0,
+          highest: 0,
+          lowest: 100,
+          mapelCount: 0,
+          tuntasCount: 0,
+          subjects: [],
+          scoresByMapel: {},
+        });
+      }
+      const bucket = paketMap.get(groupKey)!;
+      if (entry.recordedAt < bucket.firstRecordedAt) {
+        bucket.firstRecordedAt = entry.recordedAt;
+      }
+      bucket.subjects.push({
+        mapel: entry.mapel,
+        shortMapel: entry.shortMapel,
+        nilai: entry.nilai,
+        category: entry.category,
+        status: entry.status,
+        waktu: entry.waktu,
+        judul: entry.judul,
+      });
+      bucket.scoresByMapel[entry.mapel] = entry.nilai;
+      bucket[`mapel_${normalizeMapelCompareKey(entry.mapel)}`] = entry.nilai;
+    });
+
+    const sortedRows = Array.from(paketMap.values())
+      .map((row) => {
+        const sortedSubjects = [...row.subjects].sort((a, b) =>
+          a.mapel.localeCompare(b.mapel, 'id')
+        );
+        const total = sortedSubjects.reduce((acc, s) => acc + s.nilai, 0);
+        const count = sortedSubjects.length;
+        return {
+          ...row,
+          subjects: sortedSubjects,
+          mapelCount: count,
+          tuntasCount: sortedSubjects.filter((s) => s.nilai >= KKTP_THRESHOLD).length,
+          rataRata: count > 0 ? Math.round(total / count) : 0,
+          highest: count > 0 ? Math.max(...sortedSubjects.map((s) => s.nilai)) : 0,
+          lowest: count > 0 ? Math.min(...sortedSubjects.map((s) => s.nilai)) : 0,
+        };
+      })
+      .sort(
+        (a, b) =>
+          a.sortOrder - b.sortOrder ||
+          a.firstRecordedAt - b.firstRecordedAt ||
+          a.paketName.localeCompare(b.paketName, 'id')
+      );
+
+    // Jika ada paket bernama sama di CBT & TKA, bedakan label sumbu X
+    const shortNameCount = new Map<string, number>();
+    sortedRows.forEach((r) => {
+      shortNameCount.set(r.shortPaket, (shortNameCount.get(r.shortPaket) || 0) + 1);
+    });
+    const disambiguatedRows = sortedRows.map((r) => ({
+      ...r,
+      shortPaket:
+        (shortNameCount.get(r.shortPaket) || 0) > 1
+          ? `${r.shortPaket} (${r.category})`
+          : r.shortPaket,
+    }));
+
+    const orderedMapels = Array.from(mapelSet)
+      .sort((a, b) => a.localeCompare(b, 'id'))
+      .map((fullMapel, idx) => ({
+        fullMapel,
+        shortMapel: shortenMapel(fullMapel),
+        dataKey: `mapel_${normalizeMapelCompareKey(fullMapel)}`,
+        color: SUBJECT_PALETTE[idx % SUBJECT_PALETTE.length],
+      }));
+
+    return {
+      paketChartData: disambiguatedRows,
+      activeChartMapels: orderedMapels,
+    };
+  }, [filteredEntries]);
+
+  // Jika memilih 1 Paket Tes spesifik, tampilkan detail batang setiap mata pelajaran di dalam paket tersebut
+  const singlePaketBreakdownData = useMemo(() => {
+    if (effectivePaket === 'all' || paketChartData.length === 0) return [];
+    return paketChartData.flatMap((row) =>
+      row.subjects.map((sub, idx) => ({
+        key: `${row.paketKey}_${sub.mapel}_${idx}`,
+        mapel: sub.shortMapel,
+        fullMapel: sub.mapel,
+        paketName: row.paketName,
+        category: sub.category,
+        nilai: sub.nilai,
+        status: sub.status,
+        waktu: sub.waktu,
+        fill: sub.nilai >= KKTP_THRESHOLD ? '#059669' : '#d97706',
+      }))
+    );
+  }, [effectivePaket, paketChartData]);
 
   const subjectChartData = useMemo(() => {
     const grouped = new Map<
       string,
-      { mapel: string; fullMapel: string; cbtSum: number; cbtCount: number; tkaSum: number; tkaCount: number }
+      {
+        mapel: string;
+        fullMapel: string;
+        cbtSum: number;
+        cbtCount: number;
+        tkaSum: number;
+        tkaCount: number;
+        paketDetails: { paketName: string; category: 'CBT' | 'TKA'; nilai: number }[];
+      }
     >();
 
     filteredEntries.forEach((item) => {
@@ -285,6 +618,7 @@ export const StudentPerformanceStats: React.FC<Props> = ({
           cbtCount: 0,
           tkaSum: 0,
           tkaCount: 0,
+          paketDetails: [],
         });
       }
       const bucket = grouped.get(key)!;
@@ -295,6 +629,11 @@ export const StudentPerformanceStats: React.FC<Props> = ({
         bucket.tkaSum += item.nilai;
         bucket.tkaCount += 1;
       }
+      bucket.paketDetails.push({
+        paketName: item.shortPaket,
+        category: item.category,
+        nilai: item.nilai,
+      });
     });
 
     return Array.from(grouped.values()).map((g) => ({
@@ -302,6 +641,7 @@ export const StudentPerformanceStats: React.FC<Props> = ({
       fullMapel: g.fullMapel,
       CBT: g.cbtCount > 0 ? Math.round(g.cbtSum / g.cbtCount) : null,
       TKA: g.tkaCount > 0 ? Math.round(g.tkaSum / g.tkaCount) : null,
+      paketDetails: g.paketDetails,
     }));
   }, [filteredEntries]);
 
@@ -312,11 +652,13 @@ export const StudentPerformanceStats: React.FC<Props> = ({
         highest: 0,
         highestLabel: '-',
         total: 0,
+        paketCount: 0,
         cbtCount: 0,
         tkaCount: 0,
         passedCount: 0,
         passRate: 0,
         delta: 0,
+        deltaContext: 'Stabil',
       };
     }
 
@@ -331,24 +673,34 @@ export const StudentPerformanceStats: React.FC<Props> = ({
     const tkaCount = filteredEntries.filter((e) => e.category === 'TKA').length;
     const passedCount = filteredEntries.filter((e) => e.nilai >= KKTP_THRESHOLD).length;
     const passRate = Math.round((passedCount / total) * 100);
+    const paketCount = paketChartData.length;
+
+    // Hitung perkembangan rata-rata antar paket tes jika >= 2 paket, atau antar mapel
     const delta =
-      total >= 2 ? filteredEntries[total - 1].nilai - filteredEntries[0].nilai : 0;
+      paketCount >= 2
+        ? paketChartData[paketCount - 1].rataRata - paketChartData[0].rataRata
+        : total >= 2
+        ? filteredEntries[total - 1].nilai - filteredEntries[0].nilai
+        : 0;
 
     return {
       avg,
       highest: highestEntry.nilai,
-      highestLabel: `${highestEntry.category} · ${shortenMapel(highestEntry.mapel)}`,
+      highestLabel: `${highestEntry.shortPaket} · ${shortenMapel(highestEntry.mapel)}`,
       total,
+      paketCount,
       cbtCount,
       tkaCount,
       passedCount,
       passRate,
       delta,
+      deltaContext: paketCount >= 2 ? 'Antar paket tes' : 'Antar sesi',
     };
-  }, [filteredEntries]);
+  }, [filteredEntries, paketChartData]);
 
   const categoryLabel =
     categoryFilter === 'all' ? 'Semua Ujian (CBT & TKA)' : `Ujian ${categoryFilter}`;
+  const paketLabel = effectivePaket === 'all' ? 'Semua Paket Tes' : effectivePaket;
   const subjectLabel =
     effectiveSubject === 'all' ? 'Semua Mata Pelajaran' : effectiveSubject;
 
@@ -376,27 +728,28 @@ export const StudentPerformanceStats: React.FC<Props> = ({
       .replace(/^_+|_+$/g, '');
 
     const aoa: (string | number)[][] = [
-      ['REKAPITULASI STATISTIK PERFORMA UJIAN SISWA (CBT & TKA)'],
+      ['REKAPITULASI STATISTIK PERFORMA UJIAN SISWA PER PAKET TES (CBT & TKA)'],
       [schoolName],
       [],
       ['Nama Siswa', studentName, '', 'Tahun Pelajaran', activeYear],
       ['NISN', student?.nisn || '-', '', 'Semester', activeSemester],
       ['Kelas', student?.kelas || '-', '', 'Kategori Laporan', categoryLabel],
-      ['Mata Pelajaran', subjectLabel, '', 'Ketuntasan KKTP', `>= ${KKTP_THRESHOLD}`],
-      ['Tanggal Unduh', tanggalCetakIndo, '', '', ''],
+      ['Paket Tes', paketLabel, '', 'Mata Pelajaran', subjectLabel],
+      ['Tanggal Unduh', tanggalCetakIndo, '', 'Ketuntasan KKTP', `>= ${KKTP_THRESHOLD}`],
       [],
       [
         'Ringkasan Performa',
         `Rata-Rata: ${metrics.avg}`,
         `Nilai Tertinggi: ${metrics.highest}`,
-        `Ujian Selesai: ${metrics.total} (${metrics.cbtCount} CBT, ${metrics.tkaCount} TKA)`,
+        `Paket / Mapel Selesai: ${metrics.paketCount} Paket (${metrics.total} Mapel)`,
         `Ketuntasan: ${metrics.passRate}% (${metrics.passedCount}/${metrics.total})`,
       ],
       [],
-      ['No', 'Kategori', 'Mata Pelajaran', 'Judul Ujian', 'Waktu Pengerjaan', 'Nilai', 'Keterangan'],
+      ['No', 'Kategori', 'Paket Tes', 'Mata Pelajaran', 'Judul Ujian', 'Waktu Pengerjaan', 'Nilai', 'Keterangan'],
       ...filteredEntries.map((row) => [
         row.urutan,
         row.category,
+        row.paketName,
         row.mapel,
         row.judul,
         row.waktu,
@@ -409,14 +762,43 @@ export const StudentPerformanceStats: React.FC<Props> = ({
     const wsDetail = XLSX.utils.aoa_to_sheet(aoa);
     wsDetail['!cols'] = [
       { wch: 6 },
-      { wch: 12 },
+      { wch: 10 },
       { wch: 24 },
-      { wch: 36 },
+      { wch: 24 },
+      { wch: 34 },
       { wch: 22 },
       { wch: 10 },
       { wch: 16 },
     ];
     XLSX.utils.book_append_sheet(wb, wsDetail, 'Rekap Nilai Ujian');
+
+    if (paketChartData.length > 0) {
+      const paketRows = paketChartData.map((pkt, idx) => {
+        const base: Record<string, string | number> = {
+          No: idx + 1,
+          'Paket Tes': pkt.paketName,
+          Kategori: pkt.category,
+          'Jumlah Mapel': pkt.mapelCount,
+          'Rata-Rata Paket': pkt.rataRata,
+          Ketuntasan: `${pkt.tuntasCount}/${pkt.mapelCount} Tuntas`,
+        };
+        activeChartMapels.forEach((m) => {
+          base[m.fullMapel] = typeof pkt.scoresByMapel[m.fullMapel] === 'number' ? pkt.scoresByMapel[m.fullMapel] : '-';
+        });
+        return base;
+      });
+      const wsPaket = XLSX.utils.json_to_sheet(paketRows);
+      wsPaket['!cols'] = [
+        { wch: 6 },
+        { wch: 26 },
+        { wch: 12 },
+        { wch: 14 },
+        { wch: 16 },
+        { wch: 16 },
+        ...activeChartMapels.map(() => ({ wch: 16 })),
+      ];
+      XLSX.utils.book_append_sheet(wb, wsPaket, 'Rekap Per Paket Tes');
+    }
 
     if (subjectChartData.length > 0) {
       const subjectRows = subjectChartData.map((item, idx) => ({
@@ -432,7 +814,7 @@ export const StudentPerformanceStats: React.FC<Props> = ({
 
     const fileName = `Rekap_Performa_${safeName || 'Siswa'}_${getLocalTodayStr()}.xlsx`;
     XLSX.writeFile(wb, fileName);
-    showToast?.('File Excel rekap nilai ujian berhasil diunduh.', 'success');
+    showToast?.('File Excel rekap nilai per paket tes berhasil diunduh.', 'success');
   };
 
   const handleExportPDF = () => {
@@ -455,7 +837,7 @@ export const StudentPerformanceStats: React.FC<Props> = ({
             <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
               <span>Rekap Evaluasi Siswa</span>
               <span aria-hidden="true">·</span>
-              <span>CBT &amp; TKA</span>
+              <span>Per Paket Tes &amp; Mata Pelajaran</span>
             </div>
             <h2 className="text-lg sm:text-xl font-display font-black text-slate-900 mt-0.5 flex items-center gap-2">
               <BarChart3 className="w-5 h-5 text-rose-600 shrink-0" />
@@ -466,456 +848,684 @@ export const StudentPerformanceStats: React.FC<Props> = ({
           <div className="flex flex-wrap items-center gap-2.5">
             {/* Segmented Filter Kategori */}
             <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
-            {(
-              isExcludedFromTka
-                ? ([
-                    { id: 'all', label: 'Semua Ujian' },
-                    { id: 'CBT', label: 'Ujian CBT' },
-                  ] as const)
-                : ([
-                    { id: 'all', label: 'Semua Ujian' },
-                    { id: 'CBT', label: 'Ujian CBT' },
-                    { id: 'TKA', label: 'Ujian TKA' },
-                  ] as const)
-            ).map((opt) => (
+              {(
+                isExcludedFromTka
+                  ? ([
+                      { id: 'all', label: 'Semua Ujian' },
+                      { id: 'CBT', label: 'Ujian CBT' },
+                    ] as const)
+                  : ([
+                      { id: 'all', label: 'Semua Ujian' },
+                      { id: 'CBT', label: 'Ujian CBT' },
+                      { id: 'TKA', label: 'Ujian TKA' },
+                    ] as const)
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setCategoryFilter(opt.id)}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    categoryFilter === opt.id
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Dropdown Pilih Paket Tes */}
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-xl border border-slate-200/80">
+              <Layers className="w-3.5 h-3.5 text-indigo-600 shrink-0" aria-hidden="true" />
+              <label htmlFor="stats-paket-filter" className="text-xs font-bold text-slate-600 whitespace-nowrap">
+                Paket:
+              </label>
+              <select
+                id="stats-paket-filter"
+                aria-label="Pilih Paket Tes"
+                value={effectivePaket}
+                onChange={(e) => {
+                  setSelectedPaket(e.target.value);
+                  setChartView('paket');
+                }}
+                disabled={availablePakets.length === 0}
+                className="bg-transparent text-xs font-bold text-slate-900 focus:outline-none cursor-pointer max-w-[175px] truncate disabled:opacity-50"
+              >
+                <option value="all">Semua Paket Tes</option>
+                {availablePakets.map((pkt) => (
+                  <option key={pkt} value={pkt}>
+                    {pkt}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Dropdown Pilih Mata Pelajaran */}
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-xl border border-slate-200/80">
+              <BookOpen className="w-3.5 h-3.5 text-rose-600 shrink-0" aria-hidden="true" />
+              <label htmlFor="stats-subject-filter" className="text-xs font-bold text-slate-600 whitespace-nowrap">
+                Mapel:
+              </label>
+              <select
+                id="stats-subject-filter"
+                aria-label="Pilih Mata Pelajaran"
+                value={effectiveSubject}
+                onChange={(e) => {
+                  setSelectedSubject(e.target.value);
+                }}
+                disabled={availableSubjects.length === 0}
+                className="bg-transparent text-xs font-bold text-slate-900 focus:outline-none cursor-pointer max-w-[165px] truncate disabled:opacity-50"
+              >
+                <option value="all">Semua Mata Pelajaran</option>
+                {availableSubjects.map((mapel) => (
+                  <option key={mapel} value={mapel}>
+                    {mapel}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Segmented Mode Grafik */}
+            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
               <button
-                key={opt.id}
                 type="button"
-                onClick={() => setCategoryFilter(opt.id)}
+                onClick={() => setChartView('paket')}
                 className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  categoryFilter === opt.id
+                  chartView === 'paket'
                     ? 'bg-white text-slate-900 shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                {opt.label}
+                Per Paket Tes
               </button>
-            ))}
-          </div>
-
-          {/* Dropdown Pilih Mata Pelajaran */}
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-xl border border-slate-200/80">
-            <BookOpen className="w-3.5 h-3.5 text-rose-600 shrink-0" aria-hidden="true" />
-            <label htmlFor="stats-subject-filter" className="text-xs font-bold text-slate-600 whitespace-nowrap">
-              Mapel:
-            </label>
-            <select
-              id="stats-subject-filter"
-              aria-label="Pilih Mata Pelajaran"
-              value={effectiveSubject}
-              onChange={(e) => {
-                const val = e.target.value;
-                setSelectedSubject(val);
-                if (val !== 'all') {
-                  setChartView('trend');
-                }
-              }}
-              disabled={availableSubjects.length === 0}
-              className="bg-transparent text-xs font-bold text-slate-900 focus:outline-none cursor-pointer max-w-[170px] truncate disabled:opacity-50"
-            >
-              <option value="all">Semua Mata Pelajaran</option>
-              {availableSubjects.map((mapel) => (
-                <option key={mapel} value={mapel}>
-                  {mapel}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Segmented Mode Grafik */}
-          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
-            <button
-              type="button"
-              onClick={() => setChartView('trend')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                chartView === 'trend'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Tren Nilai
-            </button>
-            <button
-              type="button"
-              onClick={() => setChartView('subject')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                chartView === 'subject'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Per Mapel
-            </button>
-          </div>
-
-          {/* Tombol Unduh Laporan untuk Orang Tua */}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleExportExcel}
-              title="Unduh rekap nilai ujian dalam format Excel (.xlsx)"
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-xs"
-            >
-              <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
-              <span>Unduh Excel</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleExportPDF}
-              title="Cetak atau simpan rekap nilai ujian sebagai dokumen PDF"
-              className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-xs"
-            >
-              <Printer className="w-3.5 h-3.5 shrink-0" />
-              <span>Unduh PDF</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* KPI Summary Strip (Flat with hairline dividers, tabular numerals) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 border border-slate-200 rounded-2xl divide-y lg:divide-y-0 lg:divide-x divide-slate-200 bg-slate-50/50">
-        <div className="p-4 space-y-1">
-          <div className="text-xs font-semibold text-slate-500">Rata-Rata Nilai</div>
-          <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
-            {metrics.avg}
-          </div>
-          <div className="text-xs font-semibold flex items-center gap-1">
-            {metrics.delta > 0 ? (
-              <span className="text-emerald-700 inline-flex items-center gap-1">
-                <TrendingUp className="w-3.5 h-3.5" /> Naik {metrics.delta} poin
-              </span>
-            ) : metrics.delta < 0 ? (
-              <span className="text-amber-700 inline-flex items-center gap-1">
-                <TrendingDown className="w-3.5 h-3.5" /> Turun {Math.abs(metrics.delta)} poin
-              </span>
-            ) : (
-              <span className="text-slate-500 inline-flex items-center gap-1">
-                <Minus className="w-3.5 h-3.5" /> Stabil
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="p-4 space-y-1">
-          <div className="text-xs font-semibold text-slate-500">Nilai Tertinggi</div>
-          <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
-            {metrics.highest}
-          </div>
-          <div className="text-xs text-slate-600 truncate">{metrics.highestLabel}</div>
-        </div>
-
-        <div className="p-4 space-y-1">
-          <div className="text-xs font-semibold text-slate-500">Ujian Selesai</div>
-          <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
-            {metrics.total}
-          </div>
-          <div className="text-xs text-slate-600 tabular-nums">
-            {metrics.cbtCount} CBT <span aria-hidden="true">·</span> {metrics.tkaCount} TKA
-          </div>
-        </div>
-
-        <div className="p-4 space-y-1">
-          <div className="text-xs font-semibold text-slate-500">Ketuntasan (≥ {KKTP_THRESHOLD})</div>
-          <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
-            {metrics.passRate}%
-          </div>
-          <div className="text-xs text-slate-600 tabular-nums">
-            {metrics.passedCount} dari {metrics.total} ujian tuntas
-          </div>
-        </div>
-      </div>
-
-      {/* Chart or Empty State */}
-      {filteredEntries.length === 0 ? (
-        <div className="border border-dashed border-slate-300 rounded-2xl p-8 text-center space-y-4 bg-slate-50/40">
-          <div className="space-y-1 max-w-md mx-auto">
-            <h3 className="text-sm font-display font-black text-slate-800">
-              Belum Ada Riwayat Nilai {categoryFilter === 'all' ? 'CBT atau TKA' : categoryFilter}
-            </h3>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Grafik tren perkembangan nilai dan perbandingan per mata pelajaran akan muncul secara
-              otomatis setelah kamu menyelesaikan ujian CBT atau Tryout/Simulasi TKA.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={onStartCbt}
-              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors inline-flex items-center gap-2 whitespace-nowrap cursor-pointer"
-            >
-              <Laptop className="w-3.5 h-3.5" />
-              <span>Mulai Ujian CBT</span>
-            </button>
-            <button
-              type="button"
-              onClick={onStartTka}
-              className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors inline-flex items-center gap-2 whitespace-nowrap cursor-pointer"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Mulai Tes TKA</span>
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-6">
-          {/* Recharts Visualization */}
-          <div className="border border-slate-200 rounded-2xl p-4 sm:p-5 bg-white">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-              <div className="text-xs font-bold text-slate-700">
-                {chartView === 'trend'
-                  ? `Grafik Tren Perkembangan Nilai${
-                      effectiveSubject !== 'all' ? ` — ${effectiveSubject}` : ''
-                    } (Skala 0–100)`
-                  : `Rata-Rata Nilai per Mata Pelajaran${
-                      effectiveSubject !== 'all' ? ` — ${effectiveSubject}` : ''
-                    } (CBT vs TKA)`}
-              </div>
-              <div className="flex items-center gap-4 text-xs text-slate-500">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-sm bg-rose-600 inline-block" />
-                  CBT
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-sm bg-violet-600 inline-block" />
-                  TKA
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="w-4 border-t-2 border-dashed border-emerald-600 inline-block" />
-                  KKTP ({KKTP_THRESHOLD})
-                </span>
-              </div>
+              <button
+                type="button"
+                onClick={() => setChartView('subject')}
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  chartView === 'subject'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Per Mapel
+              </button>
             </div>
 
-            <div className="w-full h-[290px]">
-              <ResponsiveContainer width="100%" height="100%">
-                {chartView === 'trend' ? (
-                  <AreaChart
-                    data={filteredEntries}
-                    margin={{ top: 12, right: 16, left: -16, bottom: 4 }}
-                  >
-                    <defs>
-                      <linearGradient id="scoreTrendFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#e11d48" stopOpacity={0.2} />
-                        <stop offset="95%" stopColor="#e11d48" stopOpacity={0.01} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                    <XAxis
-                      dataKey="labelPendek"
-                      tick={{ fontSize: 11, fill: '#64748b' }}
-                      axisLine={{ stroke: '#cbd5e1' }}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      domain={[0, 100]}
-                      tick={{ fontSize: 11, fill: '#64748b' }}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <ReferenceLine
-                      y={KKTP_THRESHOLD}
-                      stroke="#059669"
-                      strokeDasharray="5 5"
-                      label={{
-                        value: `KKTP ${KKTP_THRESHOLD}`,
-                        position: 'insideTopRight',
-                        fill: '#059669',
-                        fontSize: 11,
-                        fontWeight: 700,
-                      }}
-                    />
-                    <Tooltip
-                      content={({ active, payload }) => {
-                        if (!active || !payload || !payload.length) return null;
-                        const row = payload[0].payload as PerformanceEntry;
-                        return (
-                          <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-md text-xs space-y-1 max-w-[240px]">
-                            <div className="text-[11px] font-semibold text-slate-500">
-                              {row.category} · {row.mapel}
-                            </div>
-                            <div className="font-bold text-slate-900 leading-snug">{row.judul}</div>
-                            <div className="flex items-center justify-between pt-1 border-t border-slate-100">
-                              <span className="text-slate-500">Nilai Akhir</span>
-                              <span className="font-mono font-black text-sm text-slate-900 tabular-nums">
-                                {row.nilai}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between text-[11px]">
-                              <span className="text-slate-500">{row.waktu}</span>
-                              <span
-                                className={
-                                  row.nilai >= KKTP_THRESHOLD
-                                    ? 'font-bold text-emerald-700'
-                                    : 'font-bold text-amber-700'
-                                }
-                              >
-                                {row.status}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="nilai"
-                      name="Nilai Ujian"
-                      stroke="#e11d48"
-                      strokeWidth={2.5}
-                      fill="url(#scoreTrendFill)"
-                      dot={(props: any) => {
-                        const { cx, cy, payload } = props;
-                        if (typeof cx !== 'number' || typeof cy !== 'number') return <g />;
-                        const fill = payload?.category === 'TKA' ? '#7c3aed' : '#e11d48';
-                        return (
-                          <circle
-                            key={payload?.key || `${cx}_${cy}`}
-                            cx={cx}
-                            cy={cy}
-                            r={5}
-                            fill={fill}
-                            stroke="#ffffff"
-                            strokeWidth={2}
-                          />
-                        );
-                      }}
-                      activeDot={{ r: 7, strokeWidth: 2, stroke: '#ffffff' }}
-                    />
-                  </AreaChart>
-                ) : (
-                  <BarChart
-                    data={subjectChartData}
-                    margin={{ top: 12, right: 16, left: -16, bottom: 4 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                    <XAxis
-                      dataKey="mapel"
-                      tick={{ fontSize: 11, fill: '#64748b' }}
-                      axisLine={{ stroke: '#cbd5e1' }}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      domain={[0, 100]}
-                      tick={{ fontSize: 11, fill: '#64748b' }}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <ReferenceLine y={KKTP_THRESHOLD} stroke="#059669" strokeDasharray="5 5" />
-                    <Tooltip
-                      content={({ active, payload }) => {
-                        if (!active || !payload || !payload.length) return null;
-                        const row = payload[0].payload;
-                        return (
-                          <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-md text-xs space-y-1">
-                            <div className="font-bold text-slate-900">{row.fullMapel}</div>
-                            {typeof row.CBT === 'number' && (
-                              <div className="flex items-center justify-between gap-4">
-                                <span className="text-rose-700 font-semibold">Rata-rata CBT</span>
-                                <span className="font-mono font-bold tabular-nums">{row.CBT}</span>
-                              </div>
-                            )}
-                            {typeof row.TKA === 'number' && (
-                              <div className="flex items-center justify-between gap-4">
-                                <span className="text-violet-700 font-semibold">Rata-rata TKA</span>
-                                <span className="font-mono font-bold tabular-nums">{row.TKA}</span>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: '12px' }} />
-                    {(categoryFilter === 'all' || categoryFilter === 'CBT') && (
-                      <Bar dataKey="CBT" name="Nilai CBT" fill="#e11d48" radius={[6, 6, 0, 0]} />
-                    )}
-                    {(categoryFilter === 'all' || categoryFilter === 'TKA') && (
-                      <Bar dataKey="TKA" name="Nilai TKA" fill="#7c3aed" radius={[6, 6, 0, 0]} />
-                    )}
-                  </BarChart>
-                )}
-              </ResponsiveContainer>
+            {/* Tombol Unduh Laporan untuk Orang Tua */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExportExcel}
+                title="Unduh rekap nilai ujian dalam format Excel (.xlsx)"
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-xs"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+                <span>Unduh Excel</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleExportPDF}
+                title="Cetak atau simpan rekap nilai ujian sebagai dokumen PDF"
+                className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-xs"
+              >
+                <Printer className="w-3.5 h-3.5 shrink-0" />
+                <span>Unduh PDF</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* KPI Summary Strip */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 border border-slate-200 rounded-2xl divide-y lg:divide-y-0 lg:divide-x divide-slate-200 bg-slate-50/50">
+          <div className="p-4 space-y-1">
+            <div className="text-xs font-semibold text-slate-500">Rata-Rata Nilai</div>
+            <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
+              {metrics.avg}
+            </div>
+            <div className="text-xs font-semibold flex items-center gap-1">
+              {metrics.delta > 0 ? (
+                <span className="text-emerald-700 inline-flex items-center gap-1">
+                  <TrendingUp className="w-3.5 h-3.5" /> Naik {metrics.delta} poin ({metrics.deltaContext})
+                </span>
+              ) : metrics.delta < 0 ? (
+                <span className="text-amber-700 inline-flex items-center gap-1">
+                  <TrendingDown className="w-3.5 h-3.5" /> Turun {Math.abs(metrics.delta)} poin ({metrics.deltaContext})
+                </span>
+              ) : (
+                <span className="text-slate-500 inline-flex items-center gap-1">
+                  <Minus className="w-3.5 h-3.5" /> Stabil
+                </span>
+              )}
             </div>
           </div>
 
-          {/* Compact Rekap Riwayat Nilai */}
-          <div className="border border-slate-200 rounded-2xl overflow-hidden">
-            <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-              <h3 className="text-xs font-display font-black text-slate-800">
-                Riwayat Nilai Ujian ({filteredEntries.length})
+          <div className="p-4 space-y-1">
+            <div className="text-xs font-semibold text-slate-500">Nilai Tertinggi</div>
+            <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
+              {metrics.highest}
+            </div>
+            <div className="text-xs text-slate-600 truncate">{metrics.highestLabel}</div>
+          </div>
+
+          <div className="p-4 space-y-1">
+            <div className="text-xs font-semibold text-slate-500">Paket &amp; Mapel Selesai</div>
+            <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
+              {metrics.paketCount} <span className="text-sm font-bold text-slate-500">Paket</span>
+            </div>
+            <div className="text-xs text-slate-600 tabular-nums">
+              {metrics.total} mapel ({metrics.cbtCount} CBT <span aria-hidden="true">·</span> {metrics.tkaCount} TKA)
+            </div>
+          </div>
+
+          <div className="p-4 space-y-1">
+            <div className="text-xs font-semibold text-slate-500">Ketuntasan (≥ {KKTP_THRESHOLD})</div>
+            <div className="text-2xl font-display font-black text-slate-900 tabular-nums">
+              {metrics.passRate}%
+            </div>
+            <div className="text-xs text-slate-600 tabular-nums">
+              {metrics.passedCount} dari {metrics.total} mapel tuntas
+            </div>
+          </div>
+        </div>
+
+        {/* Chart or Empty State */}
+        {filteredEntries.length === 0 ? (
+          <div className="border border-dashed border-slate-300 rounded-2xl p-8 text-center space-y-4 bg-slate-50/40">
+            <div className="space-y-1 max-w-md mx-auto">
+              <h3 className="text-sm font-display font-black text-slate-800">
+                Belum Ada Riwayat Nilai {categoryFilter === 'all' ? 'CBT atau TKA' : categoryFilter}
               </h3>
-              <span className="text-[11px] text-slate-500">Diurutkan dari awal ke terbaru</span>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Grafik perkembangan per paket tes beserta mata pelajaran di dalamnya akan muncul otomatis setelah kamu menyelesaikan ujian CBT atau Simulasi/Try Out TKA.
+              </p>
             </div>
-            <div className="overflow-x-auto max-h-64 overflow-y-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead className="bg-white border-b border-slate-200 text-slate-500 sticky top-0">
-                  <tr>
-                    <th className="py-2.5 px-4 font-bold">No</th>
-                    <th className="py-2.5 px-4 font-bold">Jenis</th>
-                    <th className="py-2.5 px-4 font-bold">Ujian &amp; Mata Pelajaran</th>
-                    <th className="py-2.5 px-4 font-bold">Waktu</th>
-                    <th className="py-2.5 px-4 font-bold text-right">Nilai</th>
-                    <th className="py-2.5 px-4 font-bold">Keterangan</th>
-                    <th className="py-2.5 px-4 font-bold text-right">Ulasan SARAH</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {filteredEntries.map((row) => (
-                    <tr key={row.key} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="py-2.5 px-4 font-mono text-slate-500 tabular-nums">
-                        {row.urutan}
-                      </td>
-                      <td className="py-2.5 px-4 font-bold text-slate-700">{row.category}</td>
-                      <td className="py-2.5 px-4">
-                        <div className="font-semibold text-slate-900">{row.judul}</div>
-                        <div className="text-[11px] text-slate-500">{row.mapel}</div>
-                      </td>
-                      <td className="py-2.5 px-4 text-slate-500 whitespace-nowrap">{row.waktu}</td>
-                      <td className="py-2.5 px-4 text-right font-mono font-black text-slate-900 tabular-nums">
-                        {row.nilai}
-                      </td>
-                      <td className="py-2.5 px-4 whitespace-nowrap">
-                        {row.nilai >= KKTP_THRESHOLD ? (
-                          <span className="inline-flex items-center gap-1 font-semibold text-emerald-700">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> Tuntas
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 font-semibold text-amber-700">
-                            <AlertCircle className="w-3.5 h-3.5" /> Perlu Latihan
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-4 text-right whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            window.dispatchEvent(
-                              new CustomEvent('serbu21-open-tanya-sarah', {
-                                detail: {
-                                  examId: row.examId,
-                                  paketName: row.paketName,
-                                  mapel: row.mapel,
-                                  category: row.category.toLowerCase() as 'cbt' | 'tka',
-                                  autoRequestFeedback: true,
-                                },
-                              })
-                            );
-                          }}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[11px] cursor-pointer transition"
-                          title="Tanya SARAH soal yang masih salah pada ujian ini"
-                        >
-                          <Sparkles className="w-3 h-3" />
-                          <span>Tanya Soal Salah</span>
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={onStartCbt}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors inline-flex items-center gap-2 whitespace-nowrap cursor-pointer"
+              >
+                <Laptop className="w-3.5 h-3.5" />
+                <span>Mulai Ujian CBT</span>
+              </button>
+              <button
+                type="button"
+                onClick={onStartTka}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors inline-flex items-center gap-2 whitespace-nowrap cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Mulai Tes TKA</span>
+              </button>
             </div>
           </div>
-        </div>
-      )}
-    </section>
+        ) : (
+          <div className="space-y-6">
+            {/* Recharts Visualization */}
+            <div className="border border-slate-200 rounded-2xl p-4 sm:p-5 bg-white space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs sm:text-sm font-display font-black text-slate-800">
+                    {chartView === 'paket'
+                      ? effectivePaket === 'all'
+                        ? `Grafik Perkembangan Nilai per Paket Tes${
+                            effectiveSubject !== 'all' ? ` — ${effectiveSubject}` : ''
+                          }`
+                        : `Rincian Nilai Mata Pelajaran — ${effectivePaket}`
+                      : `Rata-Rata Nilai per Mata Pelajaran${
+                          effectivePaket !== 'all' ? ` (${effectivePaket})` : ' (CBT vs TKA)'
+                        }`}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {chartView === 'paket'
+                      ? effectivePaket === 'all'
+                        ? 'Setiap paket tes menampilkan capaian masing-masing mata pelajaran beserta garis tren rata-rata paket. Klik batang/paket untuk melihat rincian.'
+                        : 'Perbandingan nilai tiap mata pelajaran di dalam paket tes terpilih terhadap ambang KKTP.'
+                      : 'Perbandingan rata-rata nilai antar mata pelajaran pada seluruh paket yang diikuti.'}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                  {effectivePaket !== 'all' && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPaket('all')}
+                      className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer transition-colors whitespace-nowrap"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Semua Paket Tes</span>
+                    </button>
+                  )}
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-4 border-t-2 border-dashed border-emerald-600 inline-block" />
+                    KKTP ({KKTP_THRESHOLD})
+                  </span>
+                </div>
+              </div>
+
+              <div className="w-full h-[310px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  {chartView === 'paket' && effectivePaket !== 'all' ? (
+                    <BarChart
+                      data={singlePaketBreakdownData}
+                      margin={{ top: 14, right: 16, left: -16, bottom: 6 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                      <XAxis
+                        dataKey="mapel"
+                        tick={{ fontSize: 11, fontWeight: 700, fill: '#334155' }}
+                        axisLine={{ stroke: '#cbd5e1' }}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        domain={[0, 100]}
+                        tick={{ fontSize: 11, fill: '#64748b' }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <ReferenceLine
+                        y={KKTP_THRESHOLD}
+                        stroke="#059669"
+                        strokeDasharray="5 5"
+                        label={{
+                          value: `KKTP ${KKTP_THRESHOLD}`,
+                          position: 'insideTopRight',
+                          fill: '#059669',
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                      />
+                      <Tooltip
+                        cursor={{ fill: '#f8fafc' }}
+                        content={({ active, payload }) => {
+                          if (!active || !payload || !payload.length) return null;
+                          const row = payload[0].payload as (typeof singlePaketBreakdownData)[number];
+                          return (
+                            <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-md text-xs space-y-1 max-w-[240px]">
+                              <div className="text-[11px] font-semibold text-slate-500">
+                                {row.category} · {row.paketName}
+                              </div>
+                              <div className="font-bold text-slate-900">{row.fullMapel}</div>
+                              <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                                <span className="text-slate-500">Nilai Mapel</span>
+                                <span className="font-mono font-black text-sm text-slate-900 tabular-nums">
+                                  {row.nilai}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span className="text-slate-500">{row.waktu}</span>
+                                <span
+                                  className={
+                                    row.nilai >= KKTP_THRESHOLD
+                                      ? 'font-bold text-emerald-700'
+                                      : 'font-bold text-amber-700'
+                                  }
+                                >
+                                  {row.status}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Bar dataKey="nilai" name="Nilai Mata Pelajaran" radius={[6, 6, 0, 0]} maxBarSize={48}>
+                        {singlePaketBreakdownData.map((item) => (
+                          <Cell key={item.key} fill={item.fill} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  ) : chartView === 'paket' ? (
+                    <ComposedChart
+                      data={paketChartData}
+                      margin={{ top: 14, right: 16, left: -16, bottom: 6 }}
+                      onClick={(state: any) => {
+                        const activeLabel = state?.activeLabel;
+                        if (!activeLabel) return;
+                        const matched = paketChartData.find((p) => p.shortPaket === activeLabel);
+                        if (matched) setSelectedPaket(matched.paketName);
+                      }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                      <XAxis
+                        dataKey="shortPaket"
+                        tick={{ fontSize: 11, fontWeight: 700, fill: '#334155' }}
+                        axisLine={{ stroke: '#cbd5e1' }}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        domain={[0, 100]}
+                        tick={{ fontSize: 11, fill: '#64748b' }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <ReferenceLine
+                        y={KKTP_THRESHOLD}
+                        stroke="#059669"
+                        strokeDasharray="5 5"
+                        label={{
+                          value: `KKTP ${KKTP_THRESHOLD}`,
+                          position: 'insideTopRight',
+                          fill: '#059669',
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                      />
+                      <Tooltip
+                        cursor={{ fill: '#f8fafc' }}
+                        content={({ active, payload }) => {
+                          if (!active || !payload || !payload.length) return null;
+                          const row = payload[0].payload as PaketChartRow;
+                          return (
+                            <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-lg text-xs space-y-2 min-w-[220px] max-w-[290px]">
+                              <div className="border-b border-slate-100 pb-1.5">
+                                <div className="text-[11px] font-semibold text-slate-500">
+                                  {row.category} · {row.mapelCount} Mata Pelajaran
+                                </div>
+                                <div className="font-bold text-slate-900 leading-snug">
+                                  {row.paketName}
+                                </div>
+                              </div>
+
+                              <div className="space-y-1">
+                                {row.subjects.map((sub) => {
+                                  const mapelMeta = activeChartMapels.find(
+                                    (m) => m.fullMapel === sub.mapel
+                                  );
+                                  return (
+                                    <div
+                                      key={`${row.paketKey}_${sub.mapel}`}
+                                      className="flex items-center justify-between gap-3"
+                                    >
+                                      <span className="inline-flex items-center gap-1.5 text-slate-700 truncate">
+                                        <span
+                                          className="w-2 h-2 rounded-xs shrink-0"
+                                          style={{ backgroundColor: mapelMeta?.color || '#64748b' }}
+                                        />
+                                        <span className="truncate">{sub.shortMapel}</span>
+                                      </span>
+                                      <span
+                                        className={`font-mono font-bold tabular-nums ${
+                                          sub.nilai >= KKTP_THRESHOLD
+                                            ? 'text-slate-900'
+                                            : 'text-amber-700'
+                                        }`}
+                                      >
+                                        {sub.nilai}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              <div className="flex items-center justify-between pt-1.5 border-t border-slate-100">
+                                <span className="font-semibold text-slate-600">Rata-Rata Paket</span>
+                                <span className="font-mono font-black text-sm text-slate-900 tabular-nums">
+                                  {row.rataRata}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-slate-500 flex items-center justify-between">
+                                <span>Ketuntasan Mapel</span>
+                                <span className="font-bold text-emerald-700 tabular-nums">
+                                  {row.tuntasCount}/{row.mapelCount} Tuntas
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '6px' }} />
+                      {activeChartMapels.map((mapelItem) => (
+                        <Bar
+                          key={mapelItem.dataKey}
+                          dataKey={mapelItem.dataKey}
+                          name={mapelItem.shortMapel}
+                          fill={mapelItem.color}
+                          radius={[5, 5, 0, 0]}
+                          maxBarSize={24}
+                        />
+                      ))}
+                      <Line
+                        type="monotone"
+                        dataKey="rataRata"
+                        name="Rata-rata Paket"
+                        stroke="#0f172a"
+                        strokeWidth={2.5}
+                        dot={{ r: 4.5, fill: '#0f172a', stroke: '#ffffff', strokeWidth: 2 }}
+                        activeDot={{ r: 6.5, strokeWidth: 2, stroke: '#ffffff' }}
+                      />
+                    </ComposedChart>
+                  ) : (
+                    <BarChart
+                      data={subjectChartData}
+                      margin={{ top: 12, right: 16, left: -16, bottom: 4 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                      <XAxis
+                        dataKey="mapel"
+                        tick={{ fontSize: 11, fill: '#64748b' }}
+                        axisLine={{ stroke: '#cbd5e1' }}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        domain={[0, 100]}
+                        tick={{ fontSize: 11, fill: '#64748b' }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <ReferenceLine y={KKTP_THRESHOLD} stroke="#059669" strokeDasharray="5 5" />
+                      <Tooltip
+                        content={({ active, payload }) => {
+                          if (!active || !payload || !payload.length) return null;
+                          const row = payload[0].payload as (typeof subjectChartData)[number];
+                          return (
+                            <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-md text-xs space-y-1.5 min-w-[200px]">
+                              <div className="font-bold text-slate-900 border-b border-slate-100 pb-1">
+                                {row.fullMapel}
+                              </div>
+                              {typeof row.CBT === 'number' && (
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-rose-700 font-semibold">Rata-rata CBT</span>
+                                  <span className="font-mono font-bold tabular-nums">{row.CBT}</span>
+                                </div>
+                              )}
+                              {typeof row.TKA === 'number' && (
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-violet-700 font-semibold">Rata-rata TKA</span>
+                                  <span className="font-mono font-bold tabular-nums">{row.TKA}</span>
+                                </div>
+                              )}
+                              {row.paketDetails.length > 0 && (
+                                <div className="pt-1 border-t border-slate-100 space-y-0.5 text-[11px]">
+                                  <div className="font-semibold text-slate-500">Per Paket Tes:</div>
+                                  {row.paketDetails.map((d, idx) => (
+                                    <div key={`${d.paketName}_${idx}`} className="flex justify-between gap-3">
+                                      <span className="text-slate-600">{d.paketName}</span>
+                                      <span className="font-mono font-bold text-slate-900 tabular-nums">{d.nilai}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: '12px' }} />
+                      {(categoryFilter === 'all' || categoryFilter === 'CBT') && (
+                        <Bar dataKey="CBT" name="Nilai CBT" fill="#e11d48" radius={[6, 6, 0, 0]} />
+                      )}
+                      {(categoryFilter === 'all' || categoryFilter === 'TKA') && (
+                        <Bar dataKey="TKA" name="Nilai TKA" fill="#7c3aed" radius={[6, 6, 0, 0]} />
+                      )}
+                    </BarChart>
+                  )}
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Ringkasan Capaian Per Paket Tes (beserta Mapel di dalamnya) */}
+            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-xs font-display font-black text-slate-800">
+                  Ringkasan Nilai Per Paket Tes ({paketChartData.length} Paket)
+                </h3>
+                <span className="text-[11px] text-slate-500">
+                  Klik baris paket tes untuk memfilter grafik mata pelajaran di dalamnya
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="bg-white border-b border-slate-200 text-slate-500">
+                    <tr>
+                      <th className="py-2.5 px-4 font-bold">Paket Tes</th>
+                      <th className="py-2.5 px-4 font-bold">Kategori</th>
+                      <th className="py-2.5 px-4 font-bold">Mata Pelajaran di Dalam Paket</th>
+                      <th className="py-2.5 px-4 font-bold text-right">Rata-Rata</th>
+                      <th className="py-2.5 px-4 font-bold text-right">Ketuntasan</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {paketChartData.map((pkt) => {
+                      const isActive = effectivePaket === pkt.paketName;
+                      return (
+                        <tr
+                          key={pkt.paketKey}
+                          onClick={() => {
+                            setSelectedPaket(isActive ? 'all' : pkt.paketName);
+                            setChartView('paket');
+                          }}
+                          className={`cursor-pointer transition-colors ${
+                            isActive ? 'bg-rose-50/70' : 'hover:bg-slate-50/80'
+                          }`}
+                        >
+                          <td className="py-2.5 px-4 font-bold text-slate-900 whitespace-nowrap">
+                            {pkt.paketName}
+                          </td>
+                          <td className="py-2.5 px-4 font-semibold text-slate-600 whitespace-nowrap">
+                            {pkt.category}
+                          </td>
+                          <td className="py-2.5 px-4">
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                              {pkt.subjects.map((sub, sIdx) => (
+                                <span
+                                  key={`${pkt.paketKey}_${sub.mapel}`}
+                                  className="inline-flex items-center gap-1 text-slate-700"
+                                >
+                                  {sIdx > 0 && (
+                                    <span className="text-slate-300 mr-1" aria-hidden="true">
+                                      ·
+                                    </span>
+                                  )}
+                                  <span>{sub.shortMapel}:</span>
+                                  <strong
+                                    className={`font-mono tabular-nums ${
+                                      sub.nilai >= KKTP_THRESHOLD
+                                        ? 'text-slate-900'
+                                        : 'text-amber-700'
+                                    }`}
+                                  >
+                                    {sub.nilai}
+                                  </strong>
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-4 text-right font-mono font-black text-slate-900 tabular-nums whitespace-nowrap">
+                            {pkt.rataRata}
+                          </td>
+                          <td className="py-2.5 px-4 text-right font-mono font-semibold text-emerald-700 tabular-nums whitespace-nowrap">
+                            {pkt.tuntasCount}/{pkt.mapelCount}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Compact Rekap Riwayat Nilai */}
+            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                <h3 className="text-xs font-display font-black text-slate-800">
+                  Riwayat Nilai Ujian ({filteredEntries.length})
+                </h3>
+                <span className="text-[11px] text-slate-500">Diurutkan sesuai urutan paket tes</span>
+              </div>
+              <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="bg-white border-b border-slate-200 text-slate-500 sticky top-0">
+                    <tr>
+                      <th className="py-2.5 px-4 font-bold">No</th>
+                      <th className="py-2.5 px-4 font-bold">Jenis</th>
+                      <th className="py-2.5 px-4 font-bold">Paket Tes</th>
+                      <th className="py-2.5 px-4 font-bold">Mata Pelajaran &amp; Judul</th>
+                      <th className="py-2.5 px-4 font-bold">Waktu</th>
+                      <th className="py-2.5 px-4 font-bold text-right">Nilai</th>
+                      <th className="py-2.5 px-4 font-bold">Keterangan</th>
+                      <th className="py-2.5 px-4 font-bold text-right">Ulasan SARAH</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {filteredEntries.map((row) => (
+                      <tr key={row.key} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="py-2.5 px-4 font-mono text-slate-500 tabular-nums">
+                          {row.urutan}
+                        </td>
+                        <td className="py-2.5 px-4 font-bold text-slate-700">{row.category}</td>
+                        <td className="py-2.5 px-4 font-semibold text-slate-800 whitespace-nowrap">
+                          {row.paketName}
+                        </td>
+                        <td className="py-2.5 px-4">
+                          <div className="font-semibold text-slate-900">{row.mapel}</div>
+                          <div className="text-[11px] text-slate-500">{row.judul}</div>
+                        </td>
+                        <td className="py-2.5 px-4 text-slate-500 whitespace-nowrap">{row.waktu}</td>
+                        <td className="py-2.5 px-4 text-right font-mono font-black text-slate-900 tabular-nums">
+                          {row.nilai}
+                        </td>
+                        <td className="py-2.5 px-4 whitespace-nowrap">
+                          {row.nilai >= KKTP_THRESHOLD ? (
+                            <span className="inline-flex items-center gap-1 font-semibold text-emerald-700">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Tuntas
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 font-semibold text-amber-700">
+                              <AlertCircle className="w-3.5 h-3.5" /> Perlu Latihan
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              window.dispatchEvent(
+                                new CustomEvent('serbu21-open-tanya-sarah', {
+                                  detail: {
+                                    examId: row.examId,
+                                    paketName: row.paketName,
+                                    mapel: row.mapel,
+                                    category: row.category.toLowerCase() as 'cbt' | 'tka',
+                                    autoRequestFeedback: true,
+                                  },
+                                })
+                              );
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[11px] cursor-pointer transition"
+                            title="Tanya SARAH soal yang masih salah pada ujian ini"
+                          >
+                            <Sparkles className="w-3 h-3" />
+                            <span>Tanya Soal Salah</span>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
 
       {/* ================================================================= */}
       {/* PRINTABLE A4 REPORT FOR PARENTS (Unduh PDF / Cetak Laporan)       */}
@@ -962,7 +1572,8 @@ export const StudentPerformanceStats: React.FC<Props> = ({
           </h2>
           <p className="text-xs mt-1">
             Salinan Progres Belajar untuk Orang Tua / Wali Murid · Kategori:{' '}
-            <strong>{categoryLabel}</strong> · Mata Pelajaran: <strong>{subjectLabel}</strong>
+            <strong>{categoryLabel}</strong> · Paket: <strong>{paketLabel}</strong> · Mapel:{' '}
+            <strong>{subjectLabel}</strong>
           </p>
         </div>
 
@@ -1007,12 +1618,10 @@ export const StudentPerformanceStats: React.FC<Props> = ({
             <div className="text-lg font-black tabular-nums mt-0.5">{metrics.highest}</div>
           </div>
           <div className="p-2.5">
-            <div className="text-[10px] uppercase font-bold text-slate-600">Ujian Selesai</div>
+            <div className="text-[10px] uppercase font-bold text-slate-600">Paket &amp; Mapel</div>
             <div className="text-lg font-black tabular-nums mt-0.5">
-              {metrics.total}{' '}
-              <span className="text-[10px] font-semibold">
-                ({metrics.cbtCount} CBT · {metrics.tkaCount} TKA)
-              </span>
+              {metrics.paketCount} Paket{' '}
+              <span className="text-[10px] font-semibold">({metrics.total} Mapel)</span>
             </div>
           </div>
           <div className="p-2.5">
@@ -1026,11 +1635,48 @@ export const StudentPerformanceStats: React.FC<Props> = ({
           </div>
         </div>
 
+        {/* Ringkasan Per Paket Tes */}
+        {paketChartData.length > 0 && (
+          <div className="mb-4">
+            <div className="text-xs font-bold uppercase mb-1.5">
+              A. Ringkasan Capaian Per Paket Tes
+            </div>
+            <table className="w-full border-collapse border border-slate-800 text-xs">
+              <thead>
+                <tr className="bg-slate-100">
+                  <th className="border border-slate-800 py-1.5 px-2 w-10 text-center">No</th>
+                  <th className="border border-slate-800 py-1.5 px-3 text-left">Paket Tes</th>
+                  <th className="border border-slate-800 py-1.5 px-2 w-16 text-center">Jenis</th>
+                  <th className="border border-slate-800 py-1.5 px-3 text-left">Nilai Mata Pelajaran</th>
+                  <th className="border border-slate-800 py-1.5 px-2 w-20 text-center">Rata-Rata</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paketChartData.map((pkt, idx) => (
+                  <tr key={`print_pkt_${pkt.paketKey}`}>
+                    <td className="border border-slate-800 py-1 px-2 text-center tabular-nums">
+                      {idx + 1}
+                    </td>
+                    <td className="border border-slate-800 py-1 px-3 font-semibold">{pkt.paketName}</td>
+                    <td className="border border-slate-800 py-1 px-2 text-center font-bold">{pkt.category}</td>
+                    <td className="border border-slate-800 py-1 px-3">
+                      {pkt.subjects.map((s) => `${s.shortMapel}: ${s.nilai}`).join(' · ')}
+                    </td>
+                    <td className="border border-slate-800 py-1 px-2 text-center font-mono font-bold tabular-nums">
+                      {pkt.rataRata}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {/* Ringkasan Rata-Rata per Mata Pelajaran */}
         {subjectChartData.length > 0 && (
           <div className="mb-4">
             <div className="text-xs font-bold uppercase mb-1.5">
-              A. Ringkasan Rata-Rata Nilai per Mata Pelajaran
+              B. Ringkasan Rata-Rata Nilai per Mata Pelajaran
             </div>
             <table className="w-full border-collapse border border-slate-800 text-xs">
               <thead>
@@ -1068,13 +1714,14 @@ export const StudentPerformanceStats: React.FC<Props> = ({
         {/* Tabel Riwayat Nilai Ujian */}
         <div className="mb-6">
           <div className="text-xs font-bold uppercase mb-1.5">
-            B. Rincian Riwayat Nilai Ujian ({filteredEntries.length} Sesi)
+            C. Rincian Riwayat Nilai Ujian ({filteredEntries.length} Sesi)
           </div>
           <table className="w-full border-collapse border border-slate-800 text-xs">
             <thead>
               <tr className="bg-slate-100">
                 <th className="border border-slate-800 py-1.5 px-2 w-10 text-center">No</th>
-                <th className="border border-slate-800 py-1.5 px-2 w-16 text-center">Jenis</th>
+                <th className="border border-slate-800 py-1.5 px-2 w-14 text-center">Jenis</th>
+                <th className="border border-slate-800 py-1.5 px-2 text-left">Paket Tes</th>
                 <th className="border border-slate-800 py-1.5 px-3 text-left">Mata Pelajaran</th>
                 <th className="border border-slate-800 py-1.5 px-3 text-left">Judul Ujian</th>
                 <th className="border border-slate-800 py-1.5 px-2 text-center">Waktu</th>
@@ -1091,6 +1738,7 @@ export const StudentPerformanceStats: React.FC<Props> = ({
                   <td className="border border-slate-800 py-1 px-2 text-center font-bold">
                     {row.category}
                   </td>
+                  <td className="border border-slate-800 py-1 px-2 font-semibold">{row.paketName}</td>
                   <td className="border border-slate-800 py-1 px-3">{row.mapel}</td>
                   <td className="border border-slate-800 py-1 px-3 font-semibold">{row.judul}</td>
                   <td className="border border-slate-800 py-1 px-2 text-center whitespace-nowrap">

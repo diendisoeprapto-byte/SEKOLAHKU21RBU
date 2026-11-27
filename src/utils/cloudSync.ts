@@ -97,6 +97,10 @@ import {
   replaceTeachersInFirestore,
   fetchTeachersFromFirestore,
 } from './teacherFirestore';
+import {
+  stripAnswerKeysFromCbtExam,
+  stripAnswerKeysFromQuestion,
+} from './examAnswerKeyFirestore';
 
 export interface CloudSyncPayload {
   version: number;
@@ -528,12 +532,32 @@ export function applyBackupMapToLocalStorage(
       }
 
       if (key === 'sekolahku_tka_questions' && Array.isArray(val)) {
-        saveStoredTKAQuestions(val);
+        const isStaffSession = (() => {
+          try {
+            const raw = localStorage.getItem('sekolahku_active_user');
+            if (!raw) return false;
+            const parsedUser = JSON.parse(raw);
+            return Boolean(parsedUser?.role && parsedUser.role !== 'siswa');
+          } catch {
+            return false;
+          }
+        })();
+        saveStoredTKAQuestions(isStaffSession ? val : val.map((q: any) => stripAnswerKeysFromQuestion(q)));
         count++;
         return;
       }
       if (key === 'sekolahku_cbt_exams' && Array.isArray(val)) {
-        saveStoredCBTExams(val);
+        const isStaffSession = (() => {
+          try {
+            const raw = localStorage.getItem('sekolahku_active_user');
+            if (!raw) return false;
+            const parsedUser = JSON.parse(raw);
+            return Boolean(parsedUser?.role && parsedUser.role !== 'siswa');
+          } catch {
+            return false;
+          }
+        })();
+        saveStoredCBTExams(isStaffSession ? val : val.map((ex: any) => stripAnswerKeysFromCbtExam(ex)));
         count++;
         return;
       }

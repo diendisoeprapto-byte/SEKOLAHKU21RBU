@@ -14,6 +14,13 @@ import {
   CBT_RESULTS_COLLECTION,
   removePendingCbtResult,
 } from './cbtResultFirestore';
+import {
+  buildTkaExamDocId,
+  fetchAllExamAnswerKeysForTenant,
+  fetchExamAnswerKeysFromFirestore,
+  mergeQuestionsWithAnswerKeys,
+  resolveBuiltInSampleExamKeys,
+} from './examAnswerKeyFirestore';
 
 export const ALL_TKA_MAPEL_KEYS: TKAMapelScoreKey[] = [
   'Bahasa Indonesia',
@@ -221,6 +228,7 @@ export async function unlockAndRecalculateCbtResults(params: {
   let recalculatedCount = 0;
   let skippedNoAnswersCount = 0;
 
+  const { byExamId, flatByQuestionId } = await fetchAllExamAnswerKeysForTenant();
   const updatedByKey = new Map<string, CBTExamResult>();
 
   for (const res of targets) {
@@ -243,9 +251,15 @@ export async function unlockAndRecalculateCbtResults(params: {
     };
 
     if (linkedExam && linkedExam.soalList.length > 0 && hasAnswers) {
-      const calc = calculateTotalExamScore(linkedExam.soalList, res.jawabanSiswa);
+      const keyMap =
+        byExamId[linkedExam.id] ||
+        (await fetchExamAnswerKeysFromFirestore(linkedExam.id)) ||
+        resolveBuiltInSampleExamKeys(linkedExam.id) ||
+        flatByQuestionId;
+      const mergedSoalList = mergeQuestionsWithAnswerKeys(linkedExam.soalList, keyMap);
+      const calc = calculateTotalExamScore(mergedSoalList, res.jawabanSiswa);
       const { benarHots, totalHots } = computeExamHotsStats(
-        linkedExam.soalList,
+        mergedSoalList,
         res.jawabanSiswa,
         (q, ans) => evaluateStudentAnswer(q, ans).isCorrect
       );
@@ -514,6 +528,9 @@ export async function unlockAndRecalculateTkaSubmissions(params: {
   const nowIso = new Date().toISOString();
   const filterMapelSet = resolveTargetTkaMapelSet(targetMapels, targetMapel);
 
+  const { byExamId: tkaKeysByExamId, flatByQuestionId: flatTkaKeys } =
+    await fetchAllExamAnswerKeysForTenant();
+
   let recalculatedCount = 0;
   let skippedNoAnswersCount = 0;
   const updatedMap = new Map<string, TKASubmissionItem>();
@@ -558,9 +575,15 @@ export async function unlockAndRecalculateTkaSubmissions(params: {
 
       if (!hasMapelAnswers) return;
 
-      const calc = calculateTotalExamScore(mapelQs, answers);
+      const tkaExamId = buildTkaExamDocId(basePaket, mapelQs[0]?.mapel || mKey);
+      const tkaExamIdNorm = buildTkaExamDocId(basePaket, mKey);
+      const keyMap =
+        tkaKeysByExamId[tkaExamId] || tkaKeysByExamId[tkaExamIdNorm] || flatTkaKeys;
+      const mergedMapelQs = mergeQuestionsWithAnswerKeys(mapelQs, keyMap);
+
+      const calc = calculateTotalExamScore(mergedMapelQs, answers);
       const hots = computeExamHotsStats(
-        mapelQs,
+        mergedMapelQs,
         answers,
         (q, ans) => evaluateStudentAnswer(q, ans).isCorrect
       );

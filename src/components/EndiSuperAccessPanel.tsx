@@ -35,12 +35,14 @@ import {
   extractImageFilesFromDataTransfer,
   useWindowImagePaste,
 } from '../utils/imageDropPaste';
+import { SchoolFullBackupCard } from './SchoolFullBackupCard';
 
 interface Props {
   activeUser: ActiveUser;
   profile: SchoolProfile;
   onUpdateProfile: (profile: SchoolProfile) => void;
   showToast: (msg: string, type?: 'success' | 'error') => void;
+  onBackupRestored?: () => void;
 }
 
 const DEFAULT_PENDOPO_IMAGE = '/assets/image_13.png';
@@ -130,10 +132,11 @@ export const EndiSuperAccessPanel: React.FC<Props> = ({
   profile,
   onUpdateProfile,
   showToast,
+  onBackupRestored,
 }) => {
   const isAllowedEndi = isEndiSoepraptoUser(activeUser) && activeUser.role !== 'siswa';
 
-  const [panelTab, setPanelTab] = useState<'login_photo' | 'admin_recovery'>('login_photo');
+  const [panelTab, setPanelTab] = useState<'login_photo' | 'admin_recovery' | 'backup_restore'>('login_photo');
 
   // State Tab 1: Foto Login Screen
   const [cloudBgUrl, setCloudBgUrl] = useState<string>(() => getCachedLoginAppearanceUrl());
@@ -410,6 +413,18 @@ export const EndiSuperAccessPanel: React.FC<Props> = ({
             >
               <ShieldAlert className="w-4 h-4" />
               <span>Pemulihan Akun Admin</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPanelTab('backup_restore')}
+              className={`px-4 py-2.5 rounded-2xl font-display font-black text-xs flex items-center gap-2 transition cursor-pointer ${
+                panelTab === 'backup_restore'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md'
+                  : 'bg-white/10 hover:bg-white/20 text-slate-200 border border-white/15'
+              }`}
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Backup &amp; Restore Sekolah</span>
             </button>
           </div>
         </div>
@@ -702,6 +717,16 @@ export const EndiSuperAccessPanel: React.FC<Props> = ({
             </button>
           </div>
         </div>
+      )}
+
+      {/* TAB 3: PUSAT PENCADANGAN & PEMULIHAN FULL DATABASE SEKOLAH */}
+      {panelTab === 'backup_restore' && (
+        <SchoolFullBackupCard
+          profile={profile}
+          activeUserName={activeUser.name}
+          showToast={showToast}
+          onBackupRestored={onBackupRestored}
+        />
       )}
 
       {/* MODAL KONFIRMASI RESET ADMIN */}
