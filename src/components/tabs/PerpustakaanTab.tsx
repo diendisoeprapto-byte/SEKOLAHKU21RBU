@@ -38,6 +38,7 @@ import {
   Grid3X3,
   ChevronLeft,
   ChevronRight,
+  ArrowLeft,
 } from 'lucide-react';
 import {
   collection,
@@ -99,6 +100,7 @@ interface Props {
   activeClass: string;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onOpenZoom: (url: string, title: string) => void;
+  onNavigateTab?: (tab: any) => void;
 }
 
 type LibrarySubTab = 'katalog' | 'pencarian' | 'literasi' | 'sirkulasi';
@@ -205,6 +207,7 @@ export const PerpustakaanTab: React.FC<Props> = ({
   activeClass,
   showToast,
   onOpenZoom,
+  onNavigateTab,
 }) => {
   const isStaff = activeUser.role === 'admin' || activeUser.role === 'guru';
   const isStudent = activeUser.role === 'siswa';
@@ -1613,6 +1616,20 @@ export const PerpustakaanTab: React.FC<Props> = ({
 
   return (
     <section className="space-y-6">
+      {isStudent && onNavigateTab && (
+        <div className="no-print">
+          <button
+            type="button"
+            onClick={() => onNavigateTab('dashboard')}
+            className="px-4 py-2.5 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 transition cursor-pointer flex items-center gap-2 text-xs font-black shadow-xs"
+            title="Kembali ke Beranda Siswa"
+          >
+            <ArrowLeft className="w-4 h-4 text-rose-600" />
+            <span>Kembali ke Beranda</span>
+          </button>
+        </div>
+      )}
+
       {/* ========================================================= */}
       {/* SCREEN UI (no-print)                                       */}
       {/* ========================================================= */}
@@ -1666,6 +1683,20 @@ export const PerpustakaanTab: React.FC<Props> = ({
                 >
                   <Plus className="w-4 h-4" />
                   <span>+ Tambah Buku</span>
+                </button>
+              </div>
+            )}
+
+            {isStudent && onNavigateTab && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onNavigateTab('dashboard')}
+                  className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-700 hover:to-rose-800 text-white font-display font-extrabold text-xs flex items-center gap-2 shadow-sm cursor-pointer transition active:scale-95"
+                  title="Kembali ke Beranda Siswa (Dashboard)"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  <span>Kembali ke Beranda</span>
                 </button>
               </div>
             )}

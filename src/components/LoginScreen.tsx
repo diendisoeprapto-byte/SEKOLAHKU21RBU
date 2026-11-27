@@ -629,7 +629,6 @@ export const LoginScreen: React.FC<Props> = ({
             type="button"
             onClick={() => setShowChangelogModal(true)}
             className="group inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-300 text-xs font-semibold text-slate-700 hover:text-rose-700 transition cursor-pointer shadow-2xs active:scale-95"
-            title="Klik untuk melihat riwayat pembaruan aplikasi SERBU 21"
           >
             <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 group-hover:ring-4 group-hover:ring-emerald-100 transition-all" aria-hidden="true" />
             <Info className="w-3.5 h-3.5 text-slate-400 group-hover:text-rose-600 transition" />

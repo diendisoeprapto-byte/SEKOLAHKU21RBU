@@ -146,7 +146,8 @@ export const Sidebar: React.FC<Props> = ({
 
   const isStudent = activeUser.role === 'siswa';
   const isAdminAccess = hasAdminMenuAccess(activeUser);
-  const isStudentTakingExam = isStudent && Boolean(activeExamStatus?.isRunning);
+  const isStudentTakingExam =
+    isStudent && Boolean(isExamActive) && Boolean(activeExamStatus?.isRunning);
 
   if (!isOpen) return null;
 

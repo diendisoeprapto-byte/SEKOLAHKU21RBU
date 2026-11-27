@@ -29,6 +29,35 @@ export interface ChangelogVersionItem {
 
 export const CHANGELOG_DATA: ChangelogVersionItem[] = [
   {
+    version: 'v5.0.0',
+    date: '27 November 2026',
+    title: 'SERBU 21 Generasi 5: Ekosistem Sekolah Terpadu & Mesin Penilaian Universal 6 Tipe Soal',
+    highlights: [
+      'Peluncuran resmi Generasi 5 "Ekosistem Merdeka" dengan modul mesin penilaian ujian universal (examEngine) yang mendukung penuh seluruh 6 tipe soal (PG, Kompleks, Menjodohkan, Isian Singkat, Uraian, dan Benar/Salah).',
+      'Penyempurnaan alur ujian siswa dan sistem isolasi kunci ujian: penguncian tombol keluar hanya aktif saat anak sedang mengerjakan soal di layar ujian, dan tombol keluar selalu aktif normal saat membuka menu lain.',
+      'Pembersihan otomatis modal notifikasi nilai saat baru membuka menu ujian TKA agar tampilan antarmuka selalu segar dan siap pakai.',
+      'Penambahan tombol navigasi "Kembali ke Beranda" pada Perpustakaan Digital di akun siswa serta integrasi menu keluar langsung pada klik nama pengguna.',
+    ],
+  },
+  {
+    version: 'v4.16.0',
+    date: '27 November 2026',
+    title: 'Integrasi Profil Siswa Reguler & Inklusi pada Data Siswa dan Jurnal Mengajar',
+    highlights: [
+      'Pengkategorian data siswa reguler dan inklusi (PDBK/PPI) terpadu di profil data siswa dan administrasi pembelajaran.',
+      'Sinkronisasi rekap kehadiran, catatan evaluasi diferensiasi, dan rekam jejak capaian pembelajaran harian.',
+    ],
+  },
+  {
+    version: 'v4.15.0',
+    date: '27 November 2026',
+    title: 'Kategori Layanan Pembelajaran Reguler, Inklusi & Kombinasi',
+    highlights: [
+      'Penambahan selector 3 kategori layanan pembelajaran (Reguler, Inklusi, dan Kombinasi) pada form Modul Ajar dan Jurnal Mengajar.',
+      'Adaptasi form dan bantuan kecerdasan buatan SARAH berbasis kategori peserta didik di kelas terpadu / inklusif.',
+    ],
+  },
+  {
     version: 'v4.14.2',
     date: '26 November 2026',
     title: 'Mode Presentasi Slideshow Penuh pada Bank Media Ajar',
@@ -261,13 +290,13 @@ export const CHANGELOG_LIST = CHANGELOG_DATA;
 
 // SUMBER KEBENARAN TUNGGAL DINAMIS BERDASARKAN ELEMEN TERATAS CHANGELOG_DATA:
 export const CURRENT_CHANGELOG_ITEM = CHANGELOG_DATA[0];
-export const APP_VERSION = CHANGELOG_DATA[0]?.version || 'v4.14.2';
-export const RELEASE_DATE = CHANGELOG_DATA[0]?.date || '26 November 2026';
+export const APP_VERSION = CHANGELOG_DATA[0]?.version || 'v5.0.0';
+export const RELEASE_DATE = CHANGELOG_DATA[0]?.date || '27 November 2026';
 export const RELEASE_DATE_SHORT = RELEASE_DATE.replace('November', 'Nov').replace('Desember', 'Des');
 export const APP_VERSION_NUMBER = APP_VERSION.replace(/^v/i, '');
 export const APP_VERSION_CODENAME = getReleaseCodename(APP_VERSION);
 export const APP_VERSION_FOOTER_TEXT = `Versi ${APP_VERSION_NUMBER} "${APP_VERSION_CODENAME}"`;
-export const APP_VERSION_TOOLTIP = 'Klik untuk melihat catatan pembaruan aplikasi SERBU 21';
+export const APP_VERSION_TOOLTIP = '';
 
 export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
 

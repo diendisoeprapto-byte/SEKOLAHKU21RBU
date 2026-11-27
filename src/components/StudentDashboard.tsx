@@ -98,6 +98,7 @@ import {
 } from '../utils/examDraft';
 import { TKA_JENIS_LIST, TKA_MAPEL_LIST } from '../data/defaultData';
 import { evaluateQuestionScore, normalizeString } from '../utils/answerChecker';
+import { evaluateStudentAnswer } from '../utils/examEngine';
 import { getLocalTodayStr } from '../utils/dateUtils';
 import { QuestionContent } from './QuestionContent';
 import { MathRenderer } from './MathRenderer';
@@ -227,16 +228,28 @@ export const StudentDashboard: React.FC<Props> = ({
   useEffect(() => {
     if (initialTab === 'laporan-kebiasaan') {
       setViewMode('kebiasaan');
+      setIsExamRunning(false);
+      onExamActiveChange?.(false);
+      onExamStatusChange?.(null);
+      setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
+      setExamResult(null);
     } else if (initialTab === 'ujian') {
       setViewMode('cbt');
+      setIsExamRunning(false);
+      onExamActiveChange?.(false);
+      onExamStatusChange?.(null);
       setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
+      setExamResult(null);
       try {
         localStorage.removeItem('sekolahku_pending_submission_lock_v1');
       } catch {}
     } else if (initialTab === 'tes-tka-siswa') {
       setViewMode('tka');
-      // Pastikan ketika baru membuka menu ujian TKA, modal hasil/pengiriman nilai tertutup & terkontrol bersih
+      setIsExamRunning(false);
+      onExamActiveChange?.(false);
+      onExamStatusChange?.(null);
       setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
+      setExamResult(null);
       try {
         localStorage.removeItem('sekolahku_pending_submission_lock_v1');
       } catch {}
@@ -246,8 +259,9 @@ export const StudentDashboard: React.FC<Props> = ({
       onExamActiveChange?.(false);
       onExamStatusChange?.(null);
       setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
+      setExamResult(null);
     }
-  }, [initialTab]);
+  }, [initialTab, onExamActiveChange, onExamStatusChange]);
 
   // State untuk alur ujian & filter dropdown Paket Soal + Mata Pelajaran
   const [selectedPaketFilter, setSelectedPaketFilter] = useState<string>('');
@@ -1341,50 +1355,9 @@ export const StudentDashboard: React.FC<Props> = ({
     };
   }, [onExamStatusChange]);
 
-  // Evaluasi skor mendukung baik format kunci huruf ("A"/"B") maupun teks penuh opsi ("Jantung")
+  // Evaluasi skor menggunakan unified examEngine (mendukung seluruh 6 tipe soal)
   const gradeQuestionAnswer = (q: CBTQuestion, studentAns: any): { isCorrect: boolean; earnedScore: number } => {
-    if (studentAns === undefined || studentAns === null || studentAns === '') {
-      return { isCorrect: false, earnedScore: 0 };
-    }
-    if (q.tipe === 'pg' && q.opsi && q.opsi.length > 0) {
-      const ansStr = typeof studentAns === 'object' ? studentAns.text || studentAns.key || '' : String(studentAns);
-      const ansKey = typeof studentAns === 'object' ? studentAns.key || '' : '';
-      const keyNorm = normalizeString(String(q.kunciJawaban || ''));
-
-      // Cocokkan teks langsung ATAU huruf opsi ('A','B','C','D') ATAU awalan 'A. ...'
-      const optIdx = q.opsi.findIndex((o) => normalizeString(o) === normalizeString(ansStr));
-      const derivedKey = optIdx >= 0 ? String.fromCharCode(65 + optIdx).toLowerCase() : normalizeString(ansKey);
-
-      const isDirectText = normalizeString(ansStr) === keyNorm;
-      const isLetterKey = derivedKey !== '' && derivedKey === keyNorm;
-      const isOptionAtKeyLetter =
-        keyNorm.length === 1 &&
-        keyNorm >= 'a' &&
-        keyNorm <= 'z' &&
-        optIdx >= 0 &&
-        optIdx === keyNorm.charCodeAt(0) - 97;
-      const isPrefixMatch =
-        ansStr.trim().charAt(1) === '.' &&
-        normalizeString(ansStr.trim().charAt(0)) === keyNorm;
-
-      const correct = isDirectText || isLetterKey || isOptionAtKeyLetter || isPrefixMatch;
-      return { isCorrect: correct, earnedScore: correct ? q.bobot : 0 };
-    }
-    if (q.tipe === 'pg_kompleks') {
-      const selectedArr: string[] = Array.isArray(studentAns) ? studentAns : [String(studentAns)];
-      const directRes = evaluateQuestionScore('pg_kompleks', selectedArr, q.kunciJawaban, q.bobot);
-      if (directRes.earnedScore > 0) return directRes;
-      // Fallback jika kunci disimpan dalam huruf A/B/C/D dan jawaban disimpan sebagai teks opsi
-      if (q.opsi && q.opsi.length > 0) {
-        const mappedLetters = selectedArr.map((txt) => {
-          const idx = q.opsi!.findIndex((o) => normalizeString(o) === normalizeString(txt));
-          return idx >= 0 ? String.fromCharCode(65 + idx) : txt;
-        });
-        return evaluateQuestionScore('pg_kompleks', mappedLetters, q.kunciJawaban, q.bobot);
-      }
-      return directRes;
-    }
-    return evaluateQuestionScore(q.tipe, studentAns, q.kunciJawaban, q.bobot, q.opsi, q);
+    return evaluateStudentAnswer(q, studentAns);
   };
 
   // Simpan referensi state ujian terbaru agar aman saat logout/unmount/beforeunload
@@ -1591,26 +1564,12 @@ export const StudentDashboard: React.FC<Props> = ({
     };
   }, []);
 
-  // Auto-resume otomatis ketika siswa masuk kembali ke menu soal CBT / TKA setelah logout/reload
+  // Reset mode resume saat kembali ke home atau menu lain
   useEffect(() => {
     if (viewMode === 'home' || viewMode === 'kebiasaan') {
       autoResumedModeRef.current = '';
-      return;
     }
-    if (isExamRunning || examResult || !currentStudent?.id) return;
-
-    const modeKey = `${currentStudent.id}:${viewMode}`;
-    if (autoResumedModeRef.current === modeKey) return;
-
-    const activeDraft = getLastActiveStudentExamDraft(currentStudent.id, viewMode);
-    if (!activeDraft || activeDraft.timeLeft <= 0) return;
-
-    const matchingExam = currentAvailableExams.find((e) => e.id === activeDraft.examId);
-    if (!matchingExam || matchingExam.soalList.length === 0) return;
-
-    autoResumedModeRef.current = modeKey;
-    resumeFromDraft(activeDraft, matchingExam);
-  }, [viewMode, isExamRunning, examResult, currentStudent?.id, currentAvailableExams]);
+  }, [viewMode]);
 
   // Timer interval saat ujian berlangsung
   useEffect(() => {
@@ -2291,6 +2250,10 @@ export const StudentDashboard: React.FC<Props> = ({
                 setViewMode('cbt');
                 setSelectedExamId('');
                 setIsExamRunning(false);
+                onExamActiveChange?.(false);
+                onExamStatusChange?.(null);
+                setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
+                setExamResult(null);
               }}
               className="group bg-white p-4 rounded-2xl border border-slate-200 hover:border-rose-300 shadow-2xs hover:shadow-sm transition text-left flex items-center justify-between gap-3 cursor-pointer"
             >
@@ -2318,6 +2281,10 @@ export const StudentDashboard: React.FC<Props> = ({
                   setViewMode('tka');
                   setSelectedExamId('');
                   setIsExamRunning(false);
+                  onExamActiveChange?.(false);
+                  onExamStatusChange?.(null);
+                  setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
+                  setExamResult(null);
                 }}
                 className="group bg-white p-4 rounded-2xl border border-slate-200 hover:border-purple-300 shadow-2xs hover:shadow-sm transition text-left flex items-center justify-between gap-3 cursor-pointer"
               >
@@ -2465,11 +2432,19 @@ export const StudentDashboard: React.FC<Props> = ({
             setViewMode('cbt');
             setSelectedExamId('');
             setIsExamRunning(false);
+            onExamActiveChange?.(false);
+            onExamStatusChange?.(null);
+            setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
+            setExamResult(null);
           }}
           onStartTka={() => {
             setViewMode('tka');
             setSelectedExamId('');
             setIsExamRunning(false);
+            onExamActiveChange?.(false);
+            onExamStatusChange?.(null);
+            setSubmittingModalState((prev) => ({ ...prev, isOpen: false }));
+            setExamResult(null);
           }}
         />
       </section>
