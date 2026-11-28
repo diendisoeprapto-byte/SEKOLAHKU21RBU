@@ -365,7 +365,7 @@ export const RELEASE_DATE = CHANGELOG_DATA[0]?.date || '27 November 2026';
 export const RELEASE_DATE_SHORT = RELEASE_DATE.replace('November', 'Nov').replace('Desember', 'Des');
 export const APP_VERSION_NUMBER = APP_VERSION.replace(/^v/i, '');
 export const APP_VERSION_CODENAME = getReleaseCodename(APP_VERSION);
-export const APP_VERSION_FOOTER_TEXT = `Versi ${APP_VERSION_NUMBER} • Klik untuk lihat pembaruan`;
+export const APP_VERSION_FOOTER_TEXT = `Versi ${APP_VERSION_NUMBER} • ${APP_VERSION_CODENAME}`;
 export const APP_VERSION_TOOLTIP = '';
 
 export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';
