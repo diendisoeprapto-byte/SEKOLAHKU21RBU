@@ -14,12 +14,13 @@ import {
   Sparkles,
   Loader2,
   X,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
-import { ActiveUser, SchoolProfile } from '../types';
+import { ActiveUser, SchoolProfile, Student, Teacher } from '../types';
 import { db } from '../utils/firebase';
 import { isEndiSoepraptoUser } from '../utils/sarahAttachments';
-import { saveStoredAdminPassword } from '../utils/storage';
+import { getStoredStudents, getStoredTeachers, saveStoredAdminPassword } from '../utils/storage';
 import {
   AdminCredentialsDoc,
   clearLocalAdminLockout,
@@ -36,10 +37,13 @@ import {
   useWindowImagePaste,
 } from '../utils/imageDropPaste';
 import { SchoolFullBackupCard } from './SchoolFullBackupCard';
+import { DapodikImportModal } from './modals/DapodikImportModal';
 
 interface Props {
   activeUser: ActiveUser;
   profile: SchoolProfile;
+  students?: Student[];
+  teachers?: Teacher[];
   onUpdateProfile: (profile: SchoolProfile) => void;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onBackupRestored?: () => void;
@@ -130,6 +134,8 @@ async function compressLoginPhotoOnCanvas(file: File): Promise<{
 export const EndiSuperAccessPanel: React.FC<Props> = ({
   activeUser,
   profile,
+  students: propStudents,
+  teachers: propTeachers,
   onUpdateProfile,
   showToast,
   onBackupRestored,
@@ -137,6 +143,7 @@ export const EndiSuperAccessPanel: React.FC<Props> = ({
   const isAllowedEndi = isEndiSoepraptoUser(activeUser) && activeUser.role !== 'siswa';
 
   const [panelTab, setPanelTab] = useState<'login_photo' | 'admin_recovery' | 'backup_restore'>('login_photo');
+  const [isDapodikModalOpen, setIsDapodikModalOpen] = useState(false);
 
   // State Tab 1: Foto Login Screen
   const [cloudBgUrl, setCloudBgUrl] = useState<string>(() => getCachedLoginAppearanceUrl());
@@ -719,15 +726,51 @@ export const EndiSuperAccessPanel: React.FC<Props> = ({
         </div>
       )}
 
-      {/* TAB 3: PUSAT PENCADANGAN & PEMULIHAN FULL DATABASE SEKOLAH */}
+      {/* TAB 3: PUSAT PENCADANGAN & PEMULIHAN FULL DATABASE SEKOLAH + DAPODIK */}
       {panelTab === 'backup_restore' && (
-        <SchoolFullBackupCard
-          profile={profile}
-          activeUserName={activeUser.name}
-          showToast={showToast}
-          onBackupRestored={onBackupRestored}
-        />
+        <div className="space-y-6">
+          <SchoolFullBackupCard
+            profile={profile}
+            activeUserName={activeUser.name}
+            showToast={showToast}
+            onBackupRestored={onBackupRestored}
+          />
+
+          <div className="p-6 rounded-3xl bg-gradient-to-r from-sky-50 via-indigo-50 to-white border border-sky-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-2xs">
+            <div className="space-y-1.5">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-sky-600 text-white text-[10px] font-black uppercase">
+                <FileSpreadsheet className="w-3 h-3" />
+                <span>Smart Impor Dapodik v5.4.0</span>
+              </div>
+              <h3 className="font-display font-black text-base text-slate-900">
+                Sinkronisasi Impor Data Dapodik (.xlsx / .csv)
+              </h3>
+              <p className="text-xs text-slate-600 max-w-2xl leading-relaxed">
+                Impor massal Peserta Didik (deteksi inklusi otomatis), PTK/Guru, dan Profil Sekolah dari ekspor resmi Dapodik dengan batch upsert aman.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsDapodikModalOpen(true)}
+              className="px-5 py-3 rounded-2xl bg-sky-600 hover:bg-sky-700 text-white font-display font-black text-xs flex items-center gap-2 transition cursor-pointer shadow-md shadow-sky-600/20 shrink-0"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Buka Impor Dapodik</span>
+            </button>
+          </div>
+        </div>
       )}
+
+      <DapodikImportModal
+        isOpen={isDapodikModalOpen}
+        onClose={() => setIsDapodikModalOpen(false)}
+        activeUser={activeUser}
+        profile={profile}
+        students={propStudents && propStudents.length > 0 ? propStudents : getStoredStudents()}
+        teachers={propTeachers && propTeachers.length > 0 ? propTeachers : getStoredTeachers()}
+        onUpdateProfile={onUpdateProfile}
+        showToast={showToast}
+      />
 
       {/* MODAL KONFIRMASI RESET ADMIN */}
       {confirmModalAction && (

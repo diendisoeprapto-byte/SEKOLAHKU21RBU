@@ -20,9 +20,12 @@ import {
   AlertCircle,
   CheckCircle2,
   Search,
+  Share2,
 } from 'lucide-react';
 import { ActiveUser, SchoolProfile, Student, Subject, Teacher } from '../../types';
 import { isEndiSoepraptoUser } from '../../utils/sarahAttachments';
+import { publishItemToKkgLibrary } from '../../utils/kkgFirestore';
+import { sanitizeInput } from '../../utils/sanitize';
 import { getLocalTodayStr, getLocalYearMonthStr } from '../../utils/dateUtils';
 import {
   AttendanceRecordItem,
@@ -394,6 +397,8 @@ export const AdministrasiPembelajaranTab: React.FC<Props> = ({
     kelas: defaultClass,
     academicYear: defaultYear,
   });
+  const [shareToKkg, setShareToKkg] = useState(false);
+  const [sharingKkgDocId, setSharingKkgDocId] = useState<string | null>(null);
 
   const [previewDoc, setPreviewDoc] = useState<LearningAdminDoc | null>(null);
   const [deletingDocTarget, setDeletingDocTarget] = useState<LearningAdminDoc | null>(null);
@@ -613,6 +618,7 @@ export const AdministrasiPembelajaranTab: React.FC<Props> = ({
       kelas: defaultClass,
       academicYear: defaultYear,
     });
+    setShareToKkg(false);
     setShowAddDocModal(true);
   };
 
@@ -626,7 +632,34 @@ export const AdministrasiPembelajaranTab: React.FC<Props> = ({
       kelas: item.kelas || defaultClass,
       academicYear: item.academicYear || defaultYear,
     });
+    setShareToKkg(false);
     setShowAddDocModal(true);
+  };
+
+  const handleShareDocToKkg = async (item: LearningAdminDoc) => {
+    setSharingKkgDocId(item.id);
+    try {
+      await publishItemToKkgLibrary({
+        npsn: profile.npsn,
+        schoolName: profile.name,
+        authorName: item.teacherName || currentTeacherName,
+        type: 'modul_ajar',
+        title: sanitizeInput(item.title, 180),
+        mapel: 'Pembelajaran Terpadu',
+        kelas: sanitizeInput(item.kelas || defaultClass, 40),
+        topik: sanitizeInput((item.contentDraft || item.title).slice(0, 240), 250),
+        contentData: {
+          driveUrl: item.driveUrl,
+          contentDraft: item.contentDraft || '',
+          academicYear: item.academicYear,
+        },
+      });
+      showToast(`"${item.title}" berhasil dibagikan ke Pustaka KKG Lintas Sekolah!`, 'success');
+    } catch (err: any) {
+      showToast('Gagal membagikan ke Pustaka KKG: ' + (err?.message || err), 'error');
+    } finally {
+      setSharingKkgDocId(null);
+    }
   };
 
   // Save Document (Create or Edit -> Firestore)
@@ -660,13 +693,34 @@ export const AdministrasiPembelajaranTab: React.FC<Props> = ({
       }
       return [savedDoc, ...prev];
     });
+    const shouldShareKkg = savedDoc.type === 'modul_ajar' && shareToKkg;
     setShowAddDocModal(false);
     setEditingDocId(null);
+    setShareToKkg(false);
 
     try {
       await saveLearningDocToFirestore(npsnKey, savedDoc);
+      if (shouldShareKkg) {
+        await publishItemToKkgLibrary({
+          npsn: profile.npsn,
+          schoolName: profile.name,
+          authorName: savedDoc.teacherName || currentTeacherName,
+          type: 'modul_ajar',
+          title: sanitizeInput(savedDoc.title, 180),
+          mapel: 'Pembelajaran Terpadu',
+          kelas: sanitizeInput(savedDoc.kelas || defaultClass, 40),
+          topik: sanitizeInput((savedDoc.contentDraft || savedDoc.title).slice(0, 240), 250),
+          contentData: {
+            driveUrl: savedDoc.driveUrl,
+            contentDraft: savedDoc.contentDraft || '',
+            academicYear: savedDoc.academicYear,
+          },
+        });
+      }
       showToast(
-        editingDocId
+        shouldShareKkg
+          ? 'Perangkat ajar disimpan & langsung dibagikan ke Pustaka KKG Lintas Sekolah!'
+          : editingDocId
           ? 'Perangkat ajar berhasil diperbarui!'
           : 'Perangkat ajar berhasil diunggah & menunggu verifikasi kepala sekolah!',
         'success'
@@ -1360,6 +1414,18 @@ export const AdministrasiPembelajaranTab: React.FC<Props> = ({
                             <Trash2 className="w-3.5 h-3.5" /> Hapus
                           </button>
                         )}
+                        {item.type === 'modul_ajar' && (
+                          <button
+                            type="button"
+                            disabled={sharingKkgDocId === item.id}
+                            onClick={() => void handleShareDocToKkg(item)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white border border-emerald-200 text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                            title="Bagikan ke Pustaka KKG (Lintas Sekolah)"
+                          >
+                            <Share2 className="w-3.5 h-3.5" />
+                            <span>{sharingKkgDocId === item.id ? 'Membagikan...' : 'Bagikan KKG'}</span>
+                          </button>
+                        )}
                       </div>
 
                       {canSupervise && (
@@ -1997,6 +2063,26 @@ export const AdministrasiPembelajaranTab: React.FC<Props> = ({
                   className="w-full p-2.5 rounded-xl border border-slate-300 text-xs"
                 />
               </div>
+
+              {docForm.type === 'modul_ajar' && (
+                <label className="flex items-start gap-2.5 p-3 rounded-2xl bg-emerald-50 border border-emerald-200 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={shareToKkg}
+                    onChange={(e) => setShareToKkg(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                  />
+                  <div className="text-xs">
+                    <span className="font-display font-black text-emerald-950 flex items-center gap-1.5">
+                      <Share2 className="w-3.5 h-3.5 text-emerald-600" />
+                      Bagikan ke Pustaka KKG (Lintas Sekolah)
+                    </span>
+                    <span className="text-[11px] text-emerald-800 block mt-0.5">
+                      Izinkan guru dari sekolah lain meninjau dan menyalin draf Modul Ajar ini melalui Ekosistem KKG SERBU 21.
+                    </span>
+                  </div>
+                </label>
+              )}
 
               <div className="pt-2 flex flex-wrap items-center justify-between gap-2">
                 <button

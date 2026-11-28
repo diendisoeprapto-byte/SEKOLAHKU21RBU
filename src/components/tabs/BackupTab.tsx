@@ -21,12 +21,14 @@ import {
   AlertCircle,
   Lock,
   BookOpenCheck,
+  FileSpreadsheet,
 } from 'lucide-react';
-import { ExamDeletionLogEntry, SchoolProfile, Student } from '../../types';
+import { ActiveUser, ExamDeletionLogEntry, SchoolProfile, Student, Teacher } from '../../types';
 import {
   exportFullSystemJSON,
   getStoredExamDeletionLog,
   getStoredStudents,
+  getStoredTeachers,
   resetStoredAdminPassword,
 } from '../../utils/storage';
 import { compressQuestionImage } from '../../utils/imageUtils';
@@ -49,10 +51,13 @@ import {
   extractImageFilesFromDataTransfer,
 } from '../../utils/imageDropPaste';
 import { SchoolFullBackupCard } from '../SchoolFullBackupCard';
+import { DapodikImportModal } from '../modals/DapodikImportModal';
 
 interface Props {
   profile: SchoolProfile;
   students?: Student[];
+  teachers?: Teacher[];
+  activeUser?: ActiveUser;
   onSaveProfile: (profile: SchoolProfile) => void;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onResetAll: () => void;
@@ -76,6 +81,8 @@ function formatIsoTime(iso?: string): string {
 export const BackupTab: React.FC<Props> = ({
   profile,
   students: propStudents,
+  teachers: propTeachers,
+  activeUser: propActiveUser,
   onSaveProfile,
   showToast,
   onResetAll,
@@ -95,6 +102,7 @@ export const BackupTab: React.FC<Props> = ({
   const [cloudSyncMeta, setCloudSyncMeta] = useState<CloudSyncPayload | null>(null);
   const [lastRestoreSummary, setLastRestoreSummary] = useState<string>('');
   const [confirmResetAdminPass, setConfirmResetAdminPass] = useState(false);
+  const [isDapodikModalOpen, setIsDapodikModalOpen] = useState(false);
 
   // Pemulihan Data & Log Riwayat Penghapusan TKA / CBT
   const [deletionLogs, setDeletionLogs] = useState<ExamDeletionLogEntry[]>(() =>
@@ -694,6 +702,32 @@ export const BackupTab: React.FC<Props> = ({
             showToast={showToast}
             onBackupRestored={onBackupRestored}
           />
+        )}
+
+        {/* Sinkronisasi Impor Data Dapodik (.xlsx / .csv) */}
+        {isAdmin && (
+          <div className="p-6 rounded-3xl bg-gradient-to-r from-sky-50 via-indigo-50 to-white border border-sky-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-2xs">
+            <div className="space-y-1.5">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-sky-600 text-white text-[10px] font-black uppercase">
+                <FileSpreadsheet className="w-3 h-3" />
+                <span>Smart Impor Dapodik v5.4.0</span>
+              </div>
+              <h3 className="font-display font-black text-base text-slate-900">
+                Sinkronisasi Impor Data Dapodik (.xlsx / .csv)
+              </h3>
+              <p className="text-xs text-slate-600 max-w-2xl leading-relaxed">
+                Impor massal Peserta Didik (auto-deteksi status Inklusi/PDBK &amp; PIN tanggal lahir), PTK/Guru, dan Profil Sekolah langsung dari file unduhan resmi Dapodik tanpa menimpa foto atau nilai ujian.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsDapodikModalOpen(true)}
+              className="px-5 py-3 rounded-2xl bg-sky-600 hover:bg-sky-700 text-white font-display font-black text-xs flex items-center gap-2 transition cursor-pointer shadow-md shadow-sky-600/20 shrink-0"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Buka Impor Dapodik</span>
+            </button>
+          </div>
         )}
 
         {/* Backup and Restore */}
@@ -1297,6 +1331,25 @@ export const BackupTab: React.FC<Props> = ({
           </button>
         </div>
       </div>
+
+      <DapodikImportModal
+        isOpen={isDapodikModalOpen}
+        onClose={() => setIsDapodikModalOpen(false)}
+        activeUser={
+          propActiveUser || {
+            role: isAdmin ? 'admin' : 'guru',
+            name: activeUserName || 'Admin',
+            detail: 'Pengaturan Admin',
+            username: activeUserName || 'admin',
+            fotoUrl: '',
+          }
+        }
+        profile={profile}
+        students={activeStudentsList}
+        teachers={propTeachers && propTeachers.length > 0 ? propTeachers : getStoredTeachers()}
+        onUpdateProfile={onSaveProfile}
+        showToast={showToast}
+      />
     </section>
   );
 };

@@ -114,6 +114,8 @@ import { PortalAlumniTab } from './components/tabs/PortalAlumniTab';
 import { PerpustakaanTab } from './components/tabs/PerpustakaanTab';
 import { MediaAjarTab } from './components/tabs/MediaAjarTab';
 import { AdministrasiPembelajaranTab } from './components/tabs/AdministrasiPembelajaranTab';
+import { InventoryTab } from './components/tabs/InventoryTab';
+import { KkgLibraryTab } from './components/tabs/KkgLibraryTab';
 import { SarahAssistantTab } from './components/tabs/SarahAssistantTab';
 import { SarahStudentWidget } from './components/SarahStudentWidget';
 import { StudentDashboard } from './components/StudentDashboard';
@@ -1905,6 +1907,8 @@ export default function App() {
                 <BackupTab
                   profile={profile}
                   students={students}
+                  teachers={teachers}
+                  activeUser={activeUser}
                   onSaveProfile={handleSaveProfile}
                   showToast={showToast}
                   onResetAll={handleResetAll}
@@ -1913,6 +1917,25 @@ export default function App() {
                   isAdmin={hasAdminMenuAccess(activeUser)}
                   allowResetAdmin={activeUser.role === 'admin'}
                   onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
+                />
+              )}
+
+              {/* Tab Inventaris & Sarpras Digital QR */}
+              {activeUser.role !== 'siswa' && activeTab === 'inventaris-sarpras' && (
+                <InventoryTab
+                  activeUser={activeUser}
+                  profile={profile}
+                  showToast={showToast}
+                  onOpenZoom={(url, title) => setZoomModal({ isOpen: true, url, title })}
+                />
+              )}
+
+              {/* Tab Pustaka KKG Bersama (Lintas Sekolah) */}
+              {activeUser.role !== 'siswa' && activeTab === 'pustaka-kkg' && (
+                <KkgLibraryTab
+                  activeUser={activeUser}
+                  profile={profile}
+                  showToast={showToast}
                 />
               )}
 
@@ -1933,6 +1956,8 @@ export default function App() {
                 <EndiSuperAccessPanel
                   activeUser={activeUser}
                   profile={profile}
+                  students={students}
+                  teachers={teachers}
                   onUpdateProfile={handleSaveProfile}
                   showToast={showToast}
                   onBackupRestored={handleRefreshStateAfterRestore}

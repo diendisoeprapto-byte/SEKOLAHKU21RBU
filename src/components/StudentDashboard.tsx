@@ -51,6 +51,7 @@ import {
   TUJUH_KEBIASAAN_LIST,
   KebiasaanReportItem,
   isAbkExcludedFromTka,
+  isSiswaInklusi,
 } from '../types';
 import {
   getStoredCBTExams,
@@ -473,6 +474,26 @@ export const StudentDashboard: React.FC<Props> = ({
     return liveMatch || ad || students[0];
   }, [activeUser, students]);
   const isExcludedFromTka = isAbkExcludedFromTka(currentStudent);
+  const isInclusiveStudent = useMemo(() => isSiswaInklusi(currentStudent?.kebutuhanKhusus), [currentStudent]);
+  const [isInclusiveExamMode, setIsInclusiveExamMode] = useState<boolean>(isInclusiveStudent);
+  useEffect(() => {
+    setIsInclusiveExamMode(isInclusiveStudent);
+  }, [isInclusiveStudent]);
+
+  const speakText = (text: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const clean = String(text || '').replace(/<[^>]*>?/gm, '');
+    const utterance = new SpeechSynthesisUtterance(clean);
+    utterance.lang = 'id-ID';
+    utterance.rate = 0.88;
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const stopSpeech = () => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+  };
 
   // State Form Input 7 Kebiasaan Siswa
   const todayStrKebiasaan = getLocalTodayStr();
@@ -3163,9 +3184,22 @@ export const StudentDashboard: React.FC<Props> = ({
                     {activeExamObj.mapel}
                   </span>
                 </div>
-                <h3 className="text-xs sm:text-sm font-display font-black text-slate-800">
-                  Navigasi Nomor Soal ({countAnsweredQuestions(answers)} / {activeExamSoalList.length} Terjawab)
-                </h3>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-xs sm:text-sm font-display font-black text-slate-800">
+                    Navigasi Nomor Soal ({countAnsweredQuestions(answers)} / {activeExamSoalList.length} Terjawab)
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setIsInclusiveExamMode((prev) => !prev)}
+                    className={`px-3 py-1 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
+                      isInclusiveExamMode
+                        ? 'bg-amber-600 text-white shadow-sm'
+                        : 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
+                    }`}
+                  >
+                    <span>🌟 Mode Ramah Baca {isInclusiveExamMode ? '(Aktif)' : ''}</span>
+                  </button>
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 font-bold">
                 <span className="flex items-center gap-1">
@@ -3455,20 +3489,70 @@ export const StudentDashboard: React.FC<Props> = ({
               </div>
             )}
 
-            {/* Butir Soal & Pilihan Jawaban */}
+            {/* Butir Soal & Pilihan Jawaban (Mendukung Mode Ramah Inklusi / Single-Card Focus & TTS) */}
             {(() => {
               const q = activeExamSoalList[currentQIndex];
               if (!q) return null;
               const selectedAnswer = answers[q.id];
 
               return (
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-6">
-                  {/* Nomor Soal & Bobot */}
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                    <div className="flex items-center gap-2">
-                      <span className="font-display font-black text-sm text-slate-800">
+                <div className={`space-y-6 ${isInclusiveExamMode ? 'bg-amber-50/50 dark:bg-slate-900 border-2 border-amber-300/80 p-6 md:p-10 rounded-3xl shadow-xl max-w-4xl mx-auto' : 'bg-white p-6 rounded-3xl border border-slate-200 shadow-sm'}`}>
+                  {isInclusiveExamMode && (
+                    <div className="bg-amber-100/90 border border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs mb-4">
+                      <div className="flex items-center gap-3">
+                        <span className="w-9 h-9 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-black text-lg">🌟</span>
+                        <div>
+                          <p className="text-xs font-black text-amber-950">Mode Ramah Baca & Suara (Inklusi) Aktif</p>
+                          <p className="text-[11px] text-amber-800">Tampilan satu soal per layar, huruf besar, dan pembaca suara otomatis.</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={stopSpeech}
+                          className="px-3.5 py-1.5 rounded-xl bg-white text-rose-700 border border-rose-300 font-bold text-xs flex items-center gap-1.5 hover:bg-rose-50 transition cursor-pointer"
+                        >
+                          <span>⏹ Hentikan Suara</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsInclusiveExamMode(false)}
+                          className="px-3.5 py-1.5 rounded-xl bg-slate-800 text-white font-bold text-xs hover:bg-slate-900 transition cursor-pointer"
+                        >
+                          Tutup Mode
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {isInclusiveExamMode && (
+                    <div className="bg-white p-4 rounded-2xl border border-amber-200 shadow-sm flex flex-col gap-2">
+                      <div className="flex items-center justify-between text-xs font-black text-slate-800">
+                        <span>⭐ Langkah {currentQIndex + 1} dari {activeExamSoalList.length} Soal</span>
+                        <span>{Math.round(((currentQIndex + 1) / activeExamSoalList.length) * 100)}% Selesai</span>
+                      </div>
+                      <div className="w-full h-3 bg-amber-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-emerald-500 transition-all duration-300 rounded-full"
+                          style={{ width: `${((currentQIndex + 1) / activeExamSoalList.length) * 100}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Nomor Soal & Bobot / TTS Soal */}
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                    <div className="flex items-center gap-3">
+                      <span className={`font-display font-black ${isInclusiveExamMode ? 'text-lg text-amber-950' : 'text-sm text-slate-800'}`}>
                         Soal Nomor #{currentQIndex + 1}
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => speakText(q.pertanyaan)}
+                        className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                      >
+                        <span>🔊 Dengarkan Soal</span>
+                      </button>
                       <span className="text-[10px] font-extrabold uppercase bg-slate-100 text-slate-700 px-2.5 py-0.5 rounded-lg">
                         {q.tipe === 'pg'
                           ? 'Pilihan Ganda'
@@ -3490,15 +3574,15 @@ export const StudentDashboard: React.FC<Props> = ({
                     )}
                   </div>
 
-                  {/* Pertanyaan & Gambar Soal (Judul terpisah & posisi gambar sesuai pengaturan) */}
+                  {/* Pertanyaan & Gambar Soal */}
                   <QuestionContent
                     pertanyaan={q.pertanyaan}
                     judulTeks={q.judulTeks}
                     gambarUrl={q.gambarUrl}
                     gambarUrl2={q.gambarUrl2}
                     posisiGambar={q.posisiGambar}
-                    titleClassName="text-base sm:text-lg font-display font-black text-slate-900"
-                    bodyClassName="text-sm font-semibold text-slate-800 leading-relaxed"
+                    titleClassName={isInclusiveExamMode ? "text-lg md:text-xl font-display font-black text-slate-900" : "text-base sm:text-lg font-display font-black text-slate-900"}
+                    bodyClassName={isInclusiveExamMode ? "text-xl md:text-2xl font-bold text-slate-900 leading-relaxed" : "text-sm font-semibold text-slate-800 leading-relaxed"}
                   />
 
                   {/* Pilihan Opsi Jawaban sesuai Tipe Soal */}

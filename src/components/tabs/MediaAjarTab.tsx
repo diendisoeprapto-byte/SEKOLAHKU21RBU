@@ -21,6 +21,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
+  Share2,
 } from 'lucide-react';
 import {
   addDoc,
@@ -37,6 +38,8 @@ import {
 import { ActiveUser, SchoolProfile, Student } from '../../types';
 import { auth, db, handleFirestoreError, OperationType } from '../../utils/firebase';
 import { loadPresentationSlides, ParsedSlide } from '../../utils/slideDeckLoader';
+import { publishItemToKkgLibrary } from '../../utils/kkgFirestore';
+import { sanitizeInput } from '../../utils/sanitize';
 
 export interface MediaAjarItem {
   id: string;
@@ -110,6 +113,33 @@ function extractGradeDigit(raw?: string): string | null {
   const match = trimmed.match(/(?:kelas\s*)?([1-6])(?:\s*[a-zA-Z])?\b/i);
   if (match && match[1]) return match[1];
   return null;
+}
+
+function doesMediaMatchStudentClass(
+  itemKelas: string,
+  studentRawClass: string,
+  studentGradeDigit: string
+): boolean {
+  const itemK = String(itemKelas || '').trim().toLowerCase();
+  const studentK = String(studentRawClass || '').trim().toLowerCase();
+  const gradeD = String(studentGradeDigit || '').trim();
+
+  if (!itemK || itemK === 'semua' || itemK === 'semua kelas' || itemK === 'all' || itemK.includes('semua')) {
+    return true;
+  }
+
+  const normItem = itemK.replace(/[^a-z0-9]/g, '');
+  const normStudent = studentK.replace(/[^a-z0-9]/g, '');
+  if (normItem && normStudent && (normItem === normStudent || normItem.includes(normStudent) || normStudent.includes(normItem))) {
+    return true;
+  }
+
+  const itemGrade = extractGradeDigit(itemK);
+  if (itemGrade && gradeD && itemGrade === gradeD) {
+    return true;
+  }
+
+  return false;
 }
 
 export function extractGoogleDriveFileId(rawUrl: string): string | null {
@@ -414,6 +444,8 @@ export const MediaAjarTab: React.FC<Props> = ({
   const [formBab, setFormBab] = useState<string>('Bab 1');
   const [formPertemuan, setFormPertemuan] = useState<string>('Pertemuan 1');
   const [formDriveUrl, setFormDriveUrl] = useState<string>('');
+  const [formShareToKkg, setFormShareToKkg] = useState<boolean>(false);
+  const [sharingKkgId, setSharingKkgId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
   // State Konfirmasi Hapus (inline modal, menghindari window.confirm)
@@ -759,10 +791,7 @@ export const MediaAjarTab: React.FC<Props> = ({
     setLoadError(null);
 
     const mediaCol = collection(db, 'media_ajar');
-    const q =
-      targetFirestoreKelas === 'all'
-        ? mediaCol
-        : query(mediaCol, where('kelas', '==', targetFirestoreKelas));
+    const q = mediaCol;
 
     const unsubscribe = onSnapshot(
       q,
@@ -786,9 +815,31 @@ export const MediaAjarTab: React.FC<Props> = ({
           });
         });
 
+        let processedRows = rows;
+        if (accessProfile.mode === 'siswa') {
+          processedRows = rows.filter((item) =>
+            doesMediaMatchStudentClass(item.kelas, accessProfile.rawClassLabel, accessProfile.userKelas)
+          );
+        } else if (accessProfile.mode === 'guru_kelas' && accessProfile.userKelas) {
+          processedRows = rows.filter((item) =>
+            doesMediaMatchStudentClass(item.kelas, accessProfile.rawClassLabel, accessProfile.userKelas)
+          );
+        } else if (accessProfile.mode === 'admin_all' && selectedAdminKelasFilter !== 'all') {
+          processedRows = rows.filter((item) => {
+            const itemK = String(item.kelas || '').trim().toLowerCase();
+            const filterK = String(selectedAdminKelasFilter).trim().toLowerCase();
+            return (
+              itemK === filterK ||
+              extractGradeDigit(itemK) === filterK ||
+              itemK === 'semua' ||
+              itemK === 'all'
+            );
+          });
+        }
+
         // Pengurutan descending berdasarkan waktu unggah di sisi klien (menghindari composite index Firestore)
-        rows.sort((a, b) => getTimestampMs(b.created_at) - getTimestampMs(a.created_at));
-        setItems(rows);
+        processedRows.sort((a, b) => getTimestampMs(b.created_at) - getTimestampMs(a.created_at));
+        setItems(processedRows);
         setIsLoading(false);
       },
       (err) => {
@@ -803,7 +854,7 @@ export const MediaAjarTab: React.FC<Props> = ({
     );
 
     return () => unsubscribe();
-  }, [targetFirestoreKelas]);
+  }, [accessProfile, selectedAdminKelasFilter]);
 
   const mapelFilterOptions = useMemo(() => {
     const set = new Set<string>(DEFAULT_MAPEL_OPTIONS);
@@ -868,6 +919,7 @@ export const MediaAjarTab: React.FC<Props> = ({
     setFormBab(selectedBabFilter !== 'all' ? selectedBabFilter : 'Bab 1');
     setFormPertemuan(selectedPertemuanFilter !== 'all' ? selectedPertemuanFilter : 'Pertemuan 1');
     setFormDriveUrl('');
+    setFormShareToKkg(false);
     setIsFormOpen(true);
   };
 
@@ -879,7 +931,35 @@ export const MediaAjarTab: React.FC<Props> = ({
     setFormBab(item.bab || 'Bab 1');
     setFormPertemuan(item.pertemuan || 'Pertemuan 1');
     setFormDriveUrl(item.drive_url);
+    setFormShareToKkg(false);
     setIsFormOpen(true);
+  };
+
+  const handleShareMediaToKkg = async (item: MediaAjarItem) => {
+    setSharingKkgId(item.id);
+    try {
+      await publishItemToKkgLibrary({
+        npsn: profile.npsn,
+        schoolName: profile.name,
+        authorName: item.guru_nama || activeUser.name || 'Guru',
+        type: 'media_ajar',
+        title: sanitizeInput(item.judul, 180),
+        mapel: sanitizeInput(item.mapel || 'Umum', 80),
+        kelas: `Kelas ${sanitizeInput(item.kelas, 20)}`,
+        topik: sanitizeInput(`${item.bab} - ${item.pertemuan}`, 250),
+        contentData: {
+          driveUrl: item.drive_url,
+          embedUrl: item.embed_url,
+          bab: item.bab,
+          pertemuan: item.pertemuan,
+        },
+      });
+      showToast(`"${item.judul}" berhasil dibagikan ke Pustaka KKG Lintas Sekolah!`, 'success');
+    } catch (err: any) {
+      showToast('Gagal membagikan media ajar ke Pustaka KKG: ' + (err?.message || err), 'error');
+    } finally {
+      setSharingKkgId(null);
+    }
   };
 
   const handleSaveMedia = async (e: React.FormEvent) => {
@@ -917,7 +997,6 @@ export const MediaAjarTab: React.FC<Props> = ({
           drive_url: driveClean,
           embed_url: generatedEmbed,
         });
-        showToast('Media ajar berhasil diperbarui!', 'success');
       } else {
         await addDoc(collection(db, 'media_ajar'), {
           judul: judulClean,
@@ -931,8 +1010,35 @@ export const MediaAjarTab: React.FC<Props> = ({
           guru_uid: uid,
           created_at: serverTimestamp(),
         });
-        showToast(`Media ajar Kelas ${targetKelas} berhasil ditambahkan!`, 'success');
       }
+
+      if (formShareToKkg) {
+        await publishItemToKkgLibrary({
+          npsn: profile.npsn,
+          schoolName: profile.name,
+          authorName: activeUser.name || 'Guru',
+          type: 'media_ajar',
+          title: sanitizeInput(judulClean, 180),
+          mapel: sanitizeInput(formMapel, 80),
+          kelas: `Kelas ${sanitizeInput(targetKelas, 20)}`,
+          topik: sanitizeInput(`${babClean} - ${pertemuanClean}`, 250),
+          contentData: {
+            driveUrl: driveClean,
+            embedUrl: generatedEmbed,
+            bab: babClean,
+            pertemuan: pertemuanClean,
+          },
+        });
+      }
+
+      showToast(
+        formShareToKkg
+          ? 'Media ajar disimpan & dibagikan ke Pustaka KKG Lintas Sekolah!'
+          : editingItem
+          ? 'Media ajar berhasil diperbarui!'
+          : `Media ajar Kelas ${targetKelas} berhasil ditambahkan!`,
+        'success'
+      );
       setIsFormOpen(false);
     } catch (err) {
       showToast('Gagal menyimpan media ajar ke Firestore. Periksa koneksi atau izin akses.', 'error');
@@ -1219,12 +1325,21 @@ export const MediaAjarTab: React.FC<Props> = ({
                       </span>
                     </div>
 
-                    {/* Staff Edit / Delete quick actions */}
+                    {/* Staff Share KKG / Edit / Delete quick actions */}
                     {accessProfile.canManage && (
                       <div
                         className="absolute top-2.5 right-2.5 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                         onClick={(e) => e.stopPropagation()}
                       >
+                        <button
+                          type="button"
+                          disabled={sharingKkgId === item.id}
+                          onClick={() => void handleShareMediaToKkg(item)}
+                          className="w-7 h-7 rounded-lg bg-white/95 hover:bg-emerald-600 text-emerald-700 hover:text-white flex items-center justify-center shadow-xs transition cursor-pointer disabled:opacity-50"
+                          title="Bagikan ke Pustaka KKG (Lintas Sekolah)"
+                        >
+                          <Share2 className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           type="button"
                           onClick={() => openEditModal(item)}
@@ -1487,6 +1602,25 @@ export const MediaAjarTab: React.FC<Props> = ({
                   </div>
                 )}
               </div>
+
+              {/* Toggle Bagikan ke Pustaka KKG */}
+              <label className="flex items-start gap-2.5 p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={formShareToKkg}
+                  onChange={(e) => setFormShareToKkg(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                />
+                <div>
+                  <span className="font-display font-black text-xs text-emerald-950 flex items-center gap-1.5">
+                    <Share2 className="w-3.5 h-3.5 text-emerald-600" />
+                    Bagikan ke Pustaka KKG (Lintas Sekolah)
+                  </span>
+                  <span className="text-[11px] text-emerald-800 block mt-0.5">
+                    Publikasikan slide pembelajaran ini ke repositori kolaborasi guru lintas sekolah SERBU 21.
+                  </span>
+                </div>
+              </label>
 
               {/* Peringatan Hak Akses Drive */}
               <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 flex items-start gap-2.5">

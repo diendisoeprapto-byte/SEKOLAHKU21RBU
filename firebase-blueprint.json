@@ -435,6 +435,46 @@
         "updatedAt": { "type": "string", "maxLength": 60 }
       },
       "required": ["examId", "category", "npsn", "keysByQuestionId", "updatedAt"]
+    },
+    "InventoryItem": {
+      "title": "InventoryItem",
+      "description": "Data barang inventaris & sarpras digital adaptif Negeri (Permendagri 47/2021) / Swasta (Yayasan) per NPSN sekolah",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 160 },
+        "npsn": { "type": "string", "maxLength": 40 },
+        "kodeBarang": { "type": "string", "maxLength": 80 },
+        "nibar": { "type": "string", "maxLength": 60 },
+        "nomorRegister": { "type": "string", "maxLength": 40 },
+        "kodeYayasan": { "type": "string", "maxLength": 80 },
+        "namaBarang": { "type": "string", "maxLength": 200 },
+        "merkTipe": { "type": "string", "maxLength": 120 },
+        "ukuranBahan": { "type": "string", "maxLength": 120 },
+        "tahunPerolehan": { "type": "string", "maxLength": 20 },
+        "sumberDana": { "type": "string", "maxLength": 80 },
+        "hargaPerolehan": { "type": "number" },
+        "lokasiRuangan": { "type": "string", "maxLength": 100 },
+        "keadaanBarang": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["id", "npsn", "namaBarang", "lokasiRuangan"]
+    },
+    "SharedKkgItem": {
+      "title": "SharedKkgItem",
+      "description": "Perangkat ajar & media ajar yang dibagikan lintas sekolah pada Pustaka KKG Bersama",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 160 },
+        "npsn": { "type": "string", "maxLength": 40 },
+        "schoolName": { "type": "string", "maxLength": 200 },
+        "authorName": { "type": "string", "maxLength": 200 },
+        "type": { "type": "string", "enum": ["modul_ajar", "media_ajar"] },
+        "title": { "type": "string", "maxLength": 400 },
+        "mapel": { "type": "string", "maxLength": 120 },
+        "kelas": { "type": "string", "maxLength": 60 },
+        "topik": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "npsn", "schoolName", "authorName", "type", "title"]
     }
   },
   "firestore": {
@@ -549,6 +589,14 @@
     "/schools/{npsn}/exam_answer_keys/{examId}": {
       "schema": "ExamAnswerKey",
       "description": "Dokumen terproteksi kunci jawaban dan pembobotan CBT/TKA terpisah per NPSN sekolah"
+    },
+    "/schools/{npsn}/inventory_items/{itemId}": {
+      "schema": "InventoryItem",
+      "description": "Data barang inventaris & sarpras digital ber-QR Code per NPSN sekolah"
+    },
+    "/shared_kkg_items/{itemId}": {
+      "schema": "SharedKkgItem",
+      "description": "Pustaka kolaborasi berbagi Modul Ajar & Media Ajar lintas sekolah (Ekosistem KKG)"
     }
   }
 }

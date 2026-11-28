@@ -556,10 +556,21 @@ function buildEndiLocationPrayerBlock(locationPrayerContext) {
   }${timesLine ? `\n- Jadwal Sholat (WIB): ${timesLine}` : ''}\n`;
 }
 
+function isStudentInclusionProfile(userInfo = {}) {
+  const kk = String(userInfo.kebutuhanKhusus || '').trim().toLowerCase();
+  return kk && kk !== '-' && kk !== 'tidak ada' && kk !== 'tidak ada (reguler)' && kk !== 'reguler' && kk !== 'normal';
+}
+
 function buildStudentSystemInstruction(ragBlock, userInfo = {}, examReviewBlock = '') {
   const studentName = sanitizeString(userInfo.name || 'Nak', 80);
   const studentClass = sanitizeString(userInfo.kelas || 'SD', 40);
   const visualAndStickerGuide = buildAdaptiveAvatarAndStickerSection(userInfo, 'siswa');
+  const isInklusi = isStudentInclusionProfile(userInfo);
+  const inklusiRule = isInklusi ? `
+5. ATURAN ADAPTIF KHUSUS SISWA INKLUSI (PDBK):
+   - Gunakan kalimat tunggal yang sangat pendek, kosakata sehari-hari yang konkret dan konkrit, maksimal 3 poin langkah penjelasan singkat.
+   - Selalu awali dengan kalimat apresiasi positif yang hangat.
+   - Jangan gunakan kalimat panjang atau abstrak.` : '';
 
   return `Kamu adalah SARAH AI (Sistem Asisten Adaptif, Ramah, Amanah & Humanis), asisten belajar resmi bagi siswa Sekolah Dasar di aplikasi SERBU 21 SDN Rawa Badak Utara 21.
 Saat ini kamu sedang mendampingi siswa bernama ${studentName} (${studentClass}).
@@ -585,6 +596,7 @@ JIWA, PERSONA & SYSTEM INSTRUCTION KETAT:
       - Balas ramah dengan ikon gembok: "🔒 Maaf ya, SARAH belum bisa membuka pembahasan atau analisis soal ini karena kamu belum menyelesaikan ujiannya di CBT/TKA. Silakan kerjakan dan kirim jawabanmu terlebih dahulu!"
    C. SOAL PR / LATIHAN BEBAS:
       - Terapkan metode Sokratik: JANGAN memberi jawaban akhir langsung, beri penjelasan konsep sederhana + langkah pertama.
+${inklusiRule}
 
 4. BASIS DATA SEKOLAH:
 ${examReviewBlock ? `${examReviewBlock}\n\n` : ''}KONTEKS BASIS DATA SEKOLAH SAAT INI:
@@ -1332,6 +1344,7 @@ export async function processSarahRequest(body = {}, options = {}) {
         },
       ];
 
+      const isInklusiStudent = isStudentInclusionProfile(userInfo);
       const response = await askSarahGemini({
         speedMode,
         contents,
@@ -1343,6 +1356,8 @@ export async function processSarahRequest(body = {}, options = {}) {
         cacheScope: `student_chat_${sanitizeString(userInfo.kelas || 'sd', 20)}`,
         signal: requestSignal,
         config: {
+          temperature: isInklusiStudent ? 0.4 : 0.6,
+          maxOutputTokens: isInklusiStudent ? 220 : 350,
           tools: [{ googleSearch: {} }],
         },
       });
@@ -1408,6 +1423,7 @@ export async function processSarahRequest(body = {}, options = {}) {
         cacheScope: 'teacher_general_chat',
         signal: requestSignal,
         config: {
+          maxOutputTokens: 800,
           tools: [{ googleSearch: {} }],
         },
       });
@@ -1433,16 +1449,18 @@ export async function processSarahRequest(body = {}, options = {}) {
     );
 
     const response = await askSarahGemini({
-      speedMode,
+      speedMode: 'fast',
       contents: userPrompt,
       systemInstruction,
+      model: 'gemini-2.5-flash',
       timeoutMs: 26000,
       retries: 1,
       useCache: true,
       cacheScope: `${mode}_${userMode}`,
       signal: requestSignal,
       config: {
-        maxOutputTokens: 2400,
+        maxOutputTokens: 4096,
+        thinkingConfig: { thinkingBudget: 0 },
         tools: [{ googleSearch: {} }],
       },
     });
@@ -1554,6 +1572,7 @@ export async function processSarahStreamRequest(body = {}, options = {}) {
         { role: 'user', parts: [{ text: message }] },
       ];
 
+      const isInklusiStudent = isStudentInclusionProfile(userInfo);
       const response = await askSarahGeminiStream({
         speedMode,
         contents,
@@ -1562,6 +1581,8 @@ export async function processSarahStreamRequest(body = {}, options = {}) {
         fastChat: true,
         signal: requestSignal,
         config: {
+          temperature: isInklusiStudent ? 0.4 : 0.6,
+          maxOutputTokens: isInklusiStudent ? 220 : 350,
           tools: [{ googleSearch: {} }],
         },
         onChunk,
@@ -1619,6 +1640,7 @@ export async function processSarahStreamRequest(body = {}, options = {}) {
         fastChat: !hasAttachments,
         signal: requestSignal,
         config: {
+          maxOutputTokens: 800,
           tools: [{ googleSearch: {} }],
         },
         onChunk: (delta, full) => {

@@ -13,6 +13,7 @@ export const DEFAULT_SCHOOL_PROFILE: SchoolProfile = {
   kota: "Kota Administrasi Jakarta Utara",
   provinsi: "DKI Jakarta",
   alamat: "Jl. Rawa Badak Utara No. 21, Kec. Koja, Kota Administrasi Jakarta Utara, DKI Jakarta 14230",
+  schoolStatus: "negeri",
   kepalaSekolah: {
     nama: "Darti Isyanti, M.Pd",
     status: "PNS",

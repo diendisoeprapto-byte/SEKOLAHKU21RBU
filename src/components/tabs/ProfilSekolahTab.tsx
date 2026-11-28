@@ -9,11 +9,17 @@ interface Props {
 }
 
 export const ProfilSekolahTab: React.FC<Props> = ({ profile, onSaveProfile, showToast }) => {
-  const [formData, setFormData] = useState<SchoolProfile>({ ...profile });
+  const [formData, setFormData] = useState<SchoolProfile>({
+    ...profile,
+    schoolStatus: profile.schoolStatus || 'negeri',
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSaveProfile(formData);
+    onSaveProfile({
+      ...formData,
+      schoolStatus: formData.schoolStatus || 'negeri',
+    });
     showToast('Data Profil Sekolah & Kepala Sekolah berhasil diperbarui!', 'success');
   };
 
@@ -64,6 +70,25 @@ export const ProfilSekolahTab: React.FC<Props> = ({ profile, onSaveProfile, show
               placeholder="20100789"
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-xs font-mono font-bold"
             />
+          </div>
+
+          <div className="md:col-span-2 lg:col-span-3">
+            <label className="block text-xs font-extrabold text-slate-700 mb-1">
+              Status Sekolah (Menentukan Standar Kode Inventaris &amp; Sarpras QR)
+            </label>
+            <select
+              value={formData.schoolStatus || 'negeri'}
+              onChange={(e) =>
+                setFormData({
+                  ...formData,
+                  schoolStatus: e.target.value as 'negeri' | 'swasta',
+                })
+              }
+              className="w-full px-3.5 py-2.5 rounded-xl border-2 border-indigo-200 focus:border-indigo-500 bg-white text-xs font-extrabold text-slate-800 outline-none cursor-pointer"
+            >
+              <option value="negeri">Negeri (BMD - Permendagri No. 47 Tahun 2021)</option>
+              <option value="swasta">Swasta (Kebijakan Yayasan)</option>
+            </select>
           </div>
 
           <div>

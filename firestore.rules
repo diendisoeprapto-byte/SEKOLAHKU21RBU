@@ -404,6 +404,20 @@ service cloud.firestore {
           (!('paketName' in d) || (d.paketName is string && d.paketName.size() <= 160));
       }
 
+      function isValidInventoryItem(d) {
+        return
+          d.id is string && d.id.size() > 0 && d.id.size() <= 160 &&
+          d.npsn is string && d.npsn == npsn &&
+          d.namaBarang is string && d.namaBarang.size() > 0 && d.namaBarang.size() <= 200 &&
+          d.lokasiRuangan is string && d.lokasiRuangan.size() > 0 && d.lokasiRuangan.size() <= 100 &&
+          (!('hargaPerolehan' in d) || d.hargaPerolehan is number) &&
+          (!('kodeBarang' in d) || (d.kodeBarang is string && d.kodeBarang.size() <= 80)) &&
+          (!('kodeYayasan' in d) || (d.kodeYayasan is string && d.kodeYayasan.size() <= 80)) &&
+          (!('nibar' in d) || (d.nibar is string && d.nibar.size() <= 60)) &&
+          (!('nomorRegister' in d) || (d.nomorRegister is string && d.nomorRegister.size() <= 40)) &&
+          (!('keadaanBarang' in d) || (d.keadaanBarang is string && d.keadaanBarang.size() <= 60));
+      }
+
       allow read: if isValidTenantId(npsn);
       allow create, update: if isValidTenantId(npsn);
       allow delete: if false;
@@ -451,6 +465,37 @@ service cloud.firestore {
         allow create, update: if isValidTenantId(npsn) && isValidTenantId(examId) && isValidExamAnswerKey(request.resource.data);
         allow delete: if isValidTenantId(npsn) && isValidTenantId(examId);
       }
+
+      // Inventaris Sarpras & KIR ber-QR Code per NPSN sekolah
+      match /inventory_items/{itemId} {
+        allow get: if isValidTenantId(npsn) && isValidTenantId(itemId);
+        allow list: if isValidTenantId(npsn);
+        allow create, update: if isValidTenantId(npsn) && isValidTenantId(itemId) && isValidInventoryItem(request.resource.data);
+        allow delete: if isValidTenantId(npsn) && isValidTenantId(itemId);
+      }
+    }
+
+    // Pustaka Berbagi Perangkat Ajar Lintas Sekolah (Ekosistem KKG)
+    match /shared_kkg_items/{itemId} {
+      allow read: if true;
+      allow create, update: if
+        request.resource.data.id is string &&
+        request.resource.data.id.size() > 0 &&
+        request.resource.data.id.size() <= 160 &&
+        request.resource.data.npsn is string &&
+        request.resource.data.npsn.size() > 0 &&
+        request.resource.data.npsn.size() <= 40 &&
+        request.resource.data.schoolName is string &&
+        request.resource.data.schoolName.size() > 0 &&
+        request.resource.data.schoolName.size() <= 200 &&
+        request.resource.data.authorName is string &&
+        request.resource.data.authorName.size() > 0 &&
+        request.resource.data.authorName.size() <= 200 &&
+        request.resource.data.type in ['modul_ajar', 'media_ajar'] &&
+        request.resource.data.title is string &&
+        request.resource.data.title.size() > 0 &&
+        request.resource.data.title.size() <= 400;
+      allow delete: if true;
     }
   }
 }

@@ -64,6 +64,7 @@ export const TENANT_SUBCOLLECTIONS = [
   'sarah_knowledge_links',
   'exams',
   'exam_answer_keys',
+  'inventory_items',
 ] as const;
 
 // Koleksi yang dokumen usangnya aman dibersihkan saat mode Replace Full

@@ -5,6 +5,8 @@ export interface SchoolProfile {
   kota: string;
   provinsi: string;
   alamat: string;
+  schoolStatus?: 'negeri' | 'swasta'; // 'negeri' = Permendagri 47/2021 BMD, 'swasta' = Yayasan
+  inventoryRooms?: string[]; // Daftar ruangan kustom untuk modul Inventaris & KIR
   kepalaSekolah: {
     nama: string;
     status: 'PNS' | 'PPPK' | 'KKI' | 'Honor';
@@ -22,6 +24,41 @@ export interface SchoolProfile {
   isLearningAdminPublic?: boolean;
 }
 
+export interface InventoryItem {
+  id: string;
+  npsn: string;
+  kodeBarang: string; // Permendagri 47/2021 code for Negeri (e.g. 1.3.2.10.01.02.001)
+  nibar: string; // Nomor Identitas Barang
+  nomorRegister: string; // e.g. 0001
+  kodeYayasan?: string; // For Swasta
+  namaBarang: string;
+  merkTipe: string;
+  ukuranBahan: string;
+  tahunPerolehan: string;
+  sumberDana: string; // BOS Reguler, BOP, Hibah, APBD, Yayasan, Komite
+  hargaPerolehan: number; // Nilai Aset (Rp)
+  lokasiRuangan: string; // Kelas 1A, Ruang Guru, Perpustakaan, Gudang, dll.
+  keadaanBarang: 'Baik (B)' | 'Kurang Baik (KB)' | 'Rusak Berat (RB)' | 'Baik' | 'Kurang Baik / Rusak Ringan' | 'Rusak Berat';
+  createdAt?: string;
+  updatedAt?: string;
+  importedBy?: string;
+  schoolType?: 'negeri' | 'swasta';
+}
+
+export interface SharedKkgItem {
+  id: string;
+  npsn: string;
+  schoolName: string;
+  authorName: string;
+  type: 'modul_ajar' | 'media_ajar';
+  title: string;
+  mapel: string;
+  kelas: string;
+  topik: string;
+  contentData: any;
+  createdAt: string;
+}
+
 export interface Teacher {
   id: string;
   nama: string;
@@ -35,6 +72,8 @@ export interface Teacher {
   username: string;
   password: string;
   fotoUrl: string;
+  nuptk?: string;
+  jenisPtk?: string;
   teachingHistory?: Record<string, string>; // e.g. { "2026/2027": "Kelas 6A", "2027/2028": "Kelas 5A" }
 }
 
@@ -124,10 +163,14 @@ export interface Student {
   tanggalLahir: string; // YYYY-MM-DD
   nik: string; // 16 digit NIK
   nisn: string; // 10 digit NISN
+  nipd?: string;
   kebutuhanKhusus: string;
+  learningStatus?: 'reguler' | 'inklusi';
+  inclusionNote?: string;
   ikutTka?: boolean; // Khusus siswa ABK/Inklusi: true/undefined = ikut TKA, false = tidak masuk TKA
   namaAyah: string;
   namaIbu: string;
+  namaWali?: string;
   noTelpOrtu?: string; // Nomor Telepon / WhatsApp Orang Tua / Wali
   alamat: string;
   agama: ReligionType;

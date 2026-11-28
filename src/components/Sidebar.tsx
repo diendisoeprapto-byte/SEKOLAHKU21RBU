@@ -36,6 +36,8 @@ import {
   ShieldAlert,
   Power,
   Lock,
+  Package,
+  Globe,
 } from 'lucide-react';
 import {
   ActiveExamHeaderStatus,
@@ -92,6 +94,8 @@ export type TabId =
   | 'manajemen-asaj'
   | 'portal-alumni'
   | 'perpustakaan'
+  | 'inventaris-sarpras'
+  | 'pustaka-kkg'
   | 'asisten-sarah'
   | 'administrasi-pembelajaran'
   | 'super-access-endi';
@@ -146,6 +150,19 @@ export const Sidebar: React.FC<Props> = ({
 
   const isStudent = activeUser.role === 'siswa';
   const isAdminAccess = hasAdminMenuAccess(activeUser);
+  const userDetailLower = (activeUser.detail || '').toLowerCase();
+  const userNameLower = (activeUser.name || '').toLowerCase();
+  const canAccessInventory =
+    !isStudent &&
+    (isAdminAccess ||
+      isEndiSoepraptoUser(activeUser) ||
+      userDetailLower.includes('bendahara') ||
+      userDetailLower.includes('sarpras') ||
+      userDetailLower.includes('pengurus') ||
+      userDetailLower.includes('tata usaha') ||
+      userDetailLower.includes('kepala sekolah') ||
+      userNameLower.includes('kepala sekolah') ||
+      userNameLower.includes('endi soeprapto'));
   const isStudentTakingExam =
     isStudent && Boolean(isExamActive) && Boolean(activeExamStatus?.isRunning);
 
@@ -617,7 +634,7 @@ export const Sidebar: React.FC<Props> = ({
                   <ChevronRight className="w-4 h-4 text-slate-500" />
                 )}
               </button>
-              {openGroups.group3 && (
+              {(openGroups.group3 || Boolean(searchQuery)) && (
                 <div className="p-2 space-y-1 bg-white/80 border-t border-amber-100">
                   {(!searchQuery || 'cp capaian pembelajaran'.includes(searchQuery)) && (
                     <button
@@ -695,6 +712,20 @@ export const Sidebar: React.FC<Props> = ({
                     >
                       <Presentation className="w-4 h-4" />
                       <span>Bank Media Ajar (PPT)</span>
+                    </button>
+                  )}
+
+                  {(!searchQuery || 'pustaka kkg bersama berbagi perangkat ajar lintas sekolah modul rpp'.includes(searchQuery)) && (
+                    <button
+                      onClick={() => onSelectTab('pustaka-kkg')}
+                      className={`w-full px-3 py-2 rounded-xl font-display font-extrabold text-xs flex items-center gap-2.5 text-left transition ${
+                        activeTab === 'pustaka-kkg'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-emerald-900 bg-emerald-50/70 hover:bg-emerald-100/80'
+                      }`}
+                    >
+                      <Globe className="w-4 h-4" />
+                      <span>Pustaka KKG Bersama</span>
                     </button>
                   )}
 
@@ -941,6 +972,26 @@ export const Sidebar: React.FC<Props> = ({
                 <ChevronRight className={`w-4 h-4 ${activeTab === 'perpustakaan' ? 'text-white/90' : 'text-rose-600/70'}`} />
               </button>
             )}
+
+            {/* MENU INVENTARIS & SARPRAS QR */}
+            {canAccessInventory &&
+              (!searchQuery || 'inventaris sarpras qr kir barang aset bmd nibar aset sekolah'.includes(searchQuery)) && (
+                <button
+                  type="button"
+                  onClick={() => onSelectTab('inventaris-sarpras')}
+                  className={`w-full px-4 py-3 rounded-2xl font-display font-black text-xs uppercase tracking-wider flex items-center justify-between text-left transition border shadow-2xs cursor-pointer ${
+                    activeTab === 'inventaris-sarpras'
+                      ? 'bg-gradient-to-r from-indigo-600 to-sky-600 text-white border-transparent shadow-md'
+                      : 'border-indigo-200/80 bg-indigo-50/70 text-indigo-900 hover:bg-indigo-100/70'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <Package className={`w-4 h-4 ${activeTab === 'inventaris-sarpras' ? 'text-white' : 'text-indigo-600'}`} />
+                    <span>INVENTARIS &amp; SARPRAS QR</span>
+                  </span>
+                  <ChevronRight className={`w-4 h-4 ${activeTab === 'inventaris-sarpras' ? 'text-white/90' : 'text-indigo-600/70'}`} />
+                </button>
+              )}
 
             {/* GRUP 8: 8. PENGATURAN & SISTEM */}
             <div className="rounded-2xl border border-slate-200 bg-slate-100/80 overflow-hidden shadow-2xs">

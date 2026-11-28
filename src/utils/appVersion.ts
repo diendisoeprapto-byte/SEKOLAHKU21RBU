@@ -29,6 +29,36 @@ export interface ChangelogVersionItem {
 
 export const CHANGELOG_DATA: ChangelogVersionItem[] = [
   {
+    version: 'v5.4.0',
+    date: '27 November 2026',
+    title: 'Smart Impor Dapodik (.xlsx/.csv), Inventaris Sarpras QR (Permendagri 47/2021 & Yayasan) & Pustaka KKG',
+    highlights: [
+      'Menambahkan Smart Impor Data Dapodik (.xlsx / .csv) untuk Peserta Didik, PTK/Guru, dan Profil Sekolah dengan deteksi baris header otomatis, deteksi otomatis Siswa Inklusi dari kolom kebutuhan khusus, serta pembaruan aman menggunakan upsert batch tanpa menghapus nilai ujian atau presensi.',
+      'Menambahkan Modul Inventaris & Sarpras QR dengan penyesuaian otomatis status sekolah antara Negeri (KIB B Permendagri No. 47 Tahun 2021: Kode Barang, NIBAR, Register) dan Swasta (Kode Yayasan), lengkap dengan pencetakan Kartu Inventaris Ruangan (KIR) PDF ber-QR Code dan tanda tangan Kepala Sekolah (Darti Isyanti, M.Pd) & Pengurus Barang (Endi Soeprapto, S.Pd., Gr.).',
+      'Menambahkan fitur Impor Massal Aset dari Excel/CSV e-BMD & Yayasan beserta unduh template otomatis dan tabel pratinjau validasi.',
+      'Menambahkan Pustaka Kolaborasi KKG (Lintas Sekolah) agar guru dapat berbagi dan menyalin Modul Ajar serta Media Ajar antar sekolah secara instan.',
+    ],
+  },
+  {
+    version: 'v5.3.0',
+    date: '27 November 2026',
+    title: 'Modul Inventaris Sarpras QR (Negeri/Swasta), Impor Aset & Pustaka Kolaborasi KKG',
+    highlights: [
+      'Menambahkan Modul Inventaris & Sarpras QR adaptif status sekolah: Negeri (KIB B Permendagri No. 47 Tahun 2021) dan Swasta (Kebijakan Yayasan) beserta cetak stiker label QR Code, pemindaian QR via kamera HP untuk update kondisi/mutasi ruangan, dan cetak PDF KIR resmi.',
+      'Menambahkan fitur Impor Massal Data Aset dari Excel/CSV (.xlsx/.csv) dengan unduh template resmi dan pratinjau validasi.',
+      'Menambahkan Pustaka KKG Bersama (Lintas Sekolah) beserta tombol Bagikan ke Pustaka KKG di Modul Ajar dan Bank Media Ajar serta fitur Salin ke Kelas Saya.',
+    ],
+  },
+  {
+    version: 'v5.2.0',
+    date: '27 November 2026',
+    title: 'Mode Tampilan & Asesmen Adaptif Ramah Inklusi (PDBK) pada CBT, TKA & AI SARAH',
+    highlights: [
+      'Deteksi otomatis status inklusi siswa serta sakelar manual Mode Ramah Baca pada ruang ujian CBT dan Simulasi/Tryout TKA dengan tampilan satu soal per layar, huruf besar ramah baca, dan bilah progres bintang.',
+      'Menambahkan tombol Bacakan Soal (Text-to-Speech Bahasa Indonesia) serta penguatan pendamping belajar Sokratik AI SARAH yang sabar, bertahap, dan responsif bagi seluruh peserta didik.',
+    ],
+  },
+  {
     version: 'v5.1.0',
     date: '27 November 2026',
     title: 'Keamanan Kunci Jawaban Terpisah, Jitter Ujian Serentak & Pusat Full Backup Sekolah',
@@ -335,7 +365,7 @@ export const RELEASE_DATE = CHANGELOG_DATA[0]?.date || '27 November 2026';
 export const RELEASE_DATE_SHORT = RELEASE_DATE.replace('November', 'Nov').replace('Desember', 'Des');
 export const APP_VERSION_NUMBER = APP_VERSION.replace(/^v/i, '');
 export const APP_VERSION_CODENAME = getReleaseCodename(APP_VERSION);
-export const APP_VERSION_FOOTER_TEXT = `Versi ${APP_VERSION_NUMBER} "${APP_VERSION_CODENAME}"`;
+export const APP_VERSION_FOOTER_TEXT = `Versi ${APP_VERSION_NUMBER} • Klik untuk lihat pembaruan`;
 export const APP_VERSION_TOOLTIP = '';
 
 export const APP_VERSION_STORAGE_KEY = 'serbu21_app_version';

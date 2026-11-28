@@ -588,6 +588,8 @@ export const SarahStudentWidget: React.FC<Props> = ({
     handleNewChat();
   };
 
+  const [isCooldown, setIsCooldown] = useState(false);
+
   const handleSend = async (
     e?: React.FormEvent,
     overridePrompt?: string,
@@ -601,6 +603,13 @@ export const SarahStudentWidget: React.FC<Props> = ({
       );
       return;
     }
+
+    if (isCooldown) {
+      showToast('Tunggu sebentar ya sebelum mengirim pesan berikutnya...', 'error');
+      return;
+    }
+    setIsCooldown(true);
+    setTimeout(() => setIsCooldown(false), 2000);
 
     const question = sanitizeInput(overridePrompt ?? inputText, 1500);
     if (!question || isThinking) return;
